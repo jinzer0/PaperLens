@@ -32,8 +32,9 @@ v1은 공개 오픈소스 제품으로 배포될 수 있어야 하며, 커뮤니
 - Paper: PaperLens에 가져온 단일 논문 항목. PDF 원문과 그 파생 데이터 전체를 포함한다.
 - Paper Chat: 한 Paper에 대해 항상 논문 전체 검색 근거로 답하는 단일 QA 채팅. 일반 채팅 모드나 근거 모드 토글을 갖지 않는다.
 - Chat Session: 한 Paper 안에 저장되는 Paper Chat 대화 단위. 자동 저장, 재개, 목록, 새 세션, 제목 자동 생성, 이름 변경, 삭제를 지원한다.
-- Brief: Paper에 대해 생성되는 구조화된 Markdown 정리본. 기본 템플릿 또는 사용자 정의 Template으로 생성된다.
-- Template: Brief 생성을 위한 Markdown 섹션 구조와 프롬프트 묶음. 사용자가 항목과 프롬프트를 편집할 수 있다.
+- Brief: Paper에 대해 생성되는 구조화된 Markdown 정리본. 기본 Template 또는 사용자 Template으로 생성되며, 생성 결과와 Paper-bound generation snapshot은 해당 Paper에 속한다.
+- Paper-bound generation snapshot: 한 Paper의 Brief 생성을 위해 캡처된 Template 버전과 입력값. Paper 삭제 시 생성 결과와 함께 삭제된다.
+- Template: Brief 생성을 위한 Markdown 섹션 구조와 프롬프트 묶음. 사용자가 항목과 프롬프트를 편집할 수 있는 독립 재사용 자원이며, Paper 삭제 후에도 보존된다.
 - Evidence Anchor: [ASSUMPTION A-001] PDF 페이지, 추출 문장 식별자, 화면에서 보이는 강조 위치로 구성되는 근거 연결 단위. UX/Architecture에서 세부 계약을 확정한다.
 - Provider: AI 기능을 실행하기 위해 연결하는 외부 AI 서비스. v1 Provider 연결은 OpenAI API key와 공식 Codex SDK의 ChatGPT 로그인 또는 device-code 흐름이다.
 - Job: 가져오기, 파싱, 번역, Brief 생성처럼 사용자에게 진행률, 오류, 재시도, 복구 상태를 보여야 하는 비동기 작업.
@@ -61,7 +62,7 @@ v1은 공개 오픈소스 제품으로 배포될 수 있어야 하며, 커뮤니
 - 자동 생성 및 재생성 가능한 Brief, 기본/사용자 Template, Evidence Anchor 연결.
 - Library 폴더, 태그, 검색/필터, 최근 읽은 논문, 한 줄 요약, 읽기 상태, 즐겨찾기, 중복 경고, 하이라이트, 노트, 마지막 읽은 위치, 삭제.
 - Job 진행률, 오류, 재시도, 재실행 후 복구 상태.
-- Local App Data 저장과 Paper 삭제 시 전체 파생 데이터 삭제.
+- Local App Data 저장과 Paper 삭제 시 Paper-bound generation snapshot을 포함한 Paper 소유 파생 데이터 삭제.
 
 ### 4.2 v1 비목표
 
@@ -104,7 +105,7 @@ v1은 공개 오픈소스 제품으로 배포될 수 있어야 하며, 커뮤니
 - Entry: 이서연은 지난주 읽던 논문을 다시 찾기 위해 Library를 연다.
 - Path: 최근 읽은 논문 영역에서 후보를 확인하고, 검색/필터로 태그, 읽기 상태, 즐겨찾기 여부를 좁힌다.
 - Climax: 논문 카드에서 제목, 발행연도, 한 줄 요약을 보고 Reader로 들어가 마지막 읽은 위치에서 이어 읽는다.
-- Resolution: 더 이상 필요 없는 Paper를 삭제하면 PDF와 Translation, Brief, Chat Session, Highlight, Note, 읽기 이력이 함께 사라진다.
+- Resolution: 더 이상 필요 없는 Paper를 삭제하면 PDF와 Translation, Brief, Paper-bound generation snapshot, Chat Session, Highlight, Note, 읽기 이력이 함께 사라진다.
 - Edge case: 삭제 중 실패하면 PaperLens는 삭제 미완료 상태를 표시하고 재시도할 수 있어야 하며, 완료 전에는 부분 삭제를 성공처럼 보이지 않는다.
 - Covers: FR-010, FR-026, FR-027, FR-028, FR-030, FR-031, NFR-007, NFR-008.
 
@@ -228,14 +229,16 @@ v1은 공개 오픈소스 제품으로 배포될 수 있어야 하며, 커뮤니
   - Consequences (testable): 기본 Brief 결과에는 위 항목들이 별도 섹션 또는 명확한 Markdown 항목으로 존재한다.
   - Consequences (testable): 논문이 명시한 한계와 AI가 분석한 가능성 있는 한계는 분리된 라벨로 표시된다.
   - Consequences (testable): 누락된 항목은 빈 성공처럼 보이지 않고 생성 결과에서 확인 가능한 상태를 갖는다.
-- FR-022: 사용자는 기본 Template과 사용자 Template으로 Brief를 생성하거나 재생성한다.
+- FR-022: 사용자는 기본 Template과 독립 재사용 사용자 Template으로 Brief를 생성하거나 재생성한다.
   - Consequences (testable): Brief 생성 또는 재생성 시 Template 선택이 가능하다.
+  - Consequences (testable): Brief 생성 시 사용된 Template 버전과 입력값은 해당 Paper의 Paper-bound generation snapshot으로 캡처된다.
   - Consequences (testable): 재생성된 Brief는 이전 Brief와 구분되거나 현재 Brief로 명확히 교체된다.
   - Consequences (testable): 재생성 실패 시 기존 사용 가능한 Brief를 잃지 않는다.
-- FR-023: 사용자는 사용자 Template의 Markdown 항목과 프롬프트를 편집한다.
+- FR-023: 사용자는 Paper와 독립된 사용자 Template의 Markdown 항목과 프롬프트를 편집한다.
   - Consequences (testable): Template 편집 화면에서 Markdown 섹션 목록을 추가/수정/삭제할 수 있다.
   - Consequences (testable): Template 프롬프트를 수정하고 저장할 수 있다.
   - Consequences (testable): 저장된 Template은 이후 Brief 생성 선택지에 나타난다.
+  - Consequences (testable): 사용자 Template은 특정 Paper 삭제 후에도 Template 관리 화면과 이후 Brief 생성 선택지에 남는다.
 - FR-024: Brief는 Evidence Anchor로 원문 근거를 확인할 수 있다.
   - Consequences (testable): Brief의 논문 주장에는 Evidence Anchor가 표시된다.
   - Consequences (testable): Anchor hover 시 짧은 원문 미리보기가 표시된다.
@@ -266,9 +269,10 @@ v1은 공개 오픈소스 제품으로 배포될 수 있어야 하며, 커뮤니
 
 ### FG8. 삭제와 Local App Data
 
-- FR-030: 사용자는 Library에서 Paper를 삭제하고 연결된 파생 데이터 전체 삭제 결과를 확인한다.
+- FR-030: 사용자는 Library에서 Paper를 삭제하고 Paper 소유 파생 데이터 전체 삭제 결과를 확인한다.
   - Consequences (testable): 삭제 확인 후 해당 Paper는 Library 검색, 최근 읽은 Paper, 폴더 목록에서 보이지 않는다.
-  - Consequences (testable): 삭제 후 해당 Paper의 PDF, Translation, Brief, Chat Session, Highlight, Note, 읽기 이력, 마지막 읽은 위치가 앱에서 재진입되지 않는다.
+  - Consequences (testable): 삭제 후 해당 Paper의 PDF, Translation, Brief, Paper-bound generation snapshot, Chat Session, Highlight, Note, 읽기 이력, 마지막 읽은 위치가 앱에서 재진입되지 않는다.
+  - Consequences (testable): 삭제한 Paper에서 사용된 독립 사용자 Template은 삭제되지 않고 이후 Brief 생성에 다시 사용할 수 있다.
   - Consequences (testable): 삭제 완료 후 앱 재실행 시 삭제된 Paper가 복원되지 않는다.
 - FR-031: 삭제 실패 또는 진행 중 Job과의 충돌은 완료로 오인되지 않게 표시된다.
   - Consequences (testable): 삭제 중 실패하면 삭제 미완료 상태와 재시도 동작이 보인다.
@@ -292,8 +296,9 @@ v1은 공개 오픈소스 제품으로 배포될 수 있어야 하며, 커뮤니
 
 ### FG10. Release Packaging
 
-- FR-035: v1 공개 패키지는 macOS에서 설치 또는 실행 가능한 공개 오픈소스 산출물이어야 한다.
-  - Consequences (testable): 공개 저장소 또는 배포 산출물에서 macOS 실행 방법을 확인할 수 있다.
+- FR-035: v1 공개 패키지는 macOS 15+에서 설치 또는 실행 가능한 arm64와 x86_64 별도 공개 오픈소스 산출물이어야 한다.
+  - Consequences (testable): 공개 저장소 또는 배포 산출물에서 macOS 15+ 실행 방법을 확인할 수 있다.
+  - Consequences (testable): public v1 배포에는 arm64와 x86_64용 산출물이 각각 제공된다.
   - Consequences (testable): 첫 실행 Provider 설정 절차가 공개 문서 또는 앱 안에서 설명된다.
   - Consequences (testable): public v1 배포 산출물에는 최종 확정된 오픈소스 라이선스가 명시된다.
 - FR-036: v1 문구는 후속 후보를 출시 약속처럼 표현하지 않는다.
@@ -302,21 +307,22 @@ v1은 공개 오픈소스 제품으로 배포될 수 있어야 하며, 커뮤니
 
 ## 8. 플랫폼 요구사항
 
-- v1은 macOS만 지원한다.
+- v1은 macOS 15+만 지원한다.
+- v1 공개 배포는 arm64와 x86_64 산출물을 각각 제공한다.
 - v1은 데스크톱 사용 맥락을 우선한다.
 - v1은 모바일, 웹 동기화, 다중 기기 동기화를 제공하지 않는다.
 - v1은 PaperLens 계정 생성이나 PaperLens 클라우드 로그인을 제공하지 않는다.
 
 ## 9. 교차 비기능 요구사항
 
-- NFR-001: arXiv URL 제출 후 PDF 원문을 볼 수 있을 때까지 최대 30초를 목표로 한다.
-- NFR-002: [ASSUMPTION A-002] 30초 목표는 일반 네트워크 상태, 정상 접근 가능한 arXiv/PDF URL, 과도하게 크지 않은 텍스트 기반 논문 PDF를 기준으로 검증한다.
+- NFR-001: arXiv URL 제출이 수락된 시점부터 첫 PDF 페이지가 표시되고 navigation/zoom에 응답할 때까지 30초를 soft target으로 측정하고 보고한다.
+- NFR-002: [ASSUMPTION A-002] 30초 soft target은 일반 네트워크 상태, 정상 접근 가능한 arXiv/PDF URL, 과도하게 크지 않은 텍스트 기반 논문 PDF를 기준으로 측정한다.
 - NFR-003: 로컬 PDF와 일반 PDF URL은 PDF 원문 접근을 AI Job 완료보다 우선하며, source별 세부 시간 기준은 Architecture/QA에서 측정 가능한 기준으로 확정한다.
 - NFR-004: 느린 Reader 준비는 사용자가 첫 가치를 경험하기 전 이탈하게 만드는 핵심 리스크이므로 PDF 원문 접근을 우선한다.
 - NFR-005: PaperLens는 AI 답변, Brief, Translation, Evidence Anchor의 완전한 정확도를 주장하지 않는다.
 - NFR-006: 논문 주장에 대한 AI 출력은 Evidence Anchor와 연결되거나 근거 부족 상태를 명시해야 한다.
 - NFR-007: Local App Data는 macOS 앱 로컬 데이터로 저장되며 cloud backup/sync/recovery를 제품 기능으로 제공하지 않는다.
-- NFR-008: Paper 삭제는 PDF와 모든 파생 데이터를 함께 삭제하는 완료 동작이어야 한다.
+- NFR-008: Paper 삭제는 PDF와 Paper 소유 파생 데이터를 함께 삭제하는 완료 동작이어야 하며, 독립 재사용 사용자 Template은 Paper 삭제와 분리해 보존한다.
 - NFR-009: [ASSUMPTION A-003] Provider 비밀정보는 OS keychain에 저장하지 않는 최신 결정을 따른다.
 - NFR-010: 외부 Provider 사용에 따라 논문 및 개인 데이터가 외부로 전송될 수 있음을 제품 전제로 삼는다.
 
@@ -334,21 +340,21 @@ v1은 공개 오픈소스 제품으로 배포될 수 있어야 하며, 커뮤니
 
 - Provider secret gate: Provider 비밀정보를 다루는 구현 story는 Architecture가 local storage location/class, at-rest protection decision, file permissions, log redaction, backup inclusion/exclusion, deletion behavior, OS keychain 미사용에 대한 threat acceptance를 기록하기 전에는 시작하지 않는다. 이 gate는 기술 선택이 아니라 downstream pass/fail handoff 조건이다. Applies to: FR-002, FR-003, FR-004, NFR-009, A-003.
 - Evidence Anchor gate: Evidence Anchor 관련 QA/story acceptance는 UX/Architecture가 PDF 페이지, 추출 문장 식별자, visible highlight의 세부 계약과 실패 상태를 기록하기 전에는 확정하지 않는다. Existing owner/revisit: A-001의 UX/Architecture, UX detail/Architecture/QA stories 전.
-- 30-second test gate: PDF-visible 30초 목표 관련 QA/story acceptance는 Architecture/QA가 A-002의 테스트 조건과 source별 측정 경계를 기록하기 전에는 확정하지 않는다. Existing owner/revisit: A-002의 Architecture/QA, release QA plan 전.
+- 30-second test gate: PDF-visible 30초 soft target 관련 QA/story acceptance는 Architecture/QA가 A-002의 테스트 조건, source별 측정 경계, material 또는 반복 초과의 review/disposition 기준을 기록하기 전에는 확정하지 않는다. Existing owner/revisit: A-002의 Architecture/QA, release QA plan 전.
 
 ## 11. Release Acceptance Metrics
 
-- SM-001: 샘플 arXiv abstract URL에서 Provider 설정, 가져오기, 30초 목표 기준 내 PDF-visible Reader 진입, Translation/Brief/Paper Chat Job 상태 표시가 한 흐름으로 검증된다.
+- SM-001: 샘플 arXiv abstract URL에서 Provider 설정, 가져오기, PDF-visible Reader 진입, 30초 soft target 측정 증거, Translation/Brief/Paper Chat Job 상태 표시가 한 흐름으로 검증된다. 전체 흐름은 필수이며, material 또는 반복 초과는 release review와 disposition을 요구한다.
 - SM-002: 샘플 Paper에서 Translation 문장 hover 양방향 강조, Paper Chat Evidence Anchor hover/click, Brief Evidence Anchor hover/click이 모두 PDF 페이지와 visible highlight로 돌아간다.
 - SM-003: 파싱 실패 샘플에서 PDF Reader 유지, AI 기능 비활성화, 오류 정보, 재시도 동작, 재실행 후 실패 상태 복구가 검증된다.
 - SM-004: Library에서 최근 읽은 Paper, 폴더 이동, 태그 검색/필터, 읽기 상태, 즐겨찾기, 하이라이트, 노트, 마지막 읽은 위치 복원이 검증된다.
-- SM-005: Paper 삭제 후 Library 검색/필터/최근 읽은 Paper/Reader 재진입에서 해당 Paper와 파생 데이터가 보이지 않고, 재실행 후에도 복원되지 않는다.
-- SM-006: 공개 macOS v1 오픈소스 산출물에서 실행 방법, Provider 설정 방법, 최종 확정된 라이선스가 확인된다.
+- SM-005: Paper 삭제 후 Library 검색/필터/최근 읽은 Paper/Reader 재진입에서 해당 Paper와 PDF, Translation, Brief, Paper-bound generation snapshot, Chat Session, Highlight, Note, 읽기 이력, 마지막 읽은 위치가 보이지 않고, 재실행 후에도 복원되지 않는다. 독립 사용자 Template은 보존됨이 확인된다.
+- SM-006: 공개 macOS 15+ v1 arm64와 x86_64 별도 오픈소스 산출물에서 실행 방법, Provider 설정 방법, 최종 확정된 라이선스가 확인된다.
 
 ### Counter-Metrics
 
 - CM-001: PDF-visible 속도 개선이 Evidence Anchor 생성 실패, 잘못된 clickback, 근거 부족 미표시 증가를 정당화하지 않는다.
-- CM-002: v1 기능 개수 완료율이 end-to-end 루프 검증 실패를 가리지 않는다. SM-001부터 SM-005 중 하나라도 실패하면 release-ready로 보지 않는다.
+- CM-002: v1 기능 개수 완료율이 end-to-end 루프 검증 실패를 가리지 않는다. SM-001부터 SM-005의 기능적 release gate 중 하나라도 실패하면 release-ready로 보지 않는다. 30초 soft target 초과는 그 자체만으로 자동 실패가 아니지만, material 또는 반복 초과가 disposition 없이 남으면 release-ready로 보지 않는다.
 - CM-003: AI 응답 유창성이 원문 근거 없는 논문 주장 생성을 정당화하지 않는다.
 
 ## 12. 리스크
@@ -365,7 +371,7 @@ v1은 공개 오픈소스 제품으로 배포될 수 있어야 하며, 커뮤니
 ## 13. Assumptions Index
 
 - A-001: Evidence Anchor는 PDF 페이지, 추출 문장 식별자, 화면에서 보이는 강조 위치로 검증한다. Source: memlog. Owner: UX/Architecture. Needed before: UX detail, Architecture, QA stories.
-- A-002: 30초 PDF-visible 목표는 일반 네트워크 상태, 정상 접근 가능한 arXiv/PDF URL, 과도하게 크지 않은 텍스트 기반 논문 PDF를 기준으로 검증한다. Source: PRD synthesis. Owner: Architecture/QA. Needed before: release QA plan.
+- A-002: 30초 PDF-visible soft target은 일반 네트워크 상태, 정상 접근 가능한 arXiv/PDF URL, 과도하게 크지 않은 텍스트 기반 논문 PDF를 기준으로 측정하고, material 또는 반복 초과의 review/disposition 기준은 Architecture/QA가 확정한다. Source: PRD synthesis. Owner: Architecture/QA. Needed before: release QA plan.
 - A-003: Provider 비밀정보를 OS keychain에 저장하지 않는 결정은 유지하되, Architecture는 local storage location/class, at-rest protection decision, file permissions, log redaction, backup inclusion/exclusion, deletion behavior, OS keychain 미사용에 대한 threat acceptance를 기록해야 한다. Source: memlog/review. Owner: Architecture. Needed before: Provider secret implementation/stories.
 
 ## 14. Deferred Items

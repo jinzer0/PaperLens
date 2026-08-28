@@ -23,9 +23,9 @@ updated: 2026-08-28
 ## 2. Architecture Must Decide Before Implementation
 
 - Provider secret gate: Provider 비밀정보를 다루는 구현 story는 Architecture가 local storage location/class, at-rest protection decision, file permissions, log redaction, backup inclusion/exclusion, deletion behavior, OS keychain 미사용에 대한 threat acceptance를 기록하기 전에는 시작하지 않는다. 이 gate는 저장/암호화 기술 선택이 아니라 pass/fail handoff 조건이다. Impacts: PRD FR-002, FR-003, FR-004, NFR-009, A-003.
-- Deletion gate: Paper 삭제 구현 story는 Architecture가 PDF, Translation, Brief, Chat Session, Highlight, Note, Reading Status, Favorite, 마지막 읽은 위치의 데이터 경계와 삭제 실패/복구 상태를 기록하기 전에는 시작하지 않는다. Impacts: PRD FR-030, FR-031, NFR-008, SM-005.
+- Deletion gate: Paper 삭제 구현 story는 Architecture가 PDF, Translation, Brief, Paper-bound generation snapshot, Chat Session, Highlight, Note, Reading Status, Favorite, 마지막 읽은 위치의 데이터 경계와 삭제 실패/복구 상태를 기록하기 전에는 시작하지 않는다. 독립 재사용 사용자 Template은 Paper 삭제 경계 밖에 둔다. Impacts: PRD FR-030, FR-031, NFR-008, SM-005.
 - Evidence Anchor gate: Evidence Anchor 관련 QA/story acceptance는 UX/Architecture가 PDF 페이지, 추출 문장 식별자, visible highlight의 세부 계약과 근거 없음/근거 위치 불명확/이동 실패 상태를 기록하기 전에는 확정하지 않는다. Existing owner/revisit: PRD A-001의 UX/Architecture, UX detail/Architecture/QA stories 전. Impacts: PRD FR-017, FR-024, SM-002.
-- 30-second test gate: PDF-visible 30초 목표 관련 QA/story acceptance는 Architecture/QA가 일반 네트워크 상태, 정상 접근 가능한 arXiv/PDF URL, 과도하게 크지 않은 텍스트 기반 논문 PDF 조건과 source별 측정 경계를 기록하기 전에는 확정하지 않는다. Existing owner/revisit: PRD A-002의 Architecture/QA, release QA plan 전. Impacts: PRD FR-007, FR-032, NFR-001, NFR-002, NFR-003, SM-001.
+- 30-second test gate: PDF-visible 30초 soft target 관련 QA/story acceptance는 Architecture/QA가 일반 네트워크 상태, 정상 접근 가능한 arXiv/PDF URL, 과도하게 크지 않은 텍스트 기반 논문 PDF 조건, source별 측정 경계, material 또는 반복 초과의 review/disposition 기준을 기록하기 전에는 확정하지 않는다. Existing owner/revisit: PRD A-002의 Architecture/QA, release QA plan 전. Impacts: PRD FR-007, FR-032, NFR-001, NFR-002, NFR-003, SM-001.
 - Job recovery gate: Job 상태와 앱 재실행 후 복구 구현 story는 Architecture가 pending/running/succeeded/failed 상태 전이와 재실행 후 복구 규칙을 기록하기 전에는 시작하지 않는다. Impacts: PRD FR-032, FR-033, FR-034, SM-003.
 - Provider connection gate: Provider 연결 테스트 구현 story는 Architecture가 성공/실패 판정 기준과 마지막 성공 연결 상태 처리 방식을 기록하기 전에는 시작하지 않는다. Impacts: PRD FR-001, FR-002, FR-004, SM-001.
 - Local App Data boundary gate: Local App Data 관련 story는 Architecture가 cloud backup/sync/recovery를 제품 기능으로 제공하지 않는 상태에서 사용자가 기대할 수 있는 데이터 보존 경계를 기록하기 전에는 시작하지 않는다. Impacts: PRD FR-029, FR-030, NFR-007.
@@ -67,8 +67,10 @@ updated: 2026-08-28
 
 ## 7. Local App Data와 삭제 메모
 
-- Local App Data에는 PDF, Translation, Brief, Template, Paper Chat Session, Highlight, Note, Reading Status, Favorite, 마지막 읽은 위치가 포함된다.
-- Paper 삭제 시 위 파생 데이터 전체가 삭제되어야 한다.
+- Local App Data에는 PDF, Translation, Brief, Paper-bound generation snapshot, 독립 재사용 사용자 Template, Paper Chat Session, Highlight, Note, Reading Status, Favorite, 마지막 읽은 위치가 포함된다.
+- Paper-bound generation snapshot은 한 Paper의 Brief 생성을 위해 캡처된 Template 버전과 입력값이다.
+- Paper 삭제 시 PDF, Translation, Brief, Paper-bound generation snapshot, Paper Chat Session, Highlight, Note, Reading Status, Favorite, 마지막 읽은 위치처럼 Paper가 소유한 파생 데이터 전체가 삭제되어야 한다.
+- 독립 재사용 사용자 Template은 Paper 삭제 후에도 보존되며, Template 관리와 이후 Brief 생성 선택지에 남아야 한다.
 - 진행 중 Job과 삭제가 충돌할 때 Job 결과가 삭제된 Paper를 되살리지 않아야 한다.
 - 삭제 요구사항은 사용자에게 관찰 가능한 제품 동작으로 PRD에 남기고, 구체 저장 메커니즘과 스키마는 Architecture에서 결정한다.
 
@@ -77,7 +79,7 @@ updated: 2026-08-28
 - PaperLens 공개 저장소와 v1 공개 패키징은 최종 채택된 오픈소스 라이선스 `AGPL-3.0-only`를 명시해야 한다.
 - PaperLens는 잠재 사용자와 오픈소스 커뮤니티를 위한 공개 소개 제품이며 투자자용 성장 서사가 아니다.
 - 커뮤니티 개선 가능 영역은 읽기 UX, Evidence Anchor, AI Provider 연결 방식, 연구 정리 흐름이다.
-- public v1 패키징은 macOS 실행 방법, Provider 설정 방법, 최종 확정된 오픈소스 라이선스를 사용자가 확인할 수 있어야 한다.
+- public v1 패키징은 macOS 15+ 실행 방법, arm64와 x86_64 별도 산출물, Provider 설정 방법, 최종 확정된 오픈소스 라이선스를 사용자가 확인할 수 있어야 한다.
 
 ## 9. 후속 범위 후보
 
