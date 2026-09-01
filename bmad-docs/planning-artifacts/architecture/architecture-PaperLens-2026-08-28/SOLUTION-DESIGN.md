@@ -4,7 +4,7 @@ type: solution-design
 purpose: developer-reviewer-alignment
 status: final
 created: 2026-08-28
-updated: 2026-08-29
+updated: 2026-09-01
 product_approval: 'APPROVED: PRODUCT @ 3bb2edf6a8d3d7f4942dd439325136b6fcb50456'
 source_spine: ARCHITECTURE-SPINE.md
 binds:
@@ -41,7 +41,7 @@ PaperLens v1은 macOS 15+ desktop app이며 OpenAI API key와 official Codex SDK
 
 Paper Chat에는 current page, selection, highlight가 automatic 또는 manual context로 들어가지 않는다. Reusable user Template는 Paper와 독립되고 Paper-bound generation snapshot/result만 Paper와 삭제된다. Thirty seconds is an arXiv measured soft target; unresolved material/repeated exceedance needs disposition before release-ready.
 
-Account/cloud/sync/recovery, web/mobile, collaboration, Zotero, OCR, local model, recommendation, knowledge graph, general AI Chat, Provider-free mode, complete table/figure/formula analysis, separate transfer notice/mandatory consent gate, comprehension scoring/assessment/quiz는 v1 밖이다. No-Keychain plaintext risk, external Provider transfer, non-forensic deletion limit을 숨기지 않는다. 한 개발자와 agentic coding으로 유지할 수 있어야 하며 complexity gate가 product scope를 줄이지 않는다.
+Account/cloud/sync/recovery, web/mobile, collaboration, Zotero, OCR, local model, recommendation, knowledge graph, general AI Chat, Provider-free mode, complete table/figure/formula analysis, separate transfer notice/mandatory consent gate, comprehension scoring/assessment/quiz는 v1 밖이다. No-Keychain plaintext risk, already-sent Provider-request revocation/erasure limit, APFS/existing-backup non-forensic deletion limit은 internal architecture/review fact다. 이 accepted limits를 onboarding, Settings, deletion UI, user-facing documentation, release material, consent, notices 또는 기타 user-facing disclosure surface에 도입하지 않는다. False-claim constraint는 disclosure surface를 허용하거나 요구하지 않으며 Product나 UI는 이 limit들과 모순되는 claim을 하면 안 된다. 한 개발자와 agentic coding으로 유지할 수 있어야 하며 complexity gate가 product scope를 줄이지 않는다.
 
 ## 3. Execution Topology
 
@@ -245,7 +245,7 @@ sequenceDiagram
 
 The deletion-start transaction revokes new writer and publication permits together with the active predicate, generation and leases, then dispatches cancellation. It drains all existing writers and publishers before removing Paper PDF/cache namespaces or performing terminal absence checking, and no Paper-scoped filesystem access or final rename is allowed after tombstone. A revoked writer returns only typed cancelled/stale output and removes its bytes before permit release. A failed publication DB guard synchronously removes its final artifact. No new Provider dispatch occurs after deletion begins. A request already sent externally cannot be retracted, but its response cannot publish or enter diagnostics. Pending/running attempts become non-retryable `failed/paperDeleting`; no retry is shown for deleting/deleted Paper.
 
-Deletion also issues an Agent-owned purge keyed by Paper UUID/generation/correlation. Terminal success requires purge acknowledgment/verification plus Paper-owned PDF/cache absence and terminal DB cascade. Purge failure remains `deleting/failed` and the same idempotent saga is retryable; it does not grant the native app Agent-filesystem access. Import, cache scan and recovery cannot reconstruct a tombstone identity; a later import gets a new Paper UUID. Reusable Templates survive. APFS/external backup erasure and erasure from an external Provider are not promised.
+Deletion also issues an Agent-owned purge keyed by Paper UUID/generation/correlation. Terminal success requires purge acknowledgment/verification plus Paper-owned PDF/cache absence and terminal DB cascade. Purge failure remains `deleting/failed` and the same idempotent saga is retryable; it does not grant the native app Agent-filesystem access. Import, cache scan and recovery cannot reconstruct a tombstone identity; a later import gets a new Paper UUID. Reusable Templates survive. APFS/external backup erasure and erasure from an external Provider are not promised. The inability to revoke already-sent Provider requests and the APFS/external-backup boundary must not appear in deletion confirmation, progress, result, error UI, user-facing documentation, or release material, while observable deletion semantics still require success/failure, retry when `deleting/failed`, and no retry or re-entry for deleting/deleted Paper.
 
 ### 6.6 Template And Brief Regeneration
 
@@ -281,7 +281,7 @@ Accepted limits:
 - Requests already sent to an external Provider cannot be revoked or erased by local deletion.
 - APFS snapshots and existing external backups are not forensically erased.
 
-These limits do not waive Provider Agent/XPC sandbox negative tests, import validation, redaction, no-new-dispatch-after-delete or nested-runtime integrity.
+These limits do not waive Provider Agent/XPC sandbox negative tests, import validation, redaction, no-new-dispatch-after-delete or nested-runtime integrity. They are internal design/review boundaries and must not be surfaced in onboarding, Settings, deletion UI, user-facing documentation, release material, consent, notices, or any other user-facing disclosure surface. The false-claim rule constrains claims but does not authorize or require a disclosure surface.
 
 ## 9. Packaging, Parity And Manual Updates
 
@@ -366,4 +366,4 @@ If the conditional Provider Agent cannot satisfy P-1/P-2 on either architecture,
 19. Are slot identity/config generation immutable and never reused while SDK contents mutate only inside the controlled Agent zone?
 20. Are both direct Developer ID artifacts contract-equivalent, fully inventoried, sandboxed, hardened, signed, notarized and parity-tested?
 21. Are diagnostics retention/export and downgrade/corruption still blocked by P-4/P-5 rather than decided per feature?
-22. Are updater, telemetry, App Store, cloud, consent, forensic erase and other v1 non-goals still absent?
+22. Are updater, telemetry, App Store, cloud, consent, forensic erase, accepted-limit disclosure surfaces and other v1 non-goals still absent, while internal risk facts, controls, product-visible deletion outcomes/failures/retry and truthful non-contradictory claims remain intact?

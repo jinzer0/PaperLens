@@ -7,7 +7,7 @@ paradigm: local-first modular monolith with hexagonal boundaries
 scope: PaperLens v1 macOS application
 status: final
 created: 2026-08-28
-updated: 2026-08-29
+updated: 2026-09-01
 product_approval: 'APPROVED: PRODUCT @ 3bb2edf6a8d3d7f4942dd439325136b6fcb50456'
 binds:
   - FR-001..FR-036
@@ -73,7 +73,7 @@ flowchart LR
 
 - **Binds:** FR-002..FR-004, NFR-009, NFR-010, Provider secret gate
 - **Prevents:** secret의 SQLite·일반 config·backup·diagnostic 유입과 가짜 containment claim
-- **Rule:** Keychain과 별도 at-rest encryption을 사용하지 않는다. API key는 main app sandbox의 backup-excluded private OpenAI slot에 plaintext로 두고 native adapter만 읽는다. Provider slot identity와 config generation은 immutable하며 never reused한다. Codex state home의 SDK-managed contents는 Agent zone 안에서만 mutate할 수 있고 AD-2의 Paper-linked retention/purge boundary와 descendant permission, backup exclusion, redaction, deletion control을 모두 따른다. 모든 private root/descendant는 directory `0700`, file `0600`을 강제하고 매 write/auth flow 뒤 permissions와 backup exclusion을 검증한다. 검증 실패 시 test/promotion을 거부하고 slot을 삭제하며 startup에서 abandoned stages를 정리한다. 동일 macOS user malware, UI-process PDFKit compromise, APFS snapshot, 기존 external backup 노출은 명시적 residual risk다.
+- **Rule:** Keychain과 별도 at-rest encryption을 사용하지 않는다. API key는 main app sandbox의 backup-excluded private OpenAI slot에 plaintext로 두고 native adapter만 읽는다. Provider slot identity와 config generation은 immutable하며 never reused한다. Codex state home의 SDK-managed contents는 Agent zone 안에서만 mutate할 수 있고 AD-2의 Paper-linked retention/purge boundary와 descendant permission, backup exclusion, redaction, deletion control을 모두 따른다. 모든 private root/descendant는 directory `0700`, file `0600`을 강제하고 매 write/auth flow 뒤 permissions와 backup exclusion을 검증한다. 검증 실패 시 test/promotion을 거부하고 slot을 삭제하며 startup에서 abandoned stages를 정리한다. 동일 macOS user malware, UI-process PDFKit compromise, APFS snapshot, 기존 external backup 노출은 internal architecture/review accepted limit이다. 이 accepted limit을 onboarding, Settings, deletion UI, user-facing documentation, release material, consent, notice 또는 기타 user-facing disclosure surface에 도입하지 않는다. False-claim constraint는 disclosure surface를 허용하거나 요구하지 않으며 false privacy, security, containment, revocability 또는 forensic-erasure claim은 금지한다.
 
 ### AD-5 — [ADOPTED] real activation success and staged configuration lifecycle
 
@@ -115,7 +115,7 @@ flowchart LR
 
 - **Binds:** FR-030, FR-031, NFR-008, SM-005, Deletion gate
 - **Prevents:** post-delete Provider dispatch, filesystem/DB resurrection, false completion, Template collateral deletion
-- **Rule:** Deletion 시작 transaction이 active Paper predicate를 false로 만들고 generation을 증가시키며 current leases와 새 writer/publication permit 발급을 revoke한 뒤 cancellation을 dispatch한다. 그 이후 새 Paper-scoped filesystem access, Provider dispatch, final rename을 금지하고 queued Agent request는 correlation ID로 cancel한다. Existing writers와 publishers를 모두 drain한 뒤에만 Paper PDF/cache namespace를 제거하고 terminal absence check를 수행한다. Revocation 뒤 완료한 writer의 typed `cancelled`/`stale` output은 publish하지 않고 producer가 bytes를 제거한 뒤 permit을 release해야 한다. 이미 Provider에 전송된 request는 철회할 수 없지만 response는 publish/diagnostic하지 않는다. Pending/running attempts는 persisted `failed` reason `paperDeleting`으로 non-retryable 처리하고 deleting/deleted Paper에 Retry를 노출하지 않는다. Agent에는 Paper UUID/generation/correlation로 Paper-linked state purge를 요청하며 acknowledgment/verification 전에는 terminal success가 아니다. Purge 실패는 `deleting/failed`로 남아 idempotent retry되고 native app에 broad Agent-filesystem access를 주지 않는다. Saga는 writers/publishers drain, Agent purge, Paper-owned PDF와 Paper UUID/generation cache absence를 확인한 뒤 PDF, Translation, Brief, Paper-bound generation snapshot, Chat Session, Highlight, Note, Reading Status, Favorite, last-read, extraction/FTS rows를 terminal DB transaction으로 cascade하고 minimal contentless tombstone을 남긴다. Reusable Template는 보존한다. Import/recovery/cache scan은 tombstone identity를 재활성화하지 않고 새 import는 새 Paper UUID를 쓴다. v1 tombstone은 durable하며 실패는 같은 saga를 재개한다. APFS snapshot, 기존 external backup, 이미 Provider에 전송된 data의 forensic erase나 external Provider erasure는 약속하지 않는다.
+- **Rule:** Deletion 시작 transaction이 active Paper predicate를 false로 만들고 generation을 증가시키며 current leases와 새 writer/publication permit 발급을 revoke한 뒤 cancellation을 dispatch한다. 그 이후 새 Paper-scoped filesystem access, Provider dispatch, final rename을 금지하고 queued Agent request는 correlation ID로 cancel한다. Existing writers와 publishers를 모두 drain한 뒤에만 Paper PDF/cache namespace를 제거하고 terminal absence check를 수행한다. Revocation 뒤 완료한 writer의 typed `cancelled`/`stale` output은 publish하지 않고 producer가 bytes를 제거한 뒤 permit을 release해야 한다. 이미 Provider에 전송된 request는 철회할 수 없지만 response는 publish/diagnostic하지 않는다. Pending/running attempts는 persisted `failed` reason `paperDeleting`으로 non-retryable 처리하고 deleting/deleted Paper에 Retry를 노출하지 않는다. Agent에는 Paper UUID/generation/correlation로 Paper-linked state purge를 요청하며 acknowledgment/verification 전에는 terminal success가 아니다. Purge 실패는 `deleting/failed`로 남아 idempotent retry되고 native app에 broad Agent-filesystem access를 주지 않는다. Saga는 writers/publishers drain, Agent purge, Paper-owned PDF와 Paper UUID/generation cache absence를 확인한 뒤 PDF, Translation, Brief, Paper-bound generation snapshot, Chat Session, Highlight, Note, Reading Status, Favorite, last-read, extraction/FTS rows를 terminal DB transaction으로 cascade하고 minimal contentless tombstone을 남긴다. Reusable Template는 보존한다. Import/recovery/cache scan은 tombstone identity를 재활성화하지 않고 새 import는 새 Paper UUID를 쓴다. v1 tombstone은 durable하며 실패는 같은 saga를 재개한다. APFS snapshot, 기존 external backup, 이미 Provider에 전송된 data의 forensic erase나 external Provider erasure는 internal architecture/review accepted limit이다. 이 accepted limit을 onboarding, Settings, deletion UI, user-facing documentation, release material, consent, notice 또는 기타 user-facing disclosure surface에 도입하지 않는다. False-claim constraint는 disclosure surface를 허용하거나 요구하지 않으며 false deletion, containment, revocability 또는 forensic-erasure claim은 금지한다.
 
 ### AD-12 — [ADOPTED] A-002 named PDF-visible timing events and soft target
 
@@ -146,6 +146,7 @@ flowchart LR
 | Boundaries | `Contracts/ProviderRPC`, `Contracts/ProviderRequest`, `Contracts/EvidenceAnchor`, persistence migration registry가 각 seam의 sole authority다. Framework/SDK type를 Domain이나 wire에 노출하지 않는다. |
 | Diagnostics | Structured safe codes와 allowlisted fields만 persist한다. Secret, raw URL, argv/environment, request/response, document/personal content, raw stdout/stderr는 기록하지 않는다. |
 | Retry | Explicit user Retry만 ambiguous billable external call의 새 fenced attempt를 만든다. Deleting/deleted Paper와 old Provider generation은 publish/retry할 수 없다. |
+| Accepted-limit disclosure | AD-4/AD-11 accepted limits are internal architecture/review facts only. Do not introduce them into onboarding, Settings, deletion UI, user-facing documentation, release material, consent, notices, or any other user-facing disclosure surface. The false-claim rule constrains claims but does not authorize or require a disclosure surface. |
 
 ## Stack
 
@@ -230,5 +231,6 @@ P-1..P-6은 final architecture contract에 포함된 blocking evidence/open-item
 - Universal binary is not a v1 artifact. Update UX/channel is manual replacement only; an updater is not planned.
 - Local diagnostic retention/export and downgrade/corruption handling are not feature-local choices; P-4/P-5 own them. No telemetry backend or cloud recovery is introduced.
 - Cloud service/account/sync/backup/recovery, web/mobile, local model, recommendation, knowledge graph and general-purpose AI Chat are outside v1.
-- Complete table/figure/formula analysis, separate data-transfer notice or mandatory consent gate, comprehension scoring, learning assessment and quiz are outside v1.
+- Complete table/figure/formula analysis, separate data-transfer notice, mandatory consent gate, and user-facing disclosure surfaces for AD-4/AD-11 accepted limits are outside v1 and must remain absent.
+- Comprehension scoring, learning assessment and quiz are outside v1.
 - One developer using agentic coding must sustain the design. New runtime/service/release mechanism needs an explicit prototype/release gate and cannot silently reduce launch-blocking product scope.
