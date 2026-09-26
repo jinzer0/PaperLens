@@ -1,11 +1,13 @@
 ---
 title: PaperLens PRD
-status: final
+status: draft
 created: 2026-08-27
-updated: 2026-08-28
+updated: 2026-09-27
 ---
 
 # PRD: PaperLens
+
+> 개정 상태: 3개 테마와 Settings 테마 전환을 추가한 재승인 대기 초안이다. 현재 승인된 제품 기준은 `APPROVED: PRODUCT @ 3bb2edf6a8d3d7f4942dd439325136b6fcb50456`의 PRD와 부록이며, 이 개정은 새 PRODUCT 승인 전까지 그 기준을 대체하거나 구현을 승인하지 않는다.
 
 ## 1. 제품 개요
 
@@ -44,6 +46,7 @@ v1은 공개 오픈소스 제품으로 배포될 수 있어야 하며, 커뮤니
 - Note: 사용자가 Paper 또는 Paper 위치에 남기는 개인 메모.
 - Reading Status: Paper의 읽기 진행 상태를 사용자가 Library에서 관리하기 위한 상태값.
 - Favorite: 사용자가 Library에서 중요한 Paper를 빠르게 다시 찾기 위해 표시하는 즐겨찾기 상태.
+- Theme: 앱의 시각 스타일. Native Canvas, Scholarly Press, Focused Instrument 중 선택하며, Light/Dark 명암 모드와 구분한다.
 
 ## 4. 범위
 
@@ -63,6 +66,7 @@ v1은 공개 오픈소스 제품으로 배포될 수 있어야 하며, 커뮤니
 - Library 폴더, 태그, 검색/필터, 최근 읽은 논문, 한 줄 요약, 읽기 상태, 즐겨찾기, 중복 경고, 하이라이트, 노트, 마지막 읽은 위치, 삭제.
 - Job 진행률, 오류, 재시도, 재실행 후 복구 상태.
 - Local App Data 저장과 Paper 삭제 시 Paper-bound generation snapshot을 포함한 Paper 소유 파생 데이터 삭제.
+- Native Canvas 기본 테마와 Settings에서 선택 가능한 Scholarly Press, Focused Instrument 추가 테마. 세 테마 모두 Light/Dark를 지원하고 테마 선택을 유지한다.
 
 ### 4.2 v1 비목표
 
@@ -125,7 +129,7 @@ v1은 공개 오픈소스 제품으로 배포될 수 있어야 하며, 커뮤니
 - Reader: PDF 원문, PDF 탐색/확대/검색/선택, Translation, Paper Chat, Brief Drawer, Highlight, Note, Job 상태.
 - Brief: 독립 Brief 화면, 기본 Template, 사용자 Template, 재생성, Evidence Anchor 확인.
 - Library: 최근 읽은 논문, 폴더, 목록/카드, 태그, 검색/필터, 읽기 상태, 즐겨찾기, 하이라이트, 노트, 삭제.
-- Settings: Provider 연결 관리, 번역 대상 언어, 사용자 Template 관리.
+- Settings: Provider 연결 관리, 번역 대상 언어, 사용자 Template 관리, 앱 테마 및 독립적인 명암 모드 선택.
 
 ## 7. 기능 요구사항
 
@@ -305,6 +309,25 @@ v1은 공개 오픈소스 제품으로 배포될 수 있어야 하며, 커뮤니
   - Consequences (testable): v1 UI와 공개 설명은 추천, 지식 그래프, 로컬 모델, cloud sync를 v1 기능처럼 표시하지 않는다.
   - Consequences (testable): 후속 후보는 roadmap/candidate 표현으로만 나타난다.
 
+### FG11. 앱 테마
+
+- FR-037: 기본 시각 스타일은 Native Canvas이며, 사용자는 Settings에서 Native Canvas, Scholarly Press, Focused Instrument 중 앱 테마를 선택할 수 있다.
+  - Consequences (testable): 저장된 테마 선택이 없는 새 설치에서는 Native Canvas가 적용된다.
+  - Consequences (testable): Settings에는 세 테마 이름과 현재 선택이 표시되며, 각 테마로 전환하고 Native Canvas로 되돌릴 수 있다.
+  - Consequences (testable): 선택한 테마는 Settings만이 아니라 Reader, Library, Brief 등 앱이 제공하는 화면에 일관되게 적용된다.
+- FR-038: 테마와 명암 모드 선택은 로컬 앱 환경설정으로 유지되며, 둘 중 어느 설정을 바꾸어도 읽기 맥락과 사용자 데이터를 변경하지 않는다.
+  - Consequences (testable): Scholarly Press 또는 Focused Instrument를 선택한 뒤 앱을 종료하고 다시 실행해도 선택한 테마가 복원된다.
+  - Consequences (testable): 테마를 바꾸고 Reader로 돌아오면 동일한 Paper, PDF 페이지와 열린 Chat Session이 유지되고 기존 노트와 Brief를 그대로 사용할 수 있다.
+  - Consequences (testable): 테마 변경, 명암 모드 변경 또는 System 선택 중 OS 명암 변경만으로 Import, parsing, Translation, Paper Chat 요청 또는 Brief 생성이 새로 시작되거나 재시도되지 않는다.
+  - Consequences (testable): 테마와 명암 설정은 Paper에 속하지 않으며, Paper 삭제 후에도 유지된다. 앱 화면의 스타일만 바뀌고 원본 PDF의 내용·글꼴·원본 파일은 변경되지 않는다.
+- FR-039: 세 테마는 모두 깔끔하고 매트한 시각 방향과 Light/Dark 지원을 제공하며, 기능과 상태의 의미는 테마에 따라 달라지지 않는다.
+  - Consequences (testable): 세 테마 각각의 Light/Dark 조합에서 주요 화면, 텍스트, 컨트롤, 선택 상태, 오류와 재시도 동작을 식별할 수 있다.
+  - Consequences (testable): Settings에서 테마와 별도로 시스템 설정 따름(System) / Light / Dark를 선택하며, 저장된 명암 선택이 없으면 System이 기본값이다.
+  - Consequences (testable): System은 현재 macOS 명암을 따르고 OS 명암 변경 시 화면에도 반영된다. 명시적인 Light 또는 Dark 선택은 OS 명암 변경으로 바뀌지 않는다.
+  - Consequences (testable): 앱 재실행 후 선택한 명암 정책이 복원된다. System 선택은 직전 렌더링 색상이 아니라 정책으로 유지되어 현재 OS 명암을 따른다.
+  - Consequences (testable): 테마를 바꾸어도 System/Light/Dark 선택은 유지되며, 명암 모드가 바뀌어도 선택한 테마는 유지된다.
+  - Consequences (testable): 여섯 조합 모두에서 원문/번역 양방향 강조, Evidence Anchor 이동, Job 오류·복구, 삭제 미완료 상태가 동일한 기능 계약을 따른다.
+
 ## 8. 플랫폼 요구사항
 
 - v1은 macOS 15+만 지원한다.
@@ -350,6 +373,7 @@ v1은 공개 오픈소스 제품으로 배포될 수 있어야 하며, 커뮤니
 - SM-004: Library에서 최근 읽은 Paper, 폴더 이동, 태그 검색/필터, 읽기 상태, 즐겨찾기, 하이라이트, 노트, 마지막 읽은 위치 복원이 검증된다.
 - SM-005: Paper 삭제 후 Library 검색/필터/최근 읽은 Paper/Reader 재진입에서 해당 Paper와 PDF, Translation, Brief, Paper-bound generation snapshot, Chat Session, Highlight, Note, 읽기 이력, 마지막 읽은 위치가 보이지 않고, 재실행 후에도 복원되지 않는다. 독립 사용자 Template은 보존됨이 확인된다.
 - SM-006: 공개 macOS 15+ v1 arm64와 x86_64 별도 오픈소스 산출물에서 실행 방법, Provider 설정 방법, 최종 확정된 라이선스가 확인된다.
+- SM-007: Native Canvas 및 System 기본 적용, Settings의 세 테마와 System/Light/Dark 독립 선택, 재실행 후 정책 유지가 검증된다. 세 테마 × Light/Dark의 여섯 렌더링 조합에서 Reader·Library·Brief·Settings의 가독성, 핵심 상호작용과 오류·복구 상태를 확인한다. System 선택 중 OS 명암 변경의 반영과 명시적 Light/Dark 선택의 유지, Paper 삭제 후 설정 유지도 검증한다. 전환 후 읽기 맥락과 데이터·원본 PDF가 보존되고 AI 작업이 새로 발생하지 않아야 한다. 하나라도 실패하면 테마 기능의 release gate를 통과하지 못한다.
 
 ### Counter-Metrics
 
@@ -365,8 +389,9 @@ v1은 공개 오픈소스 제품으로 배포될 수 있어야 하며, 커뮤니
 - R-004: 외부 Provider 전송 전제와 별도 consent gate 없음은 사용자 기대와 충돌할 수 있다. Impacts: FR-003, NFR-010.
 - R-005: OS keychain을 쓰지 않는 비밀정보 저장 결정은 보안 리뷰와 Architecture 단계에서 별도 acceptance boundary가 필요하다. Impacts: FR-004, NFR-009.
 - R-006: macOS only와 no cloud sync는 초기 범위를 줄이지만 다중 기기 사용 기대와 충돌할 수 있다. Impacts: FR-035, NFR-007.
-- R-007: 확정 feature group이 모두 launch-blocking이므로 1인 개발 v1에서 일정과 품질 리스크가 크다. Impacts: all FG, SM-001 through SM-006.
+- R-007: 확정 feature group이 모두 launch-blocking이므로 1인 개발 v1에서 일정과 품질 리스크가 크다. Impacts: all FG, SM-001 through SM-007.
 - R-008: 느린 Reader 진입은 사용자가 핵심 가치를 경험하기 전에 이탈하게 만들 수 있다. Impacts: FR-007, FR-032, NFR-001, NFR-004.
+- R-009: 세 테마와 Light/Dark의 조합으로 시각 검증 범위가 늘어나며, 대비·상태 표현·기능 동작이 테마별로 달라질 위험이 있다. Impacts: FR-037, FR-038, FR-039, SM-007.
 
 ## 13. Assumptions Index
 

@@ -1,0 +1,297 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PaperLens · Onboarding key screen</title>
+  <!-- Governing contract: DESIGN.md — Brand & Style, Colors, Typography, Layout & Spacing, ProviderOnboarding; EXPERIENCE.md — Component Patterns and State Patterns (Onboarding), Key Flow UJ-2. -->
+  <style>
+    :root {
+      --font-ui: -apple-system, BlinkMacSystemFont, "Helvetica Neue", "Apple SD Gothic Neo", sans-serif;
+      --font-mono: ui-monospace, "SFMono-Regular", Menlo, monospace;
+      --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px;
+      --space-5: 20px; --space-6: 24px; --space-8: 32px;
+      --radius-sm: 5px; --radius-md: 8px; --radius-lg: 12px; --radius-window: 16px;
+    }
+    * { box-sizing: border-box; }
+    html { background: #CFCAC1; }
+    body {
+      margin: 0;
+      background: #CFCAC1;
+      color: #25241F;
+      font-family: var(--font-ui);
+      line-height: 1.4;
+    }
+    button, input { font: inherit; }
+    button { cursor: default; }
+    .artifact {
+      width: min(100%, 1480px);
+      margin-inline: auto;
+      padding: 48px 32px 72px;
+    }
+    .artifact-header {
+      display: grid;
+      grid-template-columns: minmax(0, 1.25fr) minmax(280px, .75fr);
+      gap: 48px;
+      padding: 0 8px 36px;
+      border-bottom: 1px solid #AAA49A;
+    }
+    .eyebrow, .stage-label, .mini-label {
+      color: #655F56;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+    }
+    h1 { margin: 8px 0 12px; font-size: clamp(27px, 4vw, 36px); letter-spacing: -.035em; line-height: 1.08; }
+    .artifact-header p { max-width: 66ch; margin: 0; color: #514D46; font-size: 15px; line-height: 1.65; }
+    .artifact-note { align-self: end; border-top: 1px solid #AAA49A; padding-top: 8px; color: #3D3A35; font-size: 13px; line-height: 1.5; }
+    .artifact-note strong { display: block; margin-bottom: 4px; color: #726C62; font-size: 11px; letter-spacing: .1em; text-transform: uppercase; }
+    .stage { margin-top: 38px; }
+    .stage-label { margin: 0 0 12px 8px; color: #5F5A52; }
+    .app-frame {
+      --canvas: #D8D4CC; --chrome: #F4F2ED; --sidebar: #E9E6DF; --panel: #F7F5F0;
+      --paper: #FFFDF8; --raised: #FFFFFF; --ink: #25241F; --muted: #6A6760;
+      --line: #C9C5BC; --line-soft: #DEDAD2; --accent: #2E6F99; --accent-soft: #D8E8F1;
+      --match: #DCEBF3; --success: #3C724D; --success-soft: #DDEADF;
+      --error: #A3453F; --error-soft: #F3DFDC; --traffic-red: #D46B61; --traffic-amber: #D7A84F; --traffic-green: #69A66F;
+      width: 100%; min-height: 650px; overflow: hidden; border: 1px solid var(--line);
+      border-radius: var(--radius-window); background: var(--canvas); color: var(--ink);
+      box-shadow: 0 24px 72px #2E2A241F, 0 0 0 1px #5C574D33;
+      container-type: inline-size;
+    }
+    .app-frame[data-theme="dark"] {
+      --canvas: #151412; --chrome: #26241F; --sidebar: #201E1A; --panel: #1E1C19;
+      --paper: #292620; --raised: #302D27; --ink: #EEEAE1; --muted: #AAA39A;
+      --line: #47433B; --line-soft: #35322C; --accent: #83B9D9; --accent-soft: #263C48;
+      --match: #253F4E; --success: #79B78A; --success-soft: #23372A;
+      --error: #E08D84; --error-soft: #462B28; --traffic-red: #CE675E; --traffic-amber: #C99A43; --traffic-green: #5F9B66;
+    }
+    .titlebar {
+      display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 16px;
+      min-height: 50px; padding: 0 16px; background: var(--chrome); border-bottom: 1px solid var(--line);
+      box-shadow: inset 0 1px 0 #FFFFFF4D, 0 1px 2px #25221D12;
+    }
+    .traffic { display: flex; gap: 8px; }
+    .traffic span { width: 12px; height: 12px; border-radius: 50%; box-shadow: inset 0 0 0 1px #0000001F; }
+    .traffic span:nth-child(1) { background: var(--traffic-red); }
+    .traffic span:nth-child(2) { background: var(--traffic-amber); }
+    .traffic span:nth-child(3) { background: var(--traffic-green); }
+    .window-title { font-size: 13px; font-weight: 650; }
+    .title-meta { justify-self: end; color: var(--muted); font-size: 11px; }
+    .onboarding-main {
+      display: grid; grid-template-columns: minmax(0, 1.22fr) minmax(270px, .78fr); gap: 40px;
+      min-height: 598px; padding: clamp(28px, 5vw, 58px) clamp(24px, 7vw, 92px);
+      background: var(--panel);
+    }
+    .onboarding-copy { max-width: 720px; }
+    .kicker { margin: 0 0 12px; color: var(--accent); font: 700 11px/1.4 var(--font-mono); letter-spacing: .07em; text-transform: uppercase; }
+    h2 { margin: 0 0 12px; font-size: clamp(25px, 3.2vw, 34px); letter-spacing: -.035em; line-height: 1.1; }
+    .lede { max-width: 58ch; margin: 0 0 28px; color: var(--muted); font-size: 15px; line-height: 1.65; line-break: strict; word-break: keep-all; overflow-wrap: anywhere; }
+    .provider-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: stretch; }
+    .provider-card {
+      display: flex; min-width: 0; flex-direction: column; gap: 14px; padding: 20px;
+      border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--raised);
+    }
+    .provider-card.selected { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+    .provider-card h3 { margin: 0; font-size: 16px; line-height: 1.25; }
+    .provider-card p { min-height: 43px; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; line-break: strict; word-break: keep-all; overflow-wrap: anywhere; }
+    .path-label { color: var(--muted); font-size: 11px; font-weight: 650; }
+    .key-input {
+      width: 100%; min-height: 36px; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm);
+      color: var(--ink); background: var(--paper); font: 11px var(--font-mono);
+    }
+    .device-code { display: grid; align-content: center; min-height: 36px; padding: 8px 10px; border: 1px dashed var(--line); border-radius: var(--radius-sm); color: var(--muted); font-size: 12px; }
+    .card-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: auto; color: var(--muted); font-size: 11px; }
+    .selected-mark { color: var(--accent); font-weight: 700; }
+    .setup-summary { align-self: stretch; min-width: 0; border-left: 1px solid var(--line); padding: 6px 0 0 28px; }
+    .summary-label { margin: 0 0 16px; color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; }
+    .summary-list { display: grid; gap: 14px; margin: 0; padding: 0; list-style: none; }
+    .summary-list li { display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 8px; color: var(--muted); font-size: 13px; line-height: 1.5; }
+    .summary-list li::before { content: "·"; color: var(--accent); font-size: 20px; line-height: 18px; }
+    .summary-list strong { display: block; margin-bottom: 2px; color: var(--ink); font-size: 13px; }
+    .onboarding-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 24px; }
+    .button { min-height: 30px; padding: 6px 12px; border: 1px solid transparent; border-radius: var(--radius-sm); color: var(--muted); background: transparent; font-size: 13px; }
+    .button.primary { border-color: var(--accent); color: #FFFFFF; background: var(--accent); }
+    .button.secondary { border-color: var(--line); color: var(--ink); background: var(--raised); }
+    .button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .static-note { color: var(--muted); font-size: 11px; }
+    .alternate .onboarding-main { background: var(--canvas); }
+    .alternate .onboarding-copy { max-width: none; }
+    .state-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 24px; }
+    .state-card { min-width: 0; padding: 20px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--raised); }
+    .state-card h3 { margin: 0 0 8px; font-size: 16px; }
+    .state-card p { margin: 0 0 14px; color: var(--muted); font-size: 13px; line-height: 1.55; line-break: strict; word-break: keep-all; overflow-wrap: anywhere; }
+    .failure { border-color: var(--error); background: var(--error-soft); }
+    .failure .state-title { color: var(--error); }
+    .reason { margin: 0 0 14px; padding: 10px; border-left: 2px solid var(--error); color: var(--ink); background: color-mix(in srgb, var(--raised) 70%, transparent); font: 11px/1.45 var(--font-mono); overflow-wrap: anywhere; }
+    .success { border-color: var(--success); background: var(--success-soft); }
+    .success .state-title { color: var(--success); }
+    .connected { display: flex; align-items: center; gap: 8px; margin: 16px 0; color: var(--ink); font-size: 13px; font-weight: 650; }
+    .connected::before { content: "✓"; display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; color: var(--success); border: 1px solid var(--success); }
+    @media (max-width: 900px) {
+      .artifact { padding-inline: 16px; }
+      .artifact-header { grid-template-columns: 1fr; gap: 20px; }
+      .onboarding-main { grid-template-columns: 1fr; gap: 28px; }
+      .setup-summary { border-left: 0; border-top: 1px solid var(--line); padding: 20px 0 0; }
+    }
+    @media (max-width: 620px) {
+      .artifact { padding-top: 28px; }
+      .provider-grid, .state-grid { grid-template-columns: 1fr; }
+      .titlebar { grid-template-columns: 1fr auto; }
+      .titlebar .window-title { grid-column: 1; grid-row: 1; }
+      .titlebar .traffic { display: none; }
+      .title-meta { grid-column: 2; grid-row: 1; }
+      .onboarding-main { padding: 28px 20px 36px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="artifact">
+    <header class="artifact-header">
+      <div>
+        <div class="eyebrow">PaperLens · key screen 01</div>
+        <h1>Provider onboarding</h1>
+        <p>첫 실행의 full-window 연결 화면. 두 Provider 경로를 같은 무게로 놓고, 실제 인증 전에는 Library나 Reader를 열지 않는 정적 참조 모형이다.</p>
+      </div>
+      <aside class="artifact-note"><strong>Static mock</strong>실제 자격 증명·네트워크·인증 동작이 없는 오프라인 HTML 참조 화면.</aside>
+    </header>
+
+    <section class="stage" aria-labelledby="onboarding-light-label">
+      <h2 class="stage-label" id="onboarding-light-label">Light · cold / path selection · API key chosen by user (not default)</h2>
+      <div class="app-frame" data-theme="light">
+        <header class="titlebar">
+          <div class="traffic" aria-hidden="true"><span></span><span></span><span></span></div>
+          <div class="window-title">PaperLens</div>
+          <div class="title-meta">새 설치 · 연결 필요</div>
+        </header>
+        <div class="onboarding-main">
+          <section class="onboarding-copy" aria-labelledby="onboarding-light-title">
+            <p class="kicker">첫 실행 · Provider 연결</p>
+            <h2 id="onboarding-light-title">PaperLens에 연결하기</h2>
+            <p class="lede">논문을 읽고 번역하려면 먼저 연결 경로를 선택하세요. 두 경로는 같은 단계에서 시작하며, 연결이 확인된 뒤에도 Library는 <b>Continue</b>를 선택할 때 열립니다.</p>
+            <div class="provider-grid" aria-label="Provider 경로 선택">
+              <article class="provider-card selected">
+                <h3>OpenAI API key</h3>
+                <p>API key를 입력해 Provider 연결을 확인합니다.</p>
+                <label class="path-label" for="light-api-key">API key · 안전하게 표시</label>
+                <input class="key-input" id="light-api-key" value="sk-••••••••••••4K7M" aria-label="API key (redacted static value)">
+                <div class="card-foot"><span class="selected-mark">선택됨</span><span>입력 유지</span></div>
+              </article>
+              <article class="provider-card">
+                <h3>ChatGPT login</h3>
+                <p>공식 Codex SDK 로그인 또는 device-code 경로를 사용합니다.</p>
+                <span class="path-label">공식 Codex SDK</span>
+                <div class="device-code">로그인 / device-code 연결</div>
+                <div class="card-foot"><span>선택 가능</span><span>동등한 경로</span></div>
+              </article>
+            </div>
+            <div class="onboarding-actions">
+              <button class="button primary" type="button">연결 테스트</button>
+              <span class="static-note">인증이 성공하면 Continue가 활성화됩니다.</span>
+            </div>
+          </section>
+          <aside class="setup-summary" aria-label="연결 단계">
+            <p class="summary-label">Setup path</p>
+            <ol class="summary-list">
+              <li><div><strong>Provider 선택</strong>API key 또는 ChatGPT login 중 하나를 고릅니다.</div></li>
+              <li><div><strong>연결 확인</strong>실패하면 이 화면에 머물며 다음 행동을 보여줍니다.</div></li>
+              <li><div><strong>Library 열기</strong>성공 후 명시적인 Continue로 이동합니다.</div></li>
+            </ol>
+          </aside>
+        </div>
+      </div>
+    </section>
+
+    <section class="stage" aria-labelledby="onboarding-dark-label">
+      <h2 class="stage-label" id="onboarding-dark-label">Dark · same path, preserved semantics</h2>
+      <div class="app-frame" data-theme="dark">
+        <header class="titlebar">
+          <div class="traffic" aria-hidden="true"><span></span><span></span><span></span></div>
+          <div class="window-title">PaperLens</div>
+          <div class="title-meta">새 설치 · 연결 필요</div>
+        </header>
+        <div class="onboarding-main">
+          <section class="onboarding-copy" aria-labelledby="onboarding-dark-title">
+            <p class="kicker">첫 실행 · Provider 연결</p>
+            <h2 id="onboarding-dark-title">PaperLens에 연결하기</h2>
+            <p class="lede">논문을 읽고 번역하려면 먼저 연결 경로를 선택하세요. 두 경로는 같은 단계에서 시작하며, 연결이 확인된 뒤에도 Library는 <b>Continue</b>를 선택할 때 열립니다.</p>
+            <div class="provider-grid" aria-label="Provider 경로 선택">
+              <article class="provider-card selected">
+                <h3>OpenAI API key</h3>
+                <p>API key를 입력해 Provider 연결을 확인합니다.</p>
+                <label class="path-label" for="dark-api-key">API key · 안전하게 표시</label>
+                <input class="key-input" id="dark-api-key" value="sk-••••••••••••4K7M" aria-label="API key (redacted static value)">
+                <div class="card-foot"><span class="selected-mark">선택됨</span><span>입력 유지</span></div>
+              </article>
+              <article class="provider-card">
+                <h3>ChatGPT login</h3>
+                <p>공식 Codex SDK 로그인 또는 device-code 경로를 사용합니다.</p>
+                <span class="path-label">공식 Codex SDK</span>
+                <div class="device-code">로그인 / device-code 연결</div>
+                <div class="card-foot"><span>선택 가능</span><span>동등한 경로</span></div>
+              </article>
+            </div>
+            <div class="onboarding-actions">
+              <button class="button primary" type="button">연결 테스트</button>
+              <span class="static-note">인증이 성공하면 Continue가 활성화됩니다.</span>
+            </div>
+          </section>
+          <aside class="setup-summary" aria-label="연결 단계">
+            <p class="summary-label">Setup path</p>
+            <ol class="summary-list">
+              <li><div><strong>Provider 선택</strong>API key 또는 ChatGPT login 중 하나를 고릅니다.</div></li>
+              <li><div><strong>연결 확인</strong>실패하면 이 화면에 머물며 다음 행동을 보여줍니다.</div></li>
+              <li><div><strong>Library 열기</strong>성공 후 명시적인 Continue로 이동합니다.</div></li>
+            </ol>
+          </aside>
+        </div>
+      </div>
+    </section>
+
+    <section class="stage" aria-labelledby="onboarding-alt-label">
+      <h2 class="stage-label" id="onboarding-alt-label">Load-bearing alternate · failed connection and explicit success</h2>
+      <div class="app-frame alternate" data-theme="light">
+        <header class="titlebar">
+          <div class="traffic" aria-hidden="true"><span></span><span></span><span></span></div>
+          <div class="window-title">PaperLens</div>
+          <div class="title-meta">연결 결과 · 정적 예시</div>
+        </header>
+        <div class="onboarding-main">
+          <section class="onboarding-copy" aria-labelledby="onboarding-alt-title">
+            <p class="kicker">ProviderOnboarding · state reference</p>
+            <h2 id="onboarding-alt-title">현재 form을 벗어나지 않는 연결 결과</h2>
+            <p class="lede">실패 시 안전한 입력은 남아 있고 redacted reason과 다음 행동을 함께 표시합니다. 성공 시에도 자동 이동하지 않고 Continue로 Library를 엽니다.</p>
+            <div class="state-grid">
+              <article class="state-card failure" aria-label="Provider 연결 실패 상태">
+                <h3 class="state-title">연결에 실패했습니다</h3>
+                <p>입력은 안전한 형태로 유지됩니다. 다른 경로를 선택하거나 같은 요청을 다시 시도하세요.</p>
+                <p class="reason">Provider response · 401 · key=sk-••••4K7M · reason=••••••</p>
+                <div class="onboarding-actions">
+                  <button class="button secondary" type="button">Retry</button>
+                  <button class="button secondary" type="button">Change Provider Path</button>
+                </div>
+              </article>
+              <article class="state-card success" aria-label="Provider 연결 성공 상태">
+                <h3 class="state-title">연결되었습니다</h3>
+                <p>선택한 Provider가 확인되었습니다. 다음 화면으로 이동할 때는 명시적으로 계속합니다.</p>
+                <div class="connected">OpenAI API key · connected</div>
+                <button class="button primary" type="button">Continue</button>
+              </article>
+            </div>
+            <p class="static-note" style="display:block;margin-top:20px;">Reference only · 버튼은 동작하지 않는 시각 예시입니다.</p>
+          </section>
+          <aside class="setup-summary" aria-label="상태 의미">
+            <p class="summary-label">State meaning</p>
+            <ol class="summary-list">
+              <li><div><strong>실패</strong>현재 Provider form과 안전한 입력을 보존합니다.</div></li>
+              <li><div><strong>복구</strong>Retry 또는 Change Provider Path를 명시적으로 선택합니다.</div></li>
+              <li><div><strong>성공</strong>Continue 전에는 Library가 열리지 않습니다.</div></li>
+            </ol>
+          </aside>
+        </div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PaperLens — Key screen: Brief</title>
+  <style>
+    /*
+      Governing sections: EXPERIENCE.md §Information Architecture (ReaderShell and
+      Brief), §Component Patterns (BriefTrigger and TemplateSelector), §State
+      Patterns (Brief), and §Interaction Primitives 6 and 8. Visual tokens follow
+      DESIGN.md §Brand & Style, §Colors, §Typography, §Layout & Spacing, and the
+      Native Canvas direction reference. This is a static visual mock: controls
+      are labels, not an implemented app. Corrected Native Canvas Light muted and
+      success tokens are #6A6760 and #3C724D; Dark tokens are unchanged.
+    */
+    :root {
+      --frame-max: 1280px;
+      --ui: -apple-system, BlinkMacSystemFont, "Helvetica Neue", "Apple SD Gothic Neo", sans-serif;
+      --reading: ui-serif, "New York", Georgia, serif;
+      --mono: ui-monospace, "SFMono-Regular", Menlo, monospace;
+      --xs: 11px;
+      --sm: 12px;
+      --ui-size: 13px;
+      --body: 15px;
+      --r-sm: 5px;
+      --r-md: 8px;
+      --r-lg: 12px;
+      --r-window: 16px;
+    }
+    * { box-sizing: border-box; }
+    html { background: #CFCAC1; }
+    body { margin: 0; background: #CFCAC1; color: #25241F; font-family: var(--ui); }
+    button { font: inherit; cursor: default; }
+    .artifact { width: min(100%, calc(var(--frame-max) + 64px)); margin: 0 auto; padding: 46px 32px 72px; }
+    .artifact-header { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(260px, .65fr); gap: 40px; padding: 0 8px 30px; border-bottom: 1px solid #AAA49A; }
+    .eyebrow, .theme-label, .source-label { color: #655F56; font-size: var(--xs); font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
+    h1 { margin: 8px 0 12px; font-size: clamp(26px, 3vw, 34px); line-height: 1.06; letter-spacing: -.035em; }
+    .rationale { max-width: 70ch; margin: 0; color: #514D46; font-size: var(--body); line-height: 1.65; }
+    .artifact-meta { display: grid; align-content: end; gap: 14px; margin: 0; }
+    .artifact-meta div { border-top: 1px solid #AAA49A; padding-top: 8px; }
+    .artifact-meta dt { color: #726C62; font-size: var(--xs); font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
+    .artifact-meta dd { margin: 4px 0 0; color: #3D3A35; font-size: var(--sm); line-height: 1.5; }
+    .theme-stage { margin-top: 38px; }
+    .theme-label { margin: 0 0 10px 8px; color: #5F5A52; }
+
+    .app-frame, .state-gallery, .independent-brief {
+      --canvas: #D8D4CC; --chrome: #F4F2ED; --sidebar: #E9E6DF; --panel: #F7F5F0;
+      --paper: #FFFDF8; --raised: #FFFFFF; --ink: #25241F; --muted: #6A6760;
+      --line-color: #C9C5BC; --line-soft: #DEDAD2; --accent: #2E6F99; --accent-soft: #D8E8F1;
+      --match: #DCEBF3; --match-line: #4E88AC; --success: #3C724D; --success-soft: #DDEADF;
+      --error: #A3453F; --error-soft: #F3DFDC; --traffic-red: #D46B61; --traffic-amber: #D7A84F; --traffic-green: #69A66F;
+      --paper-shadow: 0 12px 28px #403B321A, 0 0 0 1px #817B6F24;
+    }
+    .app-frame[data-theme="dark"], .state-gallery[data-theme="dark"], .independent-brief[data-theme="dark"] {
+      --canvas: #151412; --chrome: #26241F; --sidebar: #201E1A; --panel: #1E1C19;
+      --paper: #292620; --raised: #302D27; --ink: #EEEAE1; --muted: #AAA39A;
+      --line-color: #47433B; --line-soft: #35322C; --accent: #83B9D9; --accent-soft: #263C48;
+      --match: #253F4E; --match-line: #79B5D8; --success: #79B78A; --success-soft: #23372A;
+      --error: #E08D84; --error-soft: #462B28; --traffic-red: #CE675E; --traffic-amber: #C99A43; --traffic-green: #5F9B66;
+      --paper-shadow: 0 14px 32px #00000033, 0 0 0 1px #7E756829;
+    }
+    .app-frame { display: grid; grid-template-rows: 48px minmax(0, 1fr); width: 100%; max-width: var(--frame-max); min-height: 770px; overflow: hidden; border: 1px solid var(--line-color); border-radius: var(--r-window); background: var(--canvas); color: var(--ink); box-shadow: 0 24px 72px #2E2A241F, 0 0 0 1px #5C574D33; }
+    .titlebar { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; min-width: 0; padding: 0 16px; background: var(--chrome); border-bottom: 1px solid var(--line-color); box-shadow: inset 0 1px 0 #FFFFFF4D, 0 1px 2px #25221D12; }
+    .traffic { display: flex; gap: 8px; }
+    .traffic span { width: 12px; height: 12px; border-radius: 50%; box-shadow: inset 0 0 0 1px #0000001F; }
+    .traffic span:nth-child(1) { background: var(--traffic-red); } .traffic span:nth-child(2) { background: var(--traffic-amber); } .traffic span:nth-child(3) { background: var(--traffic-green); }
+    .window-title { font-size: var(--ui-size); font-weight: 650; }
+    .title-actions { display: flex; justify-content: end; gap: 8px; }
+    .ui-button, .icon-button, .tab, .template-trigger, .brief-action { appearance: none; border: 1px solid transparent; color: var(--muted); background: transparent; }
+    .ui-button { min-height: 29px; padding: 5px 9px; border-radius: var(--r-sm); }
+    .icon-button { display: grid; place-items: center; width: 29px; height: 29px; border-radius: var(--r-sm); font-weight: 650; }
+    .ui-button:hover, .icon-button:hover, .template-trigger:hover, .brief-action:hover { color: var(--ink); background: var(--raised); border-color: var(--line-color); }
+    .shell { display: grid; grid-template-columns: 210px minmax(0, 1fr); min-height: 0; }
+    .sidebar { display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; min-height: 0; background: var(--sidebar); border-right: 1px solid var(--line-color); }
+    .sidebar-top, .paper-meta, .outline, .sidebar-foot { padding-inline: 16px; }
+    .sidebar-top { padding-block: 12px; border-bottom: 1px solid var(--line-soft); }
+    .paper-meta { padding-block: 20px; }
+    .paper-meta .overline { color: var(--success); font-size: var(--xs); font-weight: 700; }
+    .paper-meta h2 { margin: 8px 0; font-size: 17px; line-height: 1.23; letter-spacing: -.025em; }
+    .paper-meta p { margin: 0; color: var(--muted); font-size: var(--sm); line-height: 1.45; }
+    .outline { min-height: 0; padding-block: 8px; overflow: auto; }
+    .outline-label { margin: 8px 0; color: var(--muted); font-size: var(--xs); font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+    .outline button { width: 100%; margin: 2px 0; text-align: left; }
+    .outline .active { background: var(--raised); color: var(--ink); box-shadow: inset 0 1px 0 #FFFFFF4D, 0 1px 2px #25221D12; }
+    .sidebar-foot { padding-block: 12px; border-top: 1px solid var(--line-soft); color: var(--muted); font-size: var(--xs); }
+    .reader { display: grid; grid-template-rows: 48px 34px minmax(0, 1fr) 38px; min-width: 0; min-height: 0; }
+    .reader-toolbar, .job-strip, .statusbar { background: var(--panel); }
+    .reader-toolbar { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 16px; padding: 0 16px; border-bottom: 1px solid var(--line-color); }
+    .control-cluster { display: flex; align-items: center; gap: 8px; min-width: 0; }
+    .toolbar-center { max-width: 340px; overflow: hidden; font-size: var(--ui-size); font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+    .reader-toolbar .control-cluster:last-child { justify-content: end; }
+    .job-strip { display: flex; align-items: center; gap: 16px; min-width: 0; padding: 0 16px; border-bottom: 1px solid var(--line-color); color: var(--muted); font-size: var(--xs); }
+    .job { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
+    .job-ready { color: var(--success); } .job-progress { color: var(--accent); }
+    .status-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+    progress { width: 76px; height: 4px; accent-color: var(--accent); }
+    .workspace { position: relative; min-width: 0; min-height: 0; overflow: hidden; background: var(--canvas); }
+    .base-comparison { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); height: 100%; min-height: 0; }
+    .base-panel { display: grid; grid-template-rows: 44px minmax(0, 1fr); min-width: 0; min-height: 0; }
+    .base-panel + .base-panel { border-left: 1px solid var(--line-color); }
+    .panel-heading { display: flex; align-items: center; justify-content: space-between; min-width: 0; padding: 0 16px; background: var(--panel); border-bottom: 1px solid var(--line-color); }
+    .panel-title { font-size: var(--ui-size); font-weight: 650; } .panel-meta { color: var(--muted); font: var(--xs) var(--mono); letter-spacing: .03em; }
+    .pdf-scroll, .translation-scroll { min-height: 0; overflow: auto; padding: 24px; }
+    .pdf-page { width: min(460px, 100%); min-height: 590px; margin: 0 auto; padding: 38px 42px; color: var(--ink); background: var(--paper); border-radius: var(--r-sm); box-shadow: var(--paper-shadow); font-family: var(--reading); }
+    .paper-kicker { margin: 0 0 12px; color: var(--muted); font: 10px var(--ui); letter-spacing: .08em; text-transform: uppercase; }
+    .pdf-page h3 { margin: 0 0 20px; font-size: 18px; line-height: 1.25; }
+    .pdf-page p, .translation-body p { margin: 0 0 16px; font-size: 16px; line-height: 1.68; }
+    .equation { margin: 20px 0; padding: 12px; text-align: center; border-block: 1px solid var(--line-soft); font-style: italic; }
+    .translation-body { max-width: 42ch; margin: 0 auto; color: var(--ink); line-break: strict; word-break: keep-all; overflow-wrap: break-word; }
+    .translation-body h3 { margin: 0 0 20px; font-size: 21px; line-height: 1.25; }
+    .translation-body .section-no { margin: 0 0 8px; color: var(--accent); font: var(--xs) var(--mono); }
+    .match { padding: 1px 3px; background: var(--match); box-shadow: 0 0 0 1px var(--match-line); border-radius: 3px; }
+    .brief-drawer { position: absolute; inset: 0 0 0 auto; display: grid; grid-template-rows: 48px auto minmax(0, 1fr) 48px; width: min(470px, 52%); min-width: 360px; background: var(--raised); border-left: 1px solid var(--line-color); box-shadow: -14px 0 28px #25221D18; }
+    .drawer-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 16px; border-bottom: 1px solid var(--line-color); }
+    .drawer-head h3 { margin: 0; font-size: 16px; }
+    .drawer-head small { color: var(--muted); font-size: var(--xs); }
+    .drawer-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); }
+    .template-trigger { min-height: 31px; padding: 6px 9px; color: var(--ink); text-align: left; border-color: var(--line-color); border-radius: var(--r-sm); background: var(--panel); }
+    .manage-template { min-height: 31px; padding: 6px 9px; color: var(--accent); font-size: var(--sm); border: 1px solid var(--accent); border-radius: var(--r-sm); background: transparent; }
+    .brief-scroll { min-height: 0; overflow: auto; padding: 20px 24px 28px; }
+    .brief-status { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 16px; padding: 9px 10px; color: var(--success); font-size: var(--sm); line-height: 1.45; border: 1px solid var(--success); border-radius: var(--r-sm); background: var(--success-soft); }
+    .brief-status strong { display: block; color: var(--success); }
+    .brief-body { color: var(--ink); font-family: var(--reading); }
+    .brief-body h4 { margin: 18px 0 7px; font-family: var(--ui); font-size: 15px; line-height: 1.3; }
+    .brief-body h4:first-child { margin-top: 0; }
+    .brief-body p, .brief-body li { font-size: 15px; line-height: 1.62; }
+    .brief-body p { margin: 0 0 10px; } .brief-body ul { margin: 0 0 12px; padding-left: 20px; }
+    .brief-anchor { color: var(--accent); font-family: var(--ui); font-size: var(--sm); font-weight: 700; text-decoration: none; }
+    .drawer-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 16px; border-top: 1px solid var(--line-color); }
+    .drawer-foot span { color: var(--muted); font-size: var(--xs); } .brief-action { min-height: 29px; padding: 5px 9px; color: var(--accent); border-color: var(--accent); border-radius: var(--r-sm); }
+    .statusbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; padding: 0 16px; border-top: 1px solid var(--line-color); color: var(--muted); font-size: var(--xs); }
+    .statusbar strong { color: var(--accent); }
+
+    .independent-brief { display: grid; grid-template-columns: 190px minmax(0, 1fr); gap: 24px; margin-top: 12px; padding: 20px 24px; border: 1px solid var(--line-color); border-radius: var(--r-lg); background: var(--panel); color: var(--ink); }
+    .independent-meta { border-right: 1px solid var(--line-color); padding-right: 18px; }
+    .independent-meta .source-label { color: var(--muted); }
+    .independent-meta h3 { margin: 8px 0; font-size: 17px; line-height: 1.3; }
+    .independent-meta p { margin: 0 0 12px; color: var(--muted); font-size: var(--sm); line-height: 1.5; }
+    .brief-indicator { display: block; padding: 8px 9px; color: var(--success); font-size: var(--sm); line-height: 1.45; border: 1px solid var(--success); border-radius: var(--r-sm); background: var(--success-soft); }
+    .independent-body { max-width: 66ch; }
+    .independent-body h3 { margin: 0 0 14px; font-family: var(--reading); font-size: 22px; line-height: 1.2; }
+    .independent-body h4 { margin: 16px 0 5px; font-size: 15px; }
+    .independent-body p, .independent-body li { margin: 0 0 9px; font-family: var(--reading); font-size: 15px; line-height: 1.62; }
+    .independent-body ul { margin: 0; padding-left: 20px; }
+    .state-gallery { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 12px; padding: 12px; border: 1px solid var(--line-color); border-radius: var(--r-lg); background: var(--panel); }
+    .state-card { min-width: 0; min-height: 126px; padding: 12px; border: 1px solid var(--line-color); border-radius: var(--r-md); background: var(--raised); }
+    .state-card h3 { margin: 4px 0 7px; color: var(--ink); font-size: var(--ui-size); line-height: 1.3; }
+    .state-card p { margin: 0; color: var(--muted); font-size: var(--sm); line-height: 1.5; }
+    .state-kicker { color: var(--muted); font: 700 var(--xs) var(--mono); letter-spacing: .03em; }
+    .state-card.failure { border-color: var(--error); background: var(--error-soft); }
+    .state-card.failure .state-kicker { color: var(--error); }
+    .gallery-note, .source-map { grid-column: 1 / -1; margin: 0 2px 2px; color: var(--muted); font-size: var(--xs); line-height: 1.5; }
+    .source-map { margin-top: 12px; } .source-map strong { color: var(--ink); }
+
+    @media (max-width: 1040px) {
+      .artifact { padding-inline: 16px; } .artifact-header { grid-template-columns: 1fr; gap: 22px; }
+      .shell { grid-template-columns: 176px minmax(0, 1fr); } .pdf-scroll, .translation-scroll { padding: 16px; }
+      .pdf-page { padding: 30px; } .brief-drawer { width: min(470px, 62%); }
+    }
+    @media (max-width: 760px) {
+      .artifact { padding: 28px 10px 48px; } .app-frame { min-height: 0; height: auto; border-radius: var(--r-lg); }
+      .titlebar { padding-inline: 12px; } .title-actions .ui-button { display: none; }
+      .shell { grid-template-columns: 1fr; } .sidebar { display: none; }
+      .reader { grid-template-rows: auto auto auto auto; } .reader-toolbar { grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; padding-inline: 10px; }
+      .toolbar-center { justify-self: center; max-width: 150px; } .reader-toolbar .control-cluster:last-child .ui-button, .reader-toolbar .control-cluster:last-child .icon-button:first-child { display: none; }
+      .job-strip { gap: 10px; padding-inline: 10px; overflow: auto; } .workspace { overflow: visible; }
+      .base-comparison { grid-template-columns: 1fr; height: auto; } .base-panel { min-height: 470px; } .base-panel + .base-panel { border-top: 1px solid var(--line-color); border-left: 0; }
+      .brief-drawer { position: relative; inset: auto; width: 100%; min-width: 0; min-height: 620px; border-top: 1px solid var(--line-color); border-left: 0; box-shadow: none; }
+      .statusbar { align-items: flex-start; flex-direction: column; justify-content: center; gap: 2px; min-height: 48px; padding-block: 7px; }
+      .independent-brief { grid-template-columns: 1fr; gap: 16px; padding: 16px; } .independent-meta { border-right: 0; border-bottom: 1px solid var(--line-color); padding: 0 0 14px; }
+      .state-gallery { grid-template-columns: 1fr 1fr; } .gallery-note, .source-map { grid-column: 1 / -1; }
+    }
+    .brief-body .not-established, .independent-body .not-established { color: var(--error); }
+    .brief-contract-index {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 1px 18px;
+      max-height: 360px;
+      margin-top: 12px;
+      padding: 14px 16px;
+      overflow: auto;
+      border: 1px solid #C9C5BC;
+      border-radius: var(--r-lg);
+      background: #F7F5F0;
+      color: #25241F;
+    }
+    .brief-contract-index[data-theme="dark"] {
+      border-color: #47433B;
+      background: #1E1C19;
+      color: #EEEAE1;
+    }
+    .brief-contract-index h2 {
+      grid-column: 1 / -1;
+      margin: 0 0 8px;
+      font-size: var(--ui-size);
+      line-height: 1.35;
+    }
+    .brief-contract-index article {
+      padding: 9px 0;
+      border-top: 1px solid #DEDAD2;
+    }
+    .brief-contract-index[data-theme="dark"] article { border-color: #35322C; }
+    .brief-contract-index h3 { margin: 0 0 4px; font-size: var(--sm); }
+    .brief-contract-index p { margin: 0; color: #6A6760; font-size: var(--sm); line-height: 1.5; }
+    .brief-contract-index[data-theme="dark"] p { color: #AAA39A; }
+    .brief-contract-index .not-established { color: #A3453F; }
+    .brief-contract-index[data-theme="dark"] .not-established { color: #E08D84; }
+    @media (max-width: 460px) { .state-gallery { grid-template-columns: 1fr; } .drawer-controls { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <main class="artifact">
+    <header class="artifact-header">
+      <div>
+        <div class="eyebrow">PaperLens · key screen 02</div>
+        <h1>Brief · drawer and independent reading</h1>
+        <p class="rationale">Reader의 현재 page를 유지한 채 Brief drawer를 열고, 같은 Markdown 결과를 독립 읽기 surface에서도 확인하는 정적 시안이다. Paper 추가 직후 기본 Template으로 자동 생성된 결과와, 명시적 재생성 실패 뒤 이전 결과를 보존하는 상태를 함께 담았다.</p>
+      </div>
+      <dl class="artifact-meta">
+        <div><dt>Caption</dt><dd>Default-template Brief in a Reader drawer; independent Brief reading and failed regeneration with prior result preserved.</dd></div>
+        <div><dt>Source mapping</dt><dd>UJ-1 steps 11–13 and failure path; UJ-4 steps 1–4; BriefTrigger, TemplateSelector, and Brief state patterns.</dd></div>
+        <div><dt>Artifact status</dt><dd>Native Canvas Light/Dark reference only · static labels, no JavaScript, no network.</dd></div>
+      </dl>
+    </header>
+
+    <section class="theme-stage" aria-labelledby="brief-light-label">
+      <h2 class="theme-label" id="brief-light-label">Native Canvas · Light</h2>
+      <div class="app-frame" data-theme="light">
+        <header class="titlebar"><div class="traffic" aria-hidden="true"><span></span><span></span><span></span></div><div class="window-title">PaperLens</div><div class="title-actions"><button class="icon-button" aria-label="사이드바 전환">▤</button><button class="ui-button">검색&nbsp; ⌘F</button></div></header>
+        <div class="shell">
+          <aside class="sidebar" aria-label="논문 탐색"><div class="sidebar-top"><button class="ui-button">‹&nbsp; Library</button></div><section class="paper-meta"><div class="overline">읽는 중</div><h2>Attention Is All You Need</h2><p>Vaswani et al. · 2017</p></section><nav class="outline" aria-label="문서 목차"><div class="outline-label">Contents</div><button class="ui-button">1&nbsp;&nbsp;Introduction</button><button class="ui-button">2&nbsp;&nbsp;Background</button><button class="ui-button">3&nbsp;&nbsp;Model Architecture</button><button class="ui-button active">3.2&nbsp;&nbsp;Attention</button><button class="ui-button">4&nbsp;&nbsp;Why Self-Attention</button><button class="ui-button">5&nbsp;&nbsp;Training</button><button class="ui-button">6&nbsp;&nbsp;Results</button></nav><div class="sidebar-foot">마지막 위치 · 6페이지, 3.2.1</div></aside>
+          <section class="reader" aria-label="Brief drawer Reader"><header class="reader-toolbar"><div class="control-cluster"><button class="icon-button" aria-label="이전 페이지">‹</button><button class="icon-button" aria-label="다음 페이지">›</button><button class="ui-button">6 / 12</button></div><div class="toolbar-center">Attention Is All You Need</div><div class="control-cluster"><button class="icon-button" aria-label="축소">−</button><button class="ui-button">125%</button><button class="icon-button" aria-label="확대">+</button><button class="ui-button">PDF 검색</button></div></header><div class="job-strip"><span class="job job-ready"><span class="status-dot"></span>PDF 준비됨</span><span class="job job-progress"><span>현재 페이지 번역 84%</span><progress value="84" max="100">84%</progress></span><span class="job job-ready"><span class="status-dot"></span>Brief 준비됨</span><span>기본 Template으로 자동 생성됨</span></div>
+            <div class="workspace"><div class="base-comparison"><section class="base-panel"><header class="panel-heading"><span class="panel-title">Original PDF</span><span class="panel-meta">PAGE 6</span></header><div class="pdf-scroll"><article class="pdf-page" lang="en"><p class="paper-kicker">3 · Model Architecture</p><h3>3.2.1 Scaled Dot-Product Attention</h3><p>We call our particular attention “Scaled Dot-Product Attention.” The input consists of queries and keys of dimension d<sub>k</sub>, and values of dimension d<sub>v</sub>.</p><p>We compute the dot products of the query with all keys, divide each by √d<sub>k</sub>, and apply a softmax function to obtain the weights on the values.</p><div class="equation">Attention(Q, K, V) = softmax(QKᵀ / √d<sub>k</sub>)V</div><p><span class="match">We suspect that for large values of d<sub>k</sub>, the dot products grow large in magnitude, pushing the softmax function into regions where it has extremely small gradients.</span></p></article></div></section><section class="base-panel"><header class="panel-heading"><span class="panel-title">Translation</span><span class="panel-meta">현재 페이지 · 6</span></header><div class="translation-scroll"><article class="translation-body" lang="ko"><p class="section-no">3.2.1 · 문장 정렬됨</p><h3>스케일드 닷-프로덕트 어텐션</h3><p>쿼리와 모든 키의 내적을 계산하고, 각각을 √d<sub>k</sub>로 나눈 뒤, softmax 함수를 적용해 값에 대한 가중치를 얻는다.</p><p><span class="match">d<sub>k</sub> 값이 클수록 내적의 크기가 커져 softmax 함수가 기울기가 극도로 작은 영역으로 밀려날 수 있다.</span></p><p>이 효과를 상쇄하기 위해 내적을 1 / √d<sub>k</sub>로 스케일링한다.</p></article></div></section></div>
+              <aside class="brief-drawer" aria-label="Brief 서랍"><header class="drawer-head"><div><h3>Brief</h3><small>Attention Is All You Need · 현재 page 6 유지</small></div><button class="icon-button" aria-label="Brief 닫기">×</button></header><div class="drawer-controls"><button class="template-trigger">기본 Template&nbsp;⌄</button><button class="manage-template">Template 관리</button></div><div class="brief-scroll"><div class="brief-status"><span class="status-dot"></span><div><strong>Brief 준비됨</strong>Paper 추가 시 기본 Template으로 자동 생성된 결과</div></div><article class="brief-body"><h4>## 문제</h4><p>큰 d<sub>k</sub>에서 query와 key의 내적이 커지면 softmax가 매우 작은 gradient 영역으로 밀릴 수 있다. <a class="brief-anchor" href="#brief-light-anchor">[원문 6p]</a></p><h4>## 기존 방법 한계</h4><p>스케일링하지 않은 내적에서는 이 효과가 남을 수 있다. 다른 기존 방법과의 비교는 이 source에서 말하지 않는다.</p><h4>## 제안 방법</h4><p>내적을 √d<sub>k</sub>로 나누고 softmax를 적용한 뒤 value에 가중치를 준다. <a class="brief-anchor" href="#brief-light-anchor">[원문 6p]</a></p><h4>## 논문 명시 한계</h4><p>이 발췌가 명시하는 한계는 d<sub>k</sub>가 클 때의 작은 gradient 문제다. 더 넓은 성능 한계나 수치 비교는 제시되지 않는다.</p><h4>## AI 분석 한계</h4><p class="not-established"><strong>근거 부족.</strong> 현재 source만으로 하드웨어 성능 향상, 최적 정확도, 일반화는 확인할 수 없다.</p><h4>## 추가 최적화 가능성</h4><p class="not-established"><strong>이 source에 없음.</strong> 추가 최적화 방법은 이 발췌에 명시되어 있지 않다.</p><h4>## 방법의 장점과 한계</h4><p id="brief-light-anchor">장점은 큰 내적 값이 만드는 softmax gradient 문제를 완화하는 조정이다. 한계는 이 source가 성능 보장이나 다른 변형과의 비교를 말하지 않는다는 점이다.</p></article></div><footer class="drawer-foot"><span>Markdown Brief · selected: 기본 Template</span><button class="brief-action">Brief 재생성</button></footer></aside>
+            </div><footer class="statusbar"><span><strong>Brief drawer</strong> · Reader page 6 유지</span><span>Drawer를 닫아도 같은 위치로 돌아감</span></footer></section>
+        </div>
+      </div>
+      <section class="independent-brief" data-theme="light" aria-label="Independent Brief reading">
+        <aside class="independent-meta"><div class="source-label">Independent reading</div><h3>Attention Is All You Need</h3><p>Brief · 기본 Template<br>3.2.1 · Scaled Dot-Product Attention</p><span class="brief-indicator">기본 Template 자동 생성 결과</span></aside>
+        <article class="independent-body"><h3>논문 Brief</h3><h4>## 문제</h4><p>큰 d<sub>k</sub>에서 query와 key의 내적이 커지면 softmax가 매우 작은 gradient 영역으로 밀릴 수 있다. <a class="brief-anchor" href="#brief-independent-light">[원문 6p]</a></p><h4>## 기존 방법 한계</h4><p>스케일링하지 않은 내적에서는 이 효과가 남을 수 있다. 다른 기존 방법과의 비교는 이 source에서 말하지 않는다.</p><h4>## 제안 방법</h4><p>내적을 √d<sub>k</sub>로 나누고 softmax를 적용한 뒤 value에 가중치를 준다. <a class="brief-anchor" href="#brief-independent-light">[원문 6p]</a></p><h4>## 논문 명시 한계</h4><p>이 발췌가 명시하는 한계는 d<sub>k</sub>가 클 때의 작은 gradient 문제다. 더 넓은 성능 한계나 수치 비교는 제시되지 않는다.</p><h4>## AI 분석 한계</h4><p class="not-established"><strong>근거 부족.</strong> 현재 source만으로 하드웨어 성능 향상, 최적 정확도, 일반화는 확인할 수 없다.</p><h4>## 추가 최적화 가능성</h4><p class="not-established"><strong>이 source에 없음.</strong> 추가 최적화 방법은 이 발췌에 명시되어 있지 않다.</p><h4>## 방법의 장점과 한계</h4><p id="brief-independent-light">장점은 큰 내적 값이 만드는 softmax gradient 문제를 완화하는 조정이다. 한계는 이 source가 성능 보장이나 다른 변형과의 비교를 말하지 않는다는 점이다.</p></article>
+      </section>
+      <section class="state-gallery" data-theme="light" aria-label="Brief alternate state"><p class="gallery-note">Load-bearing alternate state: regeneration is explicit, and a failed job does not replace the prior usable Brief.</p><article class="state-card"><span class="state-kicker">AUTO DEFAULT</span><h3>기본 Template · 자동 생성</h3><p>Paper 추가 후 시작된 initial Brief Job의 결과가 drawer와 independent view에 보인다.</p></article><article class="state-card"><span class="state-kicker">SELECTED TEMPLATE</span><h3>Template 선택됨</h3><p>Template 관리에서 돌아와도 선택만 바뀌며, 저장과 재생성은 하나의 action이 아니다.</p></article><article class="state-card failure"><span class="state-kicker">FAILED WITH PRIOR</span><h3>재생성 실패 · 이전 Brief 유지</h3><p>명시적으로 Brief 재생성을 실행했지만 실패했다. 기존 Brief 본문은 그대로 읽을 수 있고 실패 이유와 재시도만 별도로 보인다.</p></article></section>
+      <p class="source-map"><strong>Mapping:</strong> UJ-1 김철수 steps 11–13 / failure path · UJ-4 최준호 steps 1–4 · `BriefTrigger`, `TemplateSelector`, `Brief` state.</p>
+      <section class="brief-contract-index" data-theme="light" aria-label="FR-021 seven Brief categories">
+        <h2>FR-021 · 기본 Template seven-category contract · drawer와 independent Brief에 동일 적용</h2>
+        <article><h3>문제</h3><p>큰 dₖ에서 query와 key의 내적이 커지면 softmax가 매우 작은 gradient 영역으로 밀릴 수 있다. 원문 6페이지.</p></article>
+        <article><h3>기존 방법 한계</h3><p>스케일링하지 않은 내적에서는 이 효과가 남을 수 있다. 다른 기존 방법과의 비교는 이 source에서 말하지 않는다.</p></article>
+        <article><h3>제안 방법</h3><p>내적을 √dₖ로 나누고 softmax를 적용한 뒤 value에 가중치를 준다. 원문 6페이지.</p></article>
+        <article><h3>논문 명시 한계</h3><p>이 발췌가 명시하는 한계는 dₖ가 클 때의 작은 gradient 문제다. 더 넓은 성능 한계나 수치 비교는 제시되지 않는다.</p></article>
+        <article><h3>AI 분석 한계</h3><p class="not-established">현재 source만으로 하드웨어 성능 향상, 최적 정확도, 일반화는 확인할 수 없다. 근거 부족.</p></article>
+        <article><h3>추가 최적화 가능성</h3><p class="not-established">이 발췌에는 추가 최적화 방법이 명시되어 있지 않다. 제안하지 않음.</p></article>
+        <article><h3>방법의 장점과 한계</h3><p>장점은 큰 내적 값이 만드는 softmax gradient 문제를 완화하는 조정이다. 한계는 이 source가 성능 보장이나 다른 변형과의 비교를 말하지 않는다는 점이다.</p></article>
+      </section>
+    </section>
+
+    <section class="theme-stage" aria-labelledby="brief-dark-label">
+      <h2 class="theme-label" id="brief-dark-label">Native Canvas · Dark</h2>
+      <div class="app-frame" data-theme="dark">
+        <header class="titlebar"><div class="traffic" aria-hidden="true"><span></span><span></span><span></span></div><div class="window-title">PaperLens</div><div class="title-actions"><button class="icon-button" aria-label="사이드바 전환">▤</button><button class="ui-button">검색&nbsp; ⌘F</button></div></header>
+        <div class="shell"><aside class="sidebar" aria-label="논문 탐색"><div class="sidebar-top"><button class="ui-button">‹&nbsp; Library</button></div><section class="paper-meta"><div class="overline">읽는 중</div><h2>Attention Is All You Need</h2><p>Vaswani et al. · 2017</p></section><nav class="outline" aria-label="문서 목차"><div class="outline-label">Contents</div><button class="ui-button">1&nbsp;&nbsp;Introduction</button><button class="ui-button">2&nbsp;&nbsp;Background</button><button class="ui-button">3&nbsp;&nbsp;Model Architecture</button><button class="ui-button active">3.2&nbsp;&nbsp;Attention</button><button class="ui-button">4&nbsp;&nbsp;Why Self-Attention</button><button class="ui-button">5&nbsp;&nbsp;Training</button><button class="ui-button">6&nbsp;&nbsp;Results</button></nav><div class="sidebar-foot">마지막 위치 · 6페이지, 3.2.1</div></aside><section class="reader" aria-label="Brief drawer Reader"><header class="reader-toolbar"><div class="control-cluster"><button class="icon-button" aria-label="이전 페이지">‹</button><button class="icon-button" aria-label="다음 페이지">›</button><button class="ui-button">6 / 12</button></div><div class="toolbar-center">Attention Is All You Need</div><div class="control-cluster"><button class="icon-button" aria-label="축소">−</button><button class="ui-button">125%</button><button class="icon-button" aria-label="확대">+</button><button class="ui-button">PDF 검색</button></div></header><div class="job-strip"><span class="job job-ready"><span class="status-dot"></span>PDF 준비됨</span><span class="job job-progress"><span>현재 페이지 번역 84%</span><progress value="84" max="100">84%</progress></span><span class="job job-ready"><span class="status-dot"></span>Brief 준비됨</span><span>기본 Template으로 자동 생성됨</span></div><div class="workspace"><div class="base-comparison"><section class="base-panel"><header class="panel-heading"><span class="panel-title">Original PDF</span><span class="panel-meta">PAGE 6</span></header><div class="pdf-scroll"><article class="pdf-page" lang="en"><p class="paper-kicker">3 · Model Architecture</p><h3>3.2.1 Scaled Dot-Product Attention</h3><p>We call our particular attention “Scaled Dot-Product Attention.” The input consists of queries and keys of dimension d<sub>k</sub>, and values of dimension d<sub>v</sub>.</p><p>We compute the dot products of the query with all keys, divide each by √d<sub>k</sub>, and apply a softmax function to obtain the weights on the values.</p><div class="equation">Attention(Q, K, V) = softmax(QKᵀ / √d<sub>k</sub>)V</div><p><span class="match">We suspect that for large values of d<sub>k</sub>, the dot products grow large in magnitude, pushing the softmax function into regions where it has extremely small gradients.</span></p></article></div></section><section class="base-panel"><header class="panel-heading"><span class="panel-title">Translation</span><span class="panel-meta">현재 페이지 · 6</span></header><div class="translation-scroll"><article class="translation-body" lang="ko"><p class="section-no">3.2.1 · 문장 정렬됨</p><h3>스케일드 닷-프로덕트 어텐션</h3><p>쿼리와 모든 키의 내적을 계산하고, 각각을 √d<sub>k</sub>로 나눈 뒤, softmax 함수를 적용해 값에 대한 가중치를 얻는다.</p><p><span class="match">d<sub>k</sub> 값이 클수록 내적의 크기가 커져 softmax 함수가 기울기가 극도로 작은 영역으로 밀려날 수 있다.</span></p><p>이 효과를 상쇄하기 위해 내적을 1 / √d<sub>k</sub>로 스케일링한다.</p></article></div></section></div><aside class="brief-drawer" aria-label="Brief 서랍"><header class="drawer-head"><div><h3>Brief</h3><small>Attention Is All You Need · 현재 page 6 유지</small></div><button class="icon-button" aria-label="Brief 닫기">×</button></header><div class="drawer-controls"><button class="template-trigger">기본 Template&nbsp;⌄</button><button class="manage-template">Template 관리</button></div><div class="brief-scroll"><div class="brief-status"><span class="status-dot"></span><div><strong>Brief 준비됨</strong>Paper 추가 시 기본 Template으로 자동 생성된 결과</div></div><article class="brief-body"><h4>## 문제</h4><p>큰 d<sub>k</sub>에서 query와 key의 내적이 커지면 softmax가 매우 작은 gradient 영역으로 밀릴 수 있다. <a class="brief-anchor" href="#brief-dark-anchor">[원문 6p]</a></p><h4>## 기존 방법 한계</h4><p>스케일링하지 않은 내적에서는 이 효과가 남을 수 있다. 다른 기존 방법과의 비교는 이 source에서 말하지 않는다.</p><h4>## 제안 방법</h4><p>내적을 √d<sub>k</sub>로 나누고 softmax를 적용한 뒤 value에 가중치를 준다. <a class="brief-anchor" href="#brief-dark-anchor">[원문 6p]</a></p><h4>## 논문 명시 한계</h4><p>이 발췌가 명시하는 한계는 d<sub>k</sub>가 클 때의 작은 gradient 문제다. 더 넓은 성능 한계나 수치 비교는 제시되지 않는다.</p><h4>## AI 분석 한계</h4><p class="not-established"><strong>근거 부족.</strong> 현재 source만으로 하드웨어 성능 향상, 최적 정확도, 일반화는 확인할 수 없다.</p><h4>## 추가 최적화 가능성</h4><p class="not-established"><strong>이 source에 없음.</strong> 추가 최적화 방법은 이 발췌에 명시되어 있지 않다.</p><h4>## 방법의 장점과 한계</h4><p id="brief-dark-anchor">장점은 큰 내적 값이 만드는 softmax gradient 문제를 완화하는 조정이다. 한계는 이 source가 성능 보장이나 다른 변형과의 비교를 말하지 않는다는 점이다.</p></article></div><footer class="drawer-foot"><span>Markdown Brief · selected: 기본 Template</span><button class="brief-action">Brief 재생성</button></footer></aside></div><footer class="statusbar"><span><strong>Brief drawer</strong> · Reader page 6 유지</span><span>Drawer를 닫아도 같은 위치로 돌아감</span></footer></section></div>
+      </div>
+      <section class="independent-brief" data-theme="dark" aria-label="Independent Brief reading"><aside class="independent-meta"><div class="source-label">Independent reading</div><h3>Attention Is All You Need</h3><p>Brief · 기본 Template<br>3.2.1 · Scaled Dot-Product Attention</p><span class="brief-indicator">기본 Template 자동 생성 결과</span></aside><article class="independent-body"><h3>논문 Brief</h3><h4>## 문제</h4><p>큰 d<sub>k</sub>에서 query와 key의 내적이 커지면 softmax가 매우 작은 gradient 영역으로 밀릴 수 있다. <a class="brief-anchor" href="#brief-independent-dark">[원문 6p]</a></p><h4>## 기존 방법 한계</h4><p>스케일링하지 않은 내적에서는 이 효과가 남을 수 있다. 다른 기존 방법과의 비교는 이 source에서 말하지 않는다.</p><h4>## 제안 방법</h4><p>내적을 √d<sub>k</sub>로 나누고 softmax를 적용한 뒤 value에 가중치를 준다. <a class="brief-anchor" href="#brief-independent-dark">[원문 6p]</a></p><h4>## 논문 명시 한계</h4><p>이 발췌가 명시하는 한계는 d<sub>k</sub>가 클 때의 작은 gradient 문제다. 더 넓은 성능 한계나 수치 비교는 제시되지 않는다.</p><h4>## AI 분석 한계</h4><p class="not-established"><strong>근거 부족.</strong> 현재 source만으로 하드웨어 성능 향상, 최적 정확도, 일반화는 확인할 수 없다.</p><h4>## 추가 최적화 가능성</h4><p class="not-established"><strong>이 source에 없음.</strong> 추가 최적화 방법은 이 발췌에 명시되어 있지 않다.</p><h4>## 방법의 장점과 한계</h4><p id="brief-independent-dark">장점은 큰 내적 값이 만드는 softmax gradient 문제를 완화하는 조정이다. 한계는 이 source가 성능 보장이나 다른 변형과의 비교를 말하지 않는다는 점이다.</p></article></section>
+      <section class="state-gallery" data-theme="dark" aria-label="Brief dark alternate state"><p class="gallery-note">Load-bearing alternate state: explicit regeneration failure preserves the prior usable result.</p><article class="state-card"><span class="state-kicker">AUTO DEFAULT</span><h3>기본 Template · 자동 생성</h3><p>Paper 추가 시 시작된 initial Brief 결과다.</p></article><article class="state-card"><span class="state-kicker">SELECTED TEMPLATE</span><h3>Template 선택됨</h3><p>선택과 재생성은 분리된 상태다.</p></article><article class="state-card failure"><span class="state-kicker">FAILED WITH PRIOR</span><h3>재생성 실패 · 이전 Brief 유지</h3><p>실패 이유는 보이지만 이전 Markdown Brief 본문은 대체되지 않는다.</p></article></section>
+      <p class="source-map"><strong>Mapping:</strong> UJ-1 / UJ-4 · `BriefTrigger`, `TemplateSelector` · `State Patterns / Brief`.</p>
+      <section class="brief-contract-index" data-theme="dark" aria-label="FR-021 seven Brief categories">
+        <h2>FR-021 · 기본 Template seven-category contract · drawer와 independent Brief에 동일 적용</h2>
+        <article><h3>문제</h3><p>큰 dₖ에서 query와 key의 내적이 커지면 softmax가 매우 작은 gradient 영역으로 밀릴 수 있다. 원문 6페이지.</p></article>
+        <article><h3>기존 방법 한계</h3><p>스케일링하지 않은 내적에서는 이 효과가 남을 수 있다. 다른 기존 방법과의 비교는 이 source에서 말하지 않는다.</p></article>
+        <article><h3>제안 방법</h3><p>내적을 √dₖ로 나누고 softmax를 적용한 뒤 value에 가중치를 준다. 원문 6페이지.</p></article>
+        <article><h3>논문 명시 한계</h3><p>이 발췌가 명시하는 한계는 dₖ가 클 때의 작은 gradient 문제다. 더 넓은 성능 한계나 수치 비교는 제시되지 않는다.</p></article>
+        <article><h3>AI 분석 한계</h3><p class="not-established">현재 source만으로 하드웨어 성능 향상, 최적 정확도, 일반화는 확인할 수 없다. 근거 부족.</p></article>
+        <article><h3>추가 최적화 가능성</h3><p class="not-established">이 발췌에는 추가 최적화 방법이 명시되어 있지 않다. 제안하지 않음.</p></article>
+        <article><h3>방법의 장점과 한계</h3><p>장점은 큰 내적 값이 만드는 softmax gradient 문제를 완화하는 조정이다. 한계는 이 source가 성능 보장이나 다른 변형과의 비교를 말하지 않는다는 점이다.</p></article>
+      </section>
+    </section>
+  </main>
+</body>
+</html>

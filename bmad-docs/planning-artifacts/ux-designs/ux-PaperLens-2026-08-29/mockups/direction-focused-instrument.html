@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PaperLens Visual Direction - Focused Instrument</title>
+  <style>
+    /*
+      Focused Instrument theme hex values
+      Light: canvas #DCE2E7, chrome #F6F8FA, sidebar #E8EDF1, panel #F1F4F6,
+      paper #FFFFFF, raised #FAFCFD, ink #18202A, muted #616C78, line #B9C3CC,
+      accent #356F9E, match #D9EAF4, success #337052, error #A14345.
+      Dark: canvas #0C1014, chrome #14191F, sidebar #11171C, panel #192027,
+      paper #202832, raised #26313B, ink #E8EDF2, muted #96A2AE, line #394550,
+      accent #79B5E4, match #213F54, success #72B88E, error #E48789.
+    */
+    :root {
+      color-scheme: light dark;
+      --frame-w: 1440px; --frame-h: 900px; --sidebar-w: 220px;
+      --titlebar-h: 50px; --toolbar-h: 52px; --jobs-h: 36px; --status-h: 42px;
+      --line-1: 1px; --line-2: 2px;
+      --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px;
+      --space-5: 20px; --space-6: 24px; --space-8: 32px;
+      --radius-1: 3px; --radius-2: 5px; --radius-window: 12px;
+      --font-ui: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+      --font-reading: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Helvetica Neue", sans-serif;
+      --font-mono: ui-monospace, "SFMono-Regular", Menlo, monospace;
+      --text-xs: 11px; --text-sm: 12px; --text-ui: 13px; --text-body: 15px; --text-title: 16px; --text-paper: 15px;
+      --shadow-frame: 0 22px 64px #17202A2B, 0 0 0 var(--line-1) #46546133;
+      --shadow-local: inset 0 var(--line-1) 0 #FFFFFF47, 0 var(--line-1) 2px #15202A12;
+    }
+    * { box-sizing: border-box; }
+    html, body { background: #C9D0D6; }
+    body { margin: 0; color: #18202A; font-family: var(--font-ui); }
+    button { font: inherit; }
+    .artifact { inline-size: 100%; max-inline-size: calc(var(--frame-w) + var(--space-8) * 2); margin-inline: auto; padding: 48px var(--space-8) 72px; }
+    .artifact-header { display: grid; grid-template-columns: minmax(0,1.4fr) minmax(320px,.6fr); gap: 48px; padding: 0 var(--space-2) 36px; border-bottom: var(--line-1) solid #8E9AA5; }
+    .eyebrow, .note-label, .theme-label { font-family: var(--font-mono); font-size: var(--text-xs); font-weight: 600; letter-spacing: .1em; text-transform: uppercase; }
+    .eyebrow { color: #536879; }
+    h1 { margin: var(--space-2) 0 var(--space-3); font-size: 34px; font-weight: 560; letter-spacing: -.035em; line-height: 1.05; }
+    .rationale { max-inline-size: 70ch; margin: 0; color: #46515C; font-size: var(--text-body); line-height: 1.62; }
+    .decision-notes { display: grid; gap: var(--space-4); align-content: end; }
+    .decision-note { border-top: var(--line-1) solid #8E9AA5; padding-top: var(--space-2); }
+    .note-label { color: #5D6974; }
+    .decision-note p { margin: var(--space-1) 0 0; color: #36414B; font-size: var(--text-ui); line-height: 1.5; }
+    .theme-stage { margin-top: 42px; }
+    .theme-label { margin: 0 0 var(--space-3) var(--space-2); color: #52606C; }
+
+    .app-frame[data-theme="light"] {
+      --canvas: #DCE2E7; --chrome: #F6F8FA; --sidebar: #E8EDF1; --panel: #F1F4F6;
+      --paper: #FFFFFF; --raised: #FAFCFD; --ink: #18202A; --muted: #616C78;
+      --line: #B9C3CC; --line-soft: #D4DBE1; --accent: #356F9E; --accent-soft: #CFE2EE;
+      --match: #D9EAF4; --match-line: #3F82B4; --success: #337052; --success-soft: #D6E8DD;
+      --error: #A14345; --error-soft: #F0DADB; --traffic-red: #CA655F; --traffic-amber: #C99A45; --traffic-green: #5E9A6A;
+      --page-shadow: inset 0 0 0 var(--line-1) #FFFFFFB3, 0 8px 22px #2131401A;
+    }
+    .app-frame[data-theme="dark"] {
+      --canvas: #0C1014; --chrome: #14191F; --sidebar: #11171C; --panel: #192027;
+      --paper: #202832; --raised: #26313B; --ink: #E8EDF2; --muted: #96A2AE;
+      --line: #394550; --line-soft: #2B353E; --accent: #79B5E4; --accent-soft: #274A63;
+      --match: #213F54; --match-line: #6BABDC; --success: #72B88E; --success-soft: #203B2B;
+      --error: #E48789; --error-soft: #46282B; --traffic-red: #C2615D; --traffic-amber: #BB8D3F; --traffic-green: #5C9366;
+      --page-shadow: inset 0 0 0 var(--line-1) #70869A24, 0 10px 26px #00000042;
+    }
+    .app-frame { container-type: inline-size; position: relative; display: grid; grid-template-rows: var(--titlebar-h) minmax(0,1fr); inline-size: 100%; max-inline-size: var(--frame-w); block-size: var(--frame-h); overflow: hidden; border: var(--line-1) solid var(--line); border-radius: var(--radius-window); background: var(--canvas); color: var(--ink); box-shadow: var(--shadow-frame); font-feature-settings: "tnum" 1, "ss01" 1; }
+    .titlebar { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; min-inline-size: 0; padding-inline: var(--space-4); background: var(--chrome); border-bottom: var(--line-1) solid var(--line); box-shadow: var(--shadow-local); }
+    .traffic { display: flex; gap: var(--space-2); }
+    .traffic span { inline-size: 12px; block-size: 12px; border-radius: 50%; box-shadow: inset 0 0 0 var(--line-1) #00000029; }
+    .traffic span:nth-child(1) { background: var(--traffic-red); } .traffic span:nth-child(2) { background: var(--traffic-amber); } .traffic span:nth-child(3) { background: var(--traffic-green); }
+    .window-title { font-size: var(--text-ui); font-weight: 600; letter-spacing: -.015em; }
+    .title-actions { justify-self: end; display: flex; gap: var(--space-2); }
+    .shell { display: grid; grid-template-columns: var(--sidebar-w) minmax(0,1fr); min-block-size: 0; }
+    .sidebar { display: grid; grid-template-rows: auto auto minmax(0,1fr) auto; min-block-size: 0; background: var(--sidebar); border-right: var(--line-1) solid var(--line); }
+    .sidebar-top, .paper-meta, .outline, .sidebar-foot { padding-inline: var(--space-4); }
+    .sidebar-top { padding-block: var(--space-3); border-bottom: var(--line-1) solid var(--line-soft); }
+    .paper-meta { padding-block: var(--space-5); }
+    .paper-meta .overline { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--success); font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
+    .paper-meta h2 { margin: var(--space-2) 0; font-size: var(--text-title); line-height: 1.25; font-weight: 620; letter-spacing: -.025em; }
+    .paper-meta p { margin: 0; color: var(--muted); font-family: var(--font-mono); font-size: var(--text-xs); line-height: 1.45; }
+    .outline { min-block-size: 0; overflow: auto; padding-block: var(--space-2); }
+    .outline-label { margin: var(--space-2) 0; color: var(--muted); font-family: var(--font-mono); font-size: var(--text-xs); font-weight: 600; text-transform: uppercase; letter-spacing: .08em; }
+    .outline button { inline-size: 100%; text-align: start; margin-block: 2px; }
+    .outline .active { background: var(--raised); color: var(--ink); border-color: var(--line); box-shadow: inset 3px 0 0 var(--accent); }
+    .sidebar-foot { padding-block: var(--space-3); border-top: var(--line-1) solid var(--line-soft); color: var(--muted); font-family: var(--font-mono); font-size: var(--text-xs); }
+    .reader { display: grid; grid-template-rows: var(--toolbar-h) var(--jobs-h) minmax(0,1fr) var(--status-h); min-block-size: 0; min-inline-size: 0; }
+    .reader-toolbar, .job-strip, .statusbar { background: var(--panel); }
+    .reader-toolbar { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: var(--space-4); padding-inline: var(--space-4); border-bottom: var(--line-1) solid var(--line); }
+    .control-cluster { display: flex; align-items: center; gap: var(--space-2); min-inline-size: 0; }
+    .toolbar-center { min-inline-size: 0; max-inline-size: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-ui); font-weight: 600; }
+    .reader-toolbar .control-cluster:last-child { justify-self: end; }
+    .ui-button, .icon-button, .tab, .retry, .brief-trigger { appearance: none; border: var(--line-1) solid transparent; border-radius: var(--radius-1); color: var(--muted); background: transparent; cursor: default; }
+    .ui-button { min-block-size: 30px; padding: 5px 9px; }
+    .icon-button { display: grid; place-items: center; inline-size: 30px; block-size: 30px; font-weight: 650; }
+    .ui-button:hover, .icon-button:hover { color: var(--ink); background: var(--raised); border-color: var(--line); box-shadow: var(--shadow-local); }
+    button:focus-visible, [tabindex="0"]:focus-visible { outline: var(--line-2) solid var(--accent); outline-offset: var(--line-2); }
+    .job-strip { display: flex; align-items: center; gap: var(--space-4); padding-inline: var(--space-4); border-bottom: var(--line-1) solid var(--line); font-family: var(--font-mono); font-size: var(--text-xs); }
+    .job { display: flex; align-items: center; gap: var(--space-2); white-space: nowrap; }
+    .job-ready { color: var(--success); } .job-progress { color: var(--accent); } .job-error { color: var(--error); }
+    .status-dot { inline-size: 7px; block-size: 7px; border-radius: 50%; background: currentColor; }
+    progress { inline-size: 86px; block-size: 4px; appearance: none; border: 0; background: var(--line-soft); }
+    progress::-webkit-progress-bar { background: var(--line-soft); } progress::-webkit-progress-value { background: var(--accent); }
+    .retry { min-block-size: 24px; padding-inline: var(--space-2); border-color: var(--error); color: var(--error); }
+    .comparison { position: relative; display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); min-block-size: 0; min-inline-size: 0; }
+    .pdf-panel, .translation-panel { display: grid; grid-template-rows: 44px minmax(0,1fr); min-block-size: 0; min-inline-size: 0; background: var(--canvas); }
+    .pdf-panel { border-right: var(--line-1) solid var(--line); }
+    .panel-heading, .tabs-row { display: flex; align-items: center; justify-content: space-between; min-inline-size: 0; padding-inline: var(--space-4); background: var(--panel); border-bottom: var(--line-1) solid var(--line); }
+    .panel-title { font-size: var(--text-ui); font-weight: 620; }
+    .panel-meta { color: var(--muted); font-family: var(--font-mono); font-size: var(--text-xs); letter-spacing: .03em; }
+    .tabs { align-self: stretch; display: flex; gap: var(--space-5); }
+    .tab { position: relative; padding-inline: 0; font-size: var(--text-ui); }
+    .tab.active { color: var(--ink); font-weight: 620; }
+    .tab.active::after { content: ""; position: absolute; inset-inline: 0; inset-block-end: -1px; block-size: 2px; background: var(--accent); }
+    .panel-scroll { min-block-size: 0; overflow: auto; }
+    .pdf-scroll { padding: var(--space-6); }
+    .translation-scroll { padding: var(--space-8) 42px 56px; background: var(--panel); }
+    .pdf-page { inline-size: min(520px,100%); min-block-size: 670px; margin-inline: auto; padding: 46px 52px; background: var(--paper); border: var(--line-1) solid var(--line); border-radius: var(--radius-1); box-shadow: var(--page-shadow); color: var(--ink); font-family: var(--font-reading); }
+    .paper-kicker { margin: 0 0 var(--space-3); color: var(--muted); font-family: var(--font-mono); font-size: 10px; letter-spacing: .06em; text-transform: uppercase; }
+    .pdf-page h3 { margin: 0 0 var(--space-5); font-size: 18px; line-height: 1.28; font-weight: 650; letter-spacing: -.02em; }
+    .pdf-page p, .translation-body p { margin: 0 0 var(--space-4); font-size: var(--text-paper); line-height: 1.68; }
+    .equation { margin: var(--space-5) 0; padding: var(--space-3); text-align: center; border: var(--line-1) solid var(--line-soft); background: var(--raised); font-family: var(--font-mono); font-size: var(--text-sm); }
+    .formula-inline { white-space: nowrap; }
+    .translation-body { max-inline-size: 48ch; margin-inline: auto; color: var(--ink); line-break: strict; word-break: keep-all; overflow-wrap: break-word; }
+    .translation-body .section-no { margin: 0 0 var(--space-2); color: var(--accent); font-family: var(--font-mono); font-size: var(--text-xs); letter-spacing: .05em; text-transform: uppercase; }
+    .translation-body h3 { margin: 0 0 var(--space-6); font-size: 21px; line-height: 1.22; font-weight: 650; letter-spacing: -.028em; }
+    .sentence { border-radius: var(--radius-1); box-decoration-break: clone; -webkit-box-decoration-break: clone; }
+    .sentence.is-match { background: var(--match); box-shadow: inset 3px 0 0 var(--match-line), 0 0 0 var(--line-1) var(--match-line); }
+    .comparison:has(.source-s3:hover) .source-s3, .comparison:has(.source-s3:hover) .translation-s3,
+    .comparison:has(.translation-s3:hover) .source-s3, .comparison:has(.translation-s3:hover) .translation-s3,
+    .comparison:has(.source-s3:focus-visible) .source-s3, .comparison:has(.source-s3:focus-visible) .translation-s3,
+    .comparison:has(.translation-s3:focus-visible) .source-s3, .comparison:has(.translation-s3:focus-visible) .translation-s3 { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--match-line), 0 0 0 var(--line-2) var(--match-line); }
+    .brief-trigger { position: absolute; inset-inline-end: 0; inset-block-start: 54px; writing-mode: vertical-rl; min-inline-size: 34px; padding: var(--space-3) var(--space-2); border: var(--line-1) solid var(--line); border-inline-end: 0; border-radius: var(--radius-2) 0 0 var(--radius-2); background: var(--raised); color: var(--ink); box-shadow: var(--shadow-local); font-family: var(--font-mono); font-size: var(--text-xs); font-weight: 600; letter-spacing: .05em; text-transform: uppercase; }
+    .statusbar { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); padding-inline: var(--space-4); border-top: var(--line-1) solid var(--line); color: var(--muted); font-family: var(--font-mono); font-size: var(--text-xs); }
+    .match-state { color: var(--accent); font-weight: 600; }
+    @media (max-width: 1240px) {
+      :root { --frame-h: 720px; --sidebar-w: 180px; }
+      .artifact { padding: var(--space-6) var(--space-3) calc(var(--space-8) + var(--space-4)); }
+      .sidebar-top, .paper-meta, .outline, .sidebar-foot,
+      .reader-toolbar, .job-strip, .statusbar, .panel-heading, .tabs-row { padding-inline: var(--space-3); }
+      .reader-toolbar { gap: var(--space-2); }
+      .pdf-scroll { padding: var(--space-4); }
+      .translation-scroll { padding: var(--space-5) var(--space-4) var(--space-8); }
+      .pdf-page { padding: var(--space-6); }
+      .pdf-page p { line-height: 1.56; }
+    }
+  </style>
+</head>
+<body>
+  <main class="artifact">
+    <header class="artifact-header"><div><div class="eyebrow">Visual direction 03</div><h1>Focused Instrument</h1><p class="rationale">The reader behaves like a calibrated research instrument: cool luminance steps, fine borders, tabular metadata, and compact controls keep state legible at a glance. Light and dark are tuned as parallel working environments, with the sentence link acting as the precise point of measurement.</p></div><div class="decision-notes"><div class="decision-note"><div class="note-label">Best fit</div><p>Frequent users who prioritize compact information density, exact state recognition, and a tool-forward sense of control.</p></div><div class="decision-note"><div class="note-label">Tradeoff</div><p>The technical register can feel less contemplative during long reading sessions and may need careful warmth in later content surfaces.</p></div></div></header>
+    <section class="theme-stage" aria-labelledby="instrument-light-label"><h2 class="theme-label" id="instrument-light-label">Light</h2>
+      <div class="app-frame" data-theme="light" id="instrument-light"><header class="titlebar"><div class="traffic" aria-hidden="true"><span></span><span></span><span></span></div><div class="window-title">PaperLens</div><div class="title-actions"><button class="icon-button" aria-label="사이드바 전환">▤</button><button class="ui-button">검색&nbsp; ⌘F</button></div></header>
+        <div class="shell"><aside class="sidebar" aria-label="논문 탐색"><div class="sidebar-top"><button class="ui-button">‹&nbsp; Library</button></div><section class="paper-meta"><div class="overline">읽는 중</div><h2>Attention Is All You Need</h2><p>Vaswani et al. · 2017</p></section><nav class="outline" aria-label="문서 목차"><div class="outline-label">Contents</div><button class="ui-button">1&nbsp;&nbsp;Introduction</button><button class="ui-button">2&nbsp;&nbsp;Background</button><button class="ui-button">3&nbsp;&nbsp;Model Architecture</button><button class="ui-button active">3.2&nbsp;&nbsp;Attention</button><button class="ui-button">4&nbsp;&nbsp;Why Self-Attention</button><button class="ui-button">5&nbsp;&nbsp;Training</button><button class="ui-button">6&nbsp;&nbsp;Results</button></nav><div class="sidebar-foot">마지막 위치 · 6페이지, 3.2.1</div></aside>
+          <section class="reader" aria-label="Reader 비교 화면"><header class="reader-toolbar"><div class="control-cluster"><button class="icon-button" aria-label="이전 페이지">‹</button><button class="icon-button" aria-label="다음 페이지">›</button><button class="ui-button">6 / 12</button></div><div class="toolbar-center">Attention Is All You Need</div><div class="control-cluster"><button class="icon-button" aria-label="축소">−</button><button class="ui-button">125%</button><button class="icon-button" aria-label="확대">+</button><button class="ui-button">PDF 검색</button></div></header>
+            <div class="job-strip" aria-label="작업 상태"><span class="job job-ready"><span class="status-dot"></span>PDF 준비됨</span><span class="job job-progress" role="status"><span>현재 페이지 번역 84%</span><progress value="84" max="100">84%</progress></span><span class="job job-error" role="alert"><span class="status-dot"></span>Brief 생성 실패</span><button class="retry">재시도</button></div>
+            <div class="comparison"><section class="pdf-panel" aria-labelledby="instrument-light-pdf-title"><header class="panel-heading"><span class="panel-title" id="instrument-light-pdf-title">Original PDF</span><span class="panel-meta">PAGE 6</span></header><div class="panel-scroll pdf-scroll"><article class="pdf-page" lang="en"><p class="paper-kicker">3 · Model Architecture</p><h3>3.2.1 Scaled Dot-Product Attention</h3><p>We call our particular attention “Scaled Dot-Product Attention.” The input consists of queries and keys of dimension d<sub>k</sub>, and values of dimension d<sub>v</sub>.</p><p>We compute the dot products of the query with all keys, divide each by √d<sub>k</sub>, and apply a softmax function to obtain the weights on the values.</p><div class="equation">Attention(Q, K, V) = softmax(QKᵀ / √d<sub>k</sub>)V</div><p><span class="sentence source-s3 is-match" tabindex="0">We suspect that for large values of d<sub>k</sub>, the dot products grow large in magnitude, pushing the softmax function into regions where it has extremely small gradients.</span> To counteract this effect, we scale the dot products by <span class="formula-inline">1 / √d<sub>k</sub></span>.</p><p>In practice, we compute the attention function on a set of queries simultaneously, packed together into a matrix Q.</p></article></div></section>
+              <section class="translation-panel" aria-labelledby="instrument-light-translation-title"><header class="tabs-row"><div class="tabs" role="tablist"><button class="tab active" role="tab" aria-selected="true" id="instrument-light-translation-title">Translation</button><button class="tab" role="tab" aria-selected="false">Paper Chat</button></div><span class="panel-meta">현재 페이지 · 6</span></header><div class="panel-scroll translation-scroll"><article class="translation-body" lang="ko"><p class="section-no">3.2.1 · 문장 정렬됨</p><h3>스케일드 닷-프로덕트 어텐션</h3><p>우리는 이 어텐션을 “스케일드 닷-프로덕트 어텐션”이라고 부른다. 입력은 차원이 d<sub>k</sub>인 쿼리와 키, 그리고 차원이 d<sub>v</sub>인 값으로 구성된다.</p><p>쿼리와 모든 키의 내적을 계산하고, 각각을 √d<sub>k</sub>로 나눈 뒤, softmax 함수를 적용해 값에 대한 가중치를 얻는다.</p><p><span class="sentence translation-s3 is-match" tabindex="0">우리는 d<sub>k</sub> 값이 클수록 내적의 크기가 커져 softmax 함수가 기울기가 극도로 작은 영역으로 밀려난다고 본다.</span> 이 효과를 상쇄하기 위해 내적을 1 / √d<sub>k</sub>로 스케일링한다.</p><p>실제 구현에서는 여러 쿼리를 행렬 Q에 함께 묶어 어텐션 함수를 동시에 계산한다.</p></article></div></section><button class="brief-trigger" aria-label="Brief 서랍 열기">Brief&nbsp; ‹</button></div><footer class="statusbar"><span class="match-state">Match 03 · source ↔ translation</span><span>현재 6페이지 · PDF 탐색이 Translation 페이지를 제어함</span></footer></section></div>
+      </div>
+    </section>
+    <section class="theme-stage" aria-labelledby="instrument-dark-label"><h2 class="theme-label" id="instrument-dark-label">Dark</h2>
+      <div class="app-frame" data-theme="dark" id="instrument-dark"><header class="titlebar"><div class="traffic" aria-hidden="true"><span></span><span></span><span></span></div><div class="window-title">PaperLens</div><div class="title-actions"><button class="icon-button" aria-label="사이드바 전환">▤</button><button class="ui-button">검색&nbsp; ⌘F</button></div></header>
+        <div class="shell"><aside class="sidebar" aria-label="논문 탐색"><div class="sidebar-top"><button class="ui-button">‹&nbsp; Library</button></div><section class="paper-meta"><div class="overline">읽는 중</div><h2>Attention Is All You Need</h2><p>Vaswani et al. · 2017</p></section><nav class="outline" aria-label="문서 목차"><div class="outline-label">Contents</div><button class="ui-button">1&nbsp;&nbsp;Introduction</button><button class="ui-button">2&nbsp;&nbsp;Background</button><button class="ui-button">3&nbsp;&nbsp;Model Architecture</button><button class="ui-button active">3.2&nbsp;&nbsp;Attention</button><button class="ui-button">4&nbsp;&nbsp;Why Self-Attention</button><button class="ui-button">5&nbsp;&nbsp;Training</button><button class="ui-button">6&nbsp;&nbsp;Results</button></nav><div class="sidebar-foot">마지막 위치 · 6페이지, 3.2.1</div></aside>
+          <section class="reader" aria-label="Reader 비교 화면"><header class="reader-toolbar"><div class="control-cluster"><button class="icon-button" aria-label="이전 페이지">‹</button><button class="icon-button" aria-label="다음 페이지">›</button><button class="ui-button">6 / 12</button></div><div class="toolbar-center">Attention Is All You Need</div><div class="control-cluster"><button class="icon-button" aria-label="축소">−</button><button class="ui-button">125%</button><button class="icon-button" aria-label="확대">+</button><button class="ui-button">PDF 검색</button></div></header>
+            <div class="job-strip" aria-label="작업 상태"><span class="job job-ready"><span class="status-dot"></span>PDF 준비됨</span><span class="job job-progress" role="status"><span>현재 페이지 번역 84%</span><progress value="84" max="100">84%</progress></span><span class="job job-error" role="alert"><span class="status-dot"></span>Brief 생성 실패</span><button class="retry">재시도</button></div>
+            <div class="comparison"><section class="pdf-panel" aria-labelledby="instrument-dark-pdf-title"><header class="panel-heading"><span class="panel-title" id="instrument-dark-pdf-title">Original PDF</span><span class="panel-meta">PAGE 6</span></header><div class="panel-scroll pdf-scroll"><article class="pdf-page" lang="en"><p class="paper-kicker">3 · Model Architecture</p><h3>3.2.1 Scaled Dot-Product Attention</h3><p>We call our particular attention “Scaled Dot-Product Attention.” The input consists of queries and keys of dimension d<sub>k</sub>, and values of dimension d<sub>v</sub>.</p><p>We compute the dot products of the query with all keys, divide each by √d<sub>k</sub>, and apply a softmax function to obtain the weights on the values.</p><div class="equation">Attention(Q, K, V) = softmax(QKᵀ / √d<sub>k</sub>)V</div><p><span class="sentence source-s3 is-match" tabindex="0">We suspect that for large values of d<sub>k</sub>, the dot products grow large in magnitude, pushing the softmax function into regions where it has extremely small gradients.</span> To counteract this effect, we scale the dot products by <span class="formula-inline">1 / √d<sub>k</sub></span>.</p><p>In practice, we compute the attention function on a set of queries simultaneously, packed together into a matrix Q.</p></article></div></section>
+              <section class="translation-panel" aria-labelledby="instrument-dark-translation-title"><header class="tabs-row"><div class="tabs" role="tablist"><button class="tab active" role="tab" aria-selected="true" id="instrument-dark-translation-title">Translation</button><button class="tab" role="tab" aria-selected="false">Paper Chat</button></div><span class="panel-meta">현재 페이지 · 6</span></header><div class="panel-scroll translation-scroll"><article class="translation-body" lang="ko"><p class="section-no">3.2.1 · 문장 정렬됨</p><h3>스케일드 닷-프로덕트 어텐션</h3><p>우리는 이 어텐션을 “스케일드 닷-프로덕트 어텐션”이라고 부른다. 입력은 차원이 d<sub>k</sub>인 쿼리와 키, 그리고 차원이 d<sub>v</sub>인 값으로 구성된다.</p><p>쿼리와 모든 키의 내적을 계산하고, 각각을 √d<sub>k</sub>로 나눈 뒤, softmax 함수를 적용해 값에 대한 가중치를 얻는다.</p><p><span class="sentence translation-s3 is-match" tabindex="0">우리는 d<sub>k</sub> 값이 클수록 내적의 크기가 커져 softmax 함수가 기울기가 극도로 작은 영역으로 밀려난다고 본다.</span> 이 효과를 상쇄하기 위해 내적을 1 / √d<sub>k</sub>로 스케일링한다.</p><p>실제 구현에서는 여러 쿼리를 행렬 Q에 함께 묶어 어텐션 함수를 동시에 계산한다.</p></article></div></section><button class="brief-trigger" aria-label="Brief 서랍 열기">Brief&nbsp; ‹</button></div><footer class="statusbar"><span class="match-state">Match 03 · source ↔ translation</span><span>현재 6페이지 · PDF 탐색이 Translation 페이지를 제어함</span></footer></section></div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

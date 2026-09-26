@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PaperLens — Key screen: Notes</title>
+  <style>
+    /*
+      Governing sections: EXPERIENCE.md §Information Architecture (ReaderShell),
+      §Component Patterns (SelectionActionBar and NotesDrawer), §State Patterns
+      (Reader/PDF selected), and §Interaction Primitives 4 and 6. Visual tokens
+      follow DESIGN.md §Brand & Style, §Colors, §Typography, §Components, and the
+      Native Canvas direction reference. This is a static visual mock: buttons
+      are label references, not implemented interactions. Corrected Native Canvas
+      Light muted/success values are #6A6760 / #3C724D; Dark tokens are unchanged.
+    */
+    :root {
+      --frame-max: 1280px;
+      --ui: -apple-system, BlinkMacSystemFont, "Helvetica Neue", "Apple SD Gothic Neo", sans-serif;
+      --reading: ui-serif, "New York", Georgia, serif;
+      --mono: ui-monospace, "SFMono-Regular", Menlo, monospace;
+      --xs: 11px; --sm: 12px; --ui-size: 13px; --body: 15px;
+      --r-sm: 5px; --r-md: 8px; --r-lg: 12px; --r-window: 16px;
+    }
+    * { box-sizing: border-box; }
+    html { background: #CFCAC1; }
+    body { margin: 0; color: #25241F; background: #CFCAC1; font-family: var(--ui); }
+    button { font: inherit; cursor: default; }
+    .artifact { width: min(100%, calc(var(--frame-max) + 64px)); margin: 0 auto; padding: 46px 32px 72px; }
+    .artifact-header { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(250px, .65fr); gap: 40px; padding: 0 8px 30px; border-bottom: 1px solid #AAA49A; }
+    .eyebrow, .theme-label, .source-label { color: #655F56; font-size: var(--xs); font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
+    h1 { margin: 8px 0 12px; font-size: clamp(26px, 3vw, 34px); line-height: 1.06; letter-spacing: -.035em; }
+    .rationale { max-width: 70ch; margin: 0; color: #514D46; font-size: var(--body); line-height: 1.65; }
+    .artifact-meta { display: grid; align-content: end; gap: 14px; margin: 0; }
+    .artifact-meta div { border-top: 1px solid #AAA49A; padding-top: 8px; }
+    .artifact-meta dt { color: #726C62; font-size: var(--xs); font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
+    .artifact-meta dd { margin: 4px 0 0; color: #3D3A35; font-size: var(--sm); line-height: 1.5; }
+    .theme-stage { margin-top: 38px; }
+    .theme-label { margin: 0 0 10px 8px; color: #5F5A52; }
+
+    .app-frame {
+      --canvas: #D8D4CC; --chrome: #F4F2ED; --sidebar: #E9E6DF; --panel: #F7F5F0;
+      --paper: #FFFDF8; --raised: #FFFFFF; --ink: #25241F; --muted: #6A6760;
+      --line-color: #C9C5BC; --line-soft: #DEDAD2; --accent: #2E6F99; --accent-soft: #D8E8F1;
+      --match: #DCEBF3; --match-line: #4E88AC; --success: #3C724D; --success-soft: #DDEADF;
+      --error: #A3453F; --error-soft: #F3DFDC; --traffic-red: #D46B61; --traffic-amber: #D7A84F; --traffic-green: #69A66F;
+      --paper-shadow: 0 12px 28px #403B321A, 0 0 0 1px #817B6F24;
+    }
+    .app-frame[data-theme="dark"] {
+      --canvas: #151412; --chrome: #26241F; --sidebar: #201E1A; --panel: #1E1C19;
+      --paper: #292620; --raised: #302D27; --ink: #EEEAE1; --muted: #AAA39A;
+      --line-color: #47433B; --line-soft: #35322C; --accent: #83B9D9; --accent-soft: #263C48;
+      --match: #253F4E; --match-line: #79B5D8; --success: #79B78A; --success-soft: #23372A;
+      --error: #E08D84; --error-soft: #462B28; --traffic-red: #CE675E; --traffic-amber: #C99A43; --traffic-green: #5F9B66;
+      --paper-shadow: 0 14px 32px #00000033, 0 0 0 1px #7E756829;
+    }
+    .app-frame { display: grid; grid-template-rows: 48px minmax(0, 1fr); width: 100%; max-width: var(--frame-max); min-height: 770px; overflow: hidden; border: 1px solid var(--line-color); border-radius: var(--r-window); background: var(--canvas); color: var(--ink); box-shadow: 0 24px 72px #2E2A241F, 0 0 0 1px #5C574D33; }
+    .titlebar { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; min-width: 0; padding: 0 16px; background: var(--chrome); border-bottom: 1px solid var(--line-color); box-shadow: inset 0 1px 0 #FFFFFF4D, 0 1px 2px #25221D12; }
+    .traffic { display: flex; gap: 8px; } .traffic span { width: 12px; height: 12px; border-radius: 50%; box-shadow: inset 0 0 0 1px #0000001F; }
+    .traffic span:nth-child(1) { background: var(--traffic-red); } .traffic span:nth-child(2) { background: var(--traffic-amber); } .traffic span:nth-child(3) { background: var(--traffic-green); }
+    .window-title { font-size: var(--ui-size); font-weight: 650; } .title-actions { display: flex; justify-content: end; gap: 8px; }
+    .ui-button, .icon-button, .tab, .drawer-action { appearance: none; border: 1px solid transparent; color: var(--muted); background: transparent; }
+    .ui-button { min-height: 29px; padding: 5px 9px; border-radius: var(--r-sm); } .icon-button { display: grid; place-items: center; width: 29px; height: 29px; border-radius: var(--r-sm); font-weight: 650; }
+    .ui-button:hover, .icon-button:hover, .drawer-action:hover { color: var(--ink); background: var(--raised); border-color: var(--line-color); }
+    .shell { display: grid; grid-template-columns: 210px minmax(0, 1fr); min-height: 0; }
+    .sidebar { display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; min-height: 0; background: var(--sidebar); border-right: 1px solid var(--line-color); }
+    .sidebar-top, .paper-meta, .outline, .sidebar-foot { padding-inline: 16px; } .sidebar-top { padding-block: 12px; border-bottom: 1px solid var(--line-soft); }
+    .paper-meta { padding-block: 20px; } .paper-meta .overline { color: var(--success); font-size: var(--xs); font-weight: 700; }
+    .paper-meta h2 { margin: 8px 0; font-size: 17px; line-height: 1.23; letter-spacing: -.025em; } .paper-meta p { margin: 0; color: var(--muted); font-size: var(--sm); line-height: 1.45; }
+    .outline { min-height: 0; padding-block: 8px; overflow: auto; } .outline-label { margin: 8px 0; color: var(--muted); font-size: var(--xs); font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+    .outline button { width: 100%; margin: 2px 0; text-align: left; } .outline .active { background: var(--raised); color: var(--ink); box-shadow: inset 0 1px 0 #FFFFFF4D, 0 1px 2px #25221D12; }
+    .sidebar-foot { padding-block: 12px; border-top: 1px solid var(--line-soft); color: var(--muted); font-size: var(--xs); }
+    .reader { display: grid; grid-template-rows: 48px 34px minmax(0, 1fr) 38px; min-width: 0; min-height: 0; }
+    .reader-toolbar, .job-strip, .statusbar { background: var(--panel); }
+    .reader-toolbar { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 16px; padding: 0 16px; border-bottom: 1px solid var(--line-color); }
+    .control-cluster { display: flex; align-items: center; gap: 8px; min-width: 0; } .toolbar-center { max-width: 340px; overflow: hidden; font-size: var(--ui-size); font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+    .reader-toolbar .control-cluster:last-child { justify-content: end; } .job-strip { display: flex; align-items: center; gap: 16px; min-width: 0; padding: 0 16px; border-bottom: 1px solid var(--line-color); color: var(--muted); font-size: var(--xs); }
+    .job { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; } .job-ready { color: var(--success); } .job-progress { color: var(--accent); }
+    .status-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; } progress { width: 76px; height: 4px; accent-color: var(--accent); }
+    .workspace { position: relative; min-width: 0; min-height: 0; overflow: hidden; background: var(--canvas); }
+    .comparison { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); height: 100%; min-height: 0; }
+    .panel { display: grid; grid-template-rows: 44px minmax(0, 1fr); min-width: 0; min-height: 0; } .panel + .panel { border-left: 1px solid var(--line-color); }
+    .panel-heading { display: flex; align-items: center; justify-content: space-between; min-width: 0; padding: 0 16px; background: var(--panel); border-bottom: 1px solid var(--line-color); }
+    .panel-title { font-size: var(--ui-size); font-weight: 650; } .panel-meta { color: var(--muted); font: var(--xs) var(--mono); letter-spacing: .03em; }
+    .pdf-scroll, .translation-scroll { min-height: 0; overflow: auto; padding: 24px; }
+    .pdf-page { position: relative; width: min(470px, 100%); min-height: 610px; margin: 0 auto; padding: 38px 42px; color: var(--ink); background: var(--paper); border-radius: var(--r-sm); box-shadow: var(--paper-shadow); font-family: var(--reading); }
+    .paper-kicker { margin: 0 0 12px; color: var(--muted); font: 10px var(--ui); letter-spacing: .08em; text-transform: uppercase; } .pdf-page h3 { margin: 0 0 20px; font-size: 18px; line-height: 1.25; }
+    .pdf-page p, .translation-body p { margin: 0 0 16px; font-size: 16px; line-height: 1.68; } .equation { margin: 20px 0; padding: 12px; text-align: center; border-block: 1px solid var(--line-soft); font-style: italic; }
+    .selected-text { padding: 2px 3px; color: var(--ink); background: var(--match); box-shadow: 0 0 0 1px var(--match-line); border-radius: 3px; }
+    .translation-body { max-width: 42ch; margin: 0 auto; color: var(--ink); line-break: strict; word-break: keep-all; overflow-wrap: break-word; } .translation-body .section-no { margin: 0 0 8px; color: var(--accent); font: var(--xs) var(--mono); }
+    .translation-body h3 { margin: 0 0 20px; font-size: 21px; line-height: 1.25; } .match { padding: 1px 3px; background: var(--match); box-shadow: 0 0 0 1px var(--match-line); border-radius: 3px; }
+    .selection-bar { position: absolute; z-index: 2; top: 51%; left: 14%; display: flex; align-items: center; gap: 2px; padding: 5px; border: 1px solid var(--line-color); border-radius: var(--r-md); background: var(--raised); box-shadow: 0 8px 20px #25221D26; }
+    .selection-bar::before { content: "선택됨"; padding: 0 7px; color: var(--muted); font-size: var(--xs); font-weight: 700; }
+    .selection-bar button { min-height: 28px; padding: 4px 8px; color: var(--ink); font-size: var(--sm); border: 0; border-left: 1px solid var(--line-soft); background: transparent; }
+    .selection-bar button:first-of-type { color: var(--accent); font-weight: 650; } .selection-bar button:hover { background: var(--accent-soft); }
+    .notes-drawer { position: absolute; inset: 0 0 0 auto; display: grid; grid-template-rows: 48px auto minmax(0, 1fr) 48px; width: min(390px, 45%); min-width: 330px; background: var(--raised); border-left: 1px solid var(--line-color); box-shadow: -14px 0 28px #25221D18; }
+    .drawer-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 16px; border-bottom: 1px solid var(--line-color); } .drawer-head h3 { margin: 0; font-size: 16px; } .drawer-head small { color: var(--muted); font-size: var(--xs); }
+    .drawer-context { margin: 16px 16px 0; padding: 10px; border: 1px solid var(--match-line); border-radius: var(--r-md); background: var(--match); }
+    .drawer-context .context-label { display: block; margin-bottom: 5px; color: var(--accent); font-size: var(--xs); font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+    .drawer-context blockquote { margin: 0; color: var(--ink); font-family: var(--reading); font-size: 14px; line-height: 1.55; } .context-meta { display: block; margin-top: 7px; color: var(--muted); font: var(--xs) var(--mono); }
+    .note-scroll { min-height: 0; overflow: auto; padding: 16px; } .note-scroll label { display: block; margin-bottom: 7px; color: var(--muted); font-size: var(--sm); font-weight: 650; }
+    .note-editor { min-height: 180px; padding: 12px; border: 1px solid var(--line-color); border-radius: var(--r-md); color: var(--ink); background: var(--panel); font-size: var(--body); line-height: 1.62; }
+    .note-hint { margin: 12px 0 0; color: var(--muted); font-size: var(--sm); line-height: 1.5; } .note-hint strong { color: var(--ink); }
+    .drawer-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 16px; border-top: 1px solid var(--line-color); } .drawer-foot span { color: var(--muted); font-size: var(--xs); }
+    .drawer-action { min-height: 29px; padding: 5px 9px; color: var(--accent); border-color: var(--accent); border-radius: var(--r-sm); }
+    .statusbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; padding: 0 16px; border-top: 1px solid var(--line-color); color: var(--muted); font-size: var(--xs); } .statusbar strong { color: var(--accent); }
+    .state-note { display: grid; grid-template-columns: minmax(0, 1fr) minmax(250px, .7fr); gap: 12px; margin-top: 12px; padding: 14px 16px; border: 1px solid var(--line-color); border-radius: var(--r-lg); background: var(--panel); color: var(--ink); }
+    .state-note h3 { margin: 0 0 5px; font-size: var(--ui-size); } .state-note p { margin: 0; color: var(--muted); font-size: var(--sm); line-height: 1.5; } .state-note .source-label { color: var(--accent); }
+    .state-note .no-chat { padding: 10px; color: var(--ink); font-size: var(--sm); line-height: 1.5; border-left: 2px solid var(--match-line); background: var(--match); }
+    .source-map { margin: 12px 2px 0; color: #5F5A52; font-size: var(--xs); line-height: 1.5; } .source-map strong { color: #3D3A35; }
+
+    @media (max-width: 1040px) { .artifact { padding-inline: 16px; } .artifact-header { grid-template-columns: 1fr; gap: 22px; } .shell { grid-template-columns: 176px minmax(0, 1fr); } .pdf-scroll, .translation-scroll { padding: 16px; } .pdf-page { padding: 30px; } .notes-drawer { width: min(390px, 56%); } }
+    @media (max-width: 760px) {
+      .artifact { padding: 28px 10px 48px; } .app-frame { min-height: 0; height: auto; border-radius: var(--r-lg); } .titlebar { padding-inline: 12px; } .title-actions .ui-button { display: none; }
+      .shell { grid-template-columns: 1fr; } .sidebar { display: none; } .reader { grid-template-rows: auto auto auto auto; }
+      .reader-toolbar { grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; padding-inline: 10px; } .toolbar-center { justify-self: center; max-width: 150px; } .reader-toolbar .control-cluster:last-child .ui-button, .reader-toolbar .control-cluster:last-child .icon-button:first-child { display: none; }
+      .job-strip { gap: 10px; padding-inline: 10px; overflow: auto; } .workspace { overflow: visible; } .comparison { grid-template-columns: 1fr; height: auto; } .panel { min-height: 470px; } .panel + .panel { border-top: 1px solid var(--line-color); border-left: 0; }
+      .selection-bar { top: 31%; left: 9%; } .notes-drawer { position: relative; inset: auto; width: 100%; min-width: 0; min-height: 590px; border-top: 1px solid var(--line-color); border-left: 0; box-shadow: none; }
+      .statusbar { align-items: flex-start; flex-direction: column; justify-content: center; gap: 2px; min-height: 48px; padding-block: 7px; } .state-note { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 460px) { .selection-bar { left: 4%; transform: scale(.92); transform-origin: left top; } }
+  </style>
+</head>
+<body>
+  <main class="artifact">
+    <header class="artifact-header">
+      <div>
+        <div class="eyebrow">PaperLens · key screen 03</div>
+        <h1>Notes · selection context drawer</h1>
+        <p class="rationale">PDF에서 선택한 원문을 그대로 보존한 채 compact SelectionActionBar와 NotesDrawer를 겹쳐 보여주는 정적 시안이다. Highlight / Add Note / Copy만 노출하며, 선택 내용을 Paper Chat context로 보내는 동작은 넣지 않는다.</p>
+      </div>
+      <dl class="artifact-meta">
+        <div><dt>Caption</dt><dd>Selected source retained in Reader; compact Highlight/Add Note/Copy bar and Notes drawer without Chat injection.</dd></div>
+        <div><dt>Source mapping</dt><dd>UJ-1 steps 9–10; SelectionActionBar, NotesDrawer, PdfPanel, and Reader/PDF selected state.</dd></div>
+        <div><dt>Artifact status</dt><dd>Native Canvas Light/Dark reference only · static labels, no JavaScript, no network.</dd></div>
+      </dl>
+    </header>
+
+    <section class="theme-stage" aria-labelledby="notes-light-label">
+      <h2 class="theme-label" id="notes-light-label">Native Canvas · Light</h2>
+      <div class="app-frame" data-theme="light">
+        <header class="titlebar"><div class="traffic" aria-hidden="true"><span></span><span></span><span></span></div><div class="window-title">PaperLens</div><div class="title-actions"><button class="icon-button" aria-label="사이드바 전환">▤</button><button class="ui-button">검색&nbsp; ⌘F</button></div></header>
+        <div class="shell">
+          <aside class="sidebar" aria-label="논문 탐색"><div class="sidebar-top"><button class="ui-button">‹&nbsp; Library</button></div><section class="paper-meta"><div class="overline">읽는 중</div><h2>Attention Is All You Need</h2><p>Vaswani et al. · 2017</p></section><nav class="outline" aria-label="문서 목차"><div class="outline-label">Contents</div><button class="ui-button">1&nbsp;&nbsp;Introduction</button><button class="ui-button">2&nbsp;&nbsp;Background</button><button class="ui-button">3&nbsp;&nbsp;Model Architecture</button><button class="ui-button active">3.2&nbsp;&nbsp;Attention</button><button class="ui-button">4&nbsp;&nbsp;Why Self-Attention</button><button class="ui-button">5&nbsp;&nbsp;Training</button><button class="ui-button">6&nbsp;&nbsp;Results</button></nav><div class="sidebar-foot">마지막 위치 · 6페이지, 3.2.1</div></aside>
+          <section class="reader" aria-label="Notes Reader"><header class="reader-toolbar"><div class="control-cluster"><button class="icon-button" aria-label="이전 페이지">‹</button><button class="icon-button" aria-label="다음 페이지">›</button><button class="ui-button">6 / 12</button></div><div class="toolbar-center">Attention Is All You Need</div><div class="control-cluster"><button class="icon-button" aria-label="축소">−</button><button class="ui-button">125%</button><button class="icon-button" aria-label="확대">+</button><button class="ui-button">PDF 검색</button></div></header><div class="job-strip"><span class="job job-ready"><span class="status-dot"></span>PDF 준비됨</span><span class="job job-progress"><span>현재 페이지 번역 84%</span><progress value="84" max="100">84%</progress></span><span class="job"><span class="status-dot" style="color:var(--success)"></span>선택한 원문 1개</span></div><div class="workspace"><div class="comparison"><section class="panel"><header class="panel-heading"><span class="panel-title">Original PDF</span><span class="panel-meta">PAGE 6</span></header><div class="pdf-scroll"><article class="pdf-page" lang="en"><p class="paper-kicker">3 · Model Architecture</p><h3>3.2.1 Scaled Dot-Product Attention</h3><p>We call our particular attention “Scaled Dot-Product Attention.” The input consists of queries and keys of dimension d<sub>k</sub>, and values of dimension d<sub>v</sub>.</p><p>We compute the dot products of the query with all keys, divide each by √d<sub>k</sub>, and apply a softmax function to obtain the weights on the values.</p><div class="equation">Attention(Q, K, V) = softmax(QKᵀ / √d<sub>k</sub>)V</div><p><span class="selected-text">We suspect that for large values of d<sub>k</sub>, the dot products grow large in magnitude, pushing the softmax function into regions where it has extremely small gradients.</span> To counteract this effect, we scale the dot products by 1 / √d<sub>k</sub>.</p><p>In practice, we compute the attention function on a set of queries simultaneously, packed together into a matrix Q.</p></article></div></section><section class="panel"><header class="panel-heading"><span class="panel-title">Translation</span><span class="panel-meta">현재 페이지 · 6</span></header><div class="translation-scroll"><article class="translation-body" lang="ko"><p class="section-no">3.2.1 · 문장 정렬됨</p><h3>스케일드 닷-프로덕트 어텐션</h3><p>내적 값이 커지면 softmax 함수가 기울기가 극도로 작은 영역으로 밀려날 수 있다.</p><p><span class="match">이 효과를 상쇄하기 위해 내적을 1 / √d<sub>k</sub>로 스케일링한다.</span></p><p>선택한 원문과 Translation은 같은 PDF page context에서 보인다.</p></article></div></section></div><div class="selection-bar" aria-label="텍스트 선택 작업"><button>Highlight</button><button>Add Note</button><button>Copy</button></div><aside class="notes-drawer" aria-label="Notes drawer"><header class="drawer-head"><div><h3>Add Note</h3><small>Reader context 유지 · page 6</small></div><button class="icon-button" aria-label="Notes 닫기">×</button></header><div class="drawer-context"><span class="context-label">Selected source · retained</span><blockquote>“the dot products grow large in magnitude, pushing the softmax function into regions where it has extremely small gradients.”</blockquote><span class="context-meta">Attention Is All You Need · p. 6 · §3.2.1</span></div><div class="note-scroll"><label for="note-light">Note</label><div class="note-editor" id="note-light" role="textbox" aria-label="Note 내용">√d_k로 스케일링하는 이유는 큰 내적 값이 softmax의 gradient를 작게 만들 수 있기 때문이다.</div><p class="note-hint"><strong>현재 위치 보존</strong><br>Note는 이 Paper의 Library 기록에 남고, 선택한 원문과 page 6 context는 그대로 유지된다.</p></div><footer class="drawer-foot"><span>Paper note · source attached</span><button class="drawer-action">Note 저장</button></footer></aside></div><footer class="statusbar"><span><strong>Selected source</strong> · page 6, 3.2.1</span><span>Highlight / Add Note / Copy · PDF position 유지</span></footer></section>
+        </div>
+      </div>
+      <section class="state-note" aria-label="Notes source separation state"><div><div class="source-label">Load-bearing state</div><h3>선택한 PDF source가 drawer 뒤에서도 유지됨</h3><p>NotesDrawer를 닫아도 같은 Reader page로 돌아가며, 저장되는 것은 개인 Note다. anchored claim과 개인 Note를 같은 evidence type으로 표시하지 않는다.</p></div><div class="no-chat"><strong>Paper Chat context로 보내지 않음</strong><br>SelectionActionBar에는 Highlight, Add Note, Copy만 있으며 Chat 전송 action이나 evidence tray가 없다.</div></section>
+      <p class="source-map"><strong>Mapping:</strong> UJ-1 김철수 step 10 · `SelectionActionBar`, `NotesDrawer`, `Reader/PDF selected` · `Interaction Primitives / Selection·evidence`.</p>
+    </section>
+
+    <section class="theme-stage" aria-labelledby="notes-dark-label">
+      <h2 class="theme-label" id="notes-dark-label">Native Canvas · Dark</h2>
+      <div class="app-frame" data-theme="dark">
+        <header class="titlebar"><div class="traffic" aria-hidden="true"><span></span><span></span><span></span></div><div class="window-title">PaperLens</div><div class="title-actions"><button class="icon-button" aria-label="사이드바 전환">▤</button><button class="ui-button">검색&nbsp; ⌘F</button></div></header>
+        <div class="shell"><aside class="sidebar" aria-label="논문 탐색"><div class="sidebar-top"><button class="ui-button">‹&nbsp; Library</button></div><section class="paper-meta"><div class="overline">읽는 중</div><h2>Attention Is All You Need</h2><p>Vaswani et al. · 2017</p></section><nav class="outline" aria-label="문서 목차"><div class="outline-label">Contents</div><button class="ui-button">1&nbsp;&nbsp;Introduction</button><button class="ui-button">2&nbsp;&nbsp;Background</button><button class="ui-button">3&nbsp;&nbsp;Model Architecture</button><button class="ui-button active">3.2&nbsp;&nbsp;Attention</button><button class="ui-button">4&nbsp;&nbsp;Why Self-Attention</button><button class="ui-button">5&nbsp;&nbsp;Training</button><button class="ui-button">6&nbsp;&nbsp;Results</button></nav><div class="sidebar-foot">마지막 위치 · 6페이지, 3.2.1</div></aside><section class="reader" aria-label="Notes Reader"><header class="reader-toolbar"><div class="control-cluster"><button class="icon-button" aria-label="이전 페이지">‹</button><button class="icon-button" aria-label="다음 페이지">›</button><button class="ui-button">6 / 12</button></div><div class="toolbar-center">Attention Is All You Need</div><div class="control-cluster"><button class="icon-button" aria-label="축소">−</button><button class="ui-button">125%</button><button class="icon-button" aria-label="확대">+</button><button class="ui-button">PDF 검색</button></div></header><div class="job-strip"><span class="job job-ready"><span class="status-dot"></span>PDF 준비됨</span><span class="job job-progress"><span>현재 페이지 번역 84%</span><progress value="84" max="100">84%</progress></span><span class="job"><span class="status-dot" style="color:var(--success)"></span>선택한 원문 1개</span></div><div class="workspace"><div class="comparison"><section class="panel"><header class="panel-heading"><span class="panel-title">Original PDF</span><span class="panel-meta">PAGE 6</span></header><div class="pdf-scroll"><article class="pdf-page" lang="en"><p class="paper-kicker">3 · Model Architecture</p><h3>3.2.1 Scaled Dot-Product Attention</h3><p>We call our particular attention “Scaled Dot-Product Attention.” The input consists of queries and keys of dimension d<sub>k</sub>, and values of dimension d<sub>v</sub>.</p><p>We compute the dot products of the query with all keys, divide each by √d<sub>k</sub>, and apply a softmax function to obtain the weights on the values.</p><div class="equation">Attention(Q, K, V) = softmax(QKᵀ / √d<sub>k</sub>)V</div><p><span class="selected-text">We suspect that for large values of d<sub>k</sub>, the dot products grow large in magnitude, pushing the softmax function into regions where it has extremely small gradients.</span> To counteract this effect, we scale the dot products by 1 / √d<sub>k</sub>.</p><p>In practice, we compute the attention function on a set of queries simultaneously, packed together into a matrix Q.</p></article></div></section><section class="panel"><header class="panel-heading"><span class="panel-title">Translation</span><span class="panel-meta">현재 페이지 · 6</span></header><div class="translation-scroll"><article class="translation-body" lang="ko"><p class="section-no">3.2.1 · 문장 정렬됨</p><h3>스케일드 닷-프로덕트 어텐션</h3><p>내적 값이 커지면 softmax 함수가 기울기가 극도로 작은 영역으로 밀려날 수 있다.</p><p><span class="match">이 효과를 상쇄하기 위해 내적을 1 / √d<sub>k</sub>로 스케일링한다.</span></p><p>선택한 원문과 Translation은 같은 PDF page context에서 보인다.</p></article></div></section></div><div class="selection-bar" aria-label="텍스트 선택 작업"><button>Highlight</button><button>Add Note</button><button>Copy</button></div><aside class="notes-drawer" aria-label="Notes drawer"><header class="drawer-head"><div><h3>Add Note</h3><small>Reader context 유지 · page 6</small></div><button class="icon-button" aria-label="Notes 닫기">×</button></header><div class="drawer-context"><span class="context-label">Selected source · retained</span><blockquote>“the dot products grow large in magnitude, pushing the softmax function into regions where it has extremely small gradients.”</blockquote><span class="context-meta">Attention Is All You Need · p. 6 · §3.2.1</span></div><div class="note-scroll"><label for="note-dark">Note</label><div class="note-editor" id="note-dark" role="textbox" aria-label="Note 내용">√d_k로 스케일링하는 이유는 큰 내적 값이 softmax의 gradient를 작게 만들 수 있기 때문이다.</div><p class="note-hint"><strong>현재 위치 보존</strong><br>Note는 이 Paper의 Library 기록에 남고, 선택한 원문과 page 6 context는 그대로 유지된다.</p></div><footer class="drawer-foot"><span>Paper note · source attached</span><button class="drawer-action">Note 저장</button></footer></aside></div><footer class="statusbar"><span><strong>Selected source</strong> · page 6, 3.2.1</span><span>Highlight / Add Note / Copy · PDF position 유지</span></footer></section></div>
+      </div>
+      <section class="state-note" aria-label="Notes dark source separation state"><div><div class="source-label">Load-bearing state</div><h3>선택 source와 현재 page가 남은 Notes drawer</h3><p>Dark에서도 selected PDF sentence, source metadata, 개인 Note의 구분을 유지한다.</p></div><div class="no-chat"><strong>Chat injection 없음</strong><br>선택 bar는 세 action만 보여주며 Paper Chat은 별도 context contract를 따른다.</div></section>
+      <p class="source-map"><strong>Mapping:</strong> UJ-1 step 10 · `SelectionActionBar`, `NotesDrawer`, `State Patterns / Reader-PDF selected`.</p>
+    </section>
+  </main>
+</body>
+</html>

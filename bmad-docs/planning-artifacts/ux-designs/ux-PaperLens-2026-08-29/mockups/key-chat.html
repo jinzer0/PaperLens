@@ -1,0 +1,427 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PaperLens — Key screen: Paper Chat</title>
+  <style>
+    /*
+      Governing sections: EXPERIENCE.md §Information Architecture (ReaderShell and
+      Paper Chat), §Component Patterns (PaperChatPanel, EvidenceAnchor,
+      ChatSessionMenu), §State Patterns (Paper Chat), and §Interaction Primitives
+      4 and 8. Visual tokens follow DESIGN.md §Brand & Style, §Colors,
+      §Typography, §Components, and the Native Canvas direction reference.
+      This is a static visual mock. The buttons and links are label references,
+      not an implemented application. Native Canvas light muted/success values
+      use the captured contrast correction #6A6760 / #3C724D.
+    */
+    :root {
+      --frame-max: 1280px;
+      --ui: -apple-system, BlinkMacSystemFont, "Helvetica Neue", "Apple SD Gothic Neo", sans-serif;
+      --reading: ui-serif, "New York", Georgia, serif;
+      --mono: ui-monospace, "SFMono-Regular", Menlo, monospace;
+      --xs: 11px;
+      --sm: 12px;
+      --ui-size: 13px;
+      --body: 15px;
+      --paper-size: 16px;
+      --line: 1px;
+      --r-sm: 5px;
+      --r-md: 8px;
+      --r-lg: 12px;
+      --r-window: 16px;
+    }
+    * { box-sizing: border-box; }
+    html { background: #CFCAC1; }
+    body {
+      margin: 0;
+      color: #25241F;
+      background: #CFCAC1;
+      font-family: var(--ui);
+    }
+    button, a { font: inherit; }
+    button { cursor: default; }
+    .artifact {
+      width: min(100%, calc(var(--frame-max) + 64px));
+      margin: 0 auto;
+      padding: 46px 32px 72px;
+    }
+    .artifact-header {
+      display: grid;
+      grid-template-columns: minmax(0, 1.4fr) minmax(250px, .6fr);
+      gap: 40px;
+      padding: 0 8px 30px;
+      border-bottom: 1px solid #AAA49A;
+    }
+    .eyebrow, .theme-label, .source-label {
+      color: #655F56;
+      font-size: var(--xs);
+      font-weight: 700;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+    h1 {
+      margin: 8px 0 12px;
+      font-size: clamp(26px, 3vw, 34px);
+      line-height: 1.06;
+      letter-spacing: -.035em;
+    }
+    .rationale {
+      max-width: 70ch;
+      margin: 0;
+      color: #514D46;
+      font-size: var(--body);
+      line-height: 1.65;
+    }
+    .artifact-meta {
+      display: grid;
+      align-content: end;
+      gap: 14px;
+      margin: 0;
+    }
+    .artifact-meta div { border-top: 1px solid #AAA49A; padding-top: 8px; }
+    .artifact-meta dt { color: #726C62; font-size: var(--xs); font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
+    .artifact-meta dd { margin: 4px 0 0; color: #3D3A35; font-size: var(--sm); line-height: 1.5; }
+    .theme-stage { margin-top: 38px; }
+    .theme-label { margin: 0 0 10px 8px; color: #5F5A52; }
+
+    .app-frame, .state-gallery {
+      --canvas: #D8D4CC;
+      --chrome: #F4F2ED;
+      --sidebar: #E9E6DF;
+      --panel: #F7F5F0;
+      --paper: #FFFDF8;
+      --raised: #FFFFFF;
+      --ink: #25241F;
+      --muted: #6A6760;
+      --line-color: #C9C5BC;
+      --line-soft: #DEDAD2;
+      --accent: #2E6F99;
+      --accent-soft: #D8E8F1;
+      --match: #DCEBF3;
+      --match-line: #4E88AC;
+      --success: #3C724D;
+      --success-soft: #DDEADF;
+      --error: #A3453F;
+      --error-soft: #F3DFDC;
+      --traffic-red: #D46B61;
+      --traffic-amber: #D7A84F;
+      --traffic-green: #69A66F;
+      --paper-shadow: 0 12px 28px #403B321A, 0 0 0 1px #817B6F24;
+    }
+    .app-frame[data-theme="dark"], .state-gallery[data-theme="dark"] {
+      --canvas: #151412;
+      --chrome: #26241F;
+      --sidebar: #201E1A;
+      --panel: #1E1C19;
+      --paper: #292620;
+      --raised: #302D27;
+      --ink: #EEEAE1;
+      --muted: #AAA39A;
+      --line-color: #47433B;
+      --line-soft: #35322C;
+      --accent: #83B9D9;
+      --accent-soft: #263C48;
+      --match: #253F4E;
+      --match-line: #79B5D8;
+      --success: #79B78A;
+      --success-soft: #23372A;
+      --error: #E08D84;
+      --error-soft: #462B28;
+      --traffic-red: #CE675E;
+      --traffic-amber: #C99A43;
+      --traffic-green: #5F9B66;
+      --paper-shadow: 0 14px 32px #00000033, 0 0 0 1px #7E756829;
+    }
+    .app-frame {
+      display: grid;
+      grid-template-rows: 48px minmax(0, 1fr);
+      width: 100%;
+      max-width: var(--frame-max);
+      min-height: 770px;
+      overflow: hidden;
+      border: 1px solid var(--line-color);
+      border-radius: var(--r-window);
+      background: var(--canvas);
+      color: var(--ink);
+      box-shadow: 0 24px 72px #2E2A241F, 0 0 0 1px #5C574D33;
+    }
+    .titlebar {
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      align-items: center;
+      min-width: 0;
+      padding: 0 16px;
+      background: var(--chrome);
+      border-bottom: 1px solid var(--line-color);
+      box-shadow: inset 0 1px 0 #FFFFFF4D, 0 1px 2px #25221D12;
+    }
+    .traffic { display: flex; gap: 8px; }
+    .traffic span { width: 12px; height: 12px; border-radius: 50%; box-shadow: inset 0 0 0 1px #0000001F; }
+    .traffic span:nth-child(1) { background: var(--traffic-red); }
+    .traffic span:nth-child(2) { background: var(--traffic-amber); }
+    .traffic span:nth-child(3) { background: var(--traffic-green); }
+    .window-title { font-size: var(--ui-size); font-weight: 650; }
+    .title-actions { display: flex; justify-content: end; gap: 8px; }
+    .shell { display: grid; grid-template-columns: 210px minmax(0, 1fr); min-height: 0; }
+    .sidebar {
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr) auto;
+      min-height: 0;
+      background: var(--sidebar);
+      border-right: 1px solid var(--line-color);
+    }
+    .sidebar-top, .paper-meta, .outline, .sidebar-foot { padding-inline: 16px; }
+    .sidebar-top { padding-block: 12px; border-bottom: 1px solid var(--line-soft); }
+    .paper-meta { padding-block: 20px; }
+    .paper-meta .overline { color: var(--success); font-size: var(--xs); font-weight: 700; }
+    .paper-meta h2 { margin: 8px 0 8px; font-size: 17px; line-height: 1.23; letter-spacing: -.025em; }
+    .paper-meta p { margin: 0; color: var(--muted); font-size: var(--sm); line-height: 1.45; }
+    .outline { min-height: 0; padding-block: 8px; overflow: auto; }
+    .outline-label { margin: 8px 0; color: var(--muted); font-size: var(--xs); font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+    .outline button { width: 100%; margin: 2px 0; text-align: left; }
+    .outline .active { background: var(--raised); color: var(--ink); box-shadow: inset 0 1px 0 #FFFFFF4D, 0 1px 2px #25221D12; }
+    .sidebar-foot { padding-block: 12px; border-top: 1px solid var(--line-soft); color: var(--muted); font-size: var(--xs); }
+    .reader { display: grid; grid-template-rows: 48px 34px minmax(0, 1fr) 38px; min-width: 0; min-height: 0; }
+    .reader-toolbar, .job-strip, .statusbar { background: var(--panel); }
+    .reader-toolbar { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 16px; padding: 0 16px; border-bottom: 1px solid var(--line-color); }
+    .control-cluster { display: flex; align-items: center; gap: 8px; min-width: 0; }
+    .toolbar-center { max-width: 340px; overflow: hidden; color: var(--ink); font-size: var(--ui-size); font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+    .reader-toolbar .control-cluster:last-child { justify-content: end; }
+    .ui-button, .icon-button, .tab, .session-title, .more-button, .retry, .composer-send {
+      appearance: none;
+      border: 1px solid transparent;
+      color: var(--muted);
+      background: transparent;
+    }
+    .ui-button { min-height: 29px; padding: 5px 9px; border-radius: var(--r-sm); }
+    .icon-button { display: grid; place-items: center; width: 29px; height: 29px; border-radius: var(--r-sm); font-weight: 650; }
+    .ui-button:hover, .icon-button:hover, .session-title:hover, .more-button:hover { color: var(--ink); background: var(--raised); border-color: var(--line-color); }
+    .job-strip { display: flex; align-items: center; gap: 16px; min-width: 0; padding: 0 16px; border-bottom: 1px solid var(--line-color); font-size: var(--xs); }
+    .job { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
+    .job-ready { color: var(--success); }
+    .job-progress { color: var(--accent); }
+    .status-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+    progress { width: 78px; height: 4px; accent-color: var(--accent); }
+    .comparison { display: grid; grid-template-columns: minmax(0, 1.04fr) minmax(360px, .96fr); min-width: 0; min-height: 0; }
+    .pdf-panel, .chat-panel { display: grid; grid-template-rows: 44px minmax(0, 1fr); min-width: 0; min-height: 0; background: var(--canvas); }
+    .pdf-panel { border-right: 1px solid var(--line-color); }
+    .panel-heading, .tabs-row { display: flex; align-items: center; justify-content: space-between; min-width: 0; padding: 0 16px; background: var(--panel); border-bottom: 1px solid var(--line-color); }
+    .panel-title { font-size: var(--ui-size); font-weight: 650; }
+    .panel-meta { color: var(--muted); font: var(--xs) var(--mono); letter-spacing: .03em; }
+    .pdf-scroll { min-height: 0; overflow: auto; padding: 24px; }
+    .pdf-page { width: min(470px, 100%); min-height: 600px; margin: 0 auto; padding: 38px 42px; color: var(--ink); background: var(--paper); border-radius: var(--r-sm); box-shadow: var(--paper-shadow); font-family: var(--reading); }
+    .paper-kicker { margin: 0 0 12px; color: var(--muted); font: 10px var(--ui); letter-spacing: .08em; text-transform: uppercase; }
+    .pdf-page h3 { margin: 0 0 20px; font-size: 18px; line-height: 1.25; }
+    .pdf-page p { margin: 0 0 16px; font-size: var(--paper-size); line-height: 1.68; }
+    .equation { margin: 20px 0; padding: 12px; text-align: center; border-block: 1px solid var(--line-soft); font-style: italic; }
+    .selected-sentence { padding: 1px 3px; background: var(--match); box-shadow: 0 0 0 1px var(--match-line); border-radius: 3px; }
+    .chat-panel { background: var(--panel); }
+    .tabs-row { padding-inline: 16px; }
+    .tabs { display: flex; align-self: stretch; gap: 20px; }
+    .tab { position: relative; padding: 0; font-size: var(--ui-size); }
+    .tab.active { color: var(--ink); font-weight: 650; }
+    .tab.active::after { content: ""; position: absolute; right: 0; bottom: -1px; left: 0; height: 2px; background: var(--accent); }
+    .chat-scroll { min-height: 0; overflow: auto; padding: 16px 20px 20px; }
+    .session-head { position: relative; display: flex; align-items: center; gap: 8px; min-width: 0; margin-bottom: 16px; }
+    .session-title { min-width: 0; max-width: 220px; padding: 6px 8px; overflow: hidden; color: var(--ink); font-size: var(--ui-size); font-weight: 650; text-align: left; text-overflow: ellipsis; white-space: nowrap; border-radius: var(--r-sm); }
+    .new-chat { min-height: 29px; padding: 5px 9px; color: var(--accent); font-size: var(--sm); border: 1px solid var(--accent); border-radius: var(--r-sm); background: transparent; }
+    .more-button { width: 29px; height: 29px; margin-left: auto; border-radius: var(--r-sm); font-weight: 700; }
+    .session-menu { position: absolute; z-index: 2; top: 36px; left: 0; width: min(280px, 100%); padding: 8px; border: 1px solid var(--line-color); border-radius: var(--r-md); background: var(--raised); box-shadow: 0 12px 28px #403B3226; }
+    .session-menu-label { margin: 3px 8px 6px; color: var(--muted); font-size: var(--xs); font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+    .session-entry { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 8px; border-radius: var(--r-sm); }
+    .session-entry.current { background: var(--accent-soft); }
+    .session-entry strong { display: block; overflow: hidden; color: var(--ink); font-size: var(--sm); text-overflow: ellipsis; white-space: nowrap; }
+    .session-entry small { display: block; margin-top: 2px; color: var(--muted); font-size: var(--xs); }
+    .session-entry .entry-more { color: var(--muted); font-size: var(--ui-size); }
+    .message { max-width: 54ch; margin-bottom: 14px; }
+    .message.user { margin-left: auto; padding: 10px 12px; border: 1px solid var(--line-color); border-radius: var(--r-md) var(--r-md) var(--r-sm) var(--r-md); background: var(--raised); }
+    .message.assistant { padding-top: 2px; }
+    .message-label { margin: 0 0 6px; color: var(--muted); font-size: var(--xs); font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+    .message p { margin: 0 0 10px; color: var(--ink); font-size: var(--body); line-height: 1.62; }
+    .evidence-anchor { color: var(--accent); font-size: var(--sm); font-weight: 700; text-decoration: none; white-space: nowrap; }
+    .source-preview { display: block; margin-top: 6px; padding: 7px 9px; color: var(--muted); font: var(--xs) / 1.5 var(--ui); border-left: 2px solid var(--match-line); background: var(--match); }
+    /*
+      Evidence is inline-only. The preview is a single hover/focus reference
+      state, not a persistent evidence card or tray; the second anchor remains
+      an inline link without an always-open preview.
+    */
+    .source-preview { display: none; }
+    .evidence-anchor:hover + .source-preview,
+    .evidence-anchor:focus-visible + .source-preview { display: block; }
+    .evidence-anchor:not(:first-of-type) + .source-preview { display: none !important; }
+    .evidence-anchor:hover + .source-preview::before,
+    .evidence-anchor:focus-visible + .source-preview::before {
+      content: "Hover/focus preview · full source sentence: ";
+      font-weight: 700;
+    }
+    .evidence-anchor:hover + .source-preview,
+    .evidence-anchor:focus-visible + .source-preview {
+      font-size: 0;
+    }
+    .evidence-anchor:hover + .source-preview::before,
+    .evidence-anchor:focus-visible + .source-preview::before {
+      font-size: var(--xs);
+    }
+    .evidence-anchor:hover + .source-preview::after,
+    .evidence-anchor:focus-visible + .source-preview::after {
+      content: "We suspect that for large values of dₖ, the dot products grow large in magnitude, pushing the softmax function into regions where it has extremely small gradients.";
+      font-size: var(--xs);
+      font-weight: 400;
+    }
+    .message.assistant p:nth-of-type(2) .source-preview {
+      display: block;
+      font-size: 0;
+    }
+    .message.assistant p:nth-of-type(2) .source-preview::before {
+      content: "Hover/focus preview state · full source sentence: ";
+      font-size: var(--xs);
+      font-weight: 700;
+    }
+    .message.assistant p:nth-of-type(2) .source-preview::after {
+      content: "We suspect that for large values of dₖ, the dot products grow large in magnitude, pushing the softmax function into regions where it has extremely small gradients.";
+      font-size: var(--xs);
+      font-weight: 400;
+    }
+    .message.assistant p:nth-of-type(3) .source-preview,
+    .message.assistant p:nth-of-type(3) .evidence-anchor:hover + .source-preview,
+    .message.assistant p:nth-of-type(3) .evidence-anchor:focus-visible + .source-preview {
+      display: none !important;
+    }
+    .session-menu .session-entry:last-child { display: none; }
+    .answer-meta { display: flex; flex-wrap: wrap; gap: 8px 12px; color: var(--muted); font-size: var(--xs); }
+    .answer-meta .status { color: var(--success); font-weight: 700; }
+    .composer { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: end; margin-top: 18px; padding: 9px; border: 1px solid var(--line-color); border-radius: var(--r-md); background: var(--raised); }
+    .composer-placeholder { min-height: 44px; padding: 5px 2px; color: var(--muted); font-size: var(--sm); line-height: 1.45; }
+    .composer-send { min-height: 29px; padding: 5px 9px; color: var(--accent); border: 1px solid var(--accent); border-radius: var(--r-sm); }
+    .statusbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; padding: 0 16px; border-top: 1px solid var(--line-color); color: var(--muted); font-size: var(--xs); }
+    .statusbar strong { color: var(--accent); }
+
+    .state-gallery { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin-top: 12px; padding: 12px; border: 1px solid var(--line-color); border-radius: var(--r-lg); background: var(--panel); }
+    .state-card { min-width: 0; min-height: 142px; padding: 12px; border: 1px solid var(--line-color); border-radius: var(--r-md); background: var(--raised); }
+    .state-card h3 { margin: 4px 0 7px; color: var(--ink); font-size: var(--ui-size); line-height: 1.3; }
+    .state-card p { margin: 0; color: var(--muted); font-size: var(--sm); line-height: 1.5; }
+    .state-kicker { color: var(--muted); font: 700 var(--xs) var(--mono); letter-spacing: .03em; }
+    .state-card.empty { border-color: var(--accent); }
+    .state-card.empty .state-kicker { color: var(--accent); }
+    .state-card.failure { background: color-mix(in srgb, var(--error-soft) 58%, var(--raised)); border-color: var(--error); }
+    .state-card.failure .state-kicker { color: var(--error); }
+    .gallery-note { grid-column: 1 / -1; margin: 0 2px 2px; color: var(--muted); font-size: var(--xs); line-height: 1.45; }
+    .source-map { margin: 12px 2px 0; color: #5F5A52; font-size: var(--xs); line-height: 1.5; }
+    .source-map strong { color: #3D3A35; }
+
+    @media (max-width: 1040px) {
+      .artifact { padding-inline: 16px; }
+      .artifact-header { grid-template-columns: 1fr; gap: 22px; }
+      .shell { grid-template-columns: 176px minmax(0, 1fr); }
+      .comparison { grid-template-columns: minmax(0, 1fr) minmax(330px, .95fr); }
+      .pdf-scroll { padding: 16px; }
+      .pdf-page { padding: 30px; }
+      .state-gallery { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    }
+    @media (max-width: 760px) {
+      .artifact { padding: 28px 10px 48px; }
+      .app-frame { min-height: 0; height: auto; border-radius: var(--r-lg); }
+      .titlebar { padding-inline: 12px; }
+      .title-actions .ui-button { display: none; }
+      .shell { grid-template-columns: 1fr; }
+      .sidebar { display: none; }
+      .reader { grid-template-rows: auto auto auto auto; }
+      .reader-toolbar { grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; padding-inline: 10px; }
+      .toolbar-center { justify-self: center; max-width: 150px; }
+      .reader-toolbar .control-cluster:last-child .ui-button, .reader-toolbar .control-cluster:last-child .icon-button:first-child { display: none; }
+      .job-strip { gap: 10px; padding-inline: 10px; overflow: auto; }
+      .comparison { grid-template-columns: 1fr; }
+      .pdf-panel { min-height: 500px; border-right: 0; border-bottom: 1px solid var(--line-color); }
+      .chat-panel { min-height: 660px; }
+      .statusbar { align-items: flex-start; flex-direction: column; justify-content: center; gap: 2px; min-height: 48px; padding-block: 7px; }
+      .state-gallery { grid-template-columns: 1fr 1fr; }
+      .gallery-note { grid-column: 1 / -1; }
+    }
+    @media (max-width: 460px) {
+      .state-gallery { grid-template-columns: 1fr; }
+      .state-card { min-height: 0; }
+      .chat-scroll { padding-inline: 12px; }
+      .session-title { max-width: 150px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="artifact">
+    <header class="artifact-header">
+      <div>
+        <div class="eyebrow">PaperLens · key screen 01</div>
+        <h1>Paper Chat · Reader right tab</h1>
+        <p class="rationale">현재 Paper의 Chat Session을 Reader 안에서 복원하고, 답변 주장 옆에만 inline Evidence Anchor를 둔 정적 시안이다. 첫 질문 전의 빈 composer와 네 가지 근거 이동 실패 상태를 같은 계약 안에서 비교한다.</p>
+      </div>
+      <dl class="artifact-meta">
+        <div><dt>Caption</dt><dd>Paper Chat answer with inline anchors; session menu, new-chat entry, and explicit evidence failure states.</dd></div>
+        <div><dt>Source mapping</dt><dd>UJ-1 steps 8–10 and failure path; UJ-4 steps 5–10; PaperChatPanel, EvidenceAnchor, ChatSessionMenu.</dd></div>
+        <div><dt>Artifact status</dt><dd>Native Canvas Light/Dark reference only · static labels, no JavaScript, no network.</dd></div>
+      </dl>
+    </header>
+
+    <section class="theme-stage" aria-labelledby="chat-light-label">
+      <h2 class="theme-label" id="chat-light-label">Native Canvas · Light</h2>
+      <div class="app-frame" data-theme="light">
+        <header class="titlebar">
+          <div class="traffic" aria-hidden="true"><span></span><span></span><span></span></div>
+          <div class="window-title">PaperLens</div>
+          <div class="title-actions"><button class="icon-button" aria-label="사이드바 전환">▤</button><button class="ui-button">검색&nbsp; ⌘F</button></div>
+        </header>
+        <div class="shell">
+          <aside class="sidebar" aria-label="논문 탐색">
+            <div class="sidebar-top"><button class="ui-button">‹&nbsp; Library</button></div>
+            <section class="paper-meta"><div class="overline">읽는 중</div><h2>Attention Is All You Need</h2><p>Vaswani et al. · 2017</p></section>
+            <nav class="outline" aria-label="문서 목차"><div class="outline-label">Contents</div><button class="ui-button">1&nbsp;&nbsp;Introduction</button><button class="ui-button">2&nbsp;&nbsp;Background</button><button class="ui-button">3&nbsp;&nbsp;Model Architecture</button><button class="ui-button active">3.2&nbsp;&nbsp;Attention</button><button class="ui-button">4&nbsp;&nbsp;Why Self-Attention</button><button class="ui-button">5&nbsp;&nbsp;Training</button><button class="ui-button">6&nbsp;&nbsp;Results</button></nav>
+            <div class="sidebar-foot">마지막 위치 · 6페이지, 3.2.1</div>
+          </aside>
+          <section class="reader" aria-label="Paper Chat Reader">
+            <header class="reader-toolbar"><div class="control-cluster"><button class="icon-button" aria-label="이전 페이지">‹</button><button class="icon-button" aria-label="다음 페이지">›</button><button class="ui-button">6 / 12</button></div><div class="toolbar-center">Attention Is All You Need</div><div class="control-cluster"><button class="icon-button" aria-label="축소">−</button><button class="ui-button">125%</button><button class="icon-button" aria-label="확대">+</button><button class="ui-button">PDF 검색</button></div></header>
+            <div class="job-strip" aria-label="작업 상태"><span class="job job-ready"><span class="status-dot"></span>PDF 준비됨</span><span class="job job-progress"><span>현재 페이지 번역 84%</span><progress value="84" max="100">84%</progress></span><span class="job"><span class="status-dot" style="color:var(--success)"></span>Paper Chat 준비됨</span></div>
+            <div class="comparison">
+              <section class="pdf-panel" aria-labelledby="chat-light-pdf-title"><header class="panel-heading"><span class="panel-title" id="chat-light-pdf-title">Original PDF</span><span class="panel-meta">PAGE 6</span></header><div class="pdf-scroll"><article class="pdf-page" lang="en"><p class="paper-kicker">3 · Model Architecture</p><h3>3.2.1 Scaled Dot-Product Attention</h3><p>We call our particular attention “Scaled Dot-Product Attention.” The input consists of queries and keys of dimension d<sub>k</sub>, and values of dimension d<sub>v</sub>.</p><p>We compute the dot products of the query with all keys, divide each by √d<sub>k</sub>, and apply a softmax function to obtain the weights on the values.</p><div class="equation">Attention(Q, K, V) = softmax(QKᵀ / √d<sub>k</sub>)V</div><p><span class="selected-sentence">We suspect that for large values of d<sub>k</sub>, the dot products grow large in magnitude, pushing the softmax function into regions where it has extremely small gradients.</span> To counteract this effect, we scale the dot products by 1 / √d<sub>k</sub>.</p><p>In practice, we compute the attention function on a set of queries simultaneously, packed together into a matrix Q.</p></article></div></section>
+              <section class="chat-panel" aria-labelledby="chat-light-panel-title"><div class="tabs-row"><div class="tabs" role="tablist"><button class="tab" role="tab" aria-selected="false">Translation</button><button class="tab active" role="tab" aria-selected="true" id="chat-light-panel-title">Paper Chat</button></div><span class="panel-meta">PAPER 전체 근거</span></div><div class="chat-scroll">
+                <div class="session-head"><button class="session-title" aria-label="현재 Chat Session">어텐션 핵심 이해&nbsp;⌄</button><button class="new-chat">새 대화</button><button class="more-button" aria-label="현재 세션 더보기">•••</button><div class="session-menu" aria-label="Chat Session 목록"><div class="session-menu-label">Chat Sessions</div><div class="session-entry current"><div><strong>어텐션 핵심 이해</strong><small>현재 세션 · 3개 질문</small></div><span class="entry-more">•••</span></div><div class="session-entry"><div><strong>세미나용 방법 요약</strong><small>어제 · 5개 질문</small></div><span class="entry-more">•••</span></div><div class="session-entry"><div><strong>새 대화</strong><small>첫 질문 전에는 세션을 만들지 않음</small></div><span class="entry-more">•••</span></div></div></div>
+                <article class="message user"><p class="message-label">질문</p><p>Scaled Dot-Product Attention에서 d<sub>k</sub>로 나누는 이유는 무엇인가요?</p></article>
+                <article class="message assistant"><p class="message-label">Paper Chat 답변</p><p>내적 값이 커지면 softmax가 기울기가 매우 작은 영역으로 밀릴 수 있기 때문입니다. 논문은 내적을 √d<sub>k</sub>로 스케일링해 이 효과를 줄입니다. <a class="evidence-anchor" href="#chat-light-source">[근거 01]</a><span class="source-preview" id="chat-light-source">원문 미리보기 · “the dot products grow large in magnitude … extremely small gradients.” · 6페이지, 3.2.1</span></p><p>따라서 여러 query를 행렬 Q로 묶어 같은 attention 계산을 동시에 수행할 수 있습니다. <a class="evidence-anchor" href="#chat-light-source-2">[근거 02]</a><span class="source-preview" id="chat-light-source-2">원문 미리보기 · “we compute the attention function on a set of queries simultaneously” · 6페이지</span></p><div class="answer-meta"><span class="status">근거 연결됨</span><span>Paper 전체 검색 · 원문 위치를 열 수 있음</span></div></article>
+                <div class="composer" aria-label="질문 composer"><div class="composer-placeholder">이 Paper에 대해 질문하세요</div><button class="composer-send">질문 보내기</button></div>
+              </div></section>
+            </div>
+            <footer class="statusbar"><span><strong>Paper Chat</strong> · current session</span><span>PDF page 6 · Chat은 current page를 별도 주입하지 않음</span></footer>
+          </section>
+        </div>
+      </div>
+      <section class="state-gallery" data-theme="light" aria-label="Paper Chat alternate states">
+        <p class="gallery-note">Load-bearing alternate state reference. Evidence failure labels stay inline and never use the anchored-success treatment.</p>
+        <article class="state-card empty"><span class="state-kicker">EMPTY · FIRST SUBMIT</span><h3>첫 질문 전</h3><p>새 대화 composer만 보이며, 첫 질문을 보낼 때 이 제목의 Chat Session이 만들어진다.</p></article>
+        <article class="state-card failure"><span class="state-kicker">INSUFFICIENT EVIDENCE</span><h3>근거 부족</h3><p>이 논문이 특정 하드웨어 성능 향상을 보장한다고 말할 근거가 없다. anchor를 만들지 않는다.</p></article>
+        <article class="state-card failure"><span class="state-kicker">LOCATION UNCLEAR</span><h3>위치 확인 불가</h3><p>관련 문장은 찾았지만 PDF page와 sentence 위치를 특정하지 못했다.</p></article>
+        <article class="state-card failure"><span class="state-kicker">NAVIGATION FAILED</span><h3>원문 이동 실패</h3><p>근거 상태는 유지되지만 PDF의 6페이지 highlight로 이동하지 못했다.</p></article>
+        <article class="state-card failure"><span class="state-kicker">STALE REVISION</span><h3>오래된 문서 버전</h3><p>Paper가 갱신되어 이전 anchor를 최신 문서의 성공 링크로 표시하지 않는다.</p></article>
+      </section>
+      <p class="source-map"><strong>Mapping:</strong> UJ-1 김철수 steps 8–10 / failure path · UJ-4 최준호 steps 5–10 · `PaperChatPanel`, `EvidenceAnchor`, `ChatSessionMenu`.</p>
+    </section>
+
+    <section class="theme-stage" aria-labelledby="chat-dark-label">
+      <h2 class="theme-label" id="chat-dark-label">Native Canvas · Dark</h2>
+      <div class="app-frame" data-theme="dark">
+        <header class="titlebar"><div class="traffic" aria-hidden="true"><span></span><span></span><span></span></div><div class="window-title">PaperLens</div><div class="title-actions"><button class="icon-button" aria-label="사이드바 전환">▤</button><button class="ui-button">검색&nbsp; ⌘F</button></div></header>
+        <div class="shell">
+          <aside class="sidebar" aria-label="논문 탐색"><div class="sidebar-top"><button class="ui-button">‹&nbsp; Library</button></div><section class="paper-meta"><div class="overline">읽는 중</div><h2>Attention Is All You Need</h2><p>Vaswani et al. · 2017</p></section><nav class="outline" aria-label="문서 목차"><div class="outline-label">Contents</div><button class="ui-button">1&nbsp;&nbsp;Introduction</button><button class="ui-button">2&nbsp;&nbsp;Background</button><button class="ui-button">3&nbsp;&nbsp;Model Architecture</button><button class="ui-button active">3.2&nbsp;&nbsp;Attention</button><button class="ui-button">4&nbsp;&nbsp;Why Self-Attention</button><button class="ui-button">5&nbsp;&nbsp;Training</button><button class="ui-button">6&nbsp;&nbsp;Results</button></nav><div class="sidebar-foot">마지막 위치 · 6페이지, 3.2.1</div></aside>
+          <section class="reader" aria-label="Paper Chat Reader"><header class="reader-toolbar"><div class="control-cluster"><button class="icon-button" aria-label="이전 페이지">‹</button><button class="icon-button" aria-label="다음 페이지">›</button><button class="ui-button">6 / 12</button></div><div class="toolbar-center">Attention Is All You Need</div><div class="control-cluster"><button class="icon-button" aria-label="축소">−</button><button class="ui-button">125%</button><button class="icon-button" aria-label="확대">+</button><button class="ui-button">PDF 검색</button></div></header><div class="job-strip" aria-label="작업 상태"><span class="job job-ready"><span class="status-dot"></span>PDF 준비됨</span><span class="job job-progress"><span>현재 페이지 번역 84%</span><progress value="84" max="100">84%</progress></span><span class="job"><span class="status-dot" style="color:var(--success)"></span>Paper Chat 준비됨</span></div><div class="comparison"><section class="pdf-panel" aria-labelledby="chat-dark-pdf-title"><header class="panel-heading"><span class="panel-title" id="chat-dark-pdf-title">Original PDF</span><span class="panel-meta">PAGE 6</span></header><div class="pdf-scroll"><article class="pdf-page" lang="en"><p class="paper-kicker">3 · Model Architecture</p><h3>3.2.1 Scaled Dot-Product Attention</h3><p>We call our particular attention “Scaled Dot-Product Attention.” The input consists of queries and keys of dimension d<sub>k</sub>, and values of dimension d<sub>v</sub>.</p><p>We compute the dot products of the query with all keys, divide each by √d<sub>k</sub>, and apply a softmax function to obtain the weights on the values.</p><div class="equation">Attention(Q, K, V) = softmax(QKᵀ / √d<sub>k</sub>)V</div><p><span class="selected-sentence">We suspect that for large values of d<sub>k</sub>, the dot products grow large in magnitude, pushing the softmax function into regions where it has extremely small gradients.</span> To counteract this effect, we scale the dot products by 1 / √d<sub>k</sub>.</p><p>In practice, we compute the attention function on a set of queries simultaneously, packed together into a matrix Q.</p></article></div></section><section class="chat-panel" aria-labelledby="chat-dark-panel-title"><div class="tabs-row"><div class="tabs" role="tablist"><button class="tab" role="tab" aria-selected="false">Translation</button><button class="tab active" role="tab" aria-selected="true" id="chat-dark-panel-title">Paper Chat</button></div><span class="panel-meta">PAPER 전체 근거</span></div><div class="chat-scroll"><div class="session-head"><button class="session-title" aria-label="현재 Chat Session">어텐션 핵심 이해&nbsp;⌄</button><button class="new-chat">새 대화</button><button class="more-button" aria-label="현재 세션 더보기">•••</button><div class="session-menu" aria-label="Chat Session 목록"><div class="session-menu-label">Chat Sessions</div><div class="session-entry current"><div><strong>어텐션 핵심 이해</strong><small>현재 세션 · 3개 질문</small></div><span class="entry-more">•••</span></div><div class="session-entry"><div><strong>세미나용 방법 요약</strong><small>어제 · 5개 질문</small></div><span class="entry-more">•••</span></div><div class="session-entry"><div><strong>새 대화</strong><small>첫 질문 전에는 세션을 만들지 않음</small></div><span class="entry-more">•••</span></div></div></div><article class="message user"><p class="message-label">질문</p><p>Scaled Dot-Product Attention에서 d<sub>k</sub>로 나누는 이유는 무엇인가요?</p></article><article class="message assistant"><p class="message-label">Paper Chat 답변</p><p>내적 값이 커지면 softmax가 기울기가 매우 작은 영역으로 밀릴 수 있기 때문입니다. 논문은 내적을 √d<sub>k</sub>로 스케일링해 이 효과를 줄입니다. <a class="evidence-anchor" href="#chat-dark-source">[근거 01]</a><span class="source-preview" id="chat-dark-source">원문 미리보기 · “the dot products grow large in magnitude … extremely small gradients.” · 6페이지, 3.2.1</span></p><p>따라서 여러 query를 행렬 Q로 묶어 같은 attention 계산을 동시에 수행할 수 있습니다. <a class="evidence-anchor" href="#chat-dark-source-2">[근거 02]</a><span class="source-preview" id="chat-dark-source-2">원문 미리보기 · “we compute the attention function on a set of queries simultaneously” · 6페이지</span></p><div class="answer-meta"><span class="status">근거 연결됨</span><span>Paper 전체 검색 · 원문 위치를 열 수 있음</span></div></article><div class="composer" aria-label="질문 composer"><div class="composer-placeholder">이 Paper에 대해 질문하세요</div><button class="composer-send">질문 보내기</button></div></div></section></div><footer class="statusbar"><span><strong>Paper Chat</strong> · current session</span><span>PDF page 6 · Chat은 current page를 별도 주입하지 않음</span></footer></section>
+        </div>
+      </div>
+      <section class="state-gallery" data-theme="dark" aria-label="Paper Chat dark alternate states">
+        <p class="gallery-note">Load-bearing alternate state reference. Failure statuses are text-labelled and visually distinct from anchored evidence.</p>
+        <article class="state-card empty"><span class="state-kicker">EMPTY · FIRST SUBMIT</span><h3>첫 질문 전</h3><p>첫 질문 전에는 durable Chat Session이 없다. 질문 제출 뒤에만 세션이 만들어진다.</p></article>
+        <article class="state-card failure"><span class="state-kicker">INSUFFICIENT EVIDENCE</span><h3>근거 부족</h3><p>논문의 범위를 넘어선 성능 주장은 근거 부족으로 남는다.</p></article>
+        <article class="state-card failure"><span class="state-kicker">LOCATION UNCLEAR</span><h3>위치 확인 불가</h3><p>관련 문장은 찾았지만 source location을 특정하지 못했다.</p></article>
+        <article class="state-card failure"><span class="state-kicker">NAVIGATION FAILED</span><h3>원문 이동 실패</h3><p>anchor 성공처럼 바꾸지 않고 PDF 이동 실패를 별도로 표시한다.</p></article>
+        <article class="state-card failure"><span class="state-kicker">STALE REVISION</span><h3>오래된 문서 버전</h3><p>이전 문서의 anchor는 최신 Paper에서 다시 확인해야 한다.</p></article>
+      </section>
+      <p class="source-map"><strong>Mapping:</strong> UJ-1 김철수 / UJ-4 최준호 · `PaperChatPanel`, `EvidenceAnchor`, `ChatSessionMenu` · `State Patterns / Paper Chat`.</p>
+    </section>
+  </main>
+</body>
+</html>

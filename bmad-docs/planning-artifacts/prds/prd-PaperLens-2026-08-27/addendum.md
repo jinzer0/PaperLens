@@ -1,8 +1,8 @@
 ---
 title: PaperLens PRD 부록
-status: final
+status: draft
 created: 2026-08-27
-updated: 2026-08-28
+updated: 2026-09-27
 ---
 
 # PaperLens PRD 부록
@@ -11,6 +11,7 @@ updated: 2026-08-28
 
 ## 1. 권위와 Superseded 결정
 
+- 이 개정은 3개 테마 지원에 대한 재승인 대기 초안이다. 새 PRODUCT 승인 전까지 `APPROVED: PRODUCT @ 3bb2edf6a8d3d7f4942dd439325136b6fcb50456`의 PRD와 부록이 승인 기준이며, 이번 문서 변경은 구현 승인이 아니다.
 - `.memlog.md`의 결정이 제품 브리프와 제품 브리프 부록보다 우선한다.
 - 브리프의 `Codex OAuth` 표현은 최신 결정에 따라 `공식 Codex SDK의 ChatGPT 로그인 또는 device-code 흐름`으로 대체한다.
 - generic Codex OAuth provider contract는 확인되지 않았고 v1에서 금지된다.
@@ -106,3 +107,22 @@ updated: 2026-08-28
 - hover 강조와 scroll sync의 구체 렌더링 전략.
 - Job scheduler와 retry backoff 구현.
 - Template 저장 포맷.
+
+## 11. 테마 확장과 UX / Architecture 후속 계약
+
+- 사용자는 Native Canvas를 기본 디자인으로 선택하고 Scholarly Press와 Focused Instrument를 Settings에서 바꿀 수 있는 추가 테마로 요청했다. 기존의 세 시안 중 하나만 채택하는 방향을 대체한다.
+- 사용자에게 관찰 가능한 요구사항과 출시 검증은 PRD FG11 / FR-037..FR-039 / SM-007에 정의한다. 세 테마는 별도 기능 모드가 아니며, 모두 같은 사용자 여정과 Light/Dark 지원을 제공한다.
+- 시각 참조는 이 문서 기준 `../../ux-designs/ux-PaperLens-2026-08-29/mockups/`의 `direction-native-canvas.html`, `direction-scholarly-press.html`, `direction-focused-instrument.html`이다. HTML 시안 자체는 제품 구현이나 최종 UX 계약을 대신하지 않는다.
+- UX는 DESIGN.md에 테마별 색상·서체·표면·간격·상태·접근성 기준을, EXPERIENCE.md에 Settings 선택과 읽기 맥락 보존 동작을 정의한다. 사용자 결정에 따라 명암 모드 기본값은 시스템 설정 따름이며, Settings에서 테마와 별도로 시스템 설정 따름 / Light / Dark를 선택한다. 이 보완 역시 새 PRODUCT 승인 전까지 재승인 대기 개정에 속한다.
+- Architecture 검토는 테마의 앱 전역 적용과 환경설정 보존 책임을 확인한다. 구체 저장 방식이나 UI 구현 기술은 PRD에서 지정하지 않는다. 기존 승인 아키텍처의 실질적 변경이 필요하면 별도 수정·커밋·ARCHITECTURE 재승인을 받는다.
+- 이번 개정은 사용자 정의 테마 편집기, 테마 다운로드 또는 marketplace를 요구하지 않는다.
+
+### 11.1 정합성 검토 — 2026-09-27
+
+- 대조 기준: 승인된 Architecture Spine AD-1·AD-6·AD-11과 SOLUTION-DESIGN §4·§7, 현재 PRD FG11/SM-007, UX DESIGN/EXPERIENCE. 승인된 아키텍처 파일 자체는 변경하지 않았다.
+- 아키텍처 영향: 테마·명암은 기존 Main App의 표현과 앱 전역 환경설정이다. 프로세스 구성, ProviderRPC, 비밀정보, 네트워크, Paper/Job 생명주기와 삭제 범위를 바꾸지 않으므로 이번 문서 개정으로 ARCHITECTURE 재승인은 필요하지 않다. 이는 검토 결론이지 새 아키텍처 승인 기록이 아니다.
+- 소유권: 지속되는 cross-feature 설정 변경은 AD-1의 Application use case와 기존 persistence 경계를 따른다. Feature가 별도 durable owner를 만들거나 SQLite를 직접 쓰지 않는다. 설정은 Paper UUID/generation에 속하지 않으므로 Paper 삭제 cascade 밖에 둔다.
+- 보완한 불일치: UX에서 확정된 System 기본값·System/Light/Dark 독립 선택·재실행 복원이 PRD 본문에는 빠져 있었다. FR-038/039와 SM-007에 정책 보존, OS 명암 변경 반영, 명시적 Light/Dark 유지, Paper 삭제 후 설정 유지, 원본 PDF 불변성을 반영했다. 여섯 렌더링 조합과 세 가지 명암 정책을 구분한다.
+- UX 현황 문구: 실제로 존재하는 `mockups/` 화면을 “생성 진행 중”으로 표시하던 내용을 정리했다. 정적 시안의 존재는 native 앱 동작 검증이나 제품 승인을 의미하지 않는다.
+- Build Spec에 남는 내용: 설정 표현·저장 연산·migration 필요 여부·native appearance 관찰 및 갱신 구현·설정 저장 실패 처리. 구체 기술 선택은 이번 PRD/UX 문서에서 새로 고정하지 않는다.
+- 승인 상태: PRD/부록은 재승인 대기 draft, UX의 final은 문서 완성 상태다. 이 문서들이 포함된 새 커밋에 대한 PRODUCT 승인과 이후 Build Spec의 IMPLEMENTATION 승인 없이 구현을 시작하지 않는다.
