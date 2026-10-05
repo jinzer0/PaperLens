@@ -1,0 +1,64 @@
+{
+  "schemaRevision": "topology-v1",
+  "approvalCommit": "7fe18449bef4a01c827c9df44b5c2b00f9cfd68b",
+  "team": "397452Z366",
+  "toolchain": {"developerDir": "/Applications/Xcode.app/Contents/Developer", "xcode": "27.0", "build": "27A266a", "sdk": "27.0", "swift": "6.4", "deploymentTarget": "15.0"},
+  "pdfium": {
+    "url": "https://pdfium.googlesource.com/pdfium.git",
+    "commit": "ad5bc13610718aefe737bd9b2f1b258d08e39428",
+    "tree": "7a17f761fbcaca163cef3575ed98a0a2058dbb3d",
+    "depsBlob": "169680f06af94277eba6ec9e9597635b40092daf",
+    "sourcePins": {
+      "build": "299066ef2d5d1396f97e582627880cebe33f497a",
+      "buildtools": "9e7655f4ee433ef4c6efcffd57e379db8f8c0432",
+      "third_party/depot_tools": "732902ab86f8bd629bee00af102d5aa2d9336166",
+      "tools/clang": "e4816757c45a072f08279139108a0a937bbeb239"
+    },
+    "vars": {"checkout_configuration": "minimal", "checkout_rust": false},
+    "clangVersion": "llvmorg-23-init-19482-g53d18800-2",
+    "gnVersion": "git_revision:1c79e13d17a1760d6c6401c90061411842bd4881",
+    "ninjaVersion": "version:3@1.12.1.chromium.4",
+    "gnArgs": {"is_component_build": false, "pdf_is_complete_lib": true, "pdf_enable_v8": false, "pdf_enable_xfa": false, "target_os": "mac", "is_debug": false, "pdf_is_standalone": false, "pdf_use_skia": false, "pdf_use_agg": true, "pdf_enable_fontations": false, "pdf_enable_rust_bmp": false, "pdf_enable_rust_jpeg": false, "pdf_enable_rust_png": false, "enable_rust": false, "use_custom_libcxx": false, "mac_deployment_target": "15.0", "mac_min_system_version": "15.0"}
+  },
+  "python": {
+    "version": "3.13.16",
+    "release": "20261003",
+    "baseURL": "https://github.com/astral-sh/python-build-standalone/releases/download/20261003/",
+    "arm64": {"filename": "cpython-3.13.16+20261003-aarch64-apple-darwin-install_only_stripped.tar.gz", "sha256": "9e01f63bbb08576cd9c8bc2d0564d098cb30c8453a0cd4bcf6aef458f6d2a147"},
+    "x86_64": {"filename": "cpython-3.13.16+20261003-x86_64-apple-darwin-install_only_stripped.tar.gz", "sha256": "b4dad38ba6a344555ccb71a1b08caad0a6c0dda88c5803658bc95bd7f04e9f5c"}
+  },
+  "sdkSource": {"project": "openai-codex", "version": "0.160.0", "filename": "openai_codex-0.160.0.tar.gz", "sha256": "31c94d69a81794aaadfaad371c5f95480a28cd7703d9fc7ca3c574286cacaff3"},
+  "pypiURL": "https://pypi.org/pypi/{project}/{version}/json",
+  "wheels": [
+    {"project": "openai-codex", "version": "0.160.0", "any": {"filename": "openai_codex-0.160.0-py3-none-any.whl", "sha256": "61d2d855ca2ebedfd51280fbeb60ff31fc47ccbd55ebce186505e3f3da096921"}},
+    {"project": "openai-codex-cli-bin", "version": "0.160.0", "arm64": {"filename": "openai_codex_cli_bin-0.160.0-py3-none-macosx_11_0_arm64.whl", "sha256": "c9b472e8928d8f94f65e43ba4928e3ecac071ccf8680bbb8281334e32cec409b"}, "x86_64": {"filename": "openai_codex_cli_bin-0.160.0-py3-none-macosx_10_9_x86_64.whl", "sha256": "06571f34b99feee1f1116577f66b82b1b6d582993e07d2099e20e346c73de374"}},
+    {"project": "annotated-types", "version": "0.8.0", "any": {"filename": "annotated_types-0.8.0-py3-none-any.whl", "sha256": "f072f4d804ea359e4eaf198b1af7a8b0943881a87f31bb764f8bf219bb9419e0"}},
+    {"project": "packaging", "version": "26.3", "any": {"filename": "packaging-26.3-py3-none-any.whl", "sha256": "d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c"}},
+    {"project": "pydantic", "version": "2.13.5", "any": {"filename": "pydantic-2.13.5-py3-none-any.whl", "sha256": "346a034f080da3755d8e9cb5e00e8b07de1d39e4f6e2c87d8ab7cafa0b269a73"}},
+    {"project": "pydantic-core", "version": "2.46.5", "arm64": {"filename": "pydantic_core-2.46.5-cp313-cp313-macosx_11_0_arm64.whl", "sha256": "f332f0e72a5a0400141f830744e141bf9f97917878dbe968669e8a7fefea78ff"}, "x86_64": {"filename": "pydantic_core-2.46.5-cp313-cp313-macosx_10_12_x86_64.whl", "sha256": "b7ca9034437b6022f941f4857459562ee00a560b97e7cce8a0ec5a74fc6766e0"}},
+    {"project": "typing-extensions", "version": "4.16.0", "any": {"filename": "typing_extensions-4.16.0-py3-none-any.whl", "sha256": "481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8"}},
+    {"project": "typing-inspection", "version": "0.4.4", "any": {"filename": "typing_inspection-0.4.4-py3-none-any.whl", "sha256": "65b8397ba37ccbce054456aaccddfc91e6e3083c92824df348d96ca832f3f147"}}
+  ],
+  "gcsBaseURL": "https://commondatastorage.googleapis.com/chromium-browser-clang/",
+  "clang": {
+    "arm64": [
+      {"object": "Mac_arm64/clang-llvmorg-23-init-19482-g53d18800-2.tar.xz", "generation": "1785366640567652", "sha256": "a9c5ab02bfdc07a6ad6c6711d884dccab1fdf52e05e71aa9328039cddaff3664"},
+      {"object": "Mac_arm64/llvmobjdump-llvmorg-23-init-19482-g53d18800-2.tar.xz", "generation": "1785366640876543", "sha256": "39fad69229bd7f8b440809f74a711175f5f0ed3cc92c4d6f3652c0ca57e39c2e"}
+    ],
+    "x86_64": [
+      {"object": "Mac/clang-llvmorg-23-init-19482-g53d18800-2.tar.xz", "generation": "1785366628543558", "sha256": "51350c8f6da5c92ab19b0b17a3cbc7762b960b29fd68530e9feb52eb5079ae19"},
+      {"object": "Mac/llvmobjdump-llvmorg-23-init-19482-g53d18800-2.tar.xz", "generation": "1785366628828288", "sha256": "ab7600041b0db44338b42c55b7ed1224edc10c96283d71e53a373820be9e62f9"}
+    ]
+  },
+  "cipdBaseURL": "https://chrome-infra-packages.appspot.com",
+  "cipd": {
+    "arm64": {
+      "gn": {"package": "gn/gn/mac-arm64", "instance": "pSLAXpGkmW3xgEhISBOgpR68Z3Z6HVOnu_rF7Ju0t50C", "sha256": "a522c05e91a4996df18048484813a0a51ebc67767a1d53a7bbfac5ec9bb4b79d"},
+      "ninja": {"package": "infra/3pp/tools/ninja/mac-arm64", "instance": "xem0_6s7Lt77xBhJ_IHxFsjQR7JYkGvswGG-nsrwSv0C", "sha256": "c5e9b4ffab3b2edefbc41849fc81f116c8d047b258906becc061be9ecaf04afd"}
+    },
+    "x86_64": {
+      "gn": {"package": "gn/gn/mac-amd64", "instance": "rIjtpVIc0WCOx1IcxodnmiQXXcL7qCaWHsHydJpqGdgC", "sha256": "ac88eda5521cd1608ec7521cc687679a24175dc2fba826961ec1f2749a6a19d8"},
+      "ninja": {"package": "infra/3pp/tools/ninja/mac-amd64", "instance": "mGbmncDR78ysAZaXITtasuAzLcxiloLxNzPgeS6pURkC", "sha256": "9866e69dc0d1efccac019697213b5ab2e0332dcc629682f13733e0792ea95119"}
+    }
+  }
+}

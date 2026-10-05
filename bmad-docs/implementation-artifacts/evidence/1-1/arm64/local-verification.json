@@ -1,0 +1,74 @@
+{
+  "schema": "paperlens.topology.local-verification.v1",
+  "date": "2026-10-05",
+  "story": "1.1",
+  "issue": 2,
+  "implementationApproval": "7fe18449bef4a01c827c9df44b5c2b00f9cfd68b",
+  "approvalRecord": "https://github.com/jinzer0/PaperLens/issues/2#issuecomment-5987429341",
+  "sourceBaseCommit": "7fe18449bef4a01c827c9df44b5c2b00f9cfd68b",
+  "sourceStateAtVerification": "uncommitted implementation on approved baseline",
+  "sourceFingerprint": {
+    "sha256": "eac2d3a66362d0bba7cdc0b1b9c77e2abff2f8d2f01a47ba249d3cb34dcdaff4",
+    "fileCount": 32,
+    "algorithm": "SHA256 of UTF-8 JSON with sorted keys and separators comma/colon, containing path-sorted objects with path, file SHA256, and octal mode strings",
+    "directFileDirectories": ["Contracts/ProviderRPC", "PaperLensApp/App", "PDFiumXPC", "ProviderAgent", "Tests/Topology", "scripts/topology"],
+    "additionalFiles": ["Package.swift", "PaperLens.xcodeproj/project.pbxproj", "PaperLens.xcodeproj/xcshareddata/xcschemes/PaperLensTopology.xcscheme"]
+  },
+  "host": {"cpu": "arm64", "macOS": "26.7.1", "osBuild": "25G241"},
+  "toolchain": {"xcode": "27.0", "xcodeBuild": "27A266a", "swift": "6.4", "sdk": "27.0", "deploymentTarget": "15.0", "pythonTestDriver": "3.13.16"},
+  "preparation": {
+    "arm64Fetch": "pass",
+    "arm64RuntimeStaging": "pass",
+    "dependencyLockSHA256": "a1de33d78f92b7bf2498e3201234806aeee8719c114f768ec93248c2e322c287",
+    "acquisitionSHA256": "ef1738bf018cb470e00e61d6492384d83ebc3df201fa8b7da35bb6d55ed26dd5",
+    "runtimeReceiptSHA256": "56f4318b567255bab614391c869d3b9e76b585f212cf3a4dc6e10859b4a60884",
+    "corrections": [
+      "Use the actual codex_cli_bin wheel module root and its recorded executables",
+      "Preserve verified internal dangling Clang aliases; reject escapes, cycles and dangling hardlinks, including Python 3.13 resolution semantics",
+      "Restore pinned DEPS defaults instead of disabling non_git_source, retaining DEPS-derived host CPython inputs",
+      "Use the upstream-generated SDK output alias and require it to resolve to the approved SDK 27.0"
+    ]
+  },
+  "automatedVerification": {
+    "swiftProviderRPC": {"command": "swift test --filter ProviderRPCTests", "tests": 12, "failures": 0},
+    "pythonTopology": {"command": ".build/topology/arm64/runtime/python/bin/python3.13 -I -B -m unittest discover -s Tests/Topology -p 'test_*.py'", "tests": 100, "failures": 0},
+    "nativeTypecheck": {"targets": ["PaperLens", "PDFiumXPC", "ProviderAgent", "FixtureGroupOwner"], "architectures": ["arm64", "x86_64"], "swiftLanguageMode": "6", "strictConcurrency": "complete", "result": "pass", "scope": "typecheck only; no full application link or execution"},
+    "nativeXcodeBuild": {"targets": ["ProviderAgent", "FixtureGroupOwner"], "architectures": ["arm64", "x86_64"], "configuration": "Release", "codeSigningAllowed": false, "result": "pass", "scope": "independent targets only, cross-built on arm64; Python runtime is not installed into these check products"},
+    "nativeBinaryInspection": {"tool": "lipo and vtool", "result": "pass", "minimumOS": "15.0", "sdk": "27.0", "binaries": [
+      {"architecture": "arm64", "target": "ProviderAgent", "sha256": "be7f5101f042628d34af24221e2c1703e32b96b4a1eb71b78fe99cd835631aeb"},
+      {"architecture": "arm64", "target": "FixtureGroupOwner", "sha256": "6ffd917f539d57cd36b13092588cdd1ef7ae1d967a14e2f013ffa763a82743dd"},
+      {"architecture": "x86_64", "target": "ProviderAgent", "sha256": "0f822fdce9d19e168f556ae45b9141a390f629259b47fbbb017fd3e7f1777a9d"},
+      {"architecture": "x86_64", "target": "FixtureGroupOwner", "sha256": "b3892aef10e6ea2bc88da294849ed98388ecca9764f496540bec43153db54e89"}
+    ]},
+    "projectPlistAndShellSyntax": "pass",
+    "isolatedVerifierHelp": "pass",
+    "warnings": [
+      "Four Xcode AppIntents metadata-extraction warnings: these targets do not depend on AppIntents.framework",
+      "One asyncio slow-task diagnostic per complete Python run, caused by the late-error test advancing its mocked loop clock by two seconds; not suppressed"
+    ]
+  },
+  "review": {"scope": "Agent findings S1 through S5 only", "result": "resolved", "verification": "independent read-only re-review; not human approval or a product gate"},
+  "buildBlocker": {
+    "entrypoint": "PATH=\"$PROJECT/.build/topology/arm64/runtime/python/bin:$PATH\" scripts/topology/build.sh --arch arm64",
+    "result": "blocked",
+    "stage": "pdfium",
+    "reason": "subprocess_failed",
+    "pdfiumCommit": "ad5bc13610718aefe737bd9b2f1b258d08e39428",
+    "source": "core/fpdfapi/page/cpdf_psengine.cpp",
+    "lines": [452, 453, 454],
+    "diagnostic": "unsafe-buffer-usage promoted to error",
+    "diagnosticCount": 4,
+    "scope": "unchanged approved system-libc++ recipe; Ninja keep-going diagnostic found only this failed translation unit",
+    "upstreamSourcePatched": false,
+    "warningsSuppressed": false,
+    "dependencyPinsChanged": false,
+    "buildDriverNote": "The launcher deliberately rejects a non-3.13 build driver; the actual recipe was retried using the already verified packaged Python 3.13.16 on PATH"
+  },
+  "notPerformed": ["complete PaperLens application link", "nested Developer ID signing and final inventory", "signed XPC and packaged SDK/CLI execution", "actual sandbox negative-access attribution", "physical Intel execution", "notarization", "stapling including validation", "Gatekeeper assessment", "remote CI", "artifact upload", "public distribution"],
+  "fixture": {"dedicatedAccountConfigured": false, "dedicatedProfileActive": false, "permissionsChanged": false},
+  "actualTwoCPU": false,
+  "storyStatus": "blocked",
+  "aggregateVerdict": "blocked",
+  "productGates": {"P-1": "unproven", "P-2": "unproven", "P-3": "unproven", "P-4": "unproven", "P-5": "unproven", "P-6": "unproven"},
+  "limitations": ["Unit, typecheck, preparation and cross-build results are not signed runtime or two-CPU execution evidence", "No full artifact hash or completed isolation result exists", "Any source-patch or approved input-contract change requires a new immutable Spec approval before implementation"]
+}

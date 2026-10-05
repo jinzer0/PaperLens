@@ -1,0 +1,90 @@
+{
+  "limits": {
+    "maxBodyBytes": 65536,
+    "maxFrameBytes": 65540,
+    "maxDepth": 8,
+    "maxObjectKeys": 16,
+    "maxArrayItems": 32,
+    "maxStringBytes": 256,
+    "minTimeoutMs": 1,
+    "maxTimeoutMs": 10000,
+    "handshakeTimeoutMs": 5000,
+    "maxOutstandingRequests": 4,
+    "maxOrdinaryRequests": 3,
+    "maxCancelRequests": 1,
+    "maxQueuedFrames": 4,
+    "maxQueuedBytes": 262160,
+    "maxRequestsPerConnection": 256,
+    "maxStreams": 0
+  },
+  "definitions": {
+    "uuid": {"type": "uuid"},
+    "capabilities": {"type": "array", "items": {"type": "string"}, "const": ["topology-v1"]},
+    "caseID": {
+      "type": "string",
+      "enum": ["ownZoneReadWrite", "mainCanaryRead", "mainCanaryWrite", "externalCanaryRead", "externalCanaryWrite", "mainCanarySymlinkRead", "externalCanarySymlinkRead", "foreignGroupCanaryRead", "foreignGroupCanaryWrite", "foreignGroupCanarySymlinkRead", "inboundListen"]
+    },
+    "errorCode": {
+      "type": "string",
+      "enum": ["versionMismatch", "handshakeRequired", "unknownMethod", "invalidParams", "busy", "cancelled", "timeout", "unavailable", "internal"]
+    }
+  },
+  "envelopes": {
+    "request": {
+      "type": "object",
+      "fields": {
+        "kind": {"type": "string", "const": "request"},
+        "id": {"ref": "uuid"},
+        "method": {"type": "string"},
+        "timeoutMs": {"type": "integer", "minimumLimit": "minTimeoutMs", "maximumLimit": "maxTimeoutMs"},
+        "params": {"type": "object"}
+      }
+    },
+    "result": {
+      "type": "object",
+      "fields": {
+        "kind": {"type": "string", "const": "result"},
+        "id": {"ref": "uuid"},
+        "result": {"type": "object"}
+      }
+    },
+    "error": {
+      "type": "object",
+      "fields": {
+        "kind": {"type": "string", "const": "error"},
+        "id": {"ref": "uuid"},
+        "code": {"ref": "errorCode"}
+      }
+    }
+  },
+  "methods": {
+    "hello": {
+      "params": {"type": "object", "fields": {"major": {"type": "integer"}, "minor": {"type": "integer"}, "capabilities": {"ref": "capabilities"}}},
+      "result": {"type": "object", "fields": {"major": {"type": "integer", "const": 1}, "minor": {"type": "integer", "const": 0}, "capabilities": {"ref": "capabilities"}}}
+    },
+    "topology.runtime": {
+      "params": {"type": "object", "fields": {}},
+      "result": {"type": "object", "fields": {"sdkImported": {"type": "boolean"}, "cliInitialized": {"type": "boolean"}, "architecture": {"type": "string", "enum": ["arm64", "x86_64"]}}}
+    },
+    "topology.prepare": {
+      "params": {"type": "object", "fields": {"runID": {"ref": "uuid"}}},
+      "result": {"type": "object", "fields": {"prepared": {"type": "boolean"}}}
+    },
+    "topology.probe": {
+      "params": {"type": "object", "fields": {"runID": {"ref": "uuid"}, "caseID": {"ref": "caseID"}}},
+      "result": {"type": "object", "fields": {"outcome": {"type": "string", "enum": ["allowed", "denied", "inconclusive"]}, "reason": {"type": "string", "enum": ["none", "permissionDenied", "missingFixture", "controlFailed", "unexpectedErrno"]}}}
+    },
+    "topology.cleanup": {
+      "params": {"type": "object", "fields": {"runID": {"ref": "uuid"}}},
+      "result": {"type": "object", "fields": {"absent": {"type": "boolean"}}}
+    },
+    "topology.wait": {
+      "params": {"type": "object", "fields": {"durationMs": {"type": "integer", "minimum": 1, "maximum": 5000}}},
+      "result": {"type": "object", "fields": {"elapsed": {"type": "boolean"}}}
+    },
+    "cancel": {
+      "params": {"type": "object", "fields": {"targetID": {"ref": "uuid"}}},
+      "result": {"type": "object", "fields": {"accepted": {"type": "boolean"}}}
+    }
+  }
+}
