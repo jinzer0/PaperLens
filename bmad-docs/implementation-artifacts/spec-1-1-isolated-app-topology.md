@@ -1,5 +1,5 @@
 ---
-title: 'Story 1.1 — 두 CPU에서 격리된 앱 실행 구조 입증'
+title: 'Story 1.1 — 현재 계정 arm64 검증과 Intel 동적 검증 면제안'
 type: feature
 created: 2026-10-05
 status: draft
@@ -20,15 +20,15 @@ context:
 
 ## Intent
 
-**Problem:** P-1의 실행·격리 topology는 아직 실증되지 않았다. 제품 Provider/PDFium 구현 전에 arm64와 실제 Intel 환경에서 동일한 경계가 유지되는지 확인해야 한다.
+**Problem:** P-1의 실행·격리 topology는 아직 실증되지 않았다. 사용자는 2026-10-06 현재 macOS 사용자 계정에서 시험하고 Intel 동적 검증을 이번 범위에서 생략하도록 명시했다. 이번 prototype은 현재 계정 arm64 동적 실행과 두 CPU build/정적 서명 증거로 한정한다. 실제 Intel 동작·격리·지원 품질은 미검증이며 PRODUCT baseline의 두 CPU 요구 충족을 주장하지 않는다.
 
 **Approach:** Story 1.1에 한정된 실제 패키징 prototype으로 Main App, no-network PDFium XPC, 별도 sandbox identity의 Provider Agent를 실행하고 서명·공증·접근 거부 증거를 남긴다. 제품 기능을 대신하는 mock이나 완성된 앱으로 제공하지 않는다.
 
 ## Boundaries & Constraints
 
-**Always:** AD-2/4/7/13을 유지한다. 모든 executable은 App Sandbox와 hardened runtime을 적용하고 두 CPU 산출물은 같은 source·후보 dependencies·entitlements·검증 기준을 사용한다. Agent와 Main은 container/app-group을 공유하지 않는다. Main의 broad Agent filesystem 접근과 XPC의 network·DB·Secrets·Caches 접근은 금지한다. XPC에는 시험용 PDF의 read-only 권한만 전달한다. Agent 자식 Python/SDK/CLI도 실제 패키징 대상이며 host-installed runtime으로 대체하지 않는다.
+**Always:** AD-2/4/7/13을 유지한다. 모든 executable은 App Sandbox와 hardened runtime을 적용하고 두 CPU 산출물은 같은 source·후보 dependencies·entitlements·정적 검증 기준을 사용한다. 이번 동적 실행은 arm64만 대상이다. Agent와 Main은 container/app-group을 공유하지 않는다. Main의 broad Agent filesystem 접근과 XPC의 network·DB·Secrets·Caches 접근은 금지한다. XPC에는 시험용 PDF의 read-only 권한만 전달한다. Agent 자식 Python/SDK/CLI도 실제 패키징 대상이며 host-installed runtime으로 대체하지 않는다.
 
-**Ask First:** 이 파일의 커밋 SHA에 대한 IMPLEMENTATION 승인 전 source를 작성하지 않는다. 별도 지시 전 push·PR·Actions 실행·공증 제출·artifact 업로드를 하지 않는다. sandbox 예외·shared container·다른 Provider mode·stack 변경이 필요하면 중단하고 architecture/product 영향에 맞춰 재승인한다. 환경이 없다는 이유로 요구를 낮추지 않는다.
+**Ask First:** 이 파일의 커밋 SHA에 대한 SCOPE 및 IMPLEMENTATION 재승인 전 변경 source를 작성하지 않는다. 별도 지시 전 push·PR·Actions 실행·공증 제출·artifact 업로드를 하지 않는다. sandbox 예외·shared container·다른 Provider mode·stack 변경이 필요하면 중단하고 architecture/product 영향에 맞춰 재승인한다. 이번 현재 계정 시험·Intel 동적 검증 면제 외에 다른 요구를 낮추지 않는다.
 
 **Never:** 제품 로그인/AI 요청, PDF 추출, Library/DB, Paper 삭제 saga를 구현하지 않는다. Story 1.2/1.3의 marker purge 또는 P-2의 최종 locks/전체 OS matrix를 완료로 계산하지 않는다. 실제 사용자의 문서·인증정보에 접근하거나 권한을 바꾸지 않는다. 이 Story 완료는 P-1/P-2 통과나 공개 배포 승인이 아니다.
 
@@ -36,18 +36,18 @@ context:
 
 | Scenario | Input / State | Expected Output / Behavior | Error Handling |
 | --- | --- | --- | --- |
-| 실행 | CPU별 서명된 bundle | 실제 Main/XPC/Agent와 nested runtime의 identity·architecture·sandbox 경계 확인 | 누락/실행 실패는 failed |
+| 실행 | 현재 계정 arm64 서명된 bundle | 실제 Main/XPC/Agent와 nested runtime의 identity·architecture·sandbox 경계 확인 | 누락/실행 실패는 failed; 기존 사용자 데이터 접근 없음 |
 | XPC 접근 | read-only 시험 PDF, 보호된 Main/Agent canary, 접근 가능한 통제 network endpoint | 허용 PDF read 성공; write·보호 데이터 read/write·network 연결 거부 | canary 부재나 endpoint 장애는 통과 아닌 inconclusive |
 | Agent 접근 | 자기 private zone, Main canary, 외부 시험 파일 | 자기 zone 사용 가능; Main container/group·임의 파일 접근 거부 | 상속된 Main identity/shared group은 failed |
 | Main 접근 | Agent가 자체 생성한 private canary | 일반 경로로 broad Agent-zone read/write 거부 | Main에 임시 예외를 주어 검사를 우회하지 않음 |
 | 패키징 | 동일 source의 arm64/x86_64 산출물 | nested inventory·signature·notary·staple·Gatekeeper 결과를 각 hash에 연결 | unsigned/rejected/미실행은 blocked 또는 failed |
-| 환경 부족 | Intel·toolchain·signing/notary 권한 부족 | 부족한 항목과 재검증 조건 기록 | cross-build/Rosetta/개발 Mac 단독 성공으로 대체 금지 |
+| Intel 동적 검증 | 사용자 지시로 이번 실행에서 생략 | 미실행·면제 사유·지원 미검증 별도 기록 | cross-build/Rosetta를 실제 Intel 성공으로 대체 금지; PRODUCT/P-1 통과 아님 |
 
 </frozen-after-approval>
 
 ## Code Map
 
-V2 구현·검증 checkpoint는 `dfc7dacaec37d502dc08cb72348acf289b926ce6`다. 실제 arm64 전체 앱 build·nested 서명·정적 integrity 및 숫자 stack/InitLibrary 회귀는 통과했다. 실제 격리·Intel·공증은 미입증이다. 아래 `use_lld=false` recipe 변경만 새 제안이며 미적용이다.
+기존 구현·검증 checkpoint는 `fe2ea0ea378b5b3704c47970fa5554f7c4960457`다. 승인된 Xcode linker로 두 CPU 전체 앱 build·nested 서명·정적 integrity 및 arm64 숫자 stack/InitLibrary 회귀는 통과했다. 이번 제안은 현재 계정 synthetic fixture 선택과 Intel 동적 검증 면제이며 미적용이다.
 
 - `PaperLens.xcodeproj/project.pbxproj` — Main/XPC/Agent targets, 두 CPU 별도 빌드, macOS 15 deployment target과 embedding/signing 구성.
 - `PaperLensApp/App/`, `PDFiumXPC/`, `ProviderAgent/` — Main launch coordinator, no-network worker, 별도 identity의 packaged Agent. 각 target의 Info.plist/entitlements도 같은 경계에 둔다.
@@ -60,26 +60,26 @@ V2 구현·검증 checkpoint는 `dfc7dacaec37d502dc08cb72348acf289b926ce6`다. �
 
 **Execution:**
 
-- [ ] Preflight — Xcode 27.0/Swift 6.4/SDK 27.0 및 SDK/CLI-bin 0.160.0의 architecture 승인은 기록됐다. Team `397452Z366`의 유일한 local Developer ID Application identity를 후보로 선택했다. key 접근/서명, notary credential reference, Intel 실행 경로는 미검증이다. Intel·notary 실제 성공은 해당 검증 단계와 Story 완료 조건이지 prototype 작성 전에 실증을 끝내야 한다는 뜻이 아니다.
+- [ ] Preflight — 고정 toolchain/stack/Team과 두 CPU build/signature는 fe2ea0ea에서 검증됐다. 새 profile/map·현재 UID·container·기존 report/fixture 충돌을 확인한다. Intel 동적 실행은 이번 범위에서 면제하며 notary credential은 조회하지 않는다.
 - [ ] Launch/topology — 아래 embedded XPC 후보와 entitlement map을 사용해 독립 identity와 private zone을 검증한다. Main sandbox를 상속한 일반 child를 별도 Agent로 오인하지 않는다. 이 revision의 후보 입력·fixture 계약을 근거로 새 SHA 승인을 받은 뒤 prototype을 구현한다. 문서 근거는 실제 격리 성공의 증거가 아니다.
 - [ ] 실제 구성요소 — PDFium은 승인 commit `ad5bc13610718aefe737bd9b2f1b258d08e39428`의 complete static library를 PDFiumXPC에 링크·초기화하고 Agent는 packaged official Python SDK/runtime/CLI 실행을 확인한다. PDF 추출·인증 요청 없이 실제 loader/process topology를 검증한다. 후보 버전/hash는 재현용으로 기록하되 P-2 최종 lock으로 표기하지 않는다.
 - [ ] 최소 wire — 아래 `topology-v1` 제안의 fields/numeric limits를 `Contracts/ProviderRPC`에서 단일 정의하고 native/Agent 양쪽이 같은 fixtures로 검증한다. 제품 operation별 P-3/Story 1.9 계약 완료로 승격하지 않는다.
 - [ ] Negative-access 검증 — 표의 모든 성공/거부 경로를 실제 signed process에서 수행한다. canary 소유 process가 자체 생성·검증·정리하며 테스트를 위해 Main에 Agent zone 접근 권한을 부여하지 않는다. 거부 원인을 sandbox 경계와 연결하고 단순 ENOENT/network 장애를 성공으로 세지 않는다. symlink 경유 접근도 포함한다.
-- [ ] 패키징 검증 — nested code를 inside-out 서명하고 개별 identity·entitlement·runtime flag 및 전체 bundle을 검사한다. runtime entitlement 예외가 필요하면 임의 허용하지 말고 재승인한다. 명시적 원격 실행 지시 후에만 notarization/stapling을 수행하고 각 CPU의 clean-machine Gatekeeper launch를 확인한다.
+- [ ] 패키징 검증 — 새 signed map으로 두 CPU bundle을 재빌드·inside-out 서명하고 identity·entitlement·runtime flag·provenance를 검사한다. runtime entitlement 예외는 허용하지 않는다. 공증/stapling/clean-machine Gatekeeper는 별도 미검증으로 남으며 현재 계정 실행을 clean-machine 증거로 세지 않는다.
 - [ ] 결과 — source commit, CPU/OS build, toolchain, artifact/nested hashes, 계약/entitlement revision, scenario별 pass/failed/blocked/inconclusive, 자동/manual/remote 분류와 한계를 기록한다. raw stdout/stderr, 환경 덤프, 개인 경로·secret은 제외한다. 제품 상태나 gate 통과로 표시하지 않는다.
 
 **Acceptance Criteria:**
 
-1. 별도 IMPLEMENTATION 승인과 환경이 확보된 뒤 arm64/x86_64 각각의 Main·XPC·Agent 실행, nested inventory·서명·entitlements·공증·Gatekeeper 증거가 기록된다. Provider 연결/PDF 추출/공개 배포 완료로 표시하지 않는다.
-2. XPC와 Agent의 금지 network/file/container/app-group 접근 및 Main의 broad Agent-zone 접근 거부가 두 실제 CPU 환경에서 검증된다.
-3. 자격 증명·실행 환경·필수 증거가 없거나 negative-access 검사가 실패하면 실패/미검증과 재검증 조건을 명시한다. Story를 done 또는 P-1을 통과로 표시하지 않는다.
+1. 새 SHA의 SCOPE 및 IMPLEMENTATION 승인 후 현재 계정에서 arm64 Main·XPC·Agent 및 packaged SDK/CLI를 실행하고 두 CPU nested inventory·서명·entitlements 증거와 연결한다. SDK/CLI는 initialize-only이며 로그인·AI 요청·사용자 인증정보 접근 없음. 공증/Gatekeeper 미검증은 별도로 기록한다.
+2. arm64의 금지 network/file/container/app-group 접근과 Main의 broad Agent-zone 접근은 이번 runID의 synthetic canary만으로 검사한다. 기존 TCC·ACL·container 접근 승인으로 원인이 불명확하면 inconclusive다. 실제 허용은 failed이며 권한 초기화·확대로 통과시키지 않는다.
+3. Intel 동적 실행·격리는 사용자 지시에 따라 이번 실행에서 면제한다. x86_64 지원 코드·build/signature 검사는 유지한다. 실제 Intel 성공, 원본 Story의 두 CPU AC 충족, PRODUCT/P-1/P-2 통과 또는 공개 배포 완료를 주장하지 않는다. 수정된 로컬 prototype 결과와 미검증 위험을 구분한다.
 
 ## Design Notes
 
-- 이 revision은 **고정 Xcode system linker 선택의 IMPLEMENTATION 재승인 대기 draft**다. [7dfc8d75 V2 명시 승인](https://github.com/jinzer0/PaperLens/issues/2#issuecomment-5994924964)으로 slicing patch와 기존 recipe를 구현·검증했다. arm64는 성공했지만 x86_64 recipe의 host NASM link에서 고정 LLD가 SDK27의 TAPI target을 해석하지 못해 실패했다. V2 승인을 새 GN 설정에 확대하지 않는다. 기존 compiler/pin/ABI/권한/architecture baseline1195c922는 유지하며 linker 변경은 새 SHA 승인 전 미적용이다.
-- Intel은 적합한 GitHub Actions runner를 우선 조사하되 실제 runner 가용성·Xcode·signing 권한·GUI/Gatekeeper 증거를 확인해야 한다. 충족하지 못하면 별도 Intel Mac/self-hosted 환경이 필요하다. 현재 원격 실행/권한/Intel 환경은 확인되지 않았다.
+- 이 revision은 **현재 계정 시험 및 Intel 동적 검증 면제의 SCOPE/IMPLEMENTATION 재승인 대기 draft**다. 기존 d2e69f93 승인과 fe2ea0ea의 두 CPU build/signature 증거는 유지한다. dependency/Clang/PDFium patch/GN args/ABI/entitlements/architecture1195c922는 변경하지 않는다. 새 profile 계약은 새 SHA 승인 전 미적용이다.
+- Intel Mac은 없으며 사용자는 Intel 동적 검증 생략을 명시했다. 원격 runner/CI를 이 revision에서 확보·실행하지 않는다. Intel 지원 삭제나 실제 호환성 증거가 아니며 향후 Intel 실행은 별도 지시·환경이 필요하다.
 - PRODUCT baseline: `5eac3bb9424ad893eca7d63bc319b71f580838ed`. ARCHITECTURE baseline: `1195c92227cc628e325f5ff24d70cc93639bf7a9` (이전 `cdabe4419606ab0c1efebcfeb79bded0fe344512` 대체). 관련 AD-2/4/7/13, AR-002~005/020, FR-002/005/035 선행 검증, R-005/007을 추적한다.
-- Story 원본: `bmad-docs/planning-artifacts/epics.md` §1.1. 작성 시 파일 SHA-256: `0dbed1d4dac4435b8ce29a3fd8bfe273f730f99e8c5f4a98a2e76a33bee75434`. 기존 untracked planning/governance 파일은 이 작업의 커밋에 임의 포함하지 않는다. 위 AC·범위는 원본의 Story 1.1 경계를 이 커밋에 보존한다.
+- Story 원본: `bmad-docs/planning-artifacts/epics.md` §1.1, 최초 SHA-256 `0dbed1d4dac4435b8ce29a3fd8bfe273f730f99e8c5f4a98a2e76a33bee75434`. 이번 draft는 사용자 요청으로 로컬 prototype 시험 범위만 재협상한다. 원본 epics/PRODUCT의 두 CPU AC는 소급 완료하지 않는다. 사용자 소유 untracked planning/governance 파일을 수정·stage하지 않는다.
 - 승인 후 `epics.md` AR-002 한 줄만 새 stack/SHA로 동기화했다. 현재 파일 SHA-256은 `bc776329ab7d74016634ebefad7a5fc70c4761b1da848f55806ba18f52ba46a6`이며 AR-002를 원래 한 줄로 되돌린 메모리 사본의 hash가 위 최초 hash와 일치함을 검사했다. 다른 사용자 내용과 Story AC·sprint 상태는 그대로다. 기존 untracked 파일 전체는 이번 커밋에 포함하지 않는다.
 
 ### Launch 후보와 identity
@@ -282,7 +282,7 @@ V2는 기존 `n`/`j` 검증·회전 의미를 유지하면서 `first(stack_count
 - hash 불일치, 다른 파일 변경, 중복·재적용 및 cache 변조를 실패시키는 회귀를 추가한다. `Tests/Topology/`에서 실제 고정 PDFium의 `CPDF_PSEngine::DoOperator(PSOP_ROLL)`을 synthetic 숫자 stack으로 검사한다. 양/음 회전, modulo, 0, 음수·stack보다 큰 `n`, 빈 stack을 포함하며 PDF document open/extraction은 수행하지 않는다.
 - 경고 억제 없이 기존 recipe로 재빌드하고 complete static library 링크·InitLibrary·기존 Python/Swift 회귀를 검증한다. 실제 서명/fixture/Intel/공증 준비가 없으면 계속 blocked로 기록한다. patch 외 추가 입력 변경이 필요하면 다시 중단한다.
 
-### Xcode system linker 수정안 — 아직 미승인·미적용
+### Xcode system linker — d2e69f93 승인·적용 완료
 
 같은 V2 입력의 x86_64 build에서 `clang_arm64/nasm` host executable link가 실패했다. 고정 Clang23의 `ld64.lld`는 SDK27 `usr/lib/libSystem.tbd`의 `arm64e.x1-macos`/`arm64e.x1-maccatalyst` target을 지원하지 않으며 TAPI parse 오류 이후 libc symbol 오류가 연쇄 발생한다. NASM binary·SDK 파일·Clang pin을 바꾸거나 오류를 무시하지 않았다.
 
@@ -290,11 +290,20 @@ V2는 기존 `n`/`j` 검증·회전 의미를 유지하면서 `first(stack_count
 
 - 승인 후 `dependencies.json` GN args와 승인 SHA를 갱신하고 source/patch 및 linker path/version을 preflight 검증·receipt에 남긴다. 변경된 generated args/output와 기존 실패·성공 artifact는 명시적으로 보존하고 새 recipe로 두 CPU를 검증한다.
 - compiler의 `-Werror`/unsafe-buffer 검사는 유지한다. upstream Apple-linker 분기는 duplicate-rpath 경고 때문에 LLD의 fatal-linker-warning flag를 적용하지 않는다. 이 차이를 숨기지 않고 모든 실제 linker 경고를 기록하며 경고 비활성화·LLVM/SDK patch는 추가하지 않는다.
-- 새 recipe의 성공은 아직 미검증이다. NASM/complete library/19-case 및 InitLibrary/전체 native app/package를 다시 확인한다. 실제 Intel 실행·fixture profile·공증은 별도 blocked로 남는다. 추가 입력 변경이 필요하면 재승인한다.
+- fe2ea0ea에서 NASM·두 CPU complete library·전체 앱·서명/정적 검사를 통과했다. arm64 실제19-case/InitLibrary는 통과, x86_64 회귀는 compile/link만 통과했다.137 Python 회귀 통과. 상세 immutable 실행 증거는 local-verification.json 및 Issue2 기록에 있다. 새 profile 변경의 승인을 이 linker 승인에서 추론하지 않는다.
 
 ### Synthetic fixture 및 증거 계약
 
-이 절은 실행 결과가 아닌 시험 설계다. 별도 시험계정의 home `H=/Users/paperlens-topology`를 두 CPU에서 동일하게 사용한다. 현재 사용자 계정에 이 fixture를 만들지 않는다. `r`은 검증된 runID, `M0=H/Library/Containers/io.github.jinzer0.PaperLens/Data`, `A0=H/Library/Containers/io.github.jinzer0.PaperLens.ProviderAgent/Data`다. 소유 process가 실제 container URL과 고정 map의 일치를 확인하며 불일치 시 다른 경로로 대체하지 않는다.
+이 절은 변경 시험 설계다. 새 SHA 승인 후 현재 사용자의 synthetic fixture만 사용한다. `H`는 환경변수나 임의 argv가 아닌 real UID의 OS account record home이다. real/effective UID 일치, 일반 사용자 UID, absolute non-symlink home 및 각 process의 OS container URL 일치를 확인한다. root/sudo·다른 사용자·임의 경로는 거부한다. `r`은 canonical UUIDv4, `M0=H/Library/Containers/io.github.jinzer0.PaperLens/Data`, `A0=H/Library/Containers/io.github.jinzer0.PaperLens.ProviderAgent/Data`다. sandbox 내부 HOME은 각자의 container여야 하며 실제 account home을 container로 오인하지 않는다.
+
+현재 계정 시험은 제품 문서·AI 요청을 처리하지 않는 제한된 topology probe다. VM은 필수가 아니지만 격리가 실패하면 probe가 자신의 synthetic canary에 접근할 수 있다. 이를 관측하되 다른 데이터를 찾아보지 않는다. 기존 TCC/FDA/ACL 상태를 자동으로 깨끗하다고 선언하지 않고 clean-machine 증거와 구분한다.
+
+- signed `fixture-map.json`을 정확히 `{"profile":"current-user","groupID":"397452Z366.io.github.jinzer0.PaperLens.TopologyFixture"}`로 변경한다. 개인 username/절대 home/UID 값은 commit·public evidence에 넣지 않는다. 네 native target과 Python이 같은 map을 검증하고 OS account metadata로 H/G 경로를 도출한다. 제품 group 권한은 추가하지 않는다.
+- dedicated-profile hardcode와 `--confirm-clean-profile`을 제거하고 verifier의 명시적인 `--confirm-current-profile`을 요구한다. 이는 synthetic-only 시험 동의이지 기존 TCC/FDA grant 부재의 증명이 아니다. Main에는 기존 `--topology-smoke --run-id`만 전달하고 RPC 계약을 유지한다.
+- 현재 UID의 OS container metadata와 고정 synthetic alias 경로만 조회한다. 사용자 Documents/Desktop/Downloads, 다른 앱 container, keychain/credential/config, 기존 CODEX_HOME을 탐색·읽지 않는다. CLI는 clean env 및 이번 실행 소유 Agent private CODEX_HOME에서 initialize-only로 실행한다.
+- 기존 report·fixture·run directory·symlink 충돌은 보존하고 blocked로 종료한다. 기존 파일 삭제·덮어쓰기·chmod/ACL/TCC/FDA 변경·접근 승인 prompt 수락·계정 생성 없음. cleanup은 이번 invocation이 생성하고 inode/device로 소유권을 추적한 파일만 정리한다.
+- group provisioning 부재는 G blocked, OS denial 귀속 부재는 inconclusive다. syscall EPERM/EACCES만으로 PASS를 만들지 않는다. 기존 권한이 접근을 허용하면 failed 또는 통제 근거 부족의 inconclusive로 기록한다.
+- native profile/map, Agent, FixtureOwner, verifier/package resource 검사와 offline 회귀를 갱신한다. approvalCommit만 새 SHA로 갱신하며 stack/GN/pins/rights는 그대로다. 재빌드·재서명·current provenance 검증 후 arm64 동적 시험하고 결과를 로컬 commit한다.
 
 | Alias | 고정 경로 | 생성·검증·정리 owner |
 | --- | --- | --- |
@@ -305,7 +314,7 @@ V2는 기존 `n`/`j` 검증·회전 의미를 유지하면서 `first(stack_count
 | G | `G0/PaperLensTopology/r/group.canary` | 제품 밖의 signed sandbox fixture-group-owner |
 | PDF | `M0/Library/Application Support/PaperLensTopology/r/input.pdf` | Main |
 
-`G0`는 선택한 Team의 fixture 전용 group `397452Z366.io.github.jinzer0.PaperLens.TopologyFixture`를 가진 owner가 OS로부터 얻고 검증한 실제 group URL이다. 두 CPU의 signed fixture-map은 같은 값을 사용한다. 임의 폴더를 만들어 group이라고 부르지 않는다. Main/Agent/PDFium에는 이 group entitlement를 주지 않는다. 시험용 owner 두 개는 `Tests/Topology/` 경계 안에서만 만들고 배포 앱에 포함하지 않는다. group provisioning이 준비되지 않으면 해당 검사는 blocked다.
+`G0`는 선택한 Team의 fixture 전용 group `397452Z366.io.github.jinzer0.PaperLens.TopologyFixture`를 가진 owner가 OS로부터 얻고 검증한 실제 group URL이다. 두 CPU의 signed map은 같은 profile/groupID를 사용한다. 임의 폴더를 만들어 group이라고 부르지 않는다. Main/Agent/PDFium에는 이 group entitlement를 주지 않는다. 시험용 owner 두 개는 `Tests/Topology/` 경계 안에서만 만들고 배포 앱에 포함하지 않는다. group provisioning이 준비되지 않으면 해당 검사는 blocked다.
 
 Agent는 signed map과 runID만으로 M/E/G 경로를 계산한다. 보호 canary fd/bookmark/security-scoped URL은 전달하지 않는다. Main/Agent의 synthetic marker는 공개된 고정 bytes이며 실제 DB/Secrets/Cache 기능이 아니다. 새 fixture만 exclusive 생성하며 기존 파일이나 symlink를 덮어쓰지 않는다. directory `0700`, file `0600`, 같은 UID 및 추가 ACL 없음의 positive control을 기록한다.
 
@@ -339,10 +348,10 @@ Manifest 필드는 `schemaRevision, sourceCommit, artifactHash, fixtureMapHash, 
 | Swift | Xcode27.0/Swift6.4/SDK27.0 architecture 승인 기록 완료, local Foundation control 성공 | 두 CPU 앱 build·실행 검증은 별도 |
 | Developer ID | 공개 Team `397452Z366`으로 arm64 inside-out 서명·nested 검증 성공. 이름·fingerprint·private key 미출력 | 실제 signed 실행·두 CPU 검증·공증은 별도 |
 | Notary | credential 내용/저장소 미조회, 제출 없음 | 사용 credential reference 및 공증 제출 명시적 지시 |
-| Intel | GitHub 문서에 `macos-15-intel`/`macos-26-intel` 존재 [E2]; 저장소 self-hosted runner API 결과 0개 | 실제 Intel 실행 경로/원격 실행 지시 확보. hosted label 존재는 job 실행/GUI Gatekeeper 증거 아님 |
-| Dependency | V2 arm64 complete PDFium/native regression/전체 앱/signature inventory 성공; x86_64는 host NASM LLD/TAPI 오류로 차단 | 최소 linker recipe 재승인·두 CPU 재검증 및 실제 runtime. P-2 최종 lock 및 실제 Intel 미완료 |
-| Fixture/증거 | 고정 map·harness 구현 및 단위 검사 완료. 전용 계정은 존재하지 않으며 해당 profile 실행 아님 | 별도 시험계정/group 준비와 실제 signed process의 denial 귀속 검증; 권한·계정 자동 변경 없음 |
-| Approval | 7dfc8d75 승인으로 V2 checkpoint dfc7daca까지 구현·검증 | `use_lld=false` 수정안의 새 SHA에 대한 IMPLEMENTATION 재승인. 원격/공증/배포 별도 |
+| Intel | 두 CPU cross-build/signature 성공; Intel 장비 없음; 사용자가 이번 동적 검증 면제 요청 | 이번 prototype 범위에서 미실행/면제를 명시. 실제 Intel 지원 검증으로 승격하지 않음 |
+| Dependency | fe2ea0ea에서 두 CPU complete library/앱/package 검사 성공 | 새 profile/map 재빌드·arm64 실제 runtime. P-2 최종 lock은 미완료 |
+| Fixture/증거 | dedicated hardcode 때문에 현재 계정 실행은 아직 blocked | 새 SHA 승인 후 synthetic-only 현재 UID 시험. 기존 데이터·권한 변경 없음 |
+| Approval | d2e69f93 승인으로 fe2ea0ea 구현·검증 | 현재 계정/Intel 동적 면제 수정안의 SCOPE 및 IMPLEMENTATION 재승인. 원격/공증/배포 별도 |
 
 시험 harness는 sandbox 거부와 Unix mode/ACL/TCC 거부를 구분해야 한다. owner가 시험 전후 canary 존재와 정상 read/write를 확인하고 같은 user의 통제 실행에서 비교한다. app-group entitlement가 없다는 정적 증거와 실제 다른 group canary 접근 거부 증거를 구분한다. group canary가 없으면 그 동적 검사는 `blocked`이며 새 shared group 권한을 제품에 부여해 통과시키지 않는다. 보호 데이터를 검사하기 위해 실제 사용자 container를 탐색하지 않는다.
 
@@ -402,3 +411,4 @@ Apple은 macOS 14+에서 다른 앱 container 접근 시 사용자 승인 요청
 - 2026-10-05: 6차 revision. 원본7fe18449의 명시적 IMPLEMENTATION 승인 후 source와 부분 검증을427c5f1d에 로컬 commit했다. 실제 PDFium/system-libc++ compile 차단을 확인했고 경고 억제·pin 변경·source patch는 수행하지 않았다. 기존 ABI/권한/버전을 유지하는 단일 bounded-iterator patch와 hash 검증·회귀 범위를 새 승인 대상으로 제안한다. 변경 입력 적용은 새 SHA 승인 전 중단 상태다.
 - 2026-10-05: 7차 revision. fd8f8b93의 명시 승인 후 V1 검증·적용·회귀 harness를fa6c2113에 commit했다. 실제 span iterator가 raw pointer여서 compiler 진단2개가 남음을 확인했다. 모든 caller pointer arithmetic을 slicing으로 대체하는 V2의 정확한 새 hash를 제안하며 승인 전 미적용이다. 기존 pin·ABI·권한·경고 정책을 유지한다.
 - 2026-10-05: 8차 revision. 7dfc8d75의 명시 승인 후 V2 source·실제 회귀·arm64 전체 앱 및 nested 서명 검사를dfc7daca에 보존했다. x86_64 host NASM link에서 고정 LLD/SDK27 TAPI 비호환을 확인했고 기존 Xcode linker를 선택하는 단일 GN 설정을 새 승인 대상으로 제안한다. 변경은 아직 미적용이다.
+- 2026-10-06: 9차 revision. 사용자의 현재 계정 실행 및 Intel 동적 검증 생략 지시로 frozen intent/로컬 prototype AC를 명시적으로 재협상한다. OS UID/account 기반 synthetic 경로·개인정보 없는 signed map·명시적 current-profile 동의·기존 데이터/권한 보호를 정의한다. x86_64 지원 삭제나 PRODUCT/원본 Story의 두 CPU 성공을 뜻하지 않는다. 새 SHA 재승인 전 product source 및 현재 계정 동적 실행은 미적용이다.
