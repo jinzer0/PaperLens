@@ -1,5 +1,6 @@
 // Synthetic numeric-stack regression only; no PDF documents are opened.
 #include "core/fpdfapi/page/cpdf_psengine.h"
+#include "public/fpdfview.h"
 
 #include <cstdio>
 #include <vector>
@@ -33,6 +34,7 @@ bool Check(const char* name, const std::vector<float>& input, int n, int j,
 }  // namespace
 
 int main() {
+  FPDF_InitLibrary();
   bool ok = true;
   const std::vector<float> input = {10, 20, 30, 40, 50};
   const std::vector<float> positive = {10, 20, 50, 30, 40};
@@ -70,6 +72,7 @@ int main() {
   }
   ok &= Check("near-capacity-negative", capacity, 98, -197, reverse_rotated);
   ok &= Check("near-capacity-invalid", capacity, 99, -1, capacity);
+  FPDF_DestroyLibrary();
   if (!ok) {
     return 1;
   }

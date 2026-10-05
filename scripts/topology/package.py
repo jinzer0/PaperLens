@@ -214,7 +214,10 @@ def install_runtime(app, runtime, cli_relative, root):
     resources.mkdir()
     info = {"CFBundleIdentifier": IDENTITY + ".ProviderAgent.PythonRuntime", "CFBundleExecutable": "PythonRuntime", "CFBundleName": "PythonRuntime", "CFBundlePackageType": "FMWK", "CFBundleVersion": "3.13.16", "CFBundleShortVersionString": "3.13.16", "LSMinimumSystemVersion": "15.0"}
     (resources / "Info.plist").write_bytes(plistlib.dumps(info, sort_keys=True))
-    (version / "PythonRuntime").symlink_to("lib/libpython3.13.dylib")
+    library = version / "lib/libpython3.13.dylib"
+    require(library.is_file() and not library.is_symlink(), "python_library_layout")
+    library.rename(version / "PythonRuntime")
+    library.symlink_to("../PythonRuntime")
     (framework / "Versions/Current").symlink_to("3.13")
     (framework / "PythonRuntime").symlink_to("Versions/Current/PythonRuntime")
     (framework / "Resources").symlink_to("Versions/Current/Resources")
@@ -224,8 +227,7 @@ def install_runtime(app, runtime, cli_relative, root):
     cli_source = version / cli_relative
     cli_destination = agent / "MacOS/codex"
     require(not cli_destination.exists() and not cli_destination.is_symlink(), "cli_destination_exists")
-    cli_source.rename(cli_destination)
-    cli_source.symlink_to(os.path.relpath(cli_destination, cli_source.parent))
+    cli_destination.symlink_to(os.path.relpath(cli_source, cli_destination.parent))
     for source, name in ((root / "ProviderAgent/agent.py", "agent.py"), (root / "Contracts/ProviderRPC/provider_rpc.py", "provider_rpc.py"), (root / "Contracts/ProviderRPC/contract.json", "contract.json")):
         require(source.is_file() and not source.is_symlink(), "agent_resource_missing")
         target = agent / "Resources" / name
@@ -269,8 +271,16 @@ def inspect_macho(path, arch, app=None):
     output, _ = command(["/usr/bin/otool", "-L", path])
     lines = output.decode().splitlines()
     require(len(lines) > 1, "missing_load_commands")
-    for line in lines[1:]:
-        name = line.strip().split(" (compatibility version", 1)[0]
+    names = [line.strip().split(" (compatibility version", 1)[0] for line in lines[1:]]
+    if types == {"DYLIB"}:
+        # otool -L prints LC_ID_DYLIB first. It is not a load edge; a bare
+        # install identifier is valid, but every actual dependency still must
+        # resolve inside the bundle or to an approved system library.
+        output, _ = command(["/usr/bin/otool", "-D", path])
+        identifiers = output.decode().splitlines()[1:]
+        require(len(identifiers) == 1 and names[0] == identifiers[0].strip(), "dylib_identity_mismatch")
+        names = names[1:]
+    for name in names:
         require(allowed_load_name(name), "external_load_dependency")
         check_relative_load(name, path, kind, app)
     output, _ = command(["/usr/bin/otool", "-l", path])
@@ -299,7 +309,7 @@ def code_policy(relative, kind):
     prefix = "Contents/XPCServices/ProviderAgent.xpc/Contents/"
     require(relative.startswith(prefix), "unexpected_nested_code")
     tail = relative[len(prefix):]
-    if tail == "MacOS/codex":
+    if tail == "Frameworks/PythonRuntime.framework/Versions/3.13/lib/python3.13/site-packages/codex_cli_bin/bin/codex":
         require(kind == "executable", "cli_not_executable")
         return IDENTITY + ".ProviderAgent.Codex", CHILD_RIGHTS
     if tail == "Frameworks/PythonRuntime.framework/Versions/3.13/bin/python3.13":

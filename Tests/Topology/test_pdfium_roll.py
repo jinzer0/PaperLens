@@ -60,6 +60,7 @@ class CommandTests(unittest.TestCase):
         self.assertIn("--target=arm64-apple-macos", command)
         self.assertIn("-mmacos-version-min=15.0", command)
         self.assertIn("/fixture/deps/libpdfium.a", command)
+        self.assertIn("Security", command)
         self.assertNotIn("-DNDEBUG", command)
         self.assertEqual(command[-2:], ["-o", "/fixture/Test"])
         for arch, sdk, deployment in (("x86_64", "sdk/xcode_links/MacOSX27.0.sdk", "15.0"), ("arm64", "other", "15.0"), ("arm64", "sdk/xcode_links/MacOSX27.0.sdk", "14.0")):

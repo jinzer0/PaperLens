@@ -17,7 +17,7 @@ import acquire
 
 ROOT = Path(__file__).resolve().parents[2]
 ENGINE = "core/fpdfapi/page/cpdf_psengine.cpp"
-PATCHED_SHA256 = "296d940f32ed604db4f61218f96d677704e40e72ded0c73eb018850aa29fc2a7"
+PATCHED_SHA256 = "0aa9216ebb101fd28f55d929050a053900a960fa7037a688379f26d2ddbcf7c9"
 
 
 def resolved_argument(value, directory):
@@ -87,7 +87,7 @@ def link_command(compile_argv, obj, archive, executable, arch, sdk, deployment):
     acquire.require(f"-mmacos-version-min={deployment}" in flags, "compile_deployment_mismatch")
     acquire.require("-isysroot" in flags and flags[flags.index("-isysroot") + 1] == sdk, "compile_sdk_mismatch")
     acquire.require(not any(flag.startswith("-stdlib=") and flag != "-stdlib=libc++" for flag in flags), "compile_libcxx_mismatch")
-    return [compile_argv[0], *flags, str(obj), str(archive), "-framework", "AppKit", "-framework", "CoreFoundation", "-framework", "CoreGraphics", "-o", str(executable)]
+    return [compile_argv[0], *flags, str(obj), str(archive), "-framework", "AppKit", "-framework", "CoreFoundation", "-framework", "CoreGraphics", "-framework", "Security", "-o", str(executable)]
 
 
 def native_execution(arch):

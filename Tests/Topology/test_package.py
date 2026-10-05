@@ -160,7 +160,7 @@ class PackagingTests(unittest.TestCase):
         with self.assertRaisesRegex(package.Failure, "runtime_distribution_mismatch"):
             package.validate_runtime(runtime)
 
-    def test_framework_preserves_prefix_and_moves_actual_cli(self):
+    def test_framework_preserves_prefix_and_keeps_cli_inside_its_seal(self):
         app = self.app()
         runtime, cli, record = self.runtime()
         cli_hash, record_bytes = package.digest(cli), record.read_bytes()
@@ -171,10 +171,15 @@ class PackagingTests(unittest.TestCase):
         version = framework / "Versions/3.13"
         agent = app / "Contents/XPCServices/ProviderAgent.xpc/Contents"
         self.assertEqual((agent / "MacOS/python3").resolve(), version / "bin/python3.13")
-        self.assertEqual((version / cli.relative_to(runtime)).resolve(), agent / "MacOS/codex")
+        self.assertEqual((agent / "MacOS/codex").resolve(), version / cli.relative_to(runtime))
+        self.assertFalse((version / cli.relative_to(runtime)).is_symlink())
+        self.assertTrue((agent / "MacOS/codex").is_symlink())
         self.assertEqual(package.digest(agent / "MacOS/codex"), cli_hash)
         self.assertEqual((version / record.relative_to(runtime)).read_bytes(), record_bytes)
-        self.assertEqual((framework / "PythonRuntime").resolve(), version / "lib/libpython3.13.dylib")
+        self.assertEqual((framework / "PythonRuntime").resolve(), version / "PythonRuntime")
+        self.assertFalse((version / "PythonRuntime").is_symlink())
+        self.assertEqual((version / "lib/libpython3.13.dylib").resolve(), version / "PythonRuntime")
+        self.assertEqual(package.digest(version / "PythonRuntime"), package.digest(runtime / "lib/libpython3.13.dylib"))
         package.check_tree(app)
         self.assertTrue(cli.is_file() and not cli.is_symlink())
 
@@ -203,6 +208,16 @@ class PackagingTests(unittest.TestCase):
             with self.assertRaisesRegex(package.Failure, "external_rpath"):
                 package.inspect_macho(self.root / "binary", "arm64")
 
+    def test_dylib_identifier_is_not_a_dependency_but_loads_remain_restricted(self):
+        for dependency, error in (("/usr/lib/libSystem.B.dylib", None), ("libitcl4.3.8.dylib", "external_load_dependency"), ("/opt/homebrew/lib/libbad.dylib", "external_load_dependency")):
+            results = [(b"arm64\n", b""), (b"MH_MAGIC_64 ARM64 ALL DYLIB\n", b""), (f"binary:\n\tlibitcl4.3.8.dylib (compatibility version 1.0.0)\n\t{dependency} (compatibility version 1.0.0)\n".encode(), b""), (b"binary:\nlibitcl4.3.8.dylib\n", b""), (b"Load command 1\n cmd LC_ID_DYLIB\n name libitcl4.3.8.dylib (offset 24)\n", b"")]
+            with self.subTest(dependency=dependency), patch.object(package, "command", side_effect=results):
+                if error:
+                    with self.assertRaisesRegex(package.Failure, error):
+                        package.inspect_macho(self.root / "binary", "arm64")
+                else:
+                    self.assertEqual(package.inspect_macho(self.root / "binary", "arm64"), "library")
+
     def test_unique_team_identity_required(self):
         identity = b'  1) ' + b'A' * 40 + b' "Developer ID Application: Synthetic (397452Z366)"\n'
         with patch.object(package, "command", return_value=(identity, b"")):
@@ -216,7 +231,8 @@ class PackagingTests(unittest.TestCase):
         prefix = "Contents/XPCServices/ProviderAgent.xpc/Contents/"
         python = prefix + "Frameworks/PythonRuntime.framework/Versions/3.13/bin/python3.13"
         self.assertEqual(package.code_policy(python, "executable"), (package.IDENTITY + ".ProviderAgent.Python", package.CHILD_RIGHTS))
-        self.assertEqual(package.code_policy(prefix + "MacOS/codex", "executable")[1], package.CHILD_RIGHTS)
+        cli = prefix + "Frameworks/PythonRuntime.framework/Versions/3.13/lib/python3.13/site-packages/codex_cli_bin/bin/codex"
+        self.assertEqual(package.code_policy(cli, "executable"), (package.IDENTITY + ".ProviderAgent.Codex", package.CHILD_RIGHTS))
         extension = prefix + "Frameworks/PythonRuntime.framework/Versions/3.13/lib/python3.13/lib-dynload/_struct.so"
         self.assertEqual(package.code_policy(extension, "library")[1], {})
         helper = prefix + "Frameworks/PythonRuntime.framework/Versions/3.13/bin/helper"
@@ -282,7 +298,7 @@ class PackagingTests(unittest.TestCase):
                 path.write_bytes(path.read_bytes() + b"signed")
 
         def inspect(path, arch, app=None):
-            return "library" if path.suffix in (".so", ".dylib") else "executable"
+            return "library" if path.suffix in (".so", ".dylib") or path.name == "PythonRuntime" else "executable"
 
         with patch.object(package.sys, "platform", "darwin"), patch.object(package, "validate_receipts", return_value=("a" * 64, "b" * 64)), patch.object(package, "source_provenance", return_value={"sourceBaseCommit": "c" * 40, "sourceDirty": True, "sourceTreeHash": "d" * 64}), patch.object(package, "signing_identity", return_value="A" * 40), patch.object(package, "inspect_macho", side_effect=inspect), patch.object(package, "sign", side_effect=sign), patch.object(package, "verify_signature"):
             manifest = package.package(self.root, "arm64", app.parent)

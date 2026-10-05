@@ -5,12 +5,13 @@
          j -= n;
        }
 -      auto begin_it = std::begin(stack_) + stack_count_ - n;
-+      auto stack = pdfium::span(stack_).first(stack_count_);
-+      auto begin_it = stack.end() - n;
-       auto middle_it = begin_it - j;
+-      auto middle_it = begin_it - j;
 -      auto end_it = std::begin(stack_) + stack_count_;
 -      std::rotate(begin_it, middle_it, end_it);
-+      std::rotate(begin_it, middle_it, stack.end());
++      auto stack =
++          pdfium::span(stack_).first(stack_count_).last(static_cast<size_t>(n));
++      std::rotate(stack.begin(),
++                  stack.subspan(static_cast<size_t>(-j)).begin(), stack.end());
        break;
      }
      default:

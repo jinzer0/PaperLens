@@ -33,10 +33,10 @@ DOWNLOAD_HOSTS = {"pypi.org", "files.pythonhosted.org", "github.com", "release-a
 MAX_ARCHIVE_BYTES = 12 * 1024**3
 PDFIUM_PATCH = {
     "path": "scripts/topology/patches/pdfium-bounded-roll.patch",
-    "sha256": "3bc8f7337144cbfe6a6c7d97fc4b470c97c370c0a1f6285c34e08295e64ccded",
+    "sha256": "987ff19ef909a415c368bc2dfba212930681faf8e980810f804d52b91ec3b55b",
     "target": "core/fpdfapi/page/cpdf_psengine.cpp",
     "beforeSha256": "deb4d8dbe96ba81a803c0930b5acf3a4e47af863c5b04929b9b6c9973435f5a6",
-    "afterSha256": "296d940f32ed604db4f61218f96d677704e40e72ded0c73eb018850aa29fc2a7",
+    "afterSha256": "0aa9216ebb101fd28f55d929050a053900a960fa7037a688379f26d2ddbcf7c9",
 }
 
 
@@ -253,7 +253,7 @@ def load_lock():
     lock = json.loads(LOCK_PATH.read_text())
     require(lock["schemaRevision"] == "topology-v1" and len(lock["wheels"]) == 8, "invalid_dependency_lock")
     require(lock["pdfium"]["commit"] == "ad5bc13610718aefe737bd9b2f1b258d08e39428", "pdfium_pin_mismatch")
-    require(lock["approvalCommit"] == "fd8f8b93f726350e3b00ea5dcf2193925561e79f" and lock["pdfium"].get("patch") == PDFIUM_PATCH, "pdfium_patch_pin_mismatch")
+    require(lock["approvalCommit"] == "7dfc8d754cf86a2f741c23fed1437f4af3880a97" and lock["pdfium"].get("patch") == PDFIUM_PATCH, "pdfium_patch_pin_mismatch")
     for arch in ARCHES:
         select_asset(lock["python"], arch)
         for wheel in lock["wheels"]:
