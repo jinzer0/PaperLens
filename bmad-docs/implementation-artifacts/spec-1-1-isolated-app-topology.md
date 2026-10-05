@@ -9,6 +9,7 @@ issue: 'https://github.com/jinzer0/PaperLens/issues/2'
 branch: issue/2-isolated-app-topology
 risk: HIGH
 implementation_approval: pending
+architecture_baseline: 1195c92227cc628e325f5ff24d70cc93639bf7a9
 context:
   - '{project-root}/docs/ai-governance.md'
   - '{project-root}/bmad-docs/planning-artifacts/architecture/architecture-PaperLens-2026-08-28/ARCHITECTURE-SPINE.md'
@@ -59,9 +60,9 @@ context:
 
 **Execution:**
 
-- [ ] Preflight — compiler/SDK 변경안의 architecture 승인, Developer ID Team/identities, notary credential reference, Intel 실행 경로를 확인한다. 사용자는 Swift 6.3.3/SDK 27 실패와 Swift 6.4 control 성공을 보고 Xcode 27.0/Swift 6.4 기준의 변경안 작성을 선택했다. 제품 build 성공은 아직 아니다. Intel·notary의 실제 성공 증거는 해당 검증 단계와 Story 완료의 조건이지 prototype 작성 전에 실증을 끝내야 한다는 뜻이 아니다.
-- [ ] Launch/topology — 아래 embedded XPC 후보와 entitlement map을 사용해 독립 identity와 private zone을 검증한다. Main sandbox를 상속한 일반 child를 별도 Agent로 오인하지 않는다. 후보 runtime/dependency closure와 fixture 계약을 먼저 닫고 새 SHA 승인을 받은 뒤 prototype을 구현한다. 문서 근거는 실제 격리 성공의 증거가 아니다.
-- [ ] 실제 구성요소 — PDFium은 승인 commit `ad5bc13610718aefe737bd9b2f1b258d08e39428`을 패키징/로드하고 Agent는 packaged official Python SDK/runtime/CLI 실행을 확인한다. PDF 추출·인증 요청 없이 실제 loader/process topology를 검증한다. 후보 버전/hash는 재현용으로 기록하되 P-2 최종 lock으로 표기하지 않는다.
+- [ ] Preflight — Xcode 27.0/Swift 6.4/SDK 27.0 및 SDK/CLI-bin 0.160.0의 architecture 승인은 기록됐다. Team `397452Z366`의 유일한 local Developer ID Application identity를 후보로 선택했다. key 접근/서명, notary credential reference, Intel 실행 경로는 미검증이다. Intel·notary 실제 성공은 해당 검증 단계와 Story 완료 조건이지 prototype 작성 전에 실증을 끝내야 한다는 뜻이 아니다.
+- [ ] Launch/topology — 아래 embedded XPC 후보와 entitlement map을 사용해 독립 identity와 private zone을 검증한다. Main sandbox를 상속한 일반 child를 별도 Agent로 오인하지 않는다. 이 revision의 후보 입력·fixture 계약을 근거로 새 SHA 승인을 받은 뒤 prototype을 구현한다. 문서 근거는 실제 격리 성공의 증거가 아니다.
+- [ ] 실제 구성요소 — PDFium은 승인 commit `ad5bc13610718aefe737bd9b2f1b258d08e39428`의 complete static library를 PDFiumXPC에 링크·초기화하고 Agent는 packaged official Python SDK/runtime/CLI 실행을 확인한다. PDF 추출·인증 요청 없이 실제 loader/process topology를 검증한다. 후보 버전/hash는 재현용으로 기록하되 P-2 최종 lock으로 표기하지 않는다.
 - [ ] 최소 wire — 아래 `topology-v1` 제안의 fields/numeric limits를 `Contracts/ProviderRPC`에서 단일 정의하고 native/Agent 양쪽이 같은 fixtures로 검증한다. 제품 operation별 P-3/Story 1.9 계약 완료로 승격하지 않는다.
 - [ ] Negative-access 검증 — 표의 모든 성공/거부 경로를 실제 signed process에서 수행한다. canary 소유 process가 자체 생성·검증·정리하며 테스트를 위해 Main에 Agent zone 접근 권한을 부여하지 않는다. 거부 원인을 sandbox 경계와 연결하고 단순 ENOENT/network 장애를 성공으로 세지 않는다. symlink 경유 접근도 포함한다.
 - [ ] 패키징 검증 — nested code를 inside-out 서명하고 개별 identity·entitlement·runtime flag 및 전체 bundle을 검사한다. runtime entitlement 예외가 필요하면 임의 허용하지 말고 재승인한다. 명시적 원격 실행 지시 후에만 notarization/stapling을 수행하고 각 CPU의 clean-machine Gatekeeper launch를 확인한다.
@@ -75,11 +76,11 @@ context:
 
 ## Design Notes
 
-- 이 Spec은 **draft, 실행 차단 상태**다. 사용자는 Swift 6.3.3 설치·환경 검증 뒤 “현재 Xcode 27 / Swift 6.4로 기준 변경안 작성” 및 “SDK/CLI 0.160.0 일치 조합으로 변경안 작성”을 선택했다. 이 선택은 문서 수정·커밋 허용이며 새 SHA에 대한 architecture/implementation 승인은 별도라는 질문 조건을 유지한다. dependency closure·실행 환경의 차단 조건은 남아 있고 일반 “승인” 발언을 미래 revision의 승인으로 확장하지 않는다.
+- 이 Spec은 **기술 명세 구체화 완료, IMPLEMENTATION 승인 대기 draft**다. 사용자가 `APPROVED: ARCHITECTURE @ 1195c92227cc628e325f5ff24d70cc93639bf7a9`를 명시했고 [Issue #2 승인 기록](https://github.com/jinzer0/PaperLens/issues/2#issuecomment-5987295896)에 보존했다. 승인된 파일의 작성 당시 draft/pending 표기는 승인 기록을 무효화하지 않으며, 표기만 바꾸려고 승인된 artifact를 재커밋하지 않는다. “나머지 특별히 검토할 게 없으면 잠정 승인”은 조건부 의사로 보존한다. 이번 조사로 후보 입력 계약은 닫았지만 새 runtime/빌드 입력을 담은 이 Spec commit SHA에 대한 확정 구현 승인으로 소급하지 않는다. artifact 취득·build·격리 성공은 승인 후 검증 대상이다.
 - Intel은 적합한 GitHub Actions runner를 우선 조사하되 실제 runner 가용성·Xcode·signing 권한·GUI/Gatekeeper 증거를 확인해야 한다. 충족하지 못하면 별도 Intel Mac/self-hosted 환경이 필요하다. 현재 원격 실행/권한/Intel 환경은 확인되지 않았다.
-- PRODUCT baseline: `5eac3bb9424ad893eca7d63bc319b71f580838ed`. ARCHITECTURE baseline: `cdabe4419606ab0c1efebcfeb79bded0fe344512`. 관련 AD-2/4/7/13, AR-002~005/020, FR-002/005/035 선행 검증, R-005/007을 추적한다.
+- PRODUCT baseline: `5eac3bb9424ad893eca7d63bc319b71f580838ed`. ARCHITECTURE baseline: `1195c92227cc628e325f5ff24d70cc93639bf7a9` (이전 `cdabe4419606ab0c1efebcfeb79bded0fe344512` 대체). 관련 AD-2/4/7/13, AR-002~005/020, FR-002/005/035 선행 검증, R-005/007을 추적한다.
 - Story 원본: `bmad-docs/planning-artifacts/epics.md` §1.1. 작성 시 파일 SHA-256: `0dbed1d4dac4435b8ce29a3fd8bfe273f730f99e8c5f4a98a2e76a33bee75434`. 기존 untracked planning/governance 파일은 이 작업의 커밋에 임의 포함하지 않는다. 위 AC·범위는 원본의 Story 1.1 경계를 이 커밋에 보존한다.
-- `epics.md` AR-002의 기존 Swift/Codex 값은 아직 승인된 baseline을 추적하므로 이번 **미승인 변경안**에 맞춰 수정하지 않는다. 새 architecture 승인 뒤 추적값을 갱신할 대상이며, untracked 원본 전체를 이번 커밋에 포함하지 않는다. Story AC·sprint 상태·governance는 변경하지 않는다.
+- 승인 후 `epics.md` AR-002 한 줄만 새 stack/SHA로 동기화했다. 현재 파일 SHA-256은 `bc776329ab7d74016634ebefad7a5fc70c4761b1da848f55806ba18f52ba46a6`이며 AR-002를 원래 한 줄로 되돌린 메모리 사본의 hash가 위 최초 hash와 일치함을 검사했다. 다른 사용자 내용과 Story AC·sprint 상태는 그대로다. 기존 untracked 파일 전체는 이번 커밋에 포함하지 않는다.
 
 ### Launch 후보와 identity
 
@@ -90,7 +91,7 @@ context:
 | Main | `io.github.jinzer0.PaperLens` | `PaperLens.app/Contents/MacOS/PaperLens` | 사용자가 GUI로 실행 |
 | PDF worker | `io.github.jinzer0.PaperLens.PDFiumXPC` | `Contents/XPCServices/PDFiumXPC.xpc` | Main의 `NSXPCConnection(serviceName:)`, service listener |
 | Agent | `io.github.jinzer0.PaperLens.ProviderAgent` | `Contents/XPCServices/ProviderAgent.xpc` | 위와 같은 on-demand launchd 경로; Main의 직접 spawn 금지 |
-| Python/CLI | Agent 하위의 고정 code-signing identifiers | Agent bundle의 `Contents/MacOS/`, libraries는 `Contents/Frameworks/`, pure Python/data는 `Contents/Resources/` | Agent → packaged Python → packaged CLI; host PATH 탐색 금지 |
+| Python/CLI | `io.github.jinzer0.PaperLens.ProviderAgent.Python` / `io.github.jinzer0.PaperLens.ProviderAgent.Codex` | Agent bundle의 `Contents/MacOS/`, libraries는 `Contents/Frameworks/`, pure Python/data는 `Contents/Resources/` | Agent → packaged Python → packaged CLI; host PATH 탐색 금지 |
 
 각 XPC Info.plist는 자신의 `CFBundleIdentifier`/`CFBundleExecutable`, `CFBundlePackageType=XPC!`, `XPCService.ServiceType=Application`을 사용한다. 모든 executable의 deployment target은 macOS 15, build configuration은 Release, hardened runtime은 활성이다. 서로 다른 bundle ID나 `$HOME` 문자열만으로 독립 container를 입증했다고 보지 않는다. 실제 container URL·code identity·canary 접근 결과를 함께 확인한다. 기본 sandbox의 시스템 파일 읽기 허용까지 “모든 filesystem 접근 금지”라고 표현하지 않는다.
 
@@ -100,7 +101,7 @@ Main↔Agent transport는 `Contracts/ProviderRPC`에 선언한 **단일 `sendFra
 
 launchd가 시작한 XPC service의 stdout을 Main의 child pipe처럼 읽지 않는다. bootstrap stdout은 사용하지 않고 Agent가 생성한 Python bridge의 stdout만 전용 pipe로 연결한다. SDK/CLI stdout은 해당 내부 adapter가 소비하며 ProviderRPC pipe에 그대로 연결하지 않는다.
 
-Main의 outbound connection과 service가 수락한 inbound connection 모두 `setCodeSigningRequirement`를 **resume 전에 한 번** 설정한다. 요구조건은 Apple signing anchor, 같은 승인 Team ID, 상대의 정확한 code identifier, Developer ID Application certificate 조건을 포함한다. Team ID 값은 실제 서명 manifest에서 선택하며 임의 값으로 대체하지 않는다. PID만 조회해 신원을 확인하지 않는다. `NSXPCListener.service()`에 `setConnectionCodeSigningRequirement`를 호출하지 않는다: 로컬 SDK 헤더는 해당 listener API를 anonymous/Mach-service listener로 제한한다 [A3]. 같은 Team의 다른 bundle, 잘못된 signer, unsigned peer는 거절 시험 대상이다.
+Main의 outbound connection과 service가 수락한 inbound connection 모두 `setCodeSigningRequirement`를 **resume 전에 한 번** 설정한다. 요구조건은 Apple signing anchor, Team `397452Z366`, 상대의 정확한 code identifier, Developer ID Application certificate 조건을 포함한다. 해당 Team은 local identity의 공개 정보만 읽어 선택했으며 실제 서명 manifest가 일치해야 한다. PID만 조회해 신원을 확인하지 않는다. `NSXPCListener.service()`에 `setConnectionCodeSigningRequirement`를 호출하지 않는다: 로컬 SDK 헤더는 해당 listener API를 anonymous/Mach-service listener로 제한한다 [A3]. 같은 Team의 다른 bundle, 잘못된 signer, unsigned peer는 거절 시험 대상이다.
 
 PDF 입력은 Main이 연 synthetic PDF의 `O_RDONLY` descriptor를 XPC로 전달한다. worker가 임의 path를 받아 열거나 security-scoped bookmark를 보존하지 않는다. read 성공과 descriptor write 실패를 검사하되 **read-only fd의 EBADF만으로 sandbox write 거부를 입증하지 않는다**. 별도 경로 reopen/write 거부와 owner positive control을 함께 검사한다.
 
@@ -149,7 +150,7 @@ Agent는 자기가 해석한 private container 안에만 cwd/HOME/TMPDIR/CODEX_H
 
 ### Dependency 조사 — 채택/다운로드/실행과 구분
 
-현재 승인 baseline의 compatibility target `0.150.1`을 **official Python SDK/CLI-bin `0.160.0` 일치 조합으로 바꾸는 변경안**이다. 사용자는 작성·커밋만 선택했으며 새 architecture SHA 승인 전까지 승인 baseline을 대체하지 않는다. 공식 SDK는 Python 3.10+, `pydantic>=2.12`, `packaging>=26.2`, `openai-codex-cli-bin==0.160.0`을 요구한다 [D1/D2]. 아래 특정 version/hash만 후보로 사용하고 latest resolution은 금지한다.
+승인된 compatibility target은 **official Python SDK/CLI-bin `0.160.0` 일치 조합**이다. 공식 SDK는 Python 3.10+, `pydantic>=2.12`, `packaging>=26.2`, `openai-codex-cli-bin==0.160.0`을 요구한다 [D1/D2]. 아래 특정 version/hash만 Story 1.1 후보로 사용하고 latest resolution은 금지한다. 최종 P-2 lock이나 두 CPU 실행 성공을 뜻하지 않는다.
 
 | 확인 대상 | upstream이 게시한 SHA-256 / 식별자 | 판정 |
 | --- | --- | --- |
@@ -157,15 +158,84 @@ Agent는 자기가 해석한 private container 안에만 cwd/HOME/TMPDIR/CODEX_H
 | `openai_codex_cli_bin-0.160.0-py3-none-macosx_11_0_arm64.whl` | `c9b472e8928d8f94f65e43ba4928e3ecac071ccf8680bbb8281334e32cec409b` | arm64 runtime metadata [D3] |
 | `openai_codex_cli_bin-0.160.0-py3-none-macosx_10_9_x86_64.whl` | `06571f34b99feee1f1116577f66b82b1b6d582993e07d2099e20e346c73de374` | Intel runtime metadata [D3] |
 | `openai_codex-0.160.0.tar.gz` | `31c94d69a81794aaadfaad371c5f95480a28cd7703d9fc7ca3c574286cacaff3` | source archive를 `/tmp`로 다운로드해 로컬 SHA-256 일치 확인, 읽기 전용 검토 [D4] |
-| PDFium | commit `ad5bc13610718aefe737bd9b2f1b258d08e39428` | 승인 pin 유지; source/dependency/binary inventory 미수집 |
+| PDFium | commit `ad5bc13610718aefe737bd9b2f1b258d08e39428` | 승인 pin 유지; 아래 source-build 경로, 정확한 prebuilt 대체 없음 |
 
-기존 SDK 0.147.0/실행 CLI 0.150.1 조합은 SDK의 CLI-bin 0.147.0 의존성까지 포장해야 하므로 이번 변경안에서 제외한다. old runtime·fallback·metadata 삭제·`--no-deps` 우회는 추가하지 않는다. SDK 0.160.0의 `resolve_codex_bin()`에서도 명시 경로가 있으면 탐색 없이 선택하고 없는 경로는 실패하는 것을 source archive에서 확인했다. 실제 실행은 포함된 CLI-bin 0.160.0 distribution의 검증된 bundle 내부 executable 경로로 고정한다.
+기존 SDK 0.147.0/실행 CLI 0.150.1 조합은 SDK의 CLI-bin 0.147.0 의존성까지 포장해야 하므로 승인된 0.160.0 조합에서는 제외한다. old runtime·fallback·metadata 삭제·`--no-deps` 우회는 추가하지 않는다. SDK 0.160.0의 `resolve_codex_bin()`에서도 명시 경로가 있으면 탐색 없이 선택하고 없는 경로는 실패하는 것을 source archive에서 확인했다. 실제 실행은 포함된 CLI-bin 0.160.0 distribution의 검증된 bundle 내부 executable 경로로 고정한다.
 
 source archive의 `src/openai_codex/client.py`/`api.py`/`__init__.py`를 읽었으며 SDK를 설치·import·실행하지 않았다. GitHub `python-v0.160.0` tag 조회는 HTTP 404였으므로 존재하지 않는 commit pin을 발명하지 않고 위 archive hash를 source provenance로 사용한다.
 
 SDK 0.160.0의 `start()`는 `os.environ.copy()` 뒤 `config.env`를 합친다. `CodexConfig.env`만으로 allowlist를 강제할 수 없으므로 Agent가 **Python 프로세스 시작 전에** 새 환경을 구성한다. 명시 packaged `codex_bin`과 private `cwd`를 사용하고 `launch_args_override`는 사용하지 않는다. no-auth smoke는 SDK import → 공식 `openai_codex.client.CodexClient`의 start/initialize/initialized → close 및 실제 child 종료 확인까지만 수행한다. default approval handler는 command/file-change를 accept하므로 사용하지 않고 주입 handler로 모든 approval을 거절하며 예상 밖 server request는 실패로 종결한다. close는 별도 shutdown RPC가 아니라 stdin close/terminate/wait/kill 경로다. SDK의 blocking waiter에는 Agent supervisor의 기존 10000 ms 상한을 적용한다. login/account/models/thread/turn을 호출하지 않는다. no-auth가 network-free 또는 filesystem-free라는 뜻은 아니다.
 
-위 wheel hash는 **upstream metadata 값**이며 로컬 binary 검증·실행 증거가 아니다. source archive만 다운로드·hash 검증·열람했다. SDK 내부 stderr tail을 예외 문자열에 포함하는 구현도 확인했으므로 raw SDK exception을 wire/diagnostics로 전달하지 않는다. CPython 배포형태/버전/source hash, Pydantic 및 native extension 등 전이 dependencies, PDFium build inputs, 전체 nested executable inventory는 아직 미확정이다. 이 closure를 채우기 전에는 구현 승인 가능한 lock이라고 표현하지 않는다.
+위 wheel hash는 **upstream metadata 값**이며 로컬 binary 검증·실행 증거가 아니다. source archive만 다운로드·hash 검증·열람했다. SDK 내부 stderr tail을 예외 문자열에 포함하는 구현도 확인했으므로 raw SDK exception을 wire/diagnostics로 전달하지 않는다. CPython/전이 wheel 및 PDFium의 후보 source/build-tool 입력은 아래에 고정했다. 전체 P-2 배포 lock 감사와 실제 다운로드 bytes 검증은 완료됐다는 뜻이 아니다.
+
+#### CPython 및 전이 wheel 후보
+
+CPython은 Astral `python-build-standalone` release `20261003`의 **3.13.16, 일반 GIL-enabled `install_only_stripped`**를 사용한다 [D5]. 이는 공식 OpenAI SDK와 구분되는 제3자 CPython 재배포다. release API의 정식 immutable release와 두 architecture asset을 확인했으며 다운로드·실행·재서명 검증은 아직 아니다.
+
+| 정확한 배포 파일 | upstream SHA-256 |
+| --- | --- |
+| `cpython-3.13.16+20261003-aarch64-apple-darwin-install_only_stripped.tar.gz` | `9e01f63bbb08576cd9c8bc2d0564d098cb30c8453a0cd4bcf6aef458f6d2a147` |
+| `cpython-3.13.16+20261003-x86_64-apple-darwin-install_only_stripped.tar.gz` | `b4dad38ba6a344555ccb71a1b08caad0a6c0dda88c5803658bc95bd7f04e9f5c` |
+| `annotated_types-0.8.0-py3-none-any.whl` | `f072f4d804ea359e4eaf198b1af7a8b0943881a87f31bb764f8bf219bb9419e0` |
+| `packaging-26.3-py3-none-any.whl` | `d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c` |
+| `pydantic-2.13.5-py3-none-any.whl` | `346a034f080da3755d8e9cb5e00e8b07de1d39e4f6e2c87d8ab7cafa0b269a73` |
+| `pydantic_core-2.46.5-cp313-cp313-macosx_11_0_arm64.whl` | `f332f0e72a5a0400141f830744e141bf9f97917878dbe968669e8a7fefea78ff` |
+| `pydantic_core-2.46.5-cp313-cp313-macosx_10_12_x86_64.whl` | `b7ca9034437b6022f941f4857459562ee00a560b97e7cce8a0ec5a74fc6766e0` |
+| `typing_extensions-4.16.0-py3-none-any.whl` | `481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8` |
+| `typing_inspection-0.4.4-py3-none-any.whl` | `65b8397ba37ccbce054456aaccddfc91e6e3083c92824df348d96ca832f3f147` |
+
+`uv 0.12.23`에서 `openai-codex==0.160.0`, Python 3.13, `--only-binary :all:`을 지정한 macOS `aarch64-apple-darwin`/`x86_64-apple-darwin` resolution은 동일한 **8개 version 집합**을 반환했다. 실제 명령은 `uv pip compile - --python-version 3.13 --python-platform <target> --only-binary :all: --no-header --no-annotate --output-file <temporary-path>`이며 입력은 위 SDK exact pin이다. 결과는 SDK/CLI-bin 두 개와 표의 여섯 Python package다. extras·source wheel build·host site-packages를 사용하지 않는다. 이후 resolution은 이 pin 집합과 위 architecture별 hash를 모두 강제한다.
+
+이 8개 pin을 입력으로 `--python-version 3.13.16 --offline --only-binary :all:`을 지정한 양쪽 재-resolution도 같은 결과였다. 단 uv는 local 3.13.16이 없어서 dependency build용 interpreter로 3.13.12를 사용한다는 경고를 냈다. 경고를 숨기지 않으며 wheel-only resolution 중 source dependency build는 수행하지 않았다. 이 검사는 metadata 만족성일 뿐 CPython 3.13.16 설치·SDK 실행 호환성 증거가 아니다.
+
+Runtime archive는 Python executable 하나가 아니라 배포 tree와 동봉 native libraries/license를 포함한다. relocation 뒤 `otool` load-command 및 nested-code inventory로 app 밖 Homebrew/build-machine 경로 의존을 거절한다. `_sysconfigdata`/Makefile의 build-time 경로는 runtime이 relocatable임을 자동 보장하지 않으며 runtime 안에서 extension을 빌드하지 않는다. native extension은 위 cp313 wheel만 사용한다. bundle 경로 재배치·서명·sandbox inheritance·실행 증거는 승인 후 prototype 검증 대상이다.
+
+#### PDFium exact-pin source-build 입력 계약
+
+조사한 bblanchon/pdfium-binaries `chromium/8035` release는 승인 commit을 changelog에 포함하지만 upstream branch tip은 `6f2272e1f3aaa141305475b83ef4eac2c1f527b8`이다. 이를 승인 commit의 binary라고 사용하지 않는다 [D7]. 실제 정확한 commit용 macOS 두 CPU prebuilt/hash 조합은 확인하지 못했다.
+
+승인 commit의 `BUILD.gn`은 `pdf_is_complete_lib`일 때 `static_component_type="static_library"`, `complete_static_lib=true`를 설정한다 [D8]. 따라서 추가 provider dylib patch 대신 **upstream complete static library를 PDFiumXPC에 링크하는 후보**를 사용한다. GN에는 `is_component_build=false`, `pdf_is_complete_lib=true`, `pdf_enable_v8=false`, `pdf_enable_xfa=false`, `target_os="mac"`, CPU별 `target_cpu="arm64"`/`"x64"`를 명시하고 macOS deployment target 15를 검증한다. `FPDF_InitLibrary()`/`FPDF_DestroyLibrary()`만 호출하며 extraction/document open은 하지 않는다. static archive에 별도 sandbox identity를 부여하지 않고 최종 XPC executable에 적용한다.
+
+확인한 source pins:
+
+| 입력 | 관측된 identity |
+| --- | --- |
+| PDFium tree Git object | `7a17f761fbcaca163cef3575ed98a0a2058dbb3d` |
+| DEPS Git blob | `169680f06af94277eba6ec9e9597635b40092daf` |
+| build revision | `299066ef2d5d1396f97e582627880cebe33f497a` |
+| buildtools revision | `9e7655f4ee433ef4c6efcffd57e379db8f8c0432` |
+| depot_tools revision | `732902ab86f8bd629bee00af102d5aa2d9336166` |
+| Clang management source revision | `e4816757c45a072f08279139108a0a937bbeb239` |
+| GN CIPD version | `git_revision:1c79e13d17a1760d6c6401c90061411842bd4881` |
+| Ninja CIPD version | `version:3@1.12.1.chromium.4` |
+
+위 표는 Git/CIPD 식별자이며 binary SHA-256이 아니다. macOS DEPS graph는 이 exact DEPS blob을 authority로 사용하고 revision/tag를 latest로 갱신하지 않는다. `checkout_configuration="minimal"`, `checkout_rust=false`를 사용하되 DEPS의 무조건부 Rust toolchain GCS 항목까지 사라진다고 주장하지 않는다. 남는 GCS object도 해당 DEPS의 generation/hash를 그대로 강제한다. depot_tools는 위 commit으로 고정하고 자동 update를 비활성화한다.
+
+PDFium용 Clang package version은 pinned `tools/clang/scripts/update.py` 및 DEPS가 일치하는 `llvmorg-23-init-19482-g53d18800-2`다 [D9]. 다음 GCS object는 `https://commondatastorage.googleapis.com/chromium-browser-clang/` 아래의 경로다. generation 및 SHA-256을 모두 검사한다.
+
+| host CPU / object | generation | SHA-256 |
+| --- | --- | --- |
+| arm64 / `Mac_arm64/clang-llvmorg-23-init-19482-g53d18800-2.tar.xz` | `1785366640567652` | `a9c5ab02bfdc07a6ad6c6711d884dccab1fdf52e05e71aa9328039cddaff3664` |
+| x64 / `Mac/clang-llvmorg-23-init-19482-g53d18800-2.tar.xz` | `1785366628543558` | `51350c8f6da5c92ab19b0b17a3cbc7762b960b29fd68530e9feb52eb5079ae19` |
+| arm64 / `Mac_arm64/llvmobjdump-llvmorg-23-init-19482-g53d18800-2.tar.xz` | `1785366640876543` | `39fad69229bd7f8b440809f74a711175f5f0ed3cc92c4d6f3652c0ca57e39c2e` |
+| x64 / `Mac/llvmobjdump-llvmorg-23-init-19482-g53d18800-2.tar.xz` | `1785366628828288` | `ab7600041b0db44338b42c55b7ed1224edc10c96283d71e53a373820be9e62f9` |
+
+GN/Ninja는 DEPS의 tag뿐 아니라 확인한 CIPD immutable instance를 고정한다 [D10]. 아래 SHA-256은 package archive hash이지 executable 자체 hash가 아니다.
+
+| CIPD package | instance ID | SHA-256 |
+| --- | --- | --- |
+| `gn/gn/mac-arm64` | `pSLAXpGkmW3xgEhISBOgpR68Z3Z6HVOnu_rF7Ju0t50C` | `a522c05e91a4996df18048484813a0a51ebc67767a1d53a7bbfac5ec9bb4b79d` |
+| `gn/gn/mac-amd64` | `rIjtpVIc0WCOx1IcxodnmiQXXcL7qCaWHsHydJpqGdgC` | `ac88eda5521cd1608ec7521cc687679a24175dc2fba826961ec1f2749a6a19d8` |
+| `infra/3pp/tools/ninja/mac-arm64` | `xem0_6s7Lt77xBhJ_IHxFsjQR7JYkGvswGG-nsrwSv0C` | `c5e9b4ffab3b2edefbc41849fc81f116c8d047b258906becc061be9ecaf04afd` |
+| `infra/3pp/tools/ninja/mac-amd64` | `mGbmncDR78ysAZaXITtasuAzLcxiloLxNzPgeS6pURkC` | `9866e69dc0d1efccac019697213b5ab2e0332dcc629682f13733e0792ea95119` |
+
+초기 build host는 현재 arm64 Mac이다. 이 host의 arm64 도구로 arm64/x64 target을 각각 만들되 cross-build를 실제 Intel 실행 증거로 세지 않는다. Intel host에서 재빌드할 때만 x64 tool package를 사용한다.
+
+공통 GN args는 위 static/V8/XFA flags에 더해 `is_debug=false`, `pdf_is_standalone=false`, `pdf_use_skia=false`, `pdf_use_agg=true`, `pdf_enable_fontations=false`, `pdf_enable_rust_bmp=false`, `pdf_enable_rust_jpeg=false`, `pdf_enable_rust_png=false`, `enable_rust=false`, `use_custom_libcxx=false`다 [D11]. AGG/Skia 모두 false로 만들지 않는다. tests/sample binary를 빌드하지 않는 선택이며 upstream PDFium library를 Init/Destroy 전용 stub으로 줄이는 것이 아니다.
+
+`mac_sdk_path`는 승인 Xcode 27.0의 실제 SDK 27.0 경로, `mac_deployment_target="15.0"`, `mac_min_system_version="15.0"`으로 고정한다. Xcode XPC와 system libc++ linkage를 사용한다. `use_custom_libcxx=false`는 pinned build source가 제공하지만 장래 제거를 경고하는 옵션이므로 향후 PDFium pin 변경 시 다시 검토한다. 현재 pin을 자동 upgrade하지 않는다. GN이 산출한 `pdfium` static output을 확인해 `.build/topology/<cpu>/deps/libpdfium.a`로 수집하며 provider patch는 적용하지 않는다.
+
+이 Git/DEPS blob + GCS generation/hash + CIPD instance/hash + GN args가 후보 입력 계약이다. 실제 다운로드 후 불일치, undeclared input, compile/link/InitLibrary 실패는 즉시 차단하고 원인을 기록한다. 입력 교체나 PDFium pin/권한 변경이 필요하면 재승인한다. 아직 없는 자체 build 출력 hash나 두 CPU 성공은 구현 승인 전 선행 조건으로 요구하지 않는다.
 
 ### Synthetic fixture 및 증거 계약
 
@@ -180,7 +250,7 @@ SDK 0.160.0의 `start()`는 `os.environ.copy()` 뒤 `config.env`를 합친다. `
 | G | `G0/PaperLensTopology/r/group.canary` | 제품 밖의 signed sandbox fixture-group-owner |
 | PDF | `M0/Library/Application Support/PaperLensTopology/r/input.pdf` | Main |
 
-`G0`는 같은 승인 Team의 fixture 전용 group `TEAMID.io.github.jinzer0.PaperLens.TopologyFixture`를 가진 owner가 OS로부터 얻고 검증한 실제 group URL이다. 두 CPU의 signed fixture-map은 같은 값을 사용한다. 임의 폴더를 만들어 group이라고 부르지 않는다. Main/Agent/PDFium에는 이 group entitlement를 주지 않는다. 시험용 owner 두 개는 `Tests/Topology/` 경계 안에서만 만들고 배포 앱에 포함하지 않는다. group provisioning이 준비되지 않으면 해당 검사는 blocked다.
+`G0`는 선택한 Team의 fixture 전용 group `397452Z366.io.github.jinzer0.PaperLens.TopologyFixture`를 가진 owner가 OS로부터 얻고 검증한 실제 group URL이다. 두 CPU의 signed fixture-map은 같은 값을 사용한다. 임의 폴더를 만들어 group이라고 부르지 않는다. Main/Agent/PDFium에는 이 group entitlement를 주지 않는다. 시험용 owner 두 개는 `Tests/Topology/` 경계 안에서만 만들고 배포 앱에 포함하지 않는다. group provisioning이 준비되지 않으면 해당 검사는 blocked다.
 
 Agent는 signed map과 runID만으로 M/E/G 경로를 계산한다. 보호 canary fd/bookmark/security-scoped URL은 전달하지 않는다. Main/Agent의 synthetic marker는 공개된 고정 bytes이며 실제 DB/Secrets/Cache 기능이 아니다. 새 fixture만 exclusive 생성하며 기존 파일이나 symlink를 덮어쓰지 않는다. directory `0700`, file `0600`, 같은 UID 및 추가 ACL 없음의 positive control을 기록한다.
 
@@ -205,19 +275,19 @@ Manifest 필드는 `schemaRevision, sourceCommit, artifactHash, fixtureMapHash, 
 - 설치 결과 success; toolchain ID는 `org.swift.633202606251a`. `xcrun --toolchain org.swift.633202606251a swift --version` 및 직접 binary 실행은 **Swift 6.3.3**을 보고했다. 초기 absolute-path `--toolchain` 호출은 default 6.4로 해석됐으므로 확인된 identifier만 사용한다.
 - `/tmp`의 제품과 무관한 최소 Foundation/UUID smoke를 `-sdk <Xcode 27 macOS SDK> -target arm64-apple-macosx15.0`으로 컴파일했다. 결과 **failed**: `unknown argument: '-target-arch-variant'`, 이어서 `cannot find 'UUID' in scope`. `TOOLCHAINS=org.swift.633202606251a`와 직접 swiftc를 지정한 재검사도 동일 실패였다. 실행 binary는 얻지 못했다.
 - 동일 입력/SDK/target의 default Swift 6.4 control은 compile·실행 성공, 예상 UUID `00000000-0000-0000-0000-000000000001`을 출력했다. 실행 뒤에도 default compiler는 6.4, `xcode-select -p`는 기존 `/Applications/Xcode.app/Contents/Developer`였다. 이 control 성공은 stack 변경 승인이나 PaperLens 테스트 통과가 아니다.
-- 따라서 “Swift 6.3.3 설치됨”과 “앱 build 가능”은 다르다. 현 조합은 blocked다. Apple 표는 Xcode 26.6을 Swift 6.3 계열/macOS SDK 26.5로 분류한다 [E3]. 호환 Xcode를 별도 확보·검증하거나, 기존 Xcode 27/Swift 6.4로 stack 변경안을 작성하고 해당 architecture SHA를 재승인해야 한다. 26.6이 정확히 6.3.3을 제공한다거나 설치 후 반드시 성공한다고 단정하지 않는다.
+- 따라서 “Swift 6.3.3 설치됨”과 “앱 build 가능”은 다르다. 6.3.3/SDK27 조합은 blocked다. Apple 표는 Xcode 26.6을 Swift 6.3 계열/macOS SDK 26.5로 분류한다 [E3]. 당시 호환 Xcode 확보와 Swift6.4 변경안을 비교했으며, 이후 사용자는 후자를 선택하고 architecture1195c922를 승인했다. 현재 구현 기준은 승인된 Xcode27/Swift6.4다. 설치된 6.3.3은 사용하지 않으며 사용자 toolchain을 임의 제거하지 않는다.
 
 ### 환경 및 승인 전 차단 목록
 
 | 항목 | 이번에 확인한 사실 | 해제 조건 |
 | --- | --- | --- |
-| Swift | 6.3.3/SDK27 compile 실패, default 6.4 control 성공; 사용자가 6.4 변경안 작성을 선택 | Xcode27.0/Swift6.4/SDK27.0 변경 commit의 architecture 재승인; 두 CPU 앱 검증은 별도 |
-| Developer ID | `security find-identity -v -p codesigning` 결과 valid Developer ID Application identity **1개**. 이름·fingerprint·private key 미출력 | 사용 Team/identity 선택과 key 접근/서명 가능성 확인; identity 존재를 서명 성공으로 간주하지 않음 |
+| Swift | Xcode27.0/Swift6.4/SDK27.0 architecture 승인 기록 완료, local Foundation control 성공 | 두 CPU 앱 build·실행 검증은 별도 |
+| Developer ID | valid Developer ID Application identity **1개**, 공개 Team `397452Z366` 선택. 이름·fingerprint·private key 미출력 | key 접근/서명 가능성 확인; identity 존재를 서명 성공으로 간주하지 않음 |
 | Notary | credential 내용/저장소 미조회, 제출 없음 | 사용 credential reference 및 공증 제출 명시적 지시 |
 | Intel | GitHub 문서에 `macos-15-intel`/`macos-26-intel` 존재 [E2]; 저장소 self-hosted runner API 결과 0개 | 실제 Intel 실행 경로/원격 실행 지시 확보. hosted label 존재는 job 실행/GUI Gatekeeper 증거 아님 |
-| Dependency | SDK/CLI-bin0.160.0 변경안과 wheel hashes 지정; CPython·전이 hash closure 미확정 | architecture 재승인 및 실제 package map/immutable hashes 고정 |
+| Dependency | CPython3.13.16 두 CPU, SDK/CLI-bin0.160.0 및 전이 wheels, PDFium exact source/DEPS·Clang/GN/Ninja immutable 입력 및 GN recipe 고정 | 승인 후 실제 취득 hash/build/link/runtime 검증; 전체 P-2 lock·nested output inventory는 아직 미완료 |
 | Fixture/증거 | 고정 map·owner·case matrix·통제 endpoint·safe evidence fields 명세화 | 별도 시험계정/group의 실제 준비 및 각 CPU 실행 시 denial 귀속 검증; 아직 미실행 |
-| Approval | IMPLEMENTATION 승인 없음 | 위 명세 차단 항목 해소 후 새 Spec commit SHA에 대한 명시적 승인 |
+| Approval | architecture 명시 승인 완료, IMPLEMENTATION은 조건부 잠정 의사만 있음 | 이 확정 후보 입력을 담은 새 Spec commit SHA에 대한 명시적 IMPLEMENTATION 승인 |
 
 시험 harness는 sandbox 거부와 Unix mode/ACL/TCC 거부를 구분해야 한다. owner가 시험 전후 canary 존재와 정상 read/write를 확인하고 같은 user의 통제 실행에서 비교한다. app-group entitlement가 없다는 정적 증거와 실제 다른 group canary 접근 거부 증거를 구분한다. group canary가 없으면 그 동적 검사는 `blocked`이며 새 shared group 권한을 제품에 부여해 통과시키지 않는다. 보호 데이터를 검사하기 위해 실제 사용자 container를 탐색하지 않는다.
 
@@ -233,6 +303,13 @@ Apple은 macOS 14+에서 다른 앱 container 접근 시 사용자 승인 요청
 - [D2] [PyPI openai-codex 0.160.0 metadata](https://pypi.org/pypi/openai-codex/0.160.0/json).
 - [D3] [PyPI CLI-bin 0.160.0 metadata](https://pypi.org/pypi/openai-codex-cli-bin/0.160.0/json).
 - [D4] [SDK 0.160.0 source archive](https://files.pythonhosted.org/packages/c8/75/9f0934ce92e8428b926ac9a555bb0f7b2728b054a59003edd039adc494dd/openai_codex-0.160.0.tar.gz); hash와 읽은 member는 위 표/본문 참조.
+- [D5] Astral [python-build-standalone 20261003](https://github.com/astral-sh/python-build-standalone/releases/tag/20261003), asset API [arm64](https://api.github.com/repos/astral-sh/python-build-standalone/releases/assets/607987313)/[x86_64](https://api.github.com/repos/astral-sh/python-build-standalone/releases/assets/607987946), [relocation caveats](https://gregoryszorc.com/docs/python-build-standalone/main/quirks.html#references-to-build-time-paths).
+- [D6] version-specific PyPI JSON metadata: [annotated-types](https://pypi.org/pypi/annotated-types/0.8.0/json), [packaging](https://pypi.org/pypi/packaging/26.3/json), [pydantic](https://pypi.org/pypi/pydantic/2.13.5/json), [pydantic-core](https://pypi.org/pypi/pydantic-core/2.46.5/json), [typing-extensions](https://pypi.org/pypi/typing-extensions/4.16.0/json), [typing-inspection](https://pypi.org/pypi/typing-inspection/0.4.4/json).
+- [D7] [bblanchon chromium/8035](https://github.com/bblanchon/pdfium-binaries/releases/tag/chromium/8035), [실제 branch tip](https://pdfium.googlesource.com/pdfium/+/refs/heads/chromium/8035?format=JSON).
+- [D8] exact PDFium commit의 [BUILD.gn](https://pdfium.googlesource.com/pdfium/+/ad5bc13610718aefe737bd9b2f1b258d08e39428/BUILD.gn?format=HTML), [DEPS](https://pdfium.googlesource.com/pdfium/+/ad5bc13610718aefe737bd9b2f1b258d08e39428/DEPS?format=HTML), [public API](https://pdfium.googlesource.com/pdfium/+/ad5bc13610718aefe737bd9b2f1b258d08e39428/public/fpdfview.h?format=HTML).
+- [D9] pinned Clang [scripts/update.py](https://chromium.googlesource.com/chromium/src/tools/clang/+/e4816757c45a072f08279139108a0a937bbeb239/scripts/update.py?format=HTML) 및 [D8] DEPS의 object/generation/hash.
+- [D10] CIPD metadata base `https://chrome-infra-packages.appspot.com/p/`: GN `gn/gn/mac-arm64/+/git_revision:1c79e13d17a1760d6c6401c90061411842bd4881` 및 `mac-amd64` counterpart; Ninja `infra/3pp/tools/ninja/mac-arm64/+/version:3@1.12.1.chromium.4` 및 `mac-amd64` counterpart. 위 instance IDs를 최종 선택에 사용한다.
+- [D11] pinned [pdfium.gni](https://pdfium.googlesource.com/pdfium/+/ad5bc13610718aefe737bd9b2f1b258d08e39428/pdfium.gni?format=HTML), build `299066ef2d5d1396f97e582627880cebe33f497a`의 [rust.gni](https://chromium.googlesource.com/chromium/src/build/+/299066ef2d5d1396f97e582627880cebe33f497a/config/rust.gni?format=HTML), [c++.gni](https://chromium.googlesource.com/chromium/src/build/+/299066ef2d5d1396f97e582627880cebe33f497a/config/c++/c++.gni?format=HTML), [mac_sdk.gni](https://chromium.googlesource.com/chromium/src/build/+/299066ef2d5d1396f97e582627880cebe33f497a/config/mac/mac_sdk.gni?format=HTML).
 - [E1] Swift.org [macOS 설치/Previous Releases](https://www.swift.org/install/macos/), [Swift 6.3.3 macOS pkg](https://download.swift.org/swift-6.3.3-release/xcode/swift-6.3.3-RELEASE/swift-6.3.3-RELEASE-osx.pkg).
 - [E2] GitHub [hosted runners reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
 - [E3] Apple [Xcode SDK and system requirements](https://developer.apple.com/xcode/system-requirements/), Swift.org [user-domain package installer](https://www.swift.org/install/macos/package_installer/).
@@ -241,7 +318,14 @@ Apple은 macOS 14+에서 다른 앱 container 접근 시 사용자 승인 요청
 
 **작성 단계:** frontmatter·필수 섹션·Issue/branch 대응·Story AC 보존·공백 검사 및 커밋 파일 목록 확인. 제품 테스트·prototype·signing·notarization·CI를 실행하지 않는다.
 
-**구현 이후:** `xcodebuild`로 각 CPU bundle을 빌드하고 `codesign --verify --strict --verbose=2 <bundle>` 및 각 nested code의 entitlement/runtime 검사를 수행한다. 명시적 공증 제출 지시 이후 `xcrun stapler validate <bundle>`과 `spctl --assess --type execute --verbose=2 <bundle>`을 실행한다. 정확한 artifact 경로와 자동 test 명령은 launch 계약 revision에서 고정한다. CLI 검사는 실제 CPU의 clean-machine GUI launch·process별 negative-access 증거를 대체하지 않는다.
+**승인 후 생성할 실행 entry points:** 다음은 아직 존재하거나 실행된 script가 아니라 구현 계약이다. `<cpu>`는 `arm64`/`x86_64`, app 경로는 `.build/topology/<cpu>/PaperLens.app`, safe evidence는 `bmad-docs/implementation-artifacts/evidence/1-1/<cpu>/`로 고정한다.
+
+- `scripts/topology/build.sh --arch <cpu>` — 고정 입력 취득/hash 검증 → PDFium static build → Xcode `PaperLensTopology` scheme Release build → inside-out signing·inventory. source commit과 승인 compiler/SDK/Team이 다르면 중단한다. 후보 artifact의 다운로드/hash 검사와 local signing은 구현 승인 범위에 포함되며 원격 CI/notary 제출은 포함되지 않는다.
+- `xcodebuild -project PaperLens.xcodeproj -scheme PaperLensTopology -configuration Release -destination 'platform=macOS,arch=arm64' test` — ProviderRPC frame 분할/합침, zero/oversize prefix, invalid UTF-8/중복 key, version mismatch, unknown method, capacity+1, cancel/result/deadline 경쟁, EOF/restart/중복 terminal 및 synthetic fixture validation을 검사한다. Intel host에서는 `arch=x86_64`로 실행한다. unit 성공을 signed process 격리 증거로 세지 않는다.
+- `scripts/topology/verify.sh --arch <cpu> --bundle .build/topology/<cpu>/PaperLens.app` — 실제 host CPU/Rosetta 여부·clean fixture profile을 확인하고 모든 positive/negative case와 safe evidence를 수집한다. 다른 CPU이면 그 실행 증거를 blocked로 기록하며 자동 Rosetta 대체를 하지 않는다. fixture/group/signing 준비 실패도 blocked다.
+- 각 bundle에 `codesign --verify --strict --verbose=2` 및 nested entitlement/runtime 검사를 수행한다. **별도 공증 제출 지시 이후에만** `xcrun stapler validate`와 `spctl --assess --type execute --verbose=2` 및 clean-machine GUI launch를 검증한다. CLI 검사만으로 GUI/실제 process 경계 증거를 대신하지 않는다.
+
+**완료 기준의 단계 구분:** 명세 입력 고정 → 이 Spec SHA의 IMPLEMENTATION 승인 → 취득/컴파일/unit → signed arm64 실행 → 실제 Intel 실행 → 별도 지시된 notarization/Gatekeeper 검증 순으로 증거를 쌓는다. 뒤 단계가 막혀도 앞의 성공을 기록할 수 있지만 Story done/P-1 PASS로 승격하지 않는다. 새로운 계약·권한·dependency pin 변경은 원래 Ask First 경계를 따른다.
 
 ## Spec Change Log
 
@@ -249,3 +333,4 @@ Apple은 macOS 14+에서 다른 앱 container 접근 시 사용자 승인 요청
 - 2026-10-05: 2차 조사 revision. embedded XPC Agent·child inheritance·서명 peer 검증·최소 entitlement 및 topology-only RPC 제안을 추가했다. 공식 Python SDK/CLI 후보 hash, Swift 6.3.3 배포 경로, local Developer ID identity 개수와 Intel runner 문서 가용성을 확인했다. SDK/CLI pair·runtime closure·fixture 계약·환경은 여전히 차단 상태다. source 구현·설치·서명·공증·CI·push는 하지 않았다.
 - 2026-10-05: 3차 revision. 사용자 승인으로 공식 Swift 6.3.3을 추가 설치했으나 SDK 27 Foundation compile 실패를 실제 확인했다. SDK explicit binary override·environment merge·종료 경로를 immutable source로 확인하고 고정 synthetic fixture/control/evidence 계약을 보완했다. stack 선택과 dependency closure는 아직 미확정이며 제품 source·서명·공증·CI·push는 수행하지 않았다.
 - 2026-10-05: 4차 revision. 사용자 선택에 따라 Swift6.4/Xcode27 및 official Python SDK·CLI-bin0.160.0 변경안을 Spine/companion과 함께 작성했다. SDK0.160.0 source archive의 로컬 hash와 launch/env/approval/close 동작을 재확인했다. 새 architecture 승인과 Story 구현 승인은 아직 없다.
+- 2026-10-05: 5차 revision. architecture1195c922의 명시적 승인을 Issue에 기록하고 baseline·epics AR-002를 동기화했다. CPython 및 8개 Python package의 두 CPU 후보/hash, signing Team을 고정했다. 정확히 일치하지 않는 PDFium prebuilt를 배제하고 upstream static-library 및 Clang/GN/Ninja immutable 입력을 확정했다. 기술 명세를 구현 승인 대상으로 준비했으며 조건부 잠정 승인을 새 SHA의 확정 IMPLEMENTATION 승인으로 확대하지 않았다.
