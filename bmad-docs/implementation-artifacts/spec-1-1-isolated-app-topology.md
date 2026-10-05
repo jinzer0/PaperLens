@@ -59,7 +59,7 @@ context:
 
 **Execution:**
 
-- [ ] Preflight — 승인된 compiler/SDK 조합, Developer ID Team/identities, notary credential reference, Intel 실행 경로를 확인한다. 사용자가 추가 설치를 명시적으로 승인하여 Swift 6.3.3을 설치했지만 Xcode 27 SDK 조합의 Foundation smoke compile은 실패했다. 명세 계약/로컬 build 환경을 먼저 해소한다. Intel·notary의 실제 성공 증거는 해당 검증 단계와 Story 완료의 조건이지 prototype 작성 전에 실증을 끝내야 한다는 뜻이 아니다.
+- [ ] Preflight — compiler/SDK 변경안의 architecture 승인, Developer ID Team/identities, notary credential reference, Intel 실행 경로를 확인한다. 사용자는 Swift 6.3.3/SDK 27 실패와 Swift 6.4 control 성공을 보고 Xcode 27.0/Swift 6.4 기준의 변경안 작성을 선택했다. 제품 build 성공은 아직 아니다. Intel·notary의 실제 성공 증거는 해당 검증 단계와 Story 완료의 조건이지 prototype 작성 전에 실증을 끝내야 한다는 뜻이 아니다.
 - [ ] Launch/topology — 아래 embedded XPC 후보와 entitlement map을 사용해 독립 identity와 private zone을 검증한다. Main sandbox를 상속한 일반 child를 별도 Agent로 오인하지 않는다. 후보 runtime/dependency closure와 fixture 계약을 먼저 닫고 새 SHA 승인을 받은 뒤 prototype을 구현한다. 문서 근거는 실제 격리 성공의 증거가 아니다.
 - [ ] 실제 구성요소 — PDFium은 승인 commit `ad5bc13610718aefe737bd9b2f1b258d08e39428`을 패키징/로드하고 Agent는 packaged official Python SDK/runtime/CLI 실행을 확인한다. PDF 추출·인증 요청 없이 실제 loader/process topology를 검증한다. 후보 버전/hash는 재현용으로 기록하되 P-2 최종 lock으로 표기하지 않는다.
 - [ ] 최소 wire — 아래 `topology-v1` 제안의 fields/numeric limits를 `Contracts/ProviderRPC`에서 단일 정의하고 native/Agent 양쪽이 같은 fixtures로 검증한다. 제품 operation별 P-3/Story 1.9 계약 완료로 승격하지 않는다.
@@ -75,10 +75,11 @@ context:
 
 ## Design Notes
 
-- 이 Spec은 **draft, 실행 차단 상태**다. 아래는 공식 문서를 바탕으로 구체화한 후보이며 실증된 설계가 아니다. dependency closure·실행 환경의 차단 조건이 남아 있다. 사용자는 명세 조사 계속 및 별도 질문의 “6.3.3 추가 설치·환경 검증 승인”을 선택했다. 그 질문에서 수정된 최종 명세의 구현 승인은 새 SHA로 별도 확인한다고 명시했다. 일반 “승인” 발언을 아직 작성되지 않은 revision의 IMPLEMENTATION 승인으로 소급/확장하지 않는다.
+- 이 Spec은 **draft, 실행 차단 상태**다. 사용자는 Swift 6.3.3 설치·환경 검증 뒤 “현재 Xcode 27 / Swift 6.4로 기준 변경안 작성” 및 “SDK/CLI 0.160.0 일치 조합으로 변경안 작성”을 선택했다. 이 선택은 문서 수정·커밋 허용이며 새 SHA에 대한 architecture/implementation 승인은 별도라는 질문 조건을 유지한다. dependency closure·실행 환경의 차단 조건은 남아 있고 일반 “승인” 발언을 미래 revision의 승인으로 확장하지 않는다.
 - Intel은 적합한 GitHub Actions runner를 우선 조사하되 실제 runner 가용성·Xcode·signing 권한·GUI/Gatekeeper 증거를 확인해야 한다. 충족하지 못하면 별도 Intel Mac/self-hosted 환경이 필요하다. 현재 원격 실행/권한/Intel 환경은 확인되지 않았다.
 - PRODUCT baseline: `5eac3bb9424ad893eca7d63bc319b71f580838ed`. ARCHITECTURE baseline: `cdabe4419606ab0c1efebcfeb79bded0fe344512`. 관련 AD-2/4/7/13, AR-002~005/020, FR-002/005/035 선행 검증, R-005/007을 추적한다.
 - Story 원본: `bmad-docs/planning-artifacts/epics.md` §1.1. 작성 시 파일 SHA-256: `0dbed1d4dac4435b8ce29a3fd8bfe273f730f99e8c5f4a98a2e76a33bee75434`. 기존 untracked planning/governance 파일은 이 작업의 커밋에 임의 포함하지 않는다. 위 AC·범위는 원본의 Story 1.1 경계를 이 커밋에 보존한다.
+- `epics.md` AR-002의 기존 Swift/Codex 값은 아직 승인된 baseline을 추적하므로 이번 **미승인 변경안**에 맞춰 수정하지 않는다. 새 architecture 승인 뒤 추적값을 갱신할 대상이며, untracked 원본 전체를 이번 커밋에 포함하지 않는다. Story AC·sprint 상태·governance는 변경하지 않는다.
 
 ### Launch 후보와 identity
 
@@ -148,22 +149,23 @@ Agent는 자기가 해석한 private container 안에만 cwd/HOME/TMPDIR/CODEX_H
 
 ### Dependency 조사 — 채택/다운로드/실행과 구분
 
-승인 stack의 Codex **compatibility target은 `0.150.1`**이다. 이를 현재 latest로 조용히 바꾸지 않는다. 공식 문서에서 Python SDK `openai-codex`와 Python 3.10+ 요구, packaged CLI 의존을 확인했다 [D1]. PyPI의 `openai-codex/0.150.1/json`은 조회 시 HTTP 404였다. 이것만으로 공식 Python SDK가 없다고 결론 내리지 않는다.
+현재 승인 baseline의 compatibility target `0.150.1`을 **official Python SDK/CLI-bin `0.160.0` 일치 조합으로 바꾸는 변경안**이다. 사용자는 작성·커밋만 선택했으며 새 architecture SHA 승인 전까지 승인 baseline을 대체하지 않는다. 공식 SDK는 Python 3.10+, `pydantic>=2.12`, `packaging>=26.2`, `openai-codex-cli-bin==0.160.0`을 요구한다 [D1/D2]. 아래 특정 version/hash만 후보로 사용하고 latest resolution은 금지한다.
 
 | 확인 대상 | upstream이 게시한 SHA-256 / 식별자 | 판정 |
 | --- | --- | --- |
-| `openai_codex-0.147.0-py3-none-any.whl` | `ab2e0b3a41dba5a62be8561397cf3e7913afb53b5372ad881002a6f0b77e6a0a` | Python SDK 후보; metadata는 CLI-bin `==0.147.0` 의존 [D2] |
-| `rust-v0.150.1`의 `codex-aarch64-apple-darwin.tar.gz` | `f66f1c45f1eda49d6a8aef86faee24121b0c8913cd9023f23ee44262606fc7b6` | 승인 compatibility target의 CLI 후보 [D3] |
-| 같은 release의 `codex-x86_64-apple-darwin.tar.gz` | `d00bdeb113c2cb42b43fbe4916b681ab1405772ac38fc8ac7fa9cc0934d1d0aa` | Intel CLI 후보 [D3] |
+| `openai_codex-0.160.0-py3-none-any.whl` | `61d2d855ca2ebedfd51280fbeb60ff31fc47ccbd55ebce186505e3f3da096921` | SDK wheel metadata [D2]; binary 실행 없음 |
+| `openai_codex_cli_bin-0.160.0-py3-none-macosx_11_0_arm64.whl` | `c9b472e8928d8f94f65e43ba4928e3ecac071ccf8680bbb8281334e32cec409b` | arm64 runtime metadata [D3] |
+| `openai_codex_cli_bin-0.160.0-py3-none-macosx_10_9_x86_64.whl` | `06571f34b99feee1f1116577f66b82b1b6d582993e07d2099e20e346c73de374` | Intel runtime metadata [D3] |
+| `openai_codex-0.160.0.tar.gz` | `31c94d69a81794aaadfaad371c5f95480a28cd7703d9fc7ca3c574286cacaff3` | source archive를 `/tmp`로 다운로드해 로컬 SHA-256 일치 확인, 읽기 전용 검토 [D4] |
 | PDFium | commit `ad5bc13610718aefe737bd9b2f1b258d08e39428` | 승인 pin 유지; source/dependency/binary inventory 미수집 |
 
-`rust-v0.150.1/sdk/python/pyproject.toml`도 CLI-bin `0.147.0`을 의존한다 [D4]. Python release tag `python-v0.147.0`의 commit은 `025a88adbd7ae4d448fc938b28d0446eb1753317`, CLI `rust-v0.150.1` commit은 `90854393966b21e9ebfd21b122334eb09a20c93d`로 확인했다. Python SDK의 `resolve_codex_bin()`은 명시 경로가 있으면 runtime 탐색을 우회하고 경로가 없으면 실패한다 [D5]. 따라서 **실행 후보 SDK 0.147.0 → CLI 0.150.1**은 가능하지만 실제 protocol 호환 성공은 아직 미검증이다.
+기존 SDK 0.147.0/실행 CLI 0.150.1 조합은 SDK의 CLI-bin 0.147.0 의존성까지 포장해야 하므로 이번 변경안에서 제외한다. old runtime·fallback·metadata 삭제·`--no-deps` 우회는 추가하지 않는다. SDK 0.160.0의 `resolve_codex_bin()`에서도 명시 경로가 있으면 탐색 없이 선택하고 없는 경로는 실패하는 것을 source archive에서 확인했다. 실제 실행은 포함된 CLI-bin 0.160.0 distribution의 검증된 bundle 내부 executable 경로로 고정한다.
 
-이 override는 SDK의 unconditional `openai-codex-cli-bin==0.147.0` 의존성을 없애지 않는다. 원본 metadata를 지키면 비선택 CLI 0.147.0도 포함·서명해야 하며, 이를 제외한 `--no-deps` 설치를 공식 완결 패키징으로 표현하지 않는다. 불필요한 중복 runtime을 채택하기 전에 stack 선택을 확정한다. 대안인 SDK/CLI-bin 0.160.0 일치 pair는 metadata가 존재하지만 compatibility target 변경이므로 architecture 변경안 작성·새 SHA 승인 없이는 채택하지 않는다.
+source archive의 `src/openai_codex/client.py`/`api.py`/`__init__.py`를 읽었으며 SDK를 설치·import·실행하지 않았다. GitHub `python-v0.160.0` tag 조회는 HTTP 404였으므로 존재하지 않는 commit pin을 발명하지 않고 위 archive hash를 source provenance로 사용한다.
 
-SDK `start()`는 `os.environ.copy()` 뒤 `config.env`를 합친다. `CodexConfig.env`만으로 allowlist를 강제할 수 없으므로 Agent가 **Python 프로세스 시작 전에** 새 환경을 구성한다. 명시 packaged `codex_bin`과 private `cwd`를 사용하고 `launch_args_override`는 사용하지 않는다. no-auth smoke는 SDK import → `Codex` context의 initialize/initialized → close 및 실제 child 종료 확인까지만 수행한다. close는 별도 shutdown RPC가 아니라 stdin close/terminate/wait/kill 경로다. login/account/models/thread/turn을 호출하지 않는다. no-auth가 network-free 또는 filesystem-free라는 뜻은 아니다.
+SDK 0.160.0의 `start()`는 `os.environ.copy()` 뒤 `config.env`를 합친다. `CodexConfig.env`만으로 allowlist를 강제할 수 없으므로 Agent가 **Python 프로세스 시작 전에** 새 환경을 구성한다. 명시 packaged `codex_bin`과 private `cwd`를 사용하고 `launch_args_override`는 사용하지 않는다. no-auth smoke는 SDK import → 공식 `openai_codex.client.CodexClient`의 start/initialize/initialized → close 및 실제 child 종료 확인까지만 수행한다. default approval handler는 command/file-change를 accept하므로 사용하지 않고 주입 handler로 모든 approval을 거절하며 예상 밖 server request는 실패로 종결한다. close는 별도 shutdown RPC가 아니라 stdin close/terminate/wait/kill 경로다. SDK의 blocking waiter에는 Agent supervisor의 기존 10000 ms 상한을 적용한다. login/account/models/thread/turn을 호출하지 않는다. no-auth가 network-free 또는 filesystem-free라는 뜻은 아니다.
 
-위 hash는 **upstream metadata 값**이며 로컬 binary를 다운로드·계산·실행한 증거가 아니다. CPython 배포형태/버전/source hash, Pydantic 및 native extension 등 전이 dependencies, PDFium build inputs, 전체 nested executable inventory는 아직 미확정이다. 이 closure를 채우기 전에는 구현 승인 가능한 lock이라고 표현하지 않는다.
+위 wheel hash는 **upstream metadata 값**이며 로컬 binary 검증·실행 증거가 아니다. source archive만 다운로드·hash 검증·열람했다. SDK 내부 stderr tail을 예외 문자열에 포함하는 구현도 확인했으므로 raw SDK exception을 wire/diagnostics로 전달하지 않는다. CPython 배포형태/버전/source hash, Pydantic 및 native extension 등 전이 dependencies, PDFium build inputs, 전체 nested executable inventory는 아직 미확정이다. 이 closure를 채우기 전에는 구현 승인 가능한 lock이라고 표현하지 않는다.
 
 ### Synthetic fixture 및 증거 계약
 
@@ -209,11 +211,11 @@ Manifest 필드는 `schemaRevision, sourceCommit, artifactHash, fixtureMapHash, 
 
 | 항목 | 이번에 확인한 사실 | 해제 조건 |
 | --- | --- | --- |
-| Swift | 사용자 영역에 6.3.3 설치/버전 확인 성공, Xcode 27 SDK Foundation compile 실패 | 호환 Xcode/SDK 확보 또는 Swift 6.4 stack 변경안과 architecture 재승인 |
+| Swift | 6.3.3/SDK27 compile 실패, default 6.4 control 성공; 사용자가 6.4 변경안 작성을 선택 | Xcode27.0/Swift6.4/SDK27.0 변경 commit의 architecture 재승인; 두 CPU 앱 검증은 별도 |
 | Developer ID | `security find-identity -v -p codesigning` 결과 valid Developer ID Application identity **1개**. 이름·fingerprint·private key 미출력 | 사용 Team/identity 선택과 key 접근/서명 가능성 확인; identity 존재를 서명 성공으로 간주하지 않음 |
 | Notary | credential 내용/저장소 미조회, 제출 없음 | 사용 credential reference 및 공증 제출 명시적 지시 |
 | Intel | GitHub 문서에 `macos-15-intel`/`macos-26-intel` 존재 [E2]; 저장소 self-hosted runner API 결과 0개 | 실제 Intel 실행 경로/원격 실행 지시 확보. hosted label 존재는 job 실행/GUI Gatekeeper 증거 아님 |
-| Dependency | 위 SDK/CLI pair·CPython·전이 hash closure 미확정 | 승인 compatibility target 유지한 실제 package map과 immutable hashes 고정 |
+| Dependency | SDK/CLI-bin0.160.0 변경안과 wheel hashes 지정; CPython·전이 hash closure 미확정 | architecture 재승인 및 실제 package map/immutable hashes 고정 |
 | Fixture/증거 | 고정 map·owner·case matrix·통제 endpoint·safe evidence fields 명세화 | 별도 시험계정/group의 실제 준비 및 각 CPU 실행 시 denial 귀속 검증; 아직 미실행 |
 | Approval | IMPLEMENTATION 승인 없음 | 위 명세 차단 항목 해소 후 새 Spec commit SHA에 대한 명시적 승인 |
 
@@ -228,10 +230,9 @@ Apple은 macOS 14+에서 다른 앱 container 접근 시 사용자 승인 요청
 - [A3] local Xcode 27 SDK `Foundation.framework/Headers/NSXPCConnection.h`, connection signing requirement 및 listener restriction 주석. API 가용성 macOS 13+; 승인 toolchain의 SDK에서도 재확인 대상.
 - [A4] Apple, [Accessing files from the macOS App Sandbox](https://developer.apple.com/documentation/security/accessing-files-from-the-macos-app-sandbox): container/code-signature 연결, 사용자 승인 및 POSIX/ACL 등 다른 거부 원인.
 - [D1] OpenAI, [Codex SDK](https://developers.openai.com/codex/sdk/) (조회 시 `learn.chatgpt.com/docs/codex-sdk`로 연결).
-- [D2] [PyPI openai-codex 0.147.0 metadata](https://pypi.org/pypi/openai-codex/0.147.0/json).
-- [D3] [OpenAI Codex rust-v0.150.1 release API](https://api.github.com/repos/openai/codex/releases/tags/rust-v0.150.1); 위 정확한 asset 이름의 `digest`.
-- [D4] [해당 release의 Python pyproject](https://raw.githubusercontent.com/openai/codex/rust-v0.150.1/sdk/python/pyproject.toml).
-- [D5] Python SDK `python-v0.147.0`의 [client.py](https://github.com/openai/codex/blob/025a88adbd7ae4d448fc938b28d0446eb1753317/sdk/python/src/openai_codex/client.py), [api.py](https://github.com/openai/codex/blob/025a88adbd7ae4d448fc938b28d0446eb1753317/sdk/python/src/openai_codex/api.py), [pyproject.toml](https://github.com/openai/codex/blob/025a88adbd7ae4d448fc938b28d0446eb1753317/sdk/python/pyproject.toml).
+- [D2] [PyPI openai-codex 0.160.0 metadata](https://pypi.org/pypi/openai-codex/0.160.0/json).
+- [D3] [PyPI CLI-bin 0.160.0 metadata](https://pypi.org/pypi/openai-codex-cli-bin/0.160.0/json).
+- [D4] [SDK 0.160.0 source archive](https://files.pythonhosted.org/packages/c8/75/9f0934ce92e8428b926ac9a555bb0f7b2728b054a59003edd039adc494dd/openai_codex-0.160.0.tar.gz); hash와 읽은 member는 위 표/본문 참조.
 - [E1] Swift.org [macOS 설치/Previous Releases](https://www.swift.org/install/macos/), [Swift 6.3.3 macOS pkg](https://download.swift.org/swift-6.3.3-release/xcode/swift-6.3.3-RELEASE/swift-6.3.3-RELEASE-osx.pkg).
 - [E2] GitHub [hosted runners reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
 - [E3] Apple [Xcode SDK and system requirements](https://developer.apple.com/xcode/system-requirements/), Swift.org [user-domain package installer](https://www.swift.org/install/macos/package_installer/).
@@ -247,3 +248,4 @@ Apple은 macOS 14+에서 다른 앱 container 접근 시 사용자 승인 요청
 - 2026-10-05: 최초 작성. 실행 topology·entitlement/wire 미확정과 Swift 6.4 대 승인 6.3.3 불일치를 발견했다. 계획을 draft로 유지하고 계약 구체화·환경 확보 이전의 구현 승인을 차단했다. Story 1.1의 두 CPU 실제 검증 및 P-1 부분 증거 경계는 유지한다.
 - 2026-10-05: 2차 조사 revision. embedded XPC Agent·child inheritance·서명 peer 검증·최소 entitlement 및 topology-only RPC 제안을 추가했다. 공식 Python SDK/CLI 후보 hash, Swift 6.3.3 배포 경로, local Developer ID identity 개수와 Intel runner 문서 가용성을 확인했다. SDK/CLI pair·runtime closure·fixture 계약·환경은 여전히 차단 상태다. source 구현·설치·서명·공증·CI·push는 하지 않았다.
 - 2026-10-05: 3차 revision. 사용자 승인으로 공식 Swift 6.3.3을 추가 설치했으나 SDK 27 Foundation compile 실패를 실제 확인했다. SDK explicit binary override·environment merge·종료 경로를 immutable source로 확인하고 고정 synthetic fixture/control/evidence 계약을 보완했다. stack 선택과 dependency closure는 아직 미확정이며 제품 source·서명·공증·CI·push는 수행하지 않았다.
+- 2026-10-05: 4차 revision. 사용자 선택에 따라 Swift6.4/Xcode27 및 official Python SDK·CLI-bin0.160.0 변경안을 Spine/companion과 함께 작성했다. SDK0.160.0 source archive의 로컬 hash와 launch/env/approval/close 동작을 재확인했다. 새 architecture 승인과 Story 구현 승인은 아직 없다.

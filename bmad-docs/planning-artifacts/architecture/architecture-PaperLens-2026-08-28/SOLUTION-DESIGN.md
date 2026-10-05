@@ -2,9 +2,11 @@
 name: PaperLens v1 Solution Design
 type: solution-design
 purpose: developer-reviewer-alignment
-status: final
+status: draft
 created: 2026-08-28
-updated: 2026-09-01
+updated: 2026-10-05
+architecture_approval: pending
+approved_architecture_baseline: cdabe4419606ab0c1efebcfeb79bded0fe344512
 product_approval: 'APPROVED: PRODUCT @ 3bb2edf6a8d3d7f4942dd439325136b6fcb50456'
 source_spine: ARCHITECTURE-SPINE.md
 binds:
@@ -24,12 +26,14 @@ sources:
 
 ## 1. Purpose And Authority
 
-이 문서는 final `ARCHITECTURE-SPINE.md`를 개발자와 리뷰어가 같은 topology, ownership, lifecycle로 해석하게 하는 companion이다. Full schema, algorithms, exact method payload fields, prompts, numeric budgets를 정하지 않는다.
+이 문서는 `ARCHITECTURE-SPINE.md`를 개발자와 리뷰어가 같은 topology, ownership, lifecycle로 해석하게 하는 companion이다. Full schema, algorithms, exact method payload fields, prompts, numeric budgets를 정하지 않는다.
+
+2026-10-05 revision은 Spine의 stack 변경안(Swift 6.4 / Xcode 27.0 / SDK 27.0, official Python Codex SDK·CLI-bin 0.160.0)에 맞춘 **승인 대기 draft**다. 사용자의 변경안 작성·커밋 선택은 새 SHA의 architecture/implementation 승인이 아니다. 승인된 architecture baseline은 `cdabe4419606ab0c1efebcfeb79bded0fe344512`이며 topology·ownership·lifecycle·AD/P gate 내용은 그대로 유지한다. Stack 값은 Spine만을 authority로 사용하고 여기에 별도 lock을 만들지 않는다.
 
 | Authority | Evidence | Consequence |
 | --- | --- | --- |
 | Product | `APPROVED: PRODUCT @ 3bb2edf6a8d3d7f4942dd439325136b6fcb50456`의 final PRD/addendum | v1 capability, non-goal, timing, platform, Template boundary를 바꾸지 않는다. |
-| Architecture | Final `ARCHITECTURE-SPINE.md` | AD-1..AD-14와 P-1..P-6가 human-finalized contract다. Final local commit SHA에 대한 별도 architecture approval 전에는 governance approval이 아니다. |
+| Architecture | 승인 기록이 가리키는 `ARCHITECTURE-SPINE.md` revision | AD-1..AD-14와 P-1..P-6가 human-finalized contract다. 현재 stack 변경안은 새 local commit SHA에 대한 별도 architecture approval 전까지 기존 baseline을 대체하지 않는다. |
 | Memlog | `.memlog.md` append-only decisions | Authoring history, explicit finalization, unpassed-gate status, commit authorization boundary를 보존한다. |
 | Governance | `docs/ai-governance.md` | Silence나 `[ADOPTED]`를 approval로 보지 않는다. |
 

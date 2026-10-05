@@ -5,9 +5,11 @@ purpose: build-substrate
 altitude: initiative
 paradigm: local-first modular monolith with hexagonal boundaries
 scope: PaperLens v1 macOS application
-status: final
+status: draft
 created: 2026-08-28
-updated: 2026-09-01
+updated: 2026-10-05
+architecture_approval: pending
+approved_architecture_baseline: cdabe4419606ab0c1efebcfeb79bded0fe344512
 product_approval: 'APPROVED: PRODUCT @ 3bb2edf6a8d3d7f4942dd439325136b6fcb50456'
 binds:
   - FR-001..FR-036
@@ -33,6 +35,7 @@ companions:
 - **[ADOPTED]:** explicit human finalization에 포함된 PaperLens architecture contract choice다.
 - **Artifact status `final`:** AD-1..AD-14와 P-1..P-6의 contract wording이 final이라는 뜻이며, 자체적으로 governance approval을 부여하지 않는다.
 - Governance architecture approval은 이 final artifact의 local commit SHA가 생긴 뒤 별도의 explicit `APPROVED: ARCHITECTURE @ <sha>` record를 받아야 한다. 그 전에는 architecture approval이나 implementation approval을 추론하지 않는다.
+- **현재 revision은 stack 변경안이다.** 사용자가 2026-10-05에 변경안 작성·커밋을 선택했으며, 이 revision의 ARCHITECTURE 승인은 아직 없다. 승인된 baseline은 위 `approved_architecture_baseline`이고, 아래 `[PROPOSED]` stack만 변경 대상으로 둔다. AD-1..AD-14와 P-1..P-6의 기존 계약은 변경하지 않는다.
 
 ## Invariants & Rules
 
@@ -152,13 +155,21 @@ flowchart LR
 
 | Name | Version |
 | --- | --- |
-| Swift | 6.3.3 |
+| Swift | 6.4 `[PROPOSED]` |
+| Xcode / macOS SDK | Xcode 27.0 (27A266a) / SDK 27.0 `[PROPOSED]`; 두 CPU 실행 검증은 P-2에 남음 |
 | GRDB.swift | 7.11.1 |
-| OpenAI Codex compatibility target | 0.150.1; exact SDK/CLI pair blocked by P-2 |
+| OpenAI Codex compatibility target | 0.160.0 `[PROPOSED]`; official Python `openai-codex==0.160.0` + `openai-codex-cli-bin==0.160.0`, CPython/전이 dependency 및 최종 runtime locks는 P-2에 남음 |
 | PDFium extraction backend | commit `ad5bc13610718aefe737bd9b2f1b258d08e39428` |
 | macOS deployment target | 15+ `[ADOPTED]` |
 | CPU architecture | arm64 and x86_64 separate artifacts `[ADOPTED]` |
 | SQLite / FTS5 | system SQLite; per-artifact provenance and FTS5 capability proof required |
+
+### Stack 변경 근거 — 2026-10-05, 승인 대기
+
+- 기존 baseline의 Swift 6.3.3은 사용자 영역에 공식 signed toolchain을 설치해 버전을 확인했지만, 현재 SDK 27과의 최소 Foundation smoke compile이 `unknown argument: '-target-arch-variant'`로 실패했다. 동일 SDK/target의 Swift 6.4 control은 compile·실행에 성공했다. 이는 개발 환경 선택 근거이지 제품·두 CPU gate 검증이 아니다.
+- 기존 Codex target 0.150.1과 확인된 Python SDK 0.147.0을 조합하면 SDK의 CLI-bin 0.147.0 의존성과 실행 CLI 0.150.1을 함께 보존해야 한다. 사용자는 불필요한 중복 runtime 대신 공식 SDK/CLI-bin 0.160.0 일치 조합의 변경안 작성을 선택했다. 원본 dependency metadata를 제거하거나 fallback CLI를 추가하지 않는다.
+- immutable package hashes, 실제 source 관측과 환경 실패/control 기록은 기존 [Story 1.1 Build Spec](../../../implementation-artifacts/spec-1-1-isolated-app-topology.md)에 둔다. SDK import/no-auth initialize, App Sandbox/Hardened Runtime, arm64/x86_64 packaging·negative access·signing/notary 검증은 아직 미실행이다.
+- 사용자 선택은 변경안 작성·커밋 허용이다. 이 변경 commit에 대한 별도 `APPROVED: ARCHITECTURE @ <sha>`와 완성된 Story Spec의 `APPROVED: IMPLEMENTATION @ <sha>` 전에는 제품 source를 구현하지 않는다. Swift 6.3.3 실패나 stack 변경으로 P-1/P-2 요구를 낮추지 않는다.
 
 ## Structural Seed
 
