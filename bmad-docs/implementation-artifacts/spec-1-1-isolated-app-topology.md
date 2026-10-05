@@ -47,7 +47,7 @@ context:
 
 ## Code Map
 
-승인 원본 `7fe18449bef4a01c827c9df44b5c2b00f9cfd68b`의 구현을 로컬 commit `427c5f1d3dc5612f4a8037f20e902cdbc6d0f34d`에 보존했다. 아래 source/build target은 존재하지만 전체 앱의 링크·서명·격리는 입증되지 않았다. 이 수정안의 PDFium source patch는 아직 적용하지 않았다.
+원본 구현 checkpoint는 `427c5f1d3dc5612f4a8037f20e902cdbc6d0f34d`, 승인된 patch V1과 실제 숫자 stack 회귀 harness checkpoint는 `fa6c2113087fa37409a2f954d16eb7cb91e439ea`다. 전체 앱의 링크·서명·격리는 입증되지 않았다. 아래 slicing-only V2는 제안이며 미적용이다.
 
 - `PaperLens.xcodeproj/project.pbxproj` — Main/XPC/Agent targets, 두 CPU 별도 빌드, macOS 15 deployment target과 embedding/signing 구성.
 - `PaperLensApp/App/`, `PDFiumXPC/`, `ProviderAgent/` — Main launch coordinator, no-network worker, 별도 identity의 packaged Agent. 각 target의 Info.plist/entitlements도 같은 경계에 둔다.
@@ -76,7 +76,7 @@ context:
 
 ## Design Notes
 
-- 이 revision은 **PDFium 단일 source patch에 대한 IMPLEMENTATION 재승인 대기 draft**다. 원본 `7fe18449bef4a01c827c9df44b5c2b00f9cfd68b`은 [명시적 구현 승인 기록](https://github.com/jinzer0/PaperLens/issues/2#issuecomment-5987429341)에 따라 구현했지만, 실제 compile 실패로 전체 앱 build를 차단했다. 그 승인을 아래 변경 입력에 확대하지 않는다. [architecture 승인 기록](https://github.com/jinzer0/PaperLens/issues/2#issuecomment-5987295896)의 baseline은 유지한다. 현재 제품 source·dependency lock·취득된 upstream source에는 제안 patch가 없으며, 새 Spec commit SHA의 명시 승인 전 적용하지 않는다.
+- 이 revision은 **PDFium slicing-only patch V2의 IMPLEMENTATION 재승인 대기 draft**다. 원본7fe18449의 [구현 승인](https://github.com/jinzer0/PaperLens/issues/2#issuecomment-5987429341) 후 [fd8f8b93 V1의 명시 승인](https://github.com/jinzer0/PaperLens/issues/2#issuecomment-5991884172)으로 patch 검증·적용·회귀 harness를 구현했다. 실제 compile은 아직 실패한다. PDFium의 span이 ordinary pointer iterator를 쓰므로 V1에 남은 두 pointer arithmetic도 제거해야 한다. V1 승인을 아래 새 hash에 확대하지 않는다. architecture baseline은1195c922를 유지하며 V2는 새 SHA 승인 전 미적용이다.
 - Intel은 적합한 GitHub Actions runner를 우선 조사하되 실제 runner 가용성·Xcode·signing 권한·GUI/Gatekeeper 증거를 확인해야 한다. 충족하지 못하면 별도 Intel Mac/self-hosted 환경이 필요하다. 현재 원격 실행/권한/Intel 환경은 확인되지 않았다.
 - PRODUCT baseline: `5eac3bb9424ad893eca7d63bc319b71f580838ed`. ARCHITECTURE baseline: `1195c92227cc628e325f5ff24d70cc93639bf7a9` (이전 `cdabe4419606ab0c1efebcfeb79bded0fe344512` 대체). 관련 AD-2/4/7/13, AR-002~005/020, FR-002/005/035 선행 검증, R-005/007을 추적한다.
 - Story 원본: `bmad-docs/planning-artifacts/epics.md` §1.1. 작성 시 파일 SHA-256: `0dbed1d4dac4435b8ce29a3fd8bfe273f730f99e8c5f4a98a2e76a33bee75434`. 기존 untracked planning/governance 파일은 이 작업의 커밋에 임의 포함하지 않는다. 위 AC·범위는 원본의 Story 1.1 경계를 이 커밋에 보존한다.
@@ -233,24 +233,26 @@ GN/Ninja는 DEPS의 tag뿐 아니라 확인한 CIPD immutable instance를 고정
 
 공통 GN args는 위 static/V8/XFA flags에 더해 `is_debug=false`, `pdf_is_standalone=false`, `pdf_use_skia=false`, `pdf_use_agg=true`, `pdf_enable_fontations=false`, `pdf_enable_rust_bmp=false`, `pdf_enable_rust_jpeg=false`, `pdf_enable_rust_png=false`, `enable_rust=false`, `use_custom_libcxx=false`다 [D11]. AGG/Skia 모두 false로 만들지 않는다. tests/sample binary를 빌드하지 않는 선택이며 upstream PDFium library를 Init/Destroy 전용 stub으로 줄이는 것이 아니다.
 
-`mac_sdk_path`는 승인 Xcode 27.0의 실제 SDK 27.0으로 resolve되는 upstream `sdk_info.py`의 output-directory alias를 사용하고, `mac_deployment_target="15.0"`, `mac_min_system_version="15.0"`을 유지한다. Xcode XPC와 system libc++ linkage를 사용한다. `use_custom_libcxx=false`는 pinned build source가 제공하지만 장래 제거를 경고하는 옵션이므로 향후 PDFium pin 변경 시 다시 검토한다. 현재 pin을 자동 upgrade하지 않는다. GN이 산출한 `pdfium` static output을 확인해 `.build/topology/<cpu>/deps/libpdfium.a`로 수집한다. 원본 승인의 무패치 조건은 현재까지 지켰으며, 이 수정안이 승인된 경우에만 아래 단일 bounded-iterator patch를 추가한다. provider dylib 변경이나 그 밖의 source patch는 허용하지 않는다.
+`mac_sdk_path`는 승인 Xcode 27.0의 실제 SDK 27.0으로 resolve되는 upstream `sdk_info.py`의 output-directory alias를 사용하고, `mac_deployment_target="15.0"`, `mac_min_system_version="15.0"`을 유지한다. Xcode XPC와 system libc++ linkage를 사용한다. `use_custom_libcxx=false`는 pinned build source가 제공하지만 장래 제거를 경고하는 옵션이므로 향후 PDFium pin 변경 시 다시 검토한다. 현재 pin을 자동 upgrade하지 않는다. GN이 산출한 `pdfium` static output을 확인해 `.build/topology/<cpu>/deps/libpdfium.a`로 수집한다. 7fe18449 승인 기간에는 무패치 조건을 지켰고 fd8f8b93 승인 후 V1만 적용했다. 이 수정안이 승인된 경우에만 아래 단일 slicing-only V2로 교체한다. provider dylib 변경이나 그 밖의 source patch는 허용하지 않는다.
 
 이 Git/DEPS blob + GCS generation/hash + CIPD instance/hash + GN args + 승인된 단일 patch digest가 수정안의 후보 입력 계약이다. 실제 다운로드 후 불일치, undeclared input, compile/link/InitLibrary 실패는 즉시 차단하고 원인을 기록한다. 입력 교체나 추가 patch, PDFium pin/권한 변경이 필요하면 재승인한다. 아직 없는 자체 build 출력 hash나 두 CPU 성공은 구현 승인 전 선행 조건으로 요구하지 않는다.
 
-### PDFium bounded-iterator 수정안 — 아직 미승인·미적용
+### PDFium slicing-only V2 수정안 — 아직 미승인·미적용
 
 고정된 원본 recipe를 실제 arm64에서 빌드했다. GN은 성공했지만 `core/fpdfapi/page/cpdf_psengine.cpp:452–454`의 `PSOP_ROLL`에서 system libc++의 raw iterator 연산에 대한 `-Wunsafe-buffer-usage` 진단 4개가 `-Werror`로 실패했다. 같은 recipe의 Ninja keep-going 조사에서도 이 translation unit만 실패했다. 이는 실행 시 취약점이 입증됐다는 뜻이 아니라 **승인 조합의 실제 compiler 차단**이다. 경고를 끄거나 error 승격을 해제하지 않았다.
 
-최소 변경은 기존 `n`/`j` 검증과 회전 의미를 보존하고, 이미 header에 포함된 `pdfium::span`의 bounded iterator를 사용하는 것이다. PDFium commit, DEPS, Clang, SDK, GN flags, system libc++ ABI, topology, 권한은 그대로 둔다. AD-2/4/7/13의 architecture 변경이 아니라 build 입력에 대한 단일 patch 예외이므로 이 Spec의 새 IMPLEMENTATION 승인을 요청한다.
+승인된 V1을 실제 적용했고 결과 hash와 재실행을 확인했으나 `stack.end() - n` 및 `begin_it - j` 두 진단이 남았다. `core/fxcrt/span.h:12–15`는 checked iterator를 ordinary pointer로 바꿨다고 명시한다. V1의 bounded-iterator 가정은 잘못됐으며 실험 결과로 정정한다. 실제 library가 없어 숫자 stack executable의 compile/run 성공은 아직 없다.
+
+V2는 기존 `n`/`j` 검증·회전 의미를 유지하면서 `first(stack_count_).last(n)`과 `subspan(-j)`의 검증된 slicing API로 모든 caller pointer arithmetic을 없앤다. `n`과 `-j`는 이미 검증·정규화된 범위이며 `StrictNumeric<size_t>`에 맞춰 명시 cast한다. PDFium commit, DEPS, Clang, SDK, GN flags, system libc++ ABI, topology, 권한은 그대로다. 미검증 compile 성공을 주장하지 않으며 이 단일 patch의 새 digest에 대한 IMPLEMENTATION 승인을 요청한다.
 
 | 항목 | 고정값 |
 | --- | --- |
 | upstream 기준 | `ad5bc13610718aefe737bd9b2f1b258d08e39428` |
 | 변경 대상 | `core/fpdfapi/page/cpdf_psengine.cpp` 한 파일 |
 | 원본 파일 SHA-256 | `deb4d8dbe96ba81a803c0930b5acf3a4e47af863c5b04929b9b6c9973435f5a6` |
-| 적용 후 파일 SHA-256 | `296d940f32ed604db4f61218f96d677704e40e72ded0c73eb018850aa29fc2a7` |
-| 아래 UTF-8/LF unified diff SHA-256 | `3bc8f7337144cbfe6a6c7d97fc4b470c97c370c0a1f6285c34e08295e64ccded` |
-| 승인 후 만들 patch 경로 | `scripts/topology/patches/pdfium-bounded-roll.patch` |
+| V2 적용 후 파일 SHA-256 | `0aa9216ebb101fd28f55d929050a053900a960fa7037a688379f26d2ddbcf7c9` |
+| 아래 V2 UTF-8/LF unified diff SHA-256 | `987ff19ef909a415c368bc2dfba212930681faf8e980810f804d52b91ec3b55b` |
+| 승인 후 교체할 patch 경로 | `scripts/topology/patches/pdfium-bounded-roll.patch` |
 
 ```diff
 --- a/core/fpdfapi/page/cpdf_psengine.cpp
@@ -260,12 +262,13 @@ GN/Ninja는 DEPS의 tag뿐 아니라 확인한 CIPD immutable instance를 고정
          j -= n;
        }
 -      auto begin_it = std::begin(stack_) + stack_count_ - n;
-+      auto stack = pdfium::span(stack_).first(stack_count_);
-+      auto begin_it = stack.end() - n;
-       auto middle_it = begin_it - j;
+-      auto middle_it = begin_it - j;
 -      auto end_it = std::begin(stack_) + stack_count_;
 -      std::rotate(begin_it, middle_it, end_it);
-+      std::rotate(begin_it, middle_it, stack.end());
++      auto stack =
++          pdfium::span(stack_).first(stack_count_).last(static_cast<size_t>(n));
++      std::rotate(stack.begin(),
++                  stack.subspan(static_cast<size_t>(-j)).begin(), stack.end());
        break;
      }
      default:
@@ -274,6 +277,7 @@ GN/Ninja는 DEPS의 tag뿐 아니라 확인한 CIPD immutable instance를 고정
 승인 후 구현·검증 범위:
 
 - `dependencies.json`에 patch 경로·digest·원본/결과 hash와 새 승인 SHA를 고정하고 `acquire.py`에서 검증한다. 기준 Git/DEPS 확인을 유지하며 정확한 원본에만 적용한다. 재실행은 정확한 승인 결과만 허용하고 다른 dirty source를 reset하거나 덮어쓰지 않는다.
+- 현재 generated checkout의 V1 결과296d940f와100644 mode, 단일 변경 파일 및 V1 patch3bc8f733을 먼저 검증·보존한다. 이 작업이 만든 그 정확한 V1 변경만 reverse해 원본deb4d8db로 확인한 뒤 V2를 적용한다. 다른 변경이 있으면 복구/reset 없이 중단한다. V1 호환 경로나 자동 fallback을 제품 코드에 추가하지 않는다.
 - 취득 receipt에 원본 commit과 patch 및 결과 hash를 남기고 기존 `acquisitionHash`/`dependencyLockHash`를 통해 packaging manifest와 연결한다. 두 CPU에 동일 patch를 적용한다.
 - hash 불일치, 다른 파일 변경, 중복·재적용 및 cache 변조를 실패시키는 회귀를 추가한다. `Tests/Topology/`에서 실제 고정 PDFium의 `CPDF_PSEngine::DoOperator(PSOP_ROLL)`을 synthetic 숫자 stack으로 검사한다. 양/음 회전, modulo, 0, 음수·stack보다 큰 `n`, 빈 stack을 포함하며 PDF document open/extraction은 수행하지 않는다.
 - 경고 억제 없이 기존 recipe로 재빌드하고 complete static library 링크·InitLibrary·기존 Python/Swift 회귀를 검증한다. 실제 서명/fixture/Intel/공증 준비가 없으면 계속 blocked로 기록한다. patch 외 추가 입력 변경이 필요하면 다시 중단한다.
@@ -328,7 +332,7 @@ Manifest 필드는 `schemaRevision, sourceCommit, artifactHash, fixtureMapHash, 
 | Intel | GitHub 문서에 `macos-15-intel`/`macos-26-intel` 존재 [E2]; 저장소 self-hosted runner API 결과 0개 | 실제 Intel 실행 경로/원격 실행 지시 확보. hosted label 존재는 job 실행/GUI Gatekeeper 증거 아님 |
 | Dependency | arm64 취득/runtime staging 성공, 원본 PDFium compile은 위 4개 진단으로 차단 | 단일 patch 수정안 재승인 후 실제 build/link/runtime 검증; P-2 lock·최종 nested inventory 미완료 |
 | Fixture/증거 | 고정 map·harness 구현 및 단위 검사 완료. 전용 계정은 존재하지 않으며 해당 profile 실행 아님 | 별도 시험계정/group 준비와 실제 signed process의 denial 귀속 검증; 권한·계정 자동 변경 없음 |
-| Approval | 원본 `7fe18449` IMPLEMENTATION 승인으로 commit `427c5f1d`까지 구현 | 이 단일 patch 수정안의 새 commit SHA에 대한 IMPLEMENTATION 재승인. 원격/공증/배포 별도 |
+| Approval | fd8f8b93의 IMPLEMENTATION 승인으로 V1 checkpoint fa6c2113까지 구현·부분 검증 | V2의 새 commit SHA에 대한 IMPLEMENTATION 재승인. 원격/공증/배포 별도 |
 
 시험 harness는 sandbox 거부와 Unix mode/ACL/TCC 거부를 구분해야 한다. owner가 시험 전후 canary 존재와 정상 read/write를 확인하고 같은 user의 통제 실행에서 비교한다. app-group entitlement가 없다는 정적 증거와 실제 다른 group canary 접근 거부 증거를 구분한다. group canary가 없으면 그 동적 검사는 `blocked`이며 새 shared group 권한을 제품에 부여해 통과시키지 않는다. 보호 데이터를 검사하기 위해 실제 사용자 container를 탐색하지 않는다.
 
@@ -371,7 +375,7 @@ Apple은 macOS 14+에서 다른 앱 container 접근 시 사용자 승인 요청
 ### 기존 승인 범위의 실행 증거
 
 - 구현 checkpoint: `427c5f1d3dc5612f4a8037f20e902cdbc6d0f34d`. 상세 redacted 결과·source fingerprint·부분 native binary hash는 `evidence/1-1/arm64/local-verification.json`에 있다.
-- Python 3.13.16의 집중 회귀 **100개**, Swift ProviderRPC **12개** 통과. Agent 검토 S1–S5는 수정·회귀 후 독립 정적 재검토에서 해소됐다.
+- 최초 Python 회귀100개, V1·실제 runner의 offline 회귀를 포함한 현재 Python 3.13.16 **133개**, Swift ProviderRPC **12개** 통과. 실제 C++ harness의19개 synthetic case는 아직 compile/run 미실행이다. Agent S1–S5는 독립 정적 재검토에서 해소됐다.
 - Main/PDFiumXPC/ProviderAgent/FixtureGroupOwner는 두 target architecture의 macOS 15 typecheck를 통과했다. ProviderAgent와 FixtureGroupOwner만 `CODE_SIGNING_ALLOWED=NO`로 두 CPU의 Xcode Release build를 통과했으며 `lipo`/`vtool`로 CPU·minimum OS 15·SDK 27을 확인했다. 실제 Intel 실행이나 전체 앱 build 성공이 아니다.
 - Xcode의 AppIntents metadata 경고 4건과 mock clock을 2초 전진시키는 회귀의 asyncio slow-task 진단을 보존했다. 경고를 숨기거나 통과를 위해 compiler 경고를 완화하지 않았다.
 - 실제 `build.sh`는 고정 PDFium compile에서 blocked다. 최종 앱 링크·nested Developer ID signing·packaged SDK/CLI 실행·OS sandbox 거부 귀속·실제 Intel·공증/Gatekeeper는 미입증이다. Story done 및 P-1~P-6 PASS를 주장하지 않는다.
@@ -384,3 +388,4 @@ Apple은 macOS 14+에서 다른 앱 container 접근 시 사용자 승인 요청
 - 2026-10-05: 4차 revision. 사용자 선택에 따라 Swift6.4/Xcode27 및 official Python SDK·CLI-bin0.160.0 변경안을 Spine/companion과 함께 작성했다. SDK0.160.0 source archive의 로컬 hash와 launch/env/approval/close 동작을 재확인했다. 새 architecture 승인과 Story 구현 승인은 아직 없다.
 - 2026-10-05: 5차 revision. architecture1195c922의 명시적 승인을 Issue에 기록하고 baseline·epics AR-002를 동기화했다. CPython 및 8개 Python package의 두 CPU 후보/hash, signing Team을 고정했다. 정확히 일치하지 않는 PDFium prebuilt를 배제하고 upstream static-library 및 Clang/GN/Ninja immutable 입력을 확정했다. 기술 명세를 구현 승인 대상으로 준비했으며 조건부 잠정 승인을 새 SHA의 확정 IMPLEMENTATION 승인으로 확대하지 않았다.
 - 2026-10-05: 6차 revision. 원본7fe18449의 명시적 IMPLEMENTATION 승인 후 source와 부분 검증을427c5f1d에 로컬 commit했다. 실제 PDFium/system-libc++ compile 차단을 확인했고 경고 억제·pin 변경·source patch는 수행하지 않았다. 기존 ABI/권한/버전을 유지하는 단일 bounded-iterator patch와 hash 검증·회귀 범위를 새 승인 대상으로 제안한다. 변경 입력 적용은 새 SHA 승인 전 중단 상태다.
+- 2026-10-05: 7차 revision. fd8f8b93의 명시 승인 후 V1 검증·적용·회귀 harness를fa6c2113에 commit했다. 실제 span iterator가 raw pointer여서 compiler 진단2개가 남음을 확인했다. 모든 caller pointer arithmetic을 slicing으로 대체하는 V2의 정확한 새 hash를 제안하며 승인 전 미적용이다. 기존 pin·ABI·권한·경고 정책을 유지한다.
