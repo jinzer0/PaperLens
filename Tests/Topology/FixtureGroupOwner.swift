@@ -8,17 +8,39 @@ private enum FixtureGroupOwner {
   static func main() {
     let arguments = CommandLine.arguments
     guard arguments.count == 3, arguments[1] == "--run-id",
-      TopologyFixtures.validRunID(arguments[2]),
-      TopologyFixtures.profileMatches(TopologyIdentity.groupOwner),
-      TopologyFixtures.groupMapMatches(),
-      let group = FileManager.default.containerURL(
-        forSecurityApplicationGroupIdentifier: TopologyIdentity.group),
-      group.standardizedFileURL.path == TopologyFixtures.groupRoot,
-      group.resolvingSymlinksInPath() == group.standardizedFileURL
+      TopologyFixtures.validRunID(arguments[2])
     else {
-      emit(["status": "blocked", "fixtureID": "G", "reason": "profileOrGroupUnavailable"])
+      emit(["status": "blocked", "fixtureID": "G", "reason": "invalidInvocation"])
       exit(2)
     }
+    guard
+      TopologyFixtures.profileMatches(TopologyIdentity.groupOwner),
+      TopologyFixtures.groupMapMatches(),
+      let groupRoot = TopologyFixtures.groupRoot
+    else {
+      emit(["status": "blocked", "fixtureID": "G", "reason": "profileUnavailable"])
+      exit(2)
+    }
+    guard
+      let group = FileManager.default.containerURL(
+        forSecurityApplicationGroupIdentifier: TopologyIdentity.group)
+    else {
+      emit(["status": "blocked", "fixtureID": "G", "reason": "groupUnavailable"])
+      exit(2)
+    }
+    guard
+      group.isFileURL, group.standardizedFileURL.path == groupRoot,
+      group.resolvingSymlinksInPath() == group.standardizedFileURL
+    else {
+      emit(["status": "blocked", "fixtureID": "G", "reason": "groupPathMismatch"])
+      exit(2)
+    }
+    guard let groupDirectory = TopologyFixtures.directory(group, create: false)
+    else {
+      emit(["status": "blocked", "fixtureID": "G", "reason": "groupDirectoryUnavailable"])
+      exit(2)
+    }
+    close(groupDirectory)
     let runID = arguments[2]
     guard
       let owner = TopologyOwnedFixtures(
@@ -28,10 +50,6 @@ private enum FixtureGroupOwner {
       emit(["status": "blocked", "fixtureID": "G", "reason": "fixtureUnavailable"])
       exit(2)
     }
-    emit([
-      "status": "ready", "runID": runID, "fixtureID": "G", "ownerPre": "pass",
-      "expectedRootMatched": true, "posixACLControl": "unverified",
-    ])
     // The harness keeps this owner alive throughout probes, then signals it.
     // No separate cleanup invocation can adopt a pre-existing user's file.
     signal(SIGTERM, SIG_IGN)
@@ -51,6 +69,10 @@ private enum FixtureGroupOwner {
     interrupt.setEventHandler(handler: finish)
     termination.resume()
     interrupt.resume()
+    emit([
+      "status": "ready", "runID": runID, "fixtureID": "G", "ownerPre": "pass",
+      "expectedRootMatched": true, "posixACLControl": "unverified",
+    ])
     withExtendedLifetime((owner, termination, interrupt)) { dispatchMain() }
   }
 

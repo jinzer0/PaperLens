@@ -5,6 +5,7 @@ import asyncio
 from dataclasses import dataclass, field
 import errno
 import importlib
+import json
 import os
 from pathlib import Path
 import platform
@@ -24,12 +25,49 @@ from provider_rpc import (  # noqa: E402
     validate_request, validate_terminal,
 )
 
-PROFILE = Path('/Users/paperlens-topology')
 MAIN_ID = 'io.github.jinzer0.PaperLens'
 AGENT_ID = MAIN_ID + '.ProviderAgent'
 GROUP_ID = '397452Z366.io.github.jinzer0.PaperLens.TopologyFixture'
 MARKER = b'PaperLens topology canary\n'
 LIMITS = CONTRACT['limits']
+
+
+def fixture_profile() -> tuple[Path, Path]:
+    """Resolve account metadata, never sandbox HOME or a caller-selected profile."""
+    uid = os.getuid()
+    if uid < 500 or os.geteuid() != uid:
+        raise PermissionError('fixtureProfileUnavailable')
+    account = pwd.getpwuid(uid)
+    home = Path(account.pw_dir)
+    if account.pw_uid != uid or not home.is_absolute() or home == Path('/'):
+        raise PermissionError('fixtureProfileUnavailable')
+    info = home.lstat()
+    if (not stat.S_ISDIR(info.st_mode) or info.st_uid != uid
+            or home.resolve(strict=True) != home):
+        raise PermissionError('fixtureProfileUnavailable')
+    map_path = Path(__file__).resolve().parent / 'fixture-map.json'
+    fd = os.open(map_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_size > 4096:
+            raise PermissionError('fixtureMapMismatch')
+        with os.fdopen(fd, 'rb', closefd=False) as source:
+            pairs = json.loads(source.read(4097), object_pairs_hook=list)
+        if (not isinstance(pairs, list) or len(pairs) != 2
+                or sorted(pairs) != sorted([
+                    ('profile', 'current-user'), ('groupID', GROUP_ID)])):
+            raise PermissionError('fixtureMapMismatch')
+    finally:
+        os.close(fd)
+    root = home / 'Library/Containers' / AGENT_ID / 'Data'
+    if Path.home() != root or Path(os.environ.get('HOME', '')) != root:
+        raise PermissionError('containerMismatch')
+    for directory in (home / 'Library', home / 'Library/Containers', root.parent, root):
+        info = directory.lstat()
+        if (not stat.S_ISDIR(info.st_mode) or info.st_uid != uid
+                or directory.resolve(strict=True) != directory):
+            raise PermissionError('containerMismatch')
+    return home, root
 
 
 def private_directory(path: Path, *, strict: bool = True) -> bool:
@@ -64,12 +102,8 @@ class Fixtures:
         return info.st_dev, info.st_ino
 
     def roots(self) -> tuple[Path, Path]:
-        if Path(pwd.getpwuid(os.getuid()).pw_dir) != PROFILE:
-            raise PermissionError('fixtureProfileUnavailable')
-        root = PROFILE / 'Library/Containers' / AGENT_ID / 'Data'
-        if Path.home() != root or Path(os.environ.get('HOME', '')) != root:
-            raise PermissionError('containerMismatch')
-        return root, PROFILE / 'Library/Containers' / MAIN_ID / 'Data'
+        home, root = fixture_profile()
+        return root, home / 'Library/Containers' / MAIN_ID / 'Data'
 
     def own_paths(self, run: str) -> tuple[Path, Path]:
         root, _ = self.roots()
@@ -171,8 +205,8 @@ class Fixtures:
                 return {'outcome': 'inconclusive', 'reason': 'controlFailed'}
         targets = {
             'main': main / 'Library/Application Support/PaperLensTopology' / run / 'db.canary',
-            'external': PROFILE / 'Library/Application Support/PaperLensTopologyFixtureHost' / run / 'external.canary',
-            'group': PROFILE / 'Library/Group Containers' / GROUP_ID / 'PaperLensTopology' / run / 'group.canary',
+            'external': root.parents[3] / 'Library/Application Support/PaperLensTopologyFixtureHost' / run / 'external.canary',
+            'group': root.parents[3] / 'Library/Group Containers' / GROUP_ID / 'PaperLensTopology' / run / 'group.canary',
         }
         key = 'main' if case.startswith('main') else 'external' if case.startswith('external') else 'group'
         path = targets[key]
@@ -280,6 +314,7 @@ class RuntimeProbe:
                 self.cancelled.discard(identifier)
 
     def run_owned(self, identifier: str, worker: RuntimeWorker) -> dict:
+        _, container = fixture_profile()
         machine = platform.machine()
         if machine not in ('arm64', 'x86_64'):
             raise RuntimeError('unsupportedCPU')
@@ -287,15 +322,24 @@ class RuntimeProbe:
         executable = resources.parent / 'MacOS/codex'
         if not executable.is_file():
             raise RuntimeError('runtimeUnavailable')
+        home = Path(os.environ['CODEX_HOME'])
+        runtime_root = container / 'Library/Application Support/PaperLensTopologyRuntime'
+        if (not home.is_absolute() or home.name != 'codex'
+                or home.parent.parent != runtime_root):
+            raise PermissionError('containerMismatch')
+        safe_uuid(home.parent.name)
+        if home.resolve() != home:
+            raise PermissionError('containerMismatch')
+        for directory in (runtime_root, home.parent):
+            info = directory.lstat()
+            if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid()
+                    or stat.S_IMODE(info.st_mode) != 0o700):
+                raise PermissionError('unsafeDirectory')
         sdk = importlib.import_module('openai_codex')
         sdk_path = Path(sdk.__file__).resolve()
         if resources.parent not in sdk_path.parents or sdk.__version__ != '0.160.0':
             raise RuntimeError('sdkIdentityMismatch')
         from openai_codex.client import CodexClient, CodexConfig
-        home = Path(os.environ['CODEX_HOME'])
-        container = Path(pwd.getpwuid(os.getuid()).pw_dir) / 'Library/Containers' / AGENT_ID / 'Data'
-        if Path.home() != container or container not in home.resolve().parents:
-            raise PermissionError('containerMismatch')
         private_directory(home)
         attempt = home / ('topology-' + safe_uuid(identifier))
         attempt.mkdir(mode=0o700)  # Unique; never reuse an existing auth/config home.

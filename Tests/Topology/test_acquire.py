@@ -2,6 +2,7 @@
 import base64
 import contextlib
 import csv
+import errno
 import hashlib
 import io
 import json
@@ -668,16 +669,95 @@ class WheelTests(IsolatedTest):
 
 
 class EvidenceTests(IsolatedTest):
+    def invoke(self, arch="arm64", consent=False):
+        output = io.StringIO()
+        args = ["--arch", arch, "--bundle", str(self.root / "PaperLens.app")]
+        if consent:
+            args.append("--confirm-current-profile")
+        with mock.patch.object(verify, "native_cpu", return_value=(arch, False)), mock.patch.object(verify, "command", return_value=(0, b"25A1", b"")), mock.patch.object(verify, "inspect_bundle") as inspect, mock.patch.object(verify, "current_home", return_value=self.root) as home, mock.patch.object(verify, "gui_run") as gui, contextlib.redirect_stdout(output):
+            status = verify.main(args)
+        return status, json.loads(output.getvalue()), inspect, home, gui
+
+    def test_consent_required_before_profile_metadata_or_gui(self):
+        status, evidence, inspect, home, gui = self.invoke()
+        self.assertEqual(status, 2)
+        inspect.assert_called_once()
+        home.assert_not_called()
+        gui.assert_not_called()
+        self.assertTrue(any(row["reason"] == "explicit_current_profile_consent_required" for row in evidence["automated"]))
+
+    def test_current_consent_is_not_clean_profile_or_two_cpu_proof(self):
+        status, evidence, inspect, home, gui = self.invoke(consent=True)
+        self.assertEqual(status, 2)
+        inspect.assert_called_once()
+        home.assert_called_once()
+        gui.assert_called_once()
+        manual = {row["caseID"]: row for row in evidence["manual"]}
+        self.assertEqual(manual["currentProfile"]["verdict"], "inconclusive")
+        self.assertEqual(manual["cleanProfile"]["verdict"], "blocked")
+        self.assertFalse(evidence["actualTwoCPU"])
+        self.assertFalse(evidence["storyDone"])
+        self.assertEqual(evidence["p1"], "unverified")
+        self.assertEqual(evidence["verdict"], "blocked")
+        self.assertTrue(all(row["verdict"] == "blocked" for row in evidence["remote"]))
+
+    def test_native_intel_remains_static_only_even_with_consent(self):
+        _, evidence, inspect, home, gui = self.invoke("x86_64", consent=True)
+        inspect.assert_called_once()
+        home.assert_not_called()
+        gui.assert_not_called()
+        self.assertEqual(evidence["intelDynamic"]["executionStatus"], "unexecuted")
+        self.assertTrue(any(row["reason"] == "intel_dynamic_waived_support_unverified" for row in evidence["automated"]))
+
+    def test_rosetta_never_enables_synthetic_launch(self):
+        output = io.StringIO()
+        with mock.patch.object(verify, "native_cpu", return_value=("arm64", True)), mock.patch.object(verify, "command", return_value=(0, b"25A1", b"")), mock.patch.object(verify, "inspect_bundle"), mock.patch.object(verify, "current_home") as home, mock.patch.object(verify, "gui_run") as gui, contextlib.redirect_stdout(output):
+            verify.main(["--arch", "arm64", "--bundle", str(self.root), "--confirm-current-profile"])
+        home.assert_not_called()
+        gui.assert_not_called()
+
+    def test_removed_clean_profile_flag_has_no_alias(self):
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
+            verify.main(["--arch", "arm64", "--bundle", str(self.root), "--confirm-clean-profile"])
+        self.assertEqual(error.exception.code, 2)
+
+    def test_existing_report_is_untouched_before_read_or_owner_launch(self):
+        report = self.root / "Library/Containers" / verify.IDENTITY / "Data/Library/Application Support/PaperLensTopology/report.json"
+        report.parent.mkdir(parents=True)
+        report.write_bytes(b"existing owner evidence")
+        before = report.stat()
+        with mock.patch.object(verify, "current_home", return_value=self.root), mock.patch.object(verify, "read_json") as read, mock.patch.object(verify, "Controls") as controls, mock.patch.object(verify, "GroupOwner") as owner, mock.patch.object(verify, "command") as launch:
+            with self.assertRaisesRegex(acquire.Failure, "existing_owner_report_preserved"):
+                verify.gui_run(self.root / "PaperLens.app", verify.base_evidence("arm64"))
+        read.assert_not_called()
+        controls.assert_not_called()
+        owner.assert_not_called()
+        launch.assert_not_called()
+        self.assertEqual(report.read_bytes(), b"existing owner evidence")
+        after = report.stat()
+        self.assertEqual((before.st_dev, before.st_ino, before.st_mode, before.st_mtime_ns), (after.st_dev, after.st_ino, after.st_mode, after.st_mtime_ns))
+
+    def test_dangling_report_symlink_is_preserved(self):
+        report = self.root / "Library/Containers" / verify.IDENTITY / "Data/Library/Application Support/PaperLensTopology/report.json"
+        report.parent.mkdir(parents=True)
+        report.symlink_to("missing-owner-report")
+        with mock.patch.object(verify, "current_home", return_value=self.root), mock.patch.object(verify, "read_json") as read, mock.patch.object(verify, "command") as launch:
+            with self.assertRaisesRegex(acquire.Failure, "existing_owner_report_preserved"):
+                verify.gui_run(self.root, verify.base_evidence("arm64"))
+        read.assert_not_called()
+        launch.assert_not_called()
+        self.assertEqual(os.readlink(report), "missing-owner-report")
+
     def test_wrong_profile_blocks_gui_and_real_container_access(self):
         output = io.StringIO()
-        with mock.patch.object(verify, "native_cpu", return_value=("arm64", False)), mock.patch.object(verify, "command", return_value=(0, b"25A1", b"")) as commands, mock.patch.object(verify, "inspect_bundle"), mock.patch.object(verify, "clean_account", return_value=False), mock.patch.object(verify, "gui_run") as gui, contextlib.redirect_stdout(output):
-            status = verify.main(["--arch", "arm64", "--bundle", str(self.root / "PaperLens.app"), "--confirm-clean-profile"])
+        with mock.patch.object(verify, "native_cpu", return_value=("arm64", False)), mock.patch.object(verify, "command", return_value=(0, b"25A1", b"")) as commands, mock.patch.object(verify, "inspect_bundle"), mock.patch.object(verify, "current_home", side_effect=acquire.Failure("fixture_profile_mismatch")), mock.patch.object(verify, "gui_run") as gui, contextlib.redirect_stdout(output):
+            status = verify.main(["--arch", "arm64", "--bundle", str(self.root / "PaperLens.app"), "--confirm-current-profile"])
         gui.assert_not_called()
         evidence = json.loads(output.getvalue())
         self.assertEqual(status, 2)
         self.assertEqual(evidence["verdict"], "blocked")
         self.assertFalse(evidence["storyDone"])
-        self.assertTrue(any(item["reason"] == "exact_clean_fixture_profile_required" for item in evidence["automated"]))
+        self.assertTrue(any(item["reason"] == "fixture_profile_mismatch" for item in evidence["automated"]))
         self.assertTrue(all(item["verdict"] == "blocked" for item in evidence["remote"]))
         self.assertTrue(all(item["executionStatus"] == "unexecuted" for item in evidence["remote"]))
         self.assertEqual(commands.call_args_list, [mock.call(["/usr/bin/sw_vers", "-buildVersion"])])
@@ -717,11 +797,89 @@ class EvidenceTests(IsolatedTest):
         with self.assertRaisesRegex(acquire.Failure, "invalid_native_status"):
             verify.project_statuses(report)
 
-    def test_control_owner_cannot_run_in_real_profile(self):
-        with mock.patch.object(verify, "clean_account", return_value=False), mock.patch.object(Path, "mkdir") as mkdir:
+    def test_control_owner_cannot_run_in_invalid_profile(self):
+        with mock.patch.object(verify, "current_home", side_effect=acquire.Failure("fixture_profile_mismatch")), mock.patch.object(Path, "mkdir") as mkdir:
             with self.assertRaisesRegex(acquire.Failure, "fixture_profile_mismatch"):
                 verify.Controls("01234567-89ab-4cde-8fab-0123456789ab")
         mkdir.assert_not_called()
+
+    def test_existing_external_run_directory_is_preserved(self):
+        run_id = "01234567-89ab-4cde-8fab-0123456789ab"
+        directory = self.root / "Library/Application Support/PaperLensTopologyFixtureHost" / run_id
+        directory.mkdir(parents=True)
+        sentinel = directory / "external.canary"
+        sentinel.write_bytes(b"prior invocation")
+        before = sentinel.stat()
+        with mock.patch.object(verify, "current_home", return_value=self.root), mock.patch.object(verify, "no_acl") as acl:
+            control = verify.Controls(run_id)
+            with self.assertRaises(FileExistsError):
+                control.start()
+        acl.assert_not_called()
+        self.assertEqual(sentinel.read_bytes(), b"prior invocation")
+        self.assertEqual(sentinel.stat().st_ino, before.st_ino)
+        self.assertEqual(sentinel.stat().st_mode, before.st_mode)
+
+    def test_external_replaced_inode_is_rejected_before_read_or_write(self):
+        with mock.patch.object(verify, "current_home", return_value=self.root):
+            control = verify.Controls("01234567-89ab-4cde-8fab-0123456789ab")
+        control.path.parent.mkdir(parents=True)
+        control.path.write_bytes(control.marker)
+        metadata = control.path.stat()
+        control.identity = (metadata.st_dev, metadata.st_ino + 1)
+        with mock.patch.object(verify.os, "read") as read, mock.patch.object(verify.os, "write") as write:
+            with self.assertRaisesRegex(acquire.Failure, "external_fixture_identity_changed"):
+                control.check_external()
+        read.assert_not_called()
+        write.assert_not_called()
+
+
+class CurrentProfileTests(IsolatedTest):
+    def test_darwin_acl_entry_success_is_not_an_empty_acl(self):
+        for pointer, status, error, expected in ((1, 0, 0, False), (1, -1, errno.EINVAL, True), (1, -1, errno.EIO, False), (0, -1, errno.EINVAL, False), (0, -1, errno.ENOENT, True), (0, -1, errno.EPERM, False)):
+            library = mock.Mock()
+            library.acl_get_fd_np.return_value = pointer
+            library.acl_get_entry.return_value = status
+            with self.subTest(pointer=pointer, status=status, error=error), mock.patch.object(verify.ctypes, "CDLL", return_value=library), mock.patch.object(verify.ctypes, "get_errno", return_value=error):
+                self.assertEqual(verify.no_acl(self.root), expected)
+            self.assertEqual(library.acl_free.call_count, int(bool(pointer)))
+
+    def resolve(self, uid=501, effective=501, home=None, account_uid=501, reported_home=None):
+        home = self.root if home is None else home
+        account = mock.Mock(pw_uid=account_uid, pw_dir=str(home))
+        reported_home = self.root if reported_home is None else reported_home
+        with mock.patch.object(verify.sys, "platform", "darwin"), mock.patch.object(verify.os, "getuid", return_value=uid), mock.patch.object(verify.os, "geteuid", return_value=effective), mock.patch.object(verify.pwd, "getpwuid", return_value=account), mock.patch.object(Path, "home", return_value=reported_home):
+            return verify.current_home()
+
+    def test_regular_current_account_uses_os_home(self):
+        self.assertEqual(self.resolve(), self.root)
+
+    def test_root_sudo_system_and_wrong_account_are_rejected(self):
+        for args in ({"uid": 0, "effective": 0}, {"uid": 501, "effective": 0}, {"uid": 499, "effective": 499}, {"account_uid": 502}):
+            with self.subTest(args=args), self.assertRaisesRegex(acquire.Failure, "fixture_profile_mismatch"):
+                self.resolve(**args)
+
+    def test_relative_missing_symlink_and_overridden_home_are_rejected(self):
+        link = self.root / "alias"
+        link.symlink_to(self.root, target_is_directory=True)
+        for args in ({"home": Path("relative")}, {"home": self.root / "missing"}, {"home": link, "reported_home": link}, {"reported_home": self.root / "sandbox"}):
+            with self.subTest(args=args), self.assertRaisesRegex(acquire.Failure, "fixture_profile_mismatch"):
+                self.resolve(**args)
+
+    def test_missing_os_account_fails_closed_without_home_fallback(self):
+        with mock.patch.object(verify.sys, "platform", "darwin"), mock.patch.object(verify.os, "getuid", return_value=501), mock.patch.object(verify.os, "geteuid", return_value=501), mock.patch.object(verify.pwd, "getpwuid", side_effect=KeyError(501)), mock.patch.object(Path, "home") as home:
+            with self.assertRaisesRegex(acquire.Failure, "fixture_profile_mismatch"):
+                verify.current_home()
+        home.assert_not_called()
+
+    def test_signed_map_is_exact_and_contains_no_home(self):
+        path = self.root / "fixture-map.json"
+        path.write_text(json.dumps({"profile": "current-user", "groupID": verify.GROUP}))
+        verify.validate_fixture_map(path)
+        for value in ({"groupRoot": str(self.root)}, {"profile": "dedicated", "groupID": verify.GROUP}, {"profile": "current-user", "groupID": "other"}, dict(verify.FIXTURE_MAP, home=str(self.root))):
+            with self.subTest(value=value):
+                path.write_text(json.dumps(value))
+                with self.assertRaisesRegex(acquire.Failure, "fixture_map_mismatch"):
+                    verify.validate_fixture_map(path)
 
 
 class ManifestTests(IsolatedTest):
@@ -808,11 +966,11 @@ class GroupOwnerTests(IsolatedTest):
         (bundle / "Contents/Resources").mkdir()
         (bundle / "Contents/MacOS/FixtureGroupOwner").write_bytes(b"synthetic")
         (bundle / "Contents/Info.plist").write_bytes(plistlib.dumps({"CFBundleIdentifier": verify.GROUP_OWNER, "CFBundleExecutable": "FixtureGroupOwner"}))
-        (bundle / "Contents/Resources/fixture-map.json").write_text(json.dumps({"groupRoot": str(verify.HOME / "Library/Group Containers" / verify.GROUP)}))
+        (bundle / "Contents/Resources/fixture-map.json").write_text(json.dumps(verify.FIXTURE_MAP))
         return bundle
 
     def test_profile_rejection_never_launches_group_owner(self):
-        with mock.patch.object(verify, "clean_account", return_value=False), mock.patch.object(verify.subprocess, "Popen") as launch:
+        with mock.patch.object(verify, "current_home", side_effect=acquire.Failure("fixture_profile_mismatch")), mock.patch.object(verify.subprocess, "Popen") as launch:
             with self.assertRaisesRegex(acquire.Failure, "fixture_profile_mismatch"):
                 verify.GroupOwner("arm64", self.run_id)
         launch.assert_not_called()
@@ -845,7 +1003,7 @@ class GroupOwnerTests(IsolatedTest):
                 return self.status
 
         process = Process()
-        with mock.patch.object(verify, "ROOT", self.root), mock.patch.object(verify, "clean_account", return_value=True), mock.patch.object(packaging, "inspect_macho", return_value="executable"), mock.patch.object(packaging, "verify_signature") as signed, mock.patch.object(verify.subprocess, "Popen", return_value=process) as launch:
+        with mock.patch.object(verify, "ROOT", self.root), mock.patch.object(verify, "current_home", return_value=self.root), mock.patch.object(packaging, "inspect_macho", return_value="executable"), mock.patch.object(packaging, "verify_signature") as signed, mock.patch.object(verify.subprocess, "Popen", return_value=process) as launch:
             owner = verify.GroupOwner("arm64", self.run_id)
             owner.start()
             self.assertTrue(owner.ready)
@@ -861,10 +1019,20 @@ class GroupOwnerTests(IsolatedTest):
 
     def test_signature_failure_never_starts_process(self):
         self.bundle()
-        with mock.patch.object(verify, "ROOT", self.root), mock.patch.object(verify, "clean_account", return_value=True), mock.patch.object(packaging, "inspect_macho", return_value="executable"), mock.patch.object(packaging, "verify_signature", side_effect=packaging.Failure("signed_team_mismatch")), mock.patch.object(verify.subprocess, "Popen") as launch:
+        with mock.patch.object(verify, "ROOT", self.root), mock.patch.object(verify, "current_home", return_value=self.root), mock.patch.object(packaging, "inspect_macho", return_value="executable"), mock.patch.object(packaging, "verify_signature", side_effect=packaging.Failure("signed_team_mismatch")), mock.patch.object(verify.subprocess, "Popen") as launch:
             owner = verify.GroupOwner("arm64", self.run_id)
             with self.assertRaises(packaging.Failure):
                 owner.start()
+        launch.assert_not_called()
+
+    def test_wrong_signed_owner_map_never_starts_process(self):
+        bundle = self.bundle()
+        (bundle / "Contents/Resources/fixture-map.json").write_text(json.dumps(dict(verify.FIXTURE_MAP, groupRoot=str(self.root))))
+        with mock.patch.object(verify, "ROOT", self.root), mock.patch.object(verify, "current_home", return_value=self.root), mock.patch.object(packaging, "inspect_macho", return_value="executable"), mock.patch.object(packaging, "verify_signature") as signed, mock.patch.object(verify.subprocess, "Popen") as launch:
+            owner = verify.GroupOwner("arm64", self.run_id)
+            with self.assertRaisesRegex(acquire.Failure, "fixture_map_mismatch"):
+                owner.start()
+        self.assertEqual(signed.call_count, 2)
         launch.assert_not_called()
 
     def test_unavailable_owner_blocks_main_without_starting_external_controls(self):
@@ -873,7 +1041,7 @@ class GroupOwnerTests(IsolatedTest):
         owner.start.side_effect = acquire.Failure("group_owner_fixture_unavailable")
         owner.finish.return_value = None
         evidence = verify.base_evidence("arm64")
-        with mock.patch.object(verify, "HOME", self.root), mock.patch.object(verify, "REPORT", self.root / "report.json"), mock.patch.object(verify, "clean_account", return_value=True), mock.patch.object(verify, "Controls", return_value=control), mock.patch.object(verify, "GroupOwner", return_value=owner), mock.patch.object(verify, "command") as commands:
+        with mock.patch.object(verify, "current_home", return_value=self.root), mock.patch.object(verify, "Controls", return_value=control), mock.patch.object(verify, "GroupOwner", return_value=owner), mock.patch.object(verify, "command") as commands:
             with self.assertRaisesRegex(acquire.Failure, "group_owner_fixture_unavailable"):
                 verify.gui_run(self.root / "PaperLens.app", evidence)
         commands.assert_not_called()
@@ -889,15 +1057,16 @@ class GroupOwnerTests(IsolatedTest):
             verify.group_message(bad, self.run_id, "ready")
         with self.assertRaisesRegex(acquire.Failure, "group_owner_invalid_message"):
             verify.group_message(dict(ready, path="/Users/private"), self.run_id, "ready")
-        with self.assertRaisesRegex(acquire.Failure, "group_owner_fixture_unavailable"):
-            verify.group_message({"status": "blocked", "fixtureID": "G", "reason": "profileOrGroupUnavailable"}, self.run_id, "ready")
+        for reason, expected in (("profileUnavailable", "group_owner_profile_unavailable"), ("groupUnavailable", "group_owner_group_unavailable"), ("groupPathMismatch", "group_owner_group_path_mismatch"), ("groupDirectoryUnavailable", "group_owner_group_directory_unavailable"), ("fixtureUnavailable", "group_owner_fixture_unavailable"), ("invalidInvocation", "group_owner_invalid_invocation")):
+            with self.subTest(reason=reason), self.assertRaisesRegex(acquire.Failure, expected):
+                verify.group_message({"status": "blocked", "fixtureID": "G", "reason": reason}, self.run_id, "ready")
         with self.assertRaisesRegex(acquire.Failure, "group_owner_inconsistent_post"):
             verify.group_message(dict(post, absent=False), self.run_id, "post")
         with self.assertRaisesRegex(acquire.Failure, "duplicate_evidence_key"):
             verify.decode_json(b'{"status":"ready","status":"blocked"}')
 
     def test_bounded_pipe_timeout_and_oversize(self):
-        with mock.patch.object(verify, "clean_account", return_value=True):
+        with mock.patch.object(verify, "current_home", return_value=self.root):
             owner = verify.GroupOwner("arm64", self.run_id)
         read_fd, write_fd = os.pipe()
         with os.fdopen(read_fd, "rb", buffering=0) as reader, os.fdopen(write_fd, "wb", buffering=0) as writer:

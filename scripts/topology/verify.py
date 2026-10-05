@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import errno
 import json
 import os
 from pathlib import Path
@@ -30,13 +31,12 @@ from acquire import ARCHES, Failure, ROOT, clean_env, ensure_root, require, safe
 
 TEAM = "397452Z366"
 IDENTITY = "io.github.jinzer0.PaperLens"
-HOME = Path("/Users/paperlens-topology")
-REPORT = HOME / "Library/Containers" / IDENTITY / "Data/Library/Application Support/PaperLensTopology/report.json"
 SANDBOX = "com.apple.security.app-sandbox"
 NETWORK = "com.apple.security.network.client"
 INHERIT = "com.apple.security.inherit"
 GROUP = TEAM + "." + IDENTITY + ".TopologyFixture"
 GROUP_OWNER = IDENTITY + ".TopologyFixtureOwner"
+FIXTURE_MAP = {"profile": "current-user", "groupID": GROUP}
 CASE_FIELDS = ("runID", "caseID", "fixtureID", "actorInstanceRef", "operation", "ownerPre", "ownerPost", "sameUIDControl", "expectedRootMatched", "posixACLControl", "syscallResult", "errno", "sandboxDenialRef", "promptObserved", "verdict")
 
 
@@ -60,9 +60,11 @@ def base_evidence(arch, actual="unknown"):
         "requestedCPU": arch,
         "processTranslated": None,
         "automated": [],
-        "manual": [result("cleanProfile", "blocked", "human_clean_profile_confirmation_required"), result("sandboxDenialAttribution", "blocked", "per_actor_os_denial_and_posix_tcc_controls_required")],
+        "manual": [result("currentProfile", "blocked", "human_synthetic_only_consent_required"), result("cleanProfile", "blocked", "current_account_not_clean_machine_evidence"), result("sandboxDenialAttribution", "blocked", "per_actor_os_denial_and_posix_tcc_controls_required")],
         "remote": [result("notarization", "blocked", "separate_submission_authorization_required"), result("staple", "blocked", "notarization_not_performed"), result("gatekeeperCleanGUI", "blocked", "separate_clean_machine_evidence_required"), result("actualTwoCPU", "blocked", "independent_native_arm64_and_intel_receipts_required")],
         "groupOwner": {"executionStatus": "unexecuted", "runID": None, "fixtureID": "G", "ownerPre": None, "ownerPost": None, "absent": None, "posixACLControl": "unverified"},
+        "intelDynamic": result("intelDynamic", "blocked", "approved_prototype_waiver_support_unverified"),
+        "actualTwoCPU": False,
         "cases": [], "verdict": "blocked", "storyDone": False, "p1": "unverified",
     }
 
@@ -159,35 +161,59 @@ def inspect_bundle(bundle, arch, evidence):
         nested = bundle / relative
         packaging.verify_signature(nested, identifier, rights)
         fixture_map = safe_path(nested, "Contents/Resources/fixture-map.json")
-        require(read_json(fixture_map) == {"groupRoot": str(HOME / "Library/Group Containers" / GROUP)}, "fixture_map_mismatch")
+        validate_fixture_map(fixture_map)
         fixture_hashes.add(sha256(fixture_map))
     require(len(fixture_hashes) == 1, "fixture_map_hash_mismatch")
     evidence["manifest"].update(sourceCommit=inventory["sourceBaseCommit"], sourceTreeHash=inventory["sourceTreeHash"], artifactHash=inventory["artifactHash"], fixtureMapHash=fixture_hashes.pop(), entitlementHash=packaging.json_hash(entitlements), codeIdentityRefs=sorted(set(identities)))
     evidence["automated"].append(result("bundleIntegrity", "pass", "nested_signatures_hashes_arch_entitlements_verified"))
 
 
-def clean_account():
-    if sys.platform != "darwin":
-        return False
-    account = pwd.getpwuid(os.getuid())
-    return os.getuid() == os.geteuid() and os.getuid() >= 500 and account.pw_name == "paperlens-topology" and account.pw_dir == str(HOME) and Path.home() == HOME and not HOME.is_symlink()
+def validate_fixture_map(path):
+    require(read_json(path) == FIXTURE_MAP, "fixture_map_mismatch")
+
+
+def current_home():
+    """Resolve only OS account metadata; never trust an overridden HOME."""
+    require(sys.platform == "darwin", "fixture_profile_mismatch")
+    uid = os.getuid()
+    require(uid == os.geteuid() and uid >= 500, "fixture_profile_mismatch")
+    try:
+        account = pwd.getpwuid(uid)
+        home = Path(account.pw_dir)
+        require(account.pw_uid == uid and home.is_absolute() and home.is_dir() and not home.is_symlink(), "fixture_profile_mismatch")
+        require(home.resolve(strict=True) == home and Path.home() == home, "fixture_profile_mismatch")
+    except (KeyError, OSError, ValueError, RuntimeError):
+        raise Failure("fixture_profile_mismatch") from None
+    return home
 
 
 def no_acl(path):
     library = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
-    library.acl_get_file.argtypes = [ctypes.c_char_p, ctypes.c_int]
-    library.acl_get_file.restype = ctypes.c_void_p
+    library.acl_get_fd_np.argtypes = [ctypes.c_int, ctypes.c_int]
+    library.acl_get_fd_np.restype = ctypes.c_void_p
     library.acl_get_entry.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.POINTER(ctypes.c_void_p)]
     library.acl_get_entry.restype = ctypes.c_int
     library.acl_free.argtypes = [ctypes.c_void_p]
-    pointer = library.acl_get_file(os.fsencode(path), 0x100)
-    if not pointer:
-        return False
     try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return False
+    pointer = None
+    try:
+        ctypes.set_errno(0)
+        pointer = library.acl_get_fd_np(descriptor, 0x100)
+        # With a live descriptor ENOENT means no extended ACL, not a missing file.
+        if not pointer:
+            return ctypes.get_errno() == errno.ENOENT
         entry = ctypes.c_void_p()
-        return library.acl_get_entry(pointer, 0, ctypes.byref(entry)) == 0
+        ctypes.set_errno(0)
+        # Darwin returns zero when an entry EXISTS, not when the ACL is empty.
+        status = library.acl_get_entry(pointer, 0, ctypes.byref(entry))
+        return status == -1 and ctypes.get_errno() == errno.EINVAL
     finally:
-        library.acl_free(pointer)
+        if pointer:
+            library.acl_free(pointer)
+        os.close(descriptor)
 
 
 def uuid4(value):
@@ -199,8 +225,9 @@ def uuid4(value):
 def group_message(value, run_id, phase):
     require(isinstance(value, dict), "group_owner_invalid_message")
     if value.get("status") == "blocked":
-        require(set(value) == {"status", "fixtureID", "reason"} and value["fixtureID"] == "G" and value["reason"] in ("profileOrGroupUnavailable", "fixtureUnavailable"), "group_owner_invalid_message")
-        raise Failure("group_owner_fixture_unavailable")
+        reasons = {"invalidInvocation": "group_owner_invalid_invocation", "profileUnavailable": "group_owner_profile_unavailable", "groupUnavailable": "group_owner_group_unavailable", "groupPathMismatch": "group_owner_group_path_mismatch", "groupDirectoryUnavailable": "group_owner_group_directory_unavailable", "fixtureUnavailable": "group_owner_fixture_unavailable"}
+        require(set(value) == {"status", "fixtureID", "reason"} and value["fixtureID"] == "G" and value["reason"] in reasons, "group_owner_invalid_message")
+        raise Failure(reasons[value["reason"]])
     require(value.get("runID") == run_id and value.get("fixtureID") == "G", "group_owner_run_mismatch")
     if phase == "ready":
         require(set(value) == {"status", "runID", "fixtureID", "ownerPre", "expectedRootMatched", "posixACLControl"}, "group_owner_invalid_message")
@@ -215,7 +242,7 @@ def group_message(value, run_id, phase):
 class GroupOwner:
     """Own one signed fixture process and its bounded, allowlisted pipe."""
     def __init__(self, arch, run_id):
-        require(clean_account(), "fixture_profile_mismatch")
+        self.home = current_home()
         require(arch in ARCHES, "unsupported_arch")
         self.arch = arch
         self.run_id = uuid4(run_id)
@@ -239,7 +266,7 @@ class GroupOwner:
         return decode_json(line)
 
     def start(self):
-        require(clean_account(), "fixture_profile_mismatch")
+        require(current_home() == self.home, "fixture_profile_mismatch")
         bundle = safe_path(ROOT / ".build/topology" / self.arch, "products/FixtureGroupOwner.app")
         require(bundle.is_dir(), "group_owner_bundle_unavailable")
         packaging.check_tree(bundle)
@@ -250,7 +277,9 @@ class GroupOwner:
         rights = {SANDBOX: True, "com.apple.security.application-groups": [GROUP]}
         packaging.verify_signature(executable, GROUP_OWNER, rights)
         packaging.verify_signature(bundle, GROUP_OWNER, rights)
-        require(read_json(safe_path(bundle, "Contents/Resources/fixture-map.json")) == {"groupRoot": str(HOME / "Library/Group Containers" / GROUP)}, "group_owner_map_mismatch")
+        validate_fixture_map(safe_path(bundle, "Contents/Resources/fixture-map.json"))
+        # The signed owner derives expected G from its real-UID account home
+        # and compares the OS group URL before emitting expectedRootMatched.
         # No caller-supplied path, shell, environment, or product group rights.
         self.process = subprocess.Popen([str(executable), "--run-id", self.run_id], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=clean_env(), bufsize=0)
         group_message(self.receive(time.monotonic() + 10), self.run_id, "ready")
@@ -291,10 +320,11 @@ class GroupOwner:
 
 class Controls:
     def __init__(self, run_id):
-        require(clean_account(), "fixture_profile_mismatch")
+        self.home = current_home()
         self.run_id = uuid4(run_id)
         self.marker = b"PaperLens topology canary\n"
-        self.path = HOME / "Library/Application Support/PaperLensTopologyFixtureHost" / run_id / "external.canary"
+        self.path = self.home / "Library/Application Support/PaperLensTopologyFixtureHost" / run_id / "external.canary"
+        self.identity = None
         self.server = None
         self.thread = None
         self.stop = threading.Event()
@@ -306,9 +336,11 @@ class Controls:
         self.inbound_post = False
 
     def check_external(self):
+        safe_path(self.home, self.path.relative_to(self.home).as_posix())
         descriptor = os.open(self.path, os.O_RDWR | os.O_NOFOLLOW)
         try:
             metadata = os.fstat(descriptor)
+            require(self.identity == (metadata.st_dev, metadata.st_ino) and stat.S_ISREG(metadata.st_mode), "external_fixture_identity_changed")
             require(metadata.st_uid == os.getuid() and stat.S_IMODE(metadata.st_mode) == 0o600 and no_acl(self.path), "fixture_posix_acl_failed")
             require(os.read(descriptor, len(self.marker) + 1) == self.marker, "external_marker_modified")
             # Same bytes, only after checking the original marker; no repair.
@@ -372,13 +404,16 @@ class Controls:
             return False
 
     def start(self):
-        parent = safe_path(HOME, "Library/Application Support/PaperLensTopologyFixtureHost")
+        require(current_home() == self.home, "fixture_profile_mismatch")
+        parent = safe_path(self.home, "Library/Application Support/PaperLensTopologyFixtureHost")
         ensure_root(parent)
         directory = safe_path(parent, self.run_id)
         directory.mkdir(mode=0o700)  # Existing run directory is never reused.
         require(stat.S_IMODE(directory.stat().st_mode) == 0o700 and no_acl(directory), "fixture_directory_control_failed")
         with self.path.open("xb") as output:
-            os.chmod(self.path, 0o600)
+            os.fchmod(output.fileno(), 0o600)
+            metadata = os.fstat(output.fileno())
+            self.identity = (metadata.st_dev, metadata.st_ino)
             output.write(self.marker)
         self.pre = self.check_external()
         self.inbound_pre = self.listen_control()
@@ -461,12 +496,13 @@ def project_statuses(report):
 
 
 def gui_run(bundle, evidence):
-    require(clean_account(), "fixture_profile_mismatch")
+    home = current_home()
+    report_path = home / "Library/Containers" / IDENTITY / "Data/Library/Application Support/PaperLensTopology/report.json"
     run_id = str(uuid.uuid4())
     # Do not overwrite a prior owner's evidence even though the application
     # itself uses atomic report replacement. No report is read until this gate.
-    safe_path(HOME, REPORT.relative_to(HOME).as_posix())
-    require(not REPORT.exists(), "existing_owner_report_preserved")
+    require(not report_path.exists() and not report_path.is_symlink(), "existing_owner_report_preserved")
+    safe_path(home, report_path.relative_to(home).as_posix())
     controls = Controls(run_id)
     owner = GroupOwner(evidence["requestedCPU"], run_id)
     controls_started = False
@@ -480,9 +516,9 @@ def gui_run(bundle, evidence):
         require(status == 0, "gui_launch_failed")
         deadline = time.monotonic() + 60
         while time.monotonic() < deadline:
-            if REPORT.exists():
-                safe_path(HOME, REPORT.relative_to(HOME).as_posix())
-                report = read_json(REPORT, maximum=1024**2)
+            if report_path.exists():
+                safe_path(home, report_path.relative_to(home).as_posix())
+                report = read_json(report_path, maximum=1024**2)
                 evidence["cases"] = project_cases(report, run_id)
                 evidence["automated"].extend(project_statuses(report))
                 evidence["automated"].append(result("guiLaunch", "pass", "matching_synthetic_run_report"))
@@ -522,7 +558,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--arch", required=True, choices=ARCHES)
     parser.add_argument("--bundle", required=True, type=Path)
-    parser.add_argument("--confirm-clean-profile", action="store_true", help="Human attests this exact synthetic account has no added TCC/container/FDA grants; never changes permissions")
+    parser.add_argument("--confirm-current-profile", action="store_true", help="Consent to current-account synthetic-only arm64 probes; not proof of clean TCC/FDA grants; never changes permissions")
     args = parser.parse_args(argv)
     evidence = base_evidence(args.arch)
     try:
@@ -536,12 +572,15 @@ def main(argv=None):
         native = actual == args.arch and translated is False
         evidence["automated"].append(result("actualCPU", "pass" if native else "blocked", "native_not_rosetta" if native else "native_cpu_not_proven", executed=True))
         inspect_bundle(args.bundle.absolute(), args.arch, evidence)
-        if not native:
+        if args.arch != "arm64":
+            evidence["automated"].append(result("guiLaunch", "blocked", "intel_dynamic_waived_support_unverified"))
+        elif not native:
             evidence["automated"].append(result("guiLaunch", "blocked", "native_cpu_required"))
-        elif not clean_account() or not args.confirm_clean_profile:
-            evidence["automated"].append(result("guiLaunch", "blocked", "exact_clean_fixture_profile_required"))
+        elif not args.confirm_current_profile:
+            evidence["automated"].append(result("guiLaunch", "blocked", "explicit_current_profile_consent_required"))
         else:
-            evidence["manual"][0] = result("cleanProfile", "inconclusive", "human_attested_no_additional_grants_not_automatically_proven", executed=True)
+            current_home()
+            evidence["manual"][0] = result("currentProfile", "inconclusive", "synthetic_only_consent_not_clean_tcc_fda_proof", executed=True)
             gui_run(args.bundle.absolute(), evidence)
     except (Failure, packaging.Failure) as error:
         failed = str(error) in {"inventory_hash_mismatch", "artifact_hash_mismatch", "inventory_coverage_mismatch", "manifest_code_policy_mismatch", "manifest_code_kind_mismatch", "inventory_link_mismatch", "manifest_arch_mismatch", "acquisition_hash_mismatch", "dependency_lock_mismatch", "acquisition_manifest_mismatch", "source_provenance_mismatch", "signed_identifier_mismatch", "signed_team_mismatch", "signed_entitlements_mismatch", "binary_architecture_mismatch", "fixture_map_mismatch"}

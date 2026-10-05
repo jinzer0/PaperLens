@@ -16,26 +16,46 @@ enum TopologyIdentity {
     "anchor apple generic and identifier \"\(identifier)\" and certificate leaf[subject.OU] = \"397452Z366\" and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists"
   }
 
-  // HOME alone is not identity evidence. Check the OS home, bundle identity and
-  // Foundation's sandbox container URL against the same fixed container map.
-  static func container(_ identifier: String) -> URL? {
-    guard Bundle.main.bundleIdentifier == identifier,
-      let entry = getpwuid(getuid()), let home = entry.pointee.pw_dir
+  // Only OS account metadata selects the profile; sandbox HOME is not the
+  // account home. Invalid metadata must not produce a fallback fixture path.
+  static func accountHome() -> URL? {
+    let uid = getuid()
+    guard uid >= 500, geteuid() == uid,
+      let entry = getpwuid(uid), entry.pointee.pw_uid == uid,
+      let directory = entry.pointee.pw_dir,
+      let path = String(validatingCString: directory), path.hasPrefix("/"), path != "/"
     else { return nil }
-    let userHome = String(cString: home)
-    let expected = URL(fileURLWithPath: userHome)
+    let home = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL
+    var info = stat()
+    guard home.path == path, home.resolvingSymlinksInPath() == home,
+      lstat(path, &info) == 0, info.st_mode & S_IFMT == S_IFDIR
+    else { return nil }
+    return home
+  }
+
+  // Check the bundle identity and actual sandbox container against the same
+  // OS-derived account home, never using sandbox HOME to select the profile.
+  static func container(_ identifier: String) -> URL? {
+    guard Bundle.main.bundleIdentifier == identifier, let home = accountHome()
+    else { return nil }
+    let expected = home
       .appendingPathComponent("Library/Containers/\(identifier)/Data", isDirectory: true)
     let actual = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true).standardizedFileURL
+    var info = stat()
     guard actual == expected.standardizedFileURL,
-      actual.resolvingSymlinksInPath() == actual
+      actual.resolvingSymlinksInPath() == actual,
+      lstat(actual.path, &info) == 0, info.st_mode & S_IFMT == S_IFDIR
     else { return nil }
     return actual
   }
 }
 
 enum TopologyFixtures {
-  static let home = "/Users/paperlens-topology"
-  static let groupRoot = home + "/Library/Group Containers/" + TopologyIdentity.group
+  static var home: String? { TopologyIdentity.accountHome()?.path }
+  static var groupRoot: String? {
+    guard let home else { return nil }
+    return home + "/Library/Group Containers/" + TopologyIdentity.group
+  }
   static let aliases = ["M", "A", "C", "E", "G", "PDF"]
   static let nonce = Data("PaperLensTopology\n".utf8)
   private static let syntheticPDF: Data = {
@@ -68,21 +88,21 @@ enum TopologyFixtures {
   }
 
   static func profileMatches(_ identifier: String) -> Bool {
-    guard let root = TopologyIdentity.container(identifier) else { return false }
+    guard groupMapMatches(), let home, let root = TopologyIdentity.container(identifier)
+    else { return false }
     return root.path == home + "/Library/Containers/\(identifier)/Data"
   }
 
   static func groupMapMatches() -> Bool {
     guard let url = Bundle.main.url(forResource: "fixture-map", withExtension: "json"),
       let bytes = try? Data(contentsOf: url), bytes.count <= 4096,
-      let map = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any],
-      let root = map["groupRoot"] as? String
+      let map = try? JSONSerialization.jsonObject(with: bytes) as? [String: String]
     else { return false }
-    return root == groupRoot
+    return map == ["profile": "current-user", "groupID": TopologyIdentity.group]
   }
 
   static func path(_ alias: String, runID: String) -> String? {
-    guard validRunID(runID) else { return nil }
+    guard validRunID(runID), groupMapMatches(), let home else { return nil }
     let main = home + "/Library/Containers/" + TopologyIdentity.main + "/Data"
     let agent = home + "/Library/Containers/" + TopologyIdentity.agent + "/Data"
     switch alias {
@@ -94,7 +114,8 @@ enum TopologyFixtures {
       return home
         + "/Library/Application Support/PaperLensTopologyFixtureHost/\(runID)/external.canary"
     case "G":
-      return groupMapMatches() ? groupRoot + "/PaperLensTopology/\(runID)/group.canary" : nil
+      guard let groupRoot else { return nil }
+      return groupRoot + "/PaperLensTopology/\(runID)/group.canary"
     default: return nil
     }
   }
@@ -107,16 +128,21 @@ enum TopologyFixtures {
   // concurrently replaced ancestor may redirect creation into user files.
   static func directory(_ url: URL, create: Bool) -> Int32? {
     guard url.isFileURL, url.path.hasPrefix("/") else { return nil }
-    var fd = open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW)
+    var fd = open("/", O_SEARCH | O_CLOEXEC | O_NOFOLLOW)
     guard fd >= 0 else { return nil }
     for part in url.pathComponents.dropFirst() {
-      if create && mkdirat(fd, part, 0o700) != 0 && errno != EEXIST {
-        let failure = errno
-        close(fd)
-        errno = failure
-        return nil
+      // Ancestors need search, not directory listing or write permission.
+      // Try existing metadata first; create only a genuinely missing segment.
+      var next = openat(fd, part, O_SEARCH | O_CLOEXEC | O_NOFOLLOW)
+      if next < 0 && errno == ENOENT && create {
+        if mkdirat(fd, part, 0o700) != 0 && errno != EEXIST {
+          let failure = errno
+          close(fd)
+          errno = failure
+          return nil
+        }
+        next = openat(fd, part, O_SEARCH | O_CLOEXEC | O_NOFOLLOW)
       }
-      let next = openat(fd, part, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW)
       let failure = next < 0 ? errno : 0
       close(fd)
       guard next >= 0 else {

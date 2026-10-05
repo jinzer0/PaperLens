@@ -1,6 +1,7 @@
 import asyncio
 import errno
 import importlib.util
+import json
 import os
 from pathlib import Path
 import sys
@@ -321,7 +322,11 @@ class RuntimeProbeTests(unittest.TestCase):
             resources = base / 'Bundle/Contents/Resources'
             container = base / 'Library/Containers' / agent.AGENT_ID / 'Data'
             container.mkdir(parents=True)
-            home = container / 'codex'
+            runtime_root = container / 'Library/Application Support/PaperLensTopologyRuntime'
+            runtime_root.mkdir(parents=True, mode=0o700)
+            invocation = runtime_root / str(uuid.uuid4())
+            invocation.mkdir(mode=0o700)
+            home = invocation / 'codex'
             sdk = ModuleType('openai_codex')
             sdk.__file__ = str(resources / 'openai_codex/__init__.py')
             sdk.__version__ = '0.160.0'
@@ -339,7 +344,7 @@ class RuntimeProbeTests(unittest.TestCase):
                     patch.object(agent.platform, 'machine', return_value='arm64'), \
                     patch.object(Path, 'is_file', return_value=True), \
                     patch.object(Path, 'home', return_value=container), \
-                    patch.object(agent.pwd, 'getpwuid', return_value=SimpleNamespace(pw_dir=str(base))), \
+                    patch.object(agent, 'fixture_profile', return_value=(base, container)), \
                     patch.dict(os.environ, {'CODEX_HOME': str(home)}), \
                     patch.dict(sys.modules, {'openai_codex': sdk, 'openai_codex.client': client_module}):
                 worker = threading.Thread(target=run)
@@ -397,13 +402,184 @@ class RuntimeProbeTests(unittest.TestCase):
                 runtime.run(str(uuid.uuid4()))
 
 
-class FixtureTests(unittest.TestCase):
-    def test_missing_profile_does_not_touch_user_data(self):
+class ProfileTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.home = Path(temporary.name).resolve()
+        self.container = self.home / 'Library/Containers' / agent.AGENT_ID / 'Data'
+        self.container.mkdir(parents=True)
+        self.resources = self.home / 'Bundle/Contents/Resources'
+        self.resources.mkdir(parents=True)
+        self.map_path = self.resources / 'fixture-map.json'
+        self.map_path.write_text(json.dumps({'profile': 'current-user', 'groupID': agent.GROUP_ID}))
+        self.account = SimpleNamespace(pw_uid=501, pw_dir=str(self.home))
+        real_lstat = Path.lstat
+        def owned_metadata(path):
+            values = list(real_lstat(path))
+            values[4] = 501
+            return os.stat_result(values)
+        for context in (
+            patch.object(agent.os, 'getuid', return_value=501),
+            patch.object(agent.os, 'geteuid', return_value=501),
+            patch.object(agent.pwd, 'getpwuid', return_value=self.account),
+            patch.object(agent, '__file__', str(self.resources / 'agent.py')),
+            patch.object(Path, 'home', return_value=self.container),
+            patch.object(Path, 'lstat', new=owned_metadata),
+            patch.dict(os.environ, {'HOME': str(self.container)}),
+        ):
+            context.start()
+            self.addCleanup(context.stop)
+
+    def test_current_account_derives_only_invocation_synthetic_targets(self):
         fixtures = agent.Fixtures()
-        fake_user = type('User', (), {'pw_dir': '/not-the-fixture-profile'})()
-        with patch.object(agent.pwd, 'getpwuid', return_value=fake_user):
+        run = str(uuid.uuid4())
+        self.assertEqual(fixtures.roots(), (
+            self.container, self.home / 'Library/Containers' / agent.MAIN_ID / 'Data'))
+        fixtures.prepare(run)
+        with patch.object(fixtures, 'access') as access:
+            for case, target in (
+                ('mainRead', self.home / 'Library/Containers' / agent.MAIN_ID / 'Data/Library/Application Support/PaperLensTopology' / run / 'db.canary'),
+                ('externalRead', self.home / 'Library/Application Support/PaperLensTopologyFixtureHost' / run / 'external.canary'),
+                ('groupRead', self.home / 'Library/Group Containers' / agent.GROUP_ID / 'PaperLensTopology' / run / 'group.canary'),
+            ):
+                self.assertEqual(fixtures.probe(run, case), {'outcome': 'allowed', 'reason': 'none'})
+                access.assert_called_with(target, write=False, follow=False)
+        self.assertEqual(fixtures.cleanup(run), {'absent': True})
+
+    def test_root_system_and_sudo_uids_fail_before_account_lookup(self):
+        for uid, euid in ((0, 0), (499, 499), (501, 0), (501, 502)):
+            with self.subTest(uid=uid, euid=euid), \
+                    patch.object(agent.os, 'getuid', return_value=uid), \
+                    patch.object(agent.os, 'geteuid', return_value=euid), \
+                    patch.object(agent.pwd, 'getpwuid') as lookup:
+                with self.assertRaises(PermissionError):
+                    agent.Fixtures().prepare(str(uuid.uuid4()))
+                lookup.assert_not_called()
+
+    def test_invalid_account_home_fails_without_fixture_creation(self):
+        link = self.home / 'home-link'
+        link.symlink_to(self.home, target_is_directory=True)
+        file = self.home / 'home-file'
+        file.write_bytes(b'preserve')
+        for uid, home in ((502, str(self.home)), (501, 'relative'), (501, '/'),
+                          (501, str(link)), (501, str(file)), (501, str(self.home / 'missing'))):
+            with self.subTest(home=home), patch.object(
+                    agent.pwd, 'getpwuid', return_value=SimpleNamespace(pw_uid=uid, pw_dir=home)):
+                with self.assertRaises((PermissionError, FileNotFoundError)):
+                    agent.Fixtures().prepare(str(uuid.uuid4()))
+        self.assertEqual(file.read_bytes(), b'preserve')
+        self.assertFalse((self.container / 'Library').exists())
+
+    def test_foreign_home_owner_is_rejected(self):
+        real_lstat = Path.lstat
+        def foreign_metadata(path):
+            values = list(real_lstat(path))
+            if path == self.home:
+                values[4] = 502
+            return os.stat_result(values)
+        with patch.object(Path, 'lstat', new=foreign_metadata):
             with self.assertRaises(PermissionError):
-                fixtures.prepare(str(uuid.uuid4()))
+                agent.fixture_profile()
+
+    def test_map_rejects_old_profile_extra_fields_wrong_group_and_duplicates(self):
+        for value in (
+            '{"profile":"dedicated","groupID":"' + agent.GROUP_ID + '"}',
+            json.dumps({'profile': 'current-user', 'groupID': 'arbitrary'}),
+            json.dumps({'profile': 'current-user', 'groupID': agent.GROUP_ID, 'home': str(self.home)}),
+            '{"profile":"current-user","profile":"current-user","groupID":"' + agent.GROUP_ID + '"}',
+            '[]', '{}', 'not JSON',
+        ):
+            with self.subTest(value=value):
+                self.map_path.write_text(value)
+                with self.assertRaises((PermissionError, ValueError)):
+                    agent.fixture_profile()
+        self.assertFalse((self.container / 'Library').exists())
+
+    def test_symlink_map_and_container_are_rejected(self):
+        saved_map = self.map_path.with_name('saved-map.json')
+        self.map_path.rename(saved_map)
+        self.map_path.symlink_to(saved_map)
+        with self.assertRaises(OSError):
+            agent.fixture_profile()
+        self.map_path.unlink()
+        saved_map.rename(self.map_path)
+        saved_container = self.container.with_name('saved-Data')
+        self.container.rename(saved_container)
+        self.container.symlink_to(saved_container, target_is_directory=True)
+        with self.assertRaises(PermissionError):
+            agent.fixture_profile()
+
+    def test_missing_oversized_and_nonregular_map_fail_closed(self):
+        self.map_path.unlink()
+        with self.assertRaises(FileNotFoundError):
+            agent.fixture_profile()
+        self.map_path.write_bytes(b' ' * 4097)
+        with self.assertRaises(PermissionError):
+            agent.fixture_profile()
+        self.map_path.unlink()
+        self.map_path.mkdir()
+        with self.assertRaises((PermissionError, IsADirectoryError)):
+            agent.fixture_profile()
+        self.assertFalse((self.container / 'Library').exists())
+
+    def test_foreign_container_owner_is_rejected(self):
+        real_lstat = Path.lstat
+        def foreign_metadata(path):
+            values = list(real_lstat(path))
+            if path == self.container:
+                values[4] = 502
+            return os.stat_result(values)
+        with patch.object(Path, 'lstat', new=foreign_metadata):
+            with self.assertRaises(PermissionError):
+                agent.fixture_profile()
+
+    def test_home_environment_cannot_select_another_profile(self):
+        for home in (self.home, self.home / 'other-container'):
+            with self.subTest(home=home), patch.dict(os.environ, {'HOME': str(home)}):
+                with self.assertRaises(PermissionError):
+                    agent.fixture_profile()
+        with patch.object(Path, 'home', return_value=self.home):
+            with self.assertRaises(PermissionError):
+                agent.fixture_profile()
+
+    def test_existing_current_user_fixture_is_preserved_and_blocks(self):
+        fixtures = agent.Fixtures()
+        run = str(uuid.uuid4())
+        own, _ = fixtures.own_paths(run)
+        own.parent.mkdir(parents=True)
+        own.write_bytes(b'prior invocation')
+        before = set(self.container.rglob('*'))
+        with self.assertRaises(FileExistsError):
+            fixtures.prepare(run)
+        self.assertEqual(own.read_bytes(), b'prior invocation')
+        self.assertEqual(set(self.container.rglob('*')), before)
+        self.assertNotIn(run, fixtures.owned)
+
+    def test_runtime_rejects_arbitrary_codex_home_before_sdk_import(self):
+        runtime_root = self.container / 'Library/Application Support/PaperLensTopologyRuntime'
+        runtime_root.mkdir(parents=True, mode=0o700)
+        invocation = runtime_root / str(uuid.uuid4())
+        invocation.mkdir(mode=0o700)
+        target = invocation / 'existing-config'
+        target.mkdir(mode=0o700)
+        (target / 'auth.json').write_bytes(b'never read')
+        link = invocation / 'codex'
+        link.symlink_to(target, target_is_directory=True)
+        for home in (self.home / 'credentials', self.container / 'codex',
+                     runtime_root / 'not-a-uuid/codex', link):
+            with self.subTest(home=home), \
+                    patch.dict(os.environ, {'CODEX_HOME': str(home)}), \
+                    patch.object(Path, 'is_file', return_value=True), \
+                    patch.object(agent.platform, 'machine', return_value='arm64'), \
+                    patch.object(agent.importlib, 'import_module') as sdk_import:
+                with self.assertRaises((PermissionError, ValueError)):
+                    agent.RuntimeProbe().run(str(uuid.uuid4()))
+                sdk_import.assert_not_called()
+        self.assertEqual((target / 'auth.json').read_bytes(), b'never read')
+
+
+class FixtureTests(unittest.TestCase):
 
     def test_errno_is_observation_not_sandbox_pass(self):
         self.assertEqual(agent.Fixtures.denial(OSError(errno.ENOENT, 'path')),
