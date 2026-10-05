@@ -59,7 +59,7 @@ context:
 
 **Execution:**
 
-- [ ] Preflight — Swift 6.3.3을 제공하는 Xcode/toolchain의 실제 가용성, Developer ID Team/identities, notary credential reference, Intel 실행 경로를 확인한다. 현재 관측은 Xcode 27.0 (27A266a), SDK 27.0, Swift 6.4, arm64이므로 승인 stack 충족 증거가 아니다. 설치/선택 변경은 이 작성 단계에서 하지 않았다. 필요한 환경을 확보하지 못하면 source 구현에 앞서 blocked로 기록한다.
+- [ ] Preflight — 승인된 compiler/SDK 조합, Developer ID Team/identities, notary credential reference, Intel 실행 경로를 확인한다. 사용자가 추가 설치를 명시적으로 승인하여 Swift 6.3.3을 설치했지만 Xcode 27 SDK 조합의 Foundation smoke compile은 실패했다. 명세 계약/로컬 build 환경을 먼저 해소한다. Intel·notary의 실제 성공 증거는 해당 검증 단계와 Story 완료의 조건이지 prototype 작성 전에 실증을 끝내야 한다는 뜻이 아니다.
 - [ ] Launch/topology — 아래 embedded XPC 후보와 entitlement map을 사용해 독립 identity와 private zone을 검증한다. Main sandbox를 상속한 일반 child를 별도 Agent로 오인하지 않는다. 후보 runtime/dependency closure와 fixture 계약을 먼저 닫고 새 SHA 승인을 받은 뒤 prototype을 구현한다. 문서 근거는 실제 격리 성공의 증거가 아니다.
 - [ ] 실제 구성요소 — PDFium은 승인 commit `ad5bc13610718aefe737bd9b2f1b258d08e39428`을 패키징/로드하고 Agent는 packaged official Python SDK/runtime/CLI 실행을 확인한다. PDF 추출·인증 요청 없이 실제 loader/process topology를 검증한다. 후보 버전/hash는 재현용으로 기록하되 P-2 최종 lock으로 표기하지 않는다.
 - [ ] 최소 wire — 아래 `topology-v1` 제안의 fields/numeric limits를 `Contracts/ProviderRPC`에서 단일 정의하고 native/Agent 양쪽이 같은 fixtures로 검증한다. 제품 operation별 P-3/Story 1.9 계약 완료로 승격하지 않는다.
@@ -75,7 +75,7 @@ context:
 
 ## Design Notes
 
-- 이 Spec은 **draft, 실행 차단 상태**다. 아래는 공식 문서를 바탕으로 구체화한 후보이며 승인되거나 실증된 설계가 아니다. dependency closure·시험 fixture·실행 환경의 차단 조건이 남아 있으므로 아직 IMPLEMENTATION 승인을 요청하지 않는다. 현재 사용자 지시는 작성 계속이며 이전의 일반 IMPLEMENTATION 발언을 미래 SHA에 소급 적용하지 않는다.
+- 이 Spec은 **draft, 실행 차단 상태**다. 아래는 공식 문서를 바탕으로 구체화한 후보이며 실증된 설계가 아니다. dependency closure·실행 환경의 차단 조건이 남아 있다. 사용자는 명세 조사 계속 및 별도 질문의 “6.3.3 추가 설치·환경 검증 승인”을 선택했다. 그 질문에서 수정된 최종 명세의 구현 승인은 새 SHA로 별도 확인한다고 명시했다. 일반 “승인” 발언을 아직 작성되지 않은 revision의 IMPLEMENTATION 승인으로 소급/확장하지 않는다.
 - Intel은 적합한 GitHub Actions runner를 우선 조사하되 실제 runner 가용성·Xcode·signing 권한·GUI/Gatekeeper 증거를 확인해야 한다. 충족하지 못하면 별도 Intel Mac/self-hosted 환경이 필요하다. 현재 원격 실행/권한/Intel 환경은 확인되지 않았다.
 - PRODUCT baseline: `5eac3bb9424ad893eca7d63bc319b71f580838ed`. ARCHITECTURE baseline: `cdabe4419606ab0c1efebcfeb79bded0fe344512`. 관련 AD-2/4/7/13, AR-002~005/020, FR-002/005/035 선행 검증, R-005/007을 추적한다.
 - Story 원본: `bmad-docs/planning-artifacts/epics.md` §1.1. 작성 시 파일 SHA-256: `0dbed1d4dac4435b8ce29a3fd8bfe273f730f99e8c5f4a98a2e76a33bee75434`. 기존 untracked planning/governance 파일은 이 작업의 커밋에 임의 포함하지 않는다. 위 AC·범위는 원본의 Story 1.1 경계를 이 커밋에 보존한다.
@@ -140,7 +140,7 @@ Agent는 자기가 해석한 private container 안에만 cwd/HOME/TMPDIR/CODEX_H
 | `topology.wait` | `{durationMs:integer}` (`1..5000`) | `{elapsed:bool}` — cancellation/deadline 경쟁 검증용, I/O 없음 |
 | `cancel` | `{targetID:UUID}` | `{accepted:bool}` |
 
-`caseID`는 `ownZoneReadWrite`, `mainCanaryRead`, `mainCanaryWrite`, `externalCanaryRead`, `externalCanaryWrite`, `mainCanarySymlinkRead`, `externalCanarySymlinkRead`, `inboundListen`의 닫힌 목록이다. `reason`은 `none`, `permissionDenied`, `missingFixture`, `controlFailed`, `unexpectedErrno`뿐이다. `permissionDenied`만으로 sandbox 귀속을 확정하지 않고 아래 별도 증거를 요구한다. arbitrary path/URL/command/JSON passthrough는 금지한다. 시험 fixture의 위치/소유권 매핑은 승인 전 추가로 고정해야 한다.
+`caseID`는 `ownZoneReadWrite`, `mainCanaryRead`, `mainCanaryWrite`, `externalCanaryRead`, `externalCanaryWrite`, `mainCanarySymlinkRead`, `externalCanarySymlinkRead`, `foreignGroupCanaryRead`, `foreignGroupCanaryWrite`, `foreignGroupCanarySymlinkRead`, `inboundListen`의 닫힌 목록이다. `reason`은 `none`, `permissionDenied`, `missingFixture`, `controlFailed`, `unexpectedErrno`뿐이다. `permissionDenied`만으로 sandbox 귀속을 확정하지 않고 아래 별도 증거를 요구한다. arbitrary path/URL/command/JSON passthrough는 금지한다. fixture 위치는 아래 고정 map만 사용한다.
 
 동시에 outstanding request 최대 4개(일반 3개 + cancel 전용 1개), 각 방향 queued frame 최대 4개/262160 bytes, 연결당 request 총수 최대 256개 후 정상 종료한다. 넘친 신규 유효 request는 `busy`, framing/중복 ID/해석 불가능한 envelope/queue overflow는 fail-closed 연결 종료다. 이 revision의 chunk/event/stream 수는 **0**이며 streaming operation을 허용하지 않는다. child stdout은 frame 전용, stderr는 읽어 버리며 저장하지 않는다.
 
@@ -157,20 +157,64 @@ Agent는 자기가 해석한 private container 안에만 cwd/HOME/TMPDIR/CODEX_H
 | 같은 release의 `codex-x86_64-apple-darwin.tar.gz` | `d00bdeb113c2cb42b43fbe4916b681ab1405772ac38fc8ac7fa9cc0934d1d0aa` | Intel CLI 후보 [D3] |
 | PDFium | commit `ad5bc13610718aefe737bd9b2f1b258d08e39428` | 승인 pin 유지; source/dependency/binary inventory 미수집 |
 
-`rust-v0.150.1/sdk/python/pyproject.toml`도 CLI-bin `0.147.0`을 의존한다 [D4]. 따라서 SDK와 CLI가 같은 버전 번호라고 가정한 lock은 금지한다. SDK의 명시적 packaged `codex_bin` 설정으로 0.150.1을 선택할 수 있는지, 요구 runtime/package의 중복 포함 및 실제 protocol 호환성을 확인한 뒤 후보 pair를 확정해야 한다. 최신 SDK 0.160.0/CLI-bin 0.160.0 metadata도 확인했지만 대체 채택하지 않았다.
+`rust-v0.150.1/sdk/python/pyproject.toml`도 CLI-bin `0.147.0`을 의존한다 [D4]. Python release tag `python-v0.147.0`의 commit은 `025a88adbd7ae4d448fc938b28d0446eb1753317`, CLI `rust-v0.150.1` commit은 `90854393966b21e9ebfd21b122334eb09a20c93d`로 확인했다. Python SDK의 `resolve_codex_bin()`은 명시 경로가 있으면 runtime 탐색을 우회하고 경로가 없으면 실패한다 [D5]. 따라서 **실행 후보 SDK 0.147.0 → CLI 0.150.1**은 가능하지만 실제 protocol 호환 성공은 아직 미검증이다.
+
+이 override는 SDK의 unconditional `openai-codex-cli-bin==0.147.0` 의존성을 없애지 않는다. 원본 metadata를 지키면 비선택 CLI 0.147.0도 포함·서명해야 하며, 이를 제외한 `--no-deps` 설치를 공식 완결 패키징으로 표현하지 않는다. 불필요한 중복 runtime을 채택하기 전에 stack 선택을 확정한다. 대안인 SDK/CLI-bin 0.160.0 일치 pair는 metadata가 존재하지만 compatibility target 변경이므로 architecture 변경안 작성·새 SHA 승인 없이는 채택하지 않는다.
+
+SDK `start()`는 `os.environ.copy()` 뒤 `config.env`를 합친다. `CodexConfig.env`만으로 allowlist를 강제할 수 없으므로 Agent가 **Python 프로세스 시작 전에** 새 환경을 구성한다. 명시 packaged `codex_bin`과 private `cwd`를 사용하고 `launch_args_override`는 사용하지 않는다. no-auth smoke는 SDK import → `Codex` context의 initialize/initialized → close 및 실제 child 종료 확인까지만 수행한다. close는 별도 shutdown RPC가 아니라 stdin close/terminate/wait/kill 경로다. login/account/models/thread/turn을 호출하지 않는다. no-auth가 network-free 또는 filesystem-free라는 뜻은 아니다.
 
 위 hash는 **upstream metadata 값**이며 로컬 binary를 다운로드·계산·실행한 증거가 아니다. CPython 배포형태/버전/source hash, Pydantic 및 native extension 등 전이 dependencies, PDFium build inputs, 전체 nested executable inventory는 아직 미확정이다. 이 closure를 채우기 전에는 구현 승인 가능한 lock이라고 표현하지 않는다.
+
+### Synthetic fixture 및 증거 계약
+
+이 절은 실행 결과가 아닌 시험 설계다. 별도 시험계정의 home `H=/Users/paperlens-topology`를 두 CPU에서 동일하게 사용한다. 현재 사용자 계정에 이 fixture를 만들지 않는다. `r`은 검증된 runID, `M0=H/Library/Containers/io.github.jinzer0.PaperLens/Data`, `A0=H/Library/Containers/io.github.jinzer0.PaperLens.ProviderAgent/Data`다. 소유 process가 실제 container URL과 고정 map의 일치를 확인하며 불일치 시 다른 경로로 대체하지 않는다.
+
+| Alias | 고정 경로 | 생성·검증·정리 owner |
+| --- | --- | --- |
+| M | `M0/Library/Application Support/PaperLensTopology/r/db.canary` | Main |
+| A | `A0/Library/Application Support/PaperLensTopology/r/secret.canary` | Agent |
+| C | `A0/Library/Caches/PaperLensTopology/r/cache.canary` | Agent |
+| E | `H/Library/Application Support/PaperLensTopologyFixtureHost/r/external.canary` | 제품 밖의 같은 UID 비-sandbox 시험 harness |
+| G | `G0/PaperLensTopology/r/group.canary` | 제품 밖의 signed sandbox fixture-group-owner |
+| PDF | `M0/Library/Application Support/PaperLensTopology/r/input.pdf` | Main |
+
+`G0`는 같은 승인 Team의 fixture 전용 group `TEAMID.io.github.jinzer0.PaperLens.TopologyFixture`를 가진 owner가 OS로부터 얻고 검증한 실제 group URL이다. 두 CPU의 signed fixture-map은 같은 값을 사용한다. 임의 폴더를 만들어 group이라고 부르지 않는다. Main/Agent/PDFium에는 이 group entitlement를 주지 않는다. 시험용 owner 두 개는 `Tests/Topology/` 경계 안에서만 만들고 배포 앱에 포함하지 않는다. group provisioning이 준비되지 않으면 해당 검사는 blocked다.
+
+Agent는 signed map과 runID만으로 M/E/G 경로를 계산한다. 보호 canary fd/bookmark/security-scoped URL은 전달하지 않는다. Main/Agent의 synthetic marker는 공개된 고정 bytes이며 실제 DB/Secrets/Cache 기능이 아니다. 새 fixture만 exclusive 생성하며 기존 파일이나 symlink를 덮어쓰지 않는다. directory `0700`, file `0600`, 같은 UID 및 추가 ACL 없음의 positive control을 기록한다.
+
+| Actor | 대상 | 연산 및 기대 |
+| --- | --- | --- |
+| 각 owner | 자기 M/A/C/E/G | 시험 전후 기존 파일 read/write 성공, marker 훼손 확인 |
+| Agent | M/E/G 각각 | read, 기존 파일 1-byte write, 자기 zone의 고정-target symlink를 통한 read 모두 sandbox 거부 |
+| Main | A/C 각각 | 위 세 연산 모두 sandbox 거부 |
+| PDFium XPC | M/A/C/E/G 각각 | 위 세 연산 모두 sandbox 거부 |
+| PDFium XPC | PDF | 전달된 fd read 성공·write 거부; 고정 원래 경로의 reopen-write는 별도로 sandbox 거부 |
+
+금지 write 검사는 create/truncate하지 않는다. owner는 예상치 못한 write를 확인하기 전에 marker를 복원하지 않는다. Agent `ownZoneReadWrite`는 A/C를 함께 확인한다. 동일 UID 비-sandbox control도 고정 synthetic 경로만 사용한다. 보호 container에 대한 control이 TCC로 막히면 FDA를 부여해 우회하지 않고 inconclusive다.
+
+Network 통제 endpoint는 시험 harness의 `127.0.0.1:18765`이며 고정 synthetic nonce만 송수신한다. Main/Agent 연결 성공을 전후 확인하고 PDFium의 connect 거부를 검사한다. Agent의 inbound listen 검사는 `127.0.0.1:18766`에서 수행하고 비-sandbox harness로 전후 정상 bind/listen control을 둔다. 각 network 작업 timeout은 2000 ms다. 이미 사용 중인 port의 process를 중단하지 않으며 EADDRINUSE/ECONNREFUSED/timeout은 sandbox PASS가 아니다. loopback 거부가 실제로 성립하지 않으면 성공으로 꾸미지 않는다.
+
+Manifest 필드는 `schemaRevision, sourceCommit, artifactHash, fixtureMapHash, entitlementHash, OSBuild, actualCPU, codeIdentityRefs`로 고정한다. Case 필드는 `runID, caseID, fixtureID, actorInstanceRef, operation, ownerPre, ownerPost, sameUIDControl, expectedRootMatched, posixACLControl, syscallResult, errno, sandboxDenialRef, promptObserved, verdict`다. `verdict`는 pass/failed/blocked/inconclusive다. denied syscall과 정상 control, 해당 actor/operation/fixture로 귀속되는 OS App Sandbox denial 관측이 모두 있어야 거부 PASS다. raw OS 로그는 저장하지 않으며 denial reference는 safe-code projection만 가리킨다. 개인 절대경로·username·marker 내용·환경·credential은 저장하지 않고 M/A/C/E/G/PDF alias를 사용한다.
+
+### 승인된 toolchain 설치와 실제 실패 기록
+
+- 사용자 선택: **“6.3.3 추가 설치·환경 검증 승인”**. 공식 문서의 `installer -target CurrentUserHomeDirectory -pkg …` 방식으로 사용자 Toolchains에 추가 설치했다. 전역 Xcode 선택과 shell 설정은 바꾸지 않았다.
+- 설치 파일: `swift-6.3.3-RELEASE-osx.pkg`, 로컬 계산 SHA-256 `ee82e57774d6650f94aa06302435d6f44a055b9411698db8ecb85d9a3bcc91d0`. `pkgutil --check-signature`에서 `Developer ID Installer: Swift Open Source (V9AUD2URP3)`와 Apple notary trusted를 확인한 뒤 설치했다. 이는 **Swift 배포자 패키지** 검증이지 PaperLens 서명·공증이 아니다.
+- 설치 결과 success; toolchain ID는 `org.swift.633202606251a`. `xcrun --toolchain org.swift.633202606251a swift --version` 및 직접 binary 실행은 **Swift 6.3.3**을 보고했다. 초기 absolute-path `--toolchain` 호출은 default 6.4로 해석됐으므로 확인된 identifier만 사용한다.
+- `/tmp`의 제품과 무관한 최소 Foundation/UUID smoke를 `-sdk <Xcode 27 macOS SDK> -target arm64-apple-macosx15.0`으로 컴파일했다. 결과 **failed**: `unknown argument: '-target-arch-variant'`, 이어서 `cannot find 'UUID' in scope`. `TOOLCHAINS=org.swift.633202606251a`와 직접 swiftc를 지정한 재검사도 동일 실패였다. 실행 binary는 얻지 못했다.
+- 동일 입력/SDK/target의 default Swift 6.4 control은 compile·실행 성공, 예상 UUID `00000000-0000-0000-0000-000000000001`을 출력했다. 실행 뒤에도 default compiler는 6.4, `xcode-select -p`는 기존 `/Applications/Xcode.app/Contents/Developer`였다. 이 control 성공은 stack 변경 승인이나 PaperLens 테스트 통과가 아니다.
+- 따라서 “Swift 6.3.3 설치됨”과 “앱 build 가능”은 다르다. 현 조합은 blocked다. Apple 표는 Xcode 26.6을 Swift 6.3 계열/macOS SDK 26.5로 분류한다 [E3]. 호환 Xcode를 별도 확보·검증하거나, 기존 Xcode 27/Swift 6.4로 stack 변경안을 작성하고 해당 architecture SHA를 재승인해야 한다. 26.6이 정확히 6.3.3을 제공한다거나 설치 후 반드시 성공한다고 단정하지 않는다.
 
 ### 환경 및 승인 전 차단 목록
 
 | 항목 | 이번에 확인한 사실 | 해제 조건 |
 | --- | --- | --- |
-| Swift | local Xcode 27.0/SDK 27.0/Swift 6.4; 일반 Xcode 및 시스템/사용자 Toolchains 위치에 추가 toolchain 없음. Swift.org는 6.3.3 macOS pkg를 제공 [E1] | 설치/선택 변경 별도 허용 후 실제 6.3.3 compiler와 Xcode/SDK 조합 검증; 현재 컴파일 미수행 |
+| Swift | 사용자 영역에 6.3.3 설치/버전 확인 성공, Xcode 27 SDK Foundation compile 실패 | 호환 Xcode/SDK 확보 또는 Swift 6.4 stack 변경안과 architecture 재승인 |
 | Developer ID | `security find-identity -v -p codesigning` 결과 valid Developer ID Application identity **1개**. 이름·fingerprint·private key 미출력 | 사용 Team/identity 선택과 key 접근/서명 가능성 확인; identity 존재를 서명 성공으로 간주하지 않음 |
 | Notary | credential 내용/저장소 미조회, 제출 없음 | 사용 credential reference 및 공증 제출 명시적 지시 |
 | Intel | GitHub 문서에 `macos-15-intel`/`macos-26-intel` 존재 [E2]; 저장소 self-hosted runner API 결과 0개 | 실제 Intel 실행 경로/원격 실행 지시 확보. hosted label 존재는 job 실행/GUI Gatekeeper 증거 아님 |
 | Dependency | 위 SDK/CLI pair·CPython·전이 hash closure 미확정 | 승인 compatibility target 유지한 실제 package map과 immutable hashes 고정 |
-| Fixture/증거 | synthetic owner-positive-control 원칙만 확정 | protected container·외부 파일·app-group별 **실재** fixture, 통제 endpoint, sandbox denial 귀속 방법과 safe evidence schema 고정 |
+| Fixture/증거 | 고정 map·owner·case matrix·통제 endpoint·safe evidence fields 명세화 | 별도 시험계정/group의 실제 준비 및 각 CPU 실행 시 denial 귀속 검증; 아직 미실행 |
 | Approval | IMPLEMENTATION 승인 없음 | 위 명세 차단 항목 해소 후 새 Spec commit SHA에 대한 명시적 승인 |
 
 시험 harness는 sandbox 거부와 Unix mode/ACL/TCC 거부를 구분해야 한다. owner가 시험 전후 canary 존재와 정상 read/write를 확인하고 같은 user의 통제 실행에서 비교한다. app-group entitlement가 없다는 정적 증거와 실제 다른 group canary 접근 거부 증거를 구분한다. group canary가 없으면 그 동적 검사는 `blocked`이며 새 shared group 권한을 제품에 부여해 통과시키지 않는다. 보호 데이터를 검사하기 위해 실제 사용자 container를 탐색하지 않는다.
@@ -187,8 +231,10 @@ Apple은 macOS 14+에서 다른 앱 container 접근 시 사용자 승인 요청
 - [D2] [PyPI openai-codex 0.147.0 metadata](https://pypi.org/pypi/openai-codex/0.147.0/json).
 - [D3] [OpenAI Codex rust-v0.150.1 release API](https://api.github.com/repos/openai/codex/releases/tags/rust-v0.150.1); 위 정확한 asset 이름의 `digest`.
 - [D4] [해당 release의 Python pyproject](https://raw.githubusercontent.com/openai/codex/rust-v0.150.1/sdk/python/pyproject.toml).
+- [D5] Python SDK `python-v0.147.0`의 [client.py](https://github.com/openai/codex/blob/025a88adbd7ae4d448fc938b28d0446eb1753317/sdk/python/src/openai_codex/client.py), [api.py](https://github.com/openai/codex/blob/025a88adbd7ae4d448fc938b28d0446eb1753317/sdk/python/src/openai_codex/api.py), [pyproject.toml](https://github.com/openai/codex/blob/025a88adbd7ae4d448fc938b28d0446eb1753317/sdk/python/pyproject.toml).
 - [E1] Swift.org [macOS 설치/Previous Releases](https://www.swift.org/install/macos/), [Swift 6.3.3 macOS pkg](https://download.swift.org/swift-6.3.3-release/xcode/swift-6.3.3-RELEASE/swift-6.3.3-RELEASE-osx.pkg).
 - [E2] GitHub [hosted runners reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
+- [E3] Apple [Xcode SDK and system requirements](https://developer.apple.com/xcode/system-requirements/), Swift.org [user-domain package installer](https://www.swift.org/install/macos/package_installer/).
 
 ## Verification
 
@@ -200,3 +246,4 @@ Apple은 macOS 14+에서 다른 앱 container 접근 시 사용자 승인 요청
 
 - 2026-10-05: 최초 작성. 실행 topology·entitlement/wire 미확정과 Swift 6.4 대 승인 6.3.3 불일치를 발견했다. 계획을 draft로 유지하고 계약 구체화·환경 확보 이전의 구현 승인을 차단했다. Story 1.1의 두 CPU 실제 검증 및 P-1 부분 증거 경계는 유지한다.
 - 2026-10-05: 2차 조사 revision. embedded XPC Agent·child inheritance·서명 peer 검증·최소 entitlement 및 topology-only RPC 제안을 추가했다. 공식 Python SDK/CLI 후보 hash, Swift 6.3.3 배포 경로, local Developer ID identity 개수와 Intel runner 문서 가용성을 확인했다. SDK/CLI pair·runtime closure·fixture 계약·환경은 여전히 차단 상태다. source 구현·설치·서명·공증·CI·push는 하지 않았다.
+- 2026-10-05: 3차 revision. 사용자 승인으로 공식 Swift 6.3.3을 추가 설치했으나 SDK 27 Foundation compile 실패를 실제 확인했다. SDK explicit binary override·environment merge·종료 경로를 immutable source로 확인하고 고정 synthetic fixture/control/evidence 계약을 보완했다. stack 선택과 dependency closure는 아직 미확정이며 제품 source·서명·공증·CI·push는 수행하지 않았다.
