@@ -1,8 +1,8 @@
 {
   "schemaRevision": "topology-v1",
-  "approvalCommit": "7dfc8d754cf86a2f741c23fed1437f4af3880a97",
+  "approvalCommit": "d2e69f935ae7d877aa9c405fdc99377f790b771a",
   "team": "397452Z366",
-  "toolchain": {"developerDir": "/Applications/Xcode.app/Contents/Developer", "xcode": "27.0", "build": "27A266a", "sdk": "27.0", "swift": "6.4", "deploymentTarget": "15.0"},
+  "toolchain": {"developerDir": "/Applications/Xcode.app/Contents/Developer", "xcode": "27.0", "build": "27A266a", "sdk": "27.0", "swift": "6.4", "deploymentTarget": "15.0", "systemLinkerVersion": "27037.1"},
   "pdfium": {
     "url": "https://pdfium.googlesource.com/pdfium.git",
     "commit": "ad5bc13610718aefe737bd9b2f1b258d08e39428",
@@ -19,7 +19,7 @@
     "clangVersion": "llvmorg-23-init-19482-g53d18800-2",
     "gnVersion": "git_revision:1c79e13d17a1760d6c6401c90061411842bd4881",
     "ninjaVersion": "version:3@1.12.1.chromium.4",
-    "gnArgs": {"is_component_build": false, "pdf_is_complete_lib": true, "pdf_enable_v8": false, "pdf_enable_xfa": false, "target_os": "mac", "is_debug": false, "pdf_is_standalone": false, "pdf_use_skia": false, "pdf_use_agg": true, "pdf_enable_fontations": false, "pdf_enable_rust_bmp": false, "pdf_enable_rust_jpeg": false, "pdf_enable_rust_png": false, "enable_rust": false, "use_custom_libcxx": false, "mac_deployment_target": "15.0", "mac_min_system_version": "15.0"}
+    "gnArgs": {"is_component_build": false, "pdf_is_complete_lib": true, "pdf_enable_v8": false, "pdf_enable_xfa": false, "target_os": "mac", "is_debug": false, "pdf_is_standalone": false, "pdf_use_skia": false, "pdf_use_agg": true, "pdf_enable_fontations": false, "pdf_enable_rust_bmp": false, "pdf_enable_rust_jpeg": false, "pdf_enable_rust_png": false, "enable_rust": false, "use_custom_libcxx": false, "mac_deployment_target": "15.0", "mac_min_system_version": "15.0", "use_lld": false}
   },
   "python": {
     "version": "3.13.16",

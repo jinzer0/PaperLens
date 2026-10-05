@@ -106,11 +106,30 @@
     "systemLinkerRecipeChangeApplied": false,
     "implementationCheckpointPackaging": {"sourceCommit": "dfc7dacaec37d502dc08cb72348acf289b926ce6", "sourceTreeHash": "d5f22c787376aa7e4ec6cf2611fe83472289c12d6d67e1bdbdc37daab8b5a74f", "artifactHash": "d51d063be157b7690f93f37ed0146c3bc80ad156c81245aad41c4e474d03351a", "insideOutSigning": "pass", "readOnlyIntegrityVerification": "pass", "scope": "Observed at the implementation checkpoint before the subsequent spec-only proposal; not a verification of the proposed linker recipe"}
   },
+  "latestImplementationApproval": "d2e69f935ae7d877aa9c405fdc99377f790b771a",
+  "approvedXcodeLinkerResult": {
+    "approvalRecord": "https://github.com/jinzer0/PaperLens/issues/2#issuecomment-5996446497",
+    "sourceBaseCommitAtBuild": "d2e69f935ae7d877aa9c405fdc99377f790b771a",
+    "sourceDirtyAtBuild": true,
+    "sourceTreeHash": "0ba83c701bd56831df8bb953cc3fc3e836b67a953caab5de41e3dfb1b85cc5ad",
+    "dependencyLockSHA256": "ce9ef4847ddc32ba1e6668b4720449f843e2a536dfd6222639b5892ca7a47861",
+    "gnChange": {"use_lld": false},
+    "systemLinker": {"path": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld", "version": "27037.1", "sha256": "374d9f0713bce2c8a9e1e82bde51615d5433516a10d99b63107eb6ee70542e4c"},
+    "actualHostNasmLinkCommandVerified": true,
+    "pythonTests": {"tests": 137, "failures": 0, "driver": "3.13.16"},
+    "arm64": {"fetch": "pass", "completePDFium": "pass", "archiveSHA256": "d584abe4d10355cb242b3b0a83bc46b1327c173e009cf2f1413b69dc26374401", "numericStackCases": 19, "regressionCompileAndLink": "pass", "regressionExecution": "native_pass", "FPDFInitAndDestroy": "pass", "executableSHA256": "0f1c3c263af0be8aab8e392ec90617e28e813ac98483c8a7b3aae0e80d7ac1f3", "fullNativeAppBuild": "pass", "insideOutSigningAndStaticIntegrity": "pass", "artifactHashAtPrecommitVerification": "82e1ac36cced049bab404724fbf066d69fbd845683dc7d83ad6408cbf684bc9c"},
+    "x86_64": {"fetch": "pass", "completePDFium": "pass", "archiveSHA256": "2f187c26b17cde515282ba1b7f9240e91c0b5bde14ba71a85e08aeafeb78a690", "regressionCompileAndLink": "pass", "regressionExecution": "blocked_cross_cpu", "executableSHA256": "d580c09075b3e13a4d1d6199ce55a5438e6a9f746a167158263da6efd1b6570b", "fullNativeAppCrossBuild": "pass", "insideOutSigningAndStaticIntegrity": "pass", "artifactHashAtPrecommitVerification": "885835bcbf2859583361633184da6f97f00a94c35385e1b841535a5274bc96c1", "actualIntelExecution": false},
+    "identicalEntitlementHashBothArchitectures": "f916325f9c2a131b48d6266f40f76976920650a13c739dbb3525e9552f8127c6",
+    "previousGeneratedOutputs": "Preserved as .pre-xcode-linker; no automatic reset, fallback or dirty-source repair",
+    "diagnosticLogs": ".build/topology/<arch>/xcode-linker-preparation.log and xcode-linker-native-build.log",
+    "warningsRetained": ["Apple libtool no-symbol warnings for conditional empty upstream objects", "dsymutil skips duplicate-name/timestamp debug map entries in the complete archive; dSYM completeness is not proven", "AppIntents metadata-extraction warnings", "Mocked asyncio deadline diagnostic"],
+    "scope": "Local build, numeric standalone regression and static signed-package validation only; no signed XPC/SDK runtime, sandbox attribution, physical Intel, notarization or product gate proof"
+  },
   "notPerformed": ["signed XPC and packaged SDK/CLI execution", "actual sandbox negative-access attribution", "physical Intel execution", "notarization", "stapling including validation", "Gatekeeper assessment", "remote CI", "artifact upload", "public distribution"],
   "fixture": {"dedicatedAccountConfigured": false, "dedicatedProfileActive": false, "permissionsChanged": false},
   "actualTwoCPU": false,
   "storyStatus": "blocked",
   "aggregateVerdict": "blocked",
   "productGates": {"P-1": "unproven", "P-2": "unproven", "P-3": "unproven", "P-4": "unproven", "P-5": "unproven", "P-6": "unproven"},
-  "limitations": ["Unit, typecheck, preparation and cross-build results are not signed runtime or two-CPU execution evidence", "No full artifact hash or completed isolation result exists", "Any source-patch or approved input-contract change requires a new immutable Spec approval before implementation"]
+  "limitations": ["Earlier baseline fields and named approval attempts remain historical; latest local execution is approvedXcodeLinkerResult", "Unit, typecheck, preparation, cross-build and static signing results are not signed runtime or two-CPU execution evidence", "Artifact hashes are recorded at their verified source snapshot; final commit-bound manifests remain in .build/topology/<arch>/manifest.json", "No completed isolation result exists", "Any source-patch or approved input-contract change requires a new immutable Spec approval before implementation"]
 }

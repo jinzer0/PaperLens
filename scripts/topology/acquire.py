@@ -253,7 +253,8 @@ def load_lock():
     lock = json.loads(LOCK_PATH.read_text())
     require(lock["schemaRevision"] == "topology-v1" and len(lock["wheels"]) == 8, "invalid_dependency_lock")
     require(lock["pdfium"]["commit"] == "ad5bc13610718aefe737bd9b2f1b258d08e39428", "pdfium_pin_mismatch")
-    require(lock["approvalCommit"] == "7dfc8d754cf86a2f741c23fed1437f4af3880a97" and lock["pdfium"].get("patch") == PDFIUM_PATCH, "pdfium_patch_pin_mismatch")
+    require(lock["approvalCommit"] == "d2e69f935ae7d877aa9c405fdc99377f790b771a" and lock["pdfium"].get("patch") == PDFIUM_PATCH, "pdfium_patch_pin_mismatch")
+    require(lock["pdfium"]["gnArgs"].get("use_lld") is False and lock["toolchain"].get("systemLinkerVersion") == "27037.1", "pdfium_linker_pin_mismatch")
     for arch in ARCHES:
         select_asset(lock["python"], arch)
         for wheel in lock["wheels"]:
@@ -343,6 +344,16 @@ def run(argv, cwd=None, env=None, offline=False):
     return completed.stdout.decode("utf-8", errors="strict").strip()
 
 
+def system_linker(lock):
+    expected = lock["toolchain"]
+    linker = Path(run(["/usr/bin/xcrun", "--sdk", "macosx", "--find", "ld"]))
+    approved = Path(expected["developerDir"]) / "Toolchains/XcodeDefault.xctoolchain/usr/bin/ld"
+    require(linker == approved and linker.is_file() and not linker.is_symlink(), "system_linker_path_mismatch")
+    details = json.loads(run([linker, "-version_details"]))
+    require(isinstance(details, dict) and details.get("version") == expected["systemLinkerVersion"], "system_linker_version_mismatch")
+    return {"path": str(linker), "version": details["version"], "sha256": sha256(linker)}
+
+
 def toolchain(lock):
     require(sys.platform == "darwin", "macos_required")
     expected = lock["toolchain"]
@@ -352,6 +363,7 @@ def toolchain(lock):
     require(re.search(r"Apple Swift version 6\.4(?:\s|\.)", swift), "swift_mismatch")
     sdk = run(["/usr/bin/xcrun", "--sdk", "macosx", "--show-sdk-path"])
     require(Path(sdk).is_relative_to(expected["developerDir"]) and Path(sdk).is_dir(), "sdk_path_mismatch")
+    system_linker(lock)
     return sdk
 
 
@@ -748,6 +760,7 @@ def runtime_stage(lock, work, receipt, cache):
 def pdfium_stage(lock, work, receipt, cache):
     require(sys.version_info[:2] == (3, 13), "build_python_version_mismatch")
     sdk = toolchain(lock)
+    linker = system_linker(lock)
     source = work / "pdfium/src"
     require(receipt.get("pdfiumPatch") == pdfium_patch_receipt(lock), "pdfium_patch_receipt_mismatch")
     pdfium_checkout(lock, source)
@@ -823,7 +836,8 @@ def pdfium_stage(lock, work, receipt, cache):
         with candidate.open("rb") as source_file, target.open("xb") as target_file:
             shutil.copyfileobj(source_file, target_file)
     result = safe_path(work, "pdfium-build.json")
-    evidence = {"arch": receipt["arch"], "sourceCommit": lock["pdfium"]["commit"], "depsBlob": lock["pdfium"]["depsBlob"], "gnArgs": arguments, "sha256": sha256(target), "actualExecution": "not_checked"}
+    require(system_linker(lock) == linker, "system_linker_changed_during_build")
+    evidence = {"arch": receipt["arch"], "sourceCommit": lock["pdfium"]["commit"], "depsBlob": lock["pdfium"]["depsBlob"], "gnArgs": arguments, "systemLinker": linker, "sha256": sha256(target), "actualExecution": "not_checked"}
     if result.exists():
         require(json.loads(result.read_text()) == evidence, "pdfium_receipt_mismatch")
     else:

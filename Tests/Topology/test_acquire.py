@@ -240,6 +240,37 @@ class ArchiveTests(IsolatedTest):
 
 
 class PinTests(IsolatedTest):
+    def test_system_linker_receipt_requires_exact_path_version_and_bytes(self):
+        linker = self.root / "Toolchains/XcodeDefault.xctoolchain/usr/bin/ld"
+        linker.parent.mkdir(parents=True)
+        linker.write_bytes(b"synthetic linker")
+        lock = {"toolchain": {"developerDir": str(self.root), "systemLinkerVersion": "27037.1"}}
+        with mock.patch.object(acquire, "run", side_effect=[str(linker), '{"version":"27037.1"}']):
+            self.assertEqual(acquire.system_linker(lock), {"path": str(linker), "version": "27037.1", "sha256": hashlib.sha256(linker.read_bytes()).hexdigest()})
+
+    def test_system_linker_rejects_other_path_before_execution(self):
+        lock = {"toolchain": {"developerDir": str(self.root), "systemLinkerVersion": "27037.1"}}
+        with mock.patch.object(acquire, "run", return_value="/usr/bin/ld") as run:
+            with self.assertRaisesRegex(acquire.Failure, "system_linker_path_mismatch"):
+                acquire.system_linker(lock)
+        self.assertEqual(run.call_count, 1)
+
+    def test_system_linker_rejects_symlink_or_version_change(self):
+        linker = self.root / "Toolchains/XcodeDefault.xctoolchain/usr/bin/ld"
+        linker.parent.mkdir(parents=True)
+        payload = self.root / "payload"
+        payload.write_bytes(b"synthetic linker")
+        linker.symlink_to(payload)
+        lock = {"toolchain": {"developerDir": str(self.root), "systemLinkerVersion": "27037.1"}}
+        with mock.patch.object(acquire, "run", return_value=str(linker)):
+            with self.assertRaisesRegex(acquire.Failure, "system_linker_path_mismatch"):
+                acquire.system_linker(lock)
+        linker.unlink()
+        linker.write_bytes(payload.read_bytes())
+        with mock.patch.object(acquire, "run", side_effect=[str(linker), '{"version":"27038.1"}']):
+            with self.assertRaisesRegex(acquire.Failure, "system_linker_version_mismatch"):
+                acquire.system_linker(lock)
+
     def test_unsupported_build_python_blocks_before_toolchain_or_source_access(self):
         with mock.patch.object(acquire.sys, "version_info", (3, 14, 0)), mock.patch.object(acquire, "toolchain") as toolchain:
             with self.assertRaisesRegex(acquire.Failure, "build_python_version_mismatch"):
