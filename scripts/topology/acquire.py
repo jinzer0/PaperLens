@@ -31,6 +31,13 @@ COMMIT = re.compile(r"[0-9a-f]{40}\Z")
 GIT_HOSTS = {"pdfium.googlesource.com", "chromium.googlesource.com", "skia.googlesource.com"}
 DOWNLOAD_HOSTS = {"pypi.org", "files.pythonhosted.org", "github.com", "release-assets.githubusercontent.com", "objects.githubusercontent.com", "commondatastorage.googleapis.com", "storage.googleapis.com", "chrome-infra-packages.appspot.com"}
 MAX_ARCHIVE_BYTES = 12 * 1024**3
+PDFIUM_PATCH = {
+    "path": "scripts/topology/patches/pdfium-bounded-roll.patch",
+    "sha256": "3bc8f7337144cbfe6a6c7d97fc4b470c97c370c0a1f6285c34e08295e64ccded",
+    "target": "core/fpdfapi/page/cpdf_psengine.cpp",
+    "beforeSha256": "deb4d8dbe96ba81a803c0930b5acf3a4e47af863c5b04929b9b6c9973435f5a6",
+    "afterSha256": "296d940f32ed604db4f61218f96d677704e40e72ded0c73eb018850aa29fc2a7",
+}
 
 
 class Failure(Exception):
@@ -246,6 +253,7 @@ def load_lock():
     lock = json.loads(LOCK_PATH.read_text())
     require(lock["schemaRevision"] == "topology-v1" and len(lock["wheels"]) == 8, "invalid_dependency_lock")
     require(lock["pdfium"]["commit"] == "ad5bc13610718aefe737bd9b2f1b258d08e39428", "pdfium_pin_mismatch")
+    require(lock["approvalCommit"] == "fd8f8b93f726350e3b00ea5dcf2193925561e79f" and lock["pdfium"].get("patch") == PDFIUM_PATCH, "pdfium_patch_pin_mismatch")
     for arch in ARCHES:
         select_asset(lock["python"], arch)
         for wheel in lock["wheels"]:
@@ -348,10 +356,10 @@ def toolchain(lock):
 
 
 def git(path, *args):
-    return run(["/usr/bin/git", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "protocol.file.allow=never", "-C", path, *args])
+    return run(["/usr/bin/git", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "core.filemode=true", "-c", "core.ignorestat=false", "-c", "protocol.file.allow=never", "-C", path, *args])
 
 
-def checkout(path, url, commit):
+def checkout_base(path, url, commit):
     require(COMMIT.fullmatch(commit), "mutable_git_revision")
     parts = urllib.parse.urlsplit(url)
     require(parts.scheme == "https" and parts.hostname in GIT_HOSTS and not parts.query and not parts.fragment and not parts.username, "undeclared_git_host")
@@ -363,8 +371,47 @@ def checkout(path, url, commit):
         git(path, "fetch", "--depth=1", "--no-tags", url, commit)
         git(path, "checkout", "--detach", commit)
     require(git(path, "rev-parse", "HEAD") == commit, "git_commit_mismatch")
+
+
+def checkout(path, url, commit):
+    checkout_base(path, url, commit)
     git(path, "diff", "--exit-code", "HEAD", "--")
     require(git(path, "ls-files", "--deleted") == "", "missing_git_source")
+
+
+def pdfium_patch_receipt(lock):
+    require(lock["pdfium"].get("patch") == PDFIUM_PATCH, "pdfium_patch_pin_mismatch")
+    require(lock["pdfium"]["commit"] == "ad5bc13610718aefe737bd9b2f1b258d08e39428" and lock["pdfium"]["tree"] == "7a17f761fbcaca163cef3575ed98a0a2058dbb3d" and lock["pdfium"]["depsBlob"] == "169680f06af94277eba6ec9e9597635b40092daf", "pdfium_pin_mismatch")
+    return {"baseCommit": lock["pdfium"]["commit"], **PDFIUM_PATCH}
+
+
+def pdfium_checkout(lock, source):
+    """Apply only the approved roll fix; never reset or repair a dirty tree."""
+    evidence = pdfium_patch_receipt(lock)
+    patch = safe_path(ROOT, PDFIUM_PATCH["path"])
+    require(patch.is_file(), "pdfium_patch_missing")
+    check_hash(patch, PDFIUM_PATCH["sha256"])
+    checkout_base(source, lock["pdfium"]["url"], lock["pdfium"]["commit"])
+    require(git(source, "rev-parse", "HEAD^{tree}") == lock["pdfium"]["tree"], "pdfium_tree_mismatch")
+    require(git(source, "rev-parse", "HEAD:DEPS") == lock["pdfium"]["depsBlob"], "deps_blob_mismatch")
+    flags = git(source, "ls-files", "-v").splitlines()
+    require(all(line.startswith("H ") for line in flags), "pdfium_hidden_source")
+    target = safe_path(source, PDFIUM_PATCH["target"])
+    require(target.is_file() and stat.S_IMODE(target.stat().st_mode) == 0o644, "pdfium_patch_target_mode")
+    require(git(source, "diff", "--cached", "--name-only", "-z", "HEAD", "--") == "", "pdfium_staged_source")
+    require(git(source, "ls-files", "--deleted") == "", "missing_git_source")
+    changed = git(source, "diff", "--no-ext-diff", "--no-textconv", "--ignore-submodules=none", "--raw", "--no-abbrev", "HEAD", "--")
+    digest = sha256(target)
+    if digest == PDFIUM_PATCH["beforeSha256"]:
+        require(changed == "", "pdfium_dirty_source")
+        git(source, "apply", "--check", "--whitespace=error", patch)
+        git(source, "apply", "--whitespace=error", patch)
+        digest = sha256(safe_path(source, PDFIUM_PATCH["target"]))
+        changed = git(source, "diff", "--no-ext-diff", "--no-textconv", "--ignore-submodules=none", "--raw", "--no-abbrev", "HEAD", "--")
+    require(digest == PDFIUM_PATCH["afterSha256"], "pdfium_patch_source_mismatch")
+    require(re.fullmatch(r":100644 100644 [0-9a-f]{40} 0{40} M\t" + re.escape(PDFIUM_PATCH["target"]), changed), "pdfium_dirty_source")
+    require(stat.S_IMODE(target.stat().st_mode) == 0o644, "pdfium_patch_target_mode")
+    return evidence
 
 
 class DepsReader:
@@ -470,9 +517,7 @@ def source_graph(lock, work, host, cache, prior=None):
     source = work / "pdfium" / "src"
     if prior is not None:
         require(source.is_dir(), "prepared_source_missing")
-    checkout(source, lock["pdfium"]["url"], lock["pdfium"]["commit"])
-    require(git(source, "rev-parse", "HEAD^{tree}") == lock["pdfium"]["tree"], "pdfium_tree_mismatch")
-    require(git(source, "rev-parse", "HEAD:DEPS") == lock["pdfium"]["depsBlob"], "deps_blob_mismatch")
+    patch_evidence = pdfium_checkout(lock, source)
     deps = DepsReader((source / "DEPS").read_text(), host, lock["pdfium"]["vars"])
     archives, repositories = [], []
     pending = [("", deps)]
@@ -565,7 +610,7 @@ def source_graph(lock, work, host, cache, prior=None):
         and isinstance(statement.targets[0], ast.Name) and isinstance(statement.value, ast.Constant)
     }
     require(str(constants.get("CLANG_REVISION")) + "-" + str(constants.get("CLANG_SUB_REVISION")) == lock["pdfium"]["clangVersion"], "clang_management_mismatch")
-    return {"repositories": repositories, "archives": archives}
+    return {"repositories": repositories, "archives": archives, "pdfiumPatch": patch_evidence}
 
 
 def fetch(lock, work, host, arch, cache):
@@ -597,6 +642,7 @@ def validate_receipt(lock, work, host, arch, cache):
     require(path.is_file(), "fetch_required")
     receipt = json.loads(path.read_text())
     require(receipt["lockHash"] == sha256(LOCK_PATH) and receipt["arch"] == arch and receipt["host"] == host, "acquisition_pin_or_arch_mismatch")
+    require(receipt.get("pdfiumPatch") == pdfium_patch_receipt(lock), "pdfium_patch_receipt_mismatch")
     expected_assets = [select_asset(lock["python"], arch), *[select_asset(wheel, arch) for wheel in lock["wheels"]], lock["sdkSource"]]
     require(len(receipt["assets"]) == len(expected_assets), "asset_inventory_mismatch")
     kinds = ["python", *(["wheel"] * len(lock["wheels"])), "source"]
@@ -607,7 +653,7 @@ def validate_receipt(lock, work, host, arch, cache):
         cached = json.loads(safe_path(cache, item["sha256"] + ".json").read_text())
         require(cached == {"url": item["url"], "sha256": item["sha256"], "generation": item.get("generation")}, "cache_provenance_mismatch")
     graph = source_graph(lock, work, host, cache, prior=receipt)
-    require(graph["repositories"] == receipt["repositories"] and graph["archives"] == receipt["archives"], "dependency_graph_mismatch")
+    require(graph["repositories"] == receipt["repositories"] and graph["archives"] == receipt["archives"] and graph["pdfiumPatch"] == receipt["pdfiumPatch"], "dependency_graph_mismatch")
     return receipt
 
 
@@ -700,10 +746,11 @@ def runtime_stage(lock, work, receipt, cache):
 
 
 def pdfium_stage(lock, work, receipt, cache):
+    require(sys.version_info[:2] == (3, 13), "build_python_version_mismatch")
     sdk = toolchain(lock)
     source = work / "pdfium/src"
-    checkout(source, lock["pdfium"]["url"], lock["pdfium"]["commit"])
-    require(git(source, "rev-parse", "HEAD:DEPS") == lock["pdfium"]["depsBlob"], "deps_blob_mismatch")
+    require(receipt.get("pdfiumPatch") == pdfium_patch_receipt(lock), "pdfium_patch_receipt_mismatch")
+    pdfium_checkout(lock, source)
     for item in receipt["repositories"]:
         checkout(safe_path(source, item["path"]), item["url"], item["commit"])
     tools_receipt = safe_path(work, "prepared-tools.json")

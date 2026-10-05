@@ -240,6 +240,12 @@ class ArchiveTests(IsolatedTest):
 
 
 class PinTests(IsolatedTest):
+    def test_unsupported_build_python_blocks_before_toolchain_or_source_access(self):
+        with mock.patch.object(acquire.sys, "version_info", (3, 14, 0)), mock.patch.object(acquire, "toolchain") as toolchain:
+            with self.assertRaisesRegex(acquire.Failure, "build_python_version_mismatch"):
+                acquire.pdfium_stage({}, None, None, None)
+        toolchain.assert_not_called()
+
     def test_wrong_sha256_rejected(self):
         path = self.root / "payload"
         path.write_bytes(b"wrong")
@@ -311,6 +317,250 @@ class PinTests(IsolatedTest):
         reader = acquire.DepsReader("vars = " + repr(variables) + "\ndeps = {}\n", "arm64", {"checkout_configuration": "minimal"})
         self.assertFalse(reader.enabled({"condition": "checkout_skia"}))
         self.assertFalse(reader.enabled({"condition": "checkout_linux and unknown_platform_flag"}))
+
+
+class PDFiumPatchTests(IsolatedTest):
+    # Exact approved UTF-8/LF input. Git is modeled offline; no fetched source,
+    # tools, hooks, patch commands or compiler are executed by these tests.
+    patch_bytes = b"""--- a/core/fpdfapi/page/cpdf_psengine.cpp
++++ b/core/fpdfapi/page/cpdf_psengine.cpp
+@@ -449,10 +449,10 @@
+       if (j > 0) {
+         j -= n;
+       }
+-      auto begin_it = std::begin(stack_) + stack_count_ - n;
++      auto stack = pdfium::span(stack_).first(stack_count_);
++      auto begin_it = stack.end() - n;
+       auto middle_it = begin_it - j;
+-      auto end_it = std::begin(stack_) + stack_count_;
+-      std::rotate(begin_it, middle_it, end_it);
++      std::rotate(begin_it, middle_it, stack.end());
+       break;
+     }
+     default:
+"""
+
+    def setUp(self):
+        super().setUp()
+        self.lock = acquire.load_lock()
+        self.source = self.root / "pdfium/src"
+        self.target = self.source / acquire.PDFIUM_PATCH["target"]
+        self.target.parent.mkdir(parents=True)
+        self.target.write_bytes(b"synthetic original\n")
+        self.target.chmod(0o644)
+        self.patch = self.root / acquire.PDFIUM_PATCH["path"]
+        self.patch.parent.mkdir(parents=True)
+        self.patch.write_bytes(self.patch_bytes)
+        self.raw = ""
+        self.staged = ""
+        self.deleted = ""
+        self.flags = "H " + acquire.PDFIUM_PATCH["target"]
+        self.base = {
+            "HEAD": self.lock["pdfium"]["commit"],
+            "HEAD^{tree}": self.lock["pdfium"]["tree"],
+            "HEAD:DEPS": self.lock["pdfium"]["depsBlob"],
+        }
+        for patcher in (
+            mock.patch.object(acquire, "ROOT", self.root),
+            mock.patch.object(acquire, "git", side_effect=self.git),
+            mock.patch.object(acquire, "sha256", side_effect=self.hash),
+        ):
+            value = patcher.start()
+            self.addCleanup(patcher.stop)
+            if patcher.attribute == "git":
+                self.commands = value
+
+    def hash(self, path):
+        data = Path(path).read_bytes()
+        if Path(path) == self.target:
+            known = {b"synthetic original\n": "beforeSha256", b"synthetic patched\n": "afterSha256"}
+            if data in known:
+                return acquire.PDFIUM_PATCH[known[data]]
+        return hashlib.sha256(data).hexdigest()
+
+    def approved_diff(self):
+        return ":100644 100644 " + "1" * 40 + " " + "0" * 40 + " M\t" + acquire.PDFIUM_PATCH["target"]
+
+    def git(self, path, *args):
+        self.assertEqual(path, self.source)
+        if args[0] == "rev-parse":
+            return self.base[args[1]]
+        if args == ("ls-files", "-v"):
+            return self.flags
+        if args == ("ls-files", "--deleted"):
+            return self.deleted
+        if args[0] == "diff":
+            return self.staged if "--cached" in args else self.raw
+        if args[0] == "apply":
+            self.assertEqual(Path(args[-1]), self.patch)
+            self.assertIn("--whitespace=error", args)
+            if "--check" not in args:
+                self.target.write_bytes(b"synthetic patched\n")
+                self.raw = self.approved_diff()
+            return ""
+        self.fail("unexpected Git command: " + repr(args))
+
+    def acquire(self):
+        return acquire.pdfium_checkout(self.lock, self.source)
+
+    def assert_not_applied(self):
+        self.assertFalse(any(call.args[1] == "apply" for call in self.commands.call_args_list))
+
+    def test_pristine_application_and_exact_reentry(self):
+        self.assertEqual(hashlib.sha256(self.patch_bytes).hexdigest(), acquire.PDFIUM_PATCH["sha256"])
+        expected = {"baseCommit": self.lock["pdfium"]["commit"], **acquire.PDFIUM_PATCH}
+        self.assertEqual(self.acquire(), expected)
+        self.assertEqual(self.target.read_bytes(), b"synthetic patched\n")
+        self.commands.reset_mock()
+        self.assertEqual(self.acquire(), expected)
+        self.assert_not_applied()
+
+    def test_changed_missing_and_symlink_patch_are_rejected(self):
+        self.patch.write_bytes(self.patch_bytes + b"\n")
+        with self.assertRaisesRegex(acquire.Failure, "sha256_mismatch"):
+            self.acquire()
+        self.patch.unlink()
+        with self.assertRaisesRegex(acquire.Failure, "pdfium_patch_missing"):
+            self.acquire()
+        outside = self.root / "outside.patch"
+        outside.write_bytes(self.patch_bytes)
+        self.patch.symlink_to(outside)
+        with self.assertRaisesRegex(acquire.Failure, "symlink_path"):
+            self.acquire()
+        self.assert_not_applied()
+
+    def test_changed_source_is_never_overwritten(self):
+        self.target.write_bytes(b"user work\n")
+        with self.assertRaisesRegex(acquire.Failure, "pdfium_patch_source_mismatch"):
+            self.acquire()
+        self.assertEqual(self.target.read_bytes(), b"user work\n")
+        self.assert_not_applied()
+
+    def test_reentry_rejects_modified_result(self):
+        self.acquire()
+        self.commands.reset_mock()
+        self.target.write_bytes(b"synthetic patched\nextra change\n")
+        with self.assertRaisesRegex(acquire.Failure, "pdfium_patch_source_mismatch"):
+            self.acquire()
+        self.assert_not_applied()
+
+    def test_reentry_still_requires_unchanged_patch_bytes(self):
+        self.acquire()
+        self.commands.reset_mock()
+        self.patch.write_bytes(self.patch_bytes.replace(b"stack.end()", b"stack.begin()"))
+        with self.assertRaisesRegex(acquire.Failure, "sha256_mismatch"):
+            self.acquire()
+        self.assert_not_applied()
+
+    def test_target_and_patch_metadata_are_not_configurable(self):
+        for key, value in (("target", "../escape"), ("target", "core/other.cpp"), ("path", "../outside.patch"), ("sha256", "0" * 64), ("beforeSha256", "0" * 64), ("afterSha256", "0" * 64)):
+            with self.subTest(key=key, value=value):
+                lock = json.loads(json.dumps(self.lock))
+                lock["pdfium"]["patch"][key] = value
+                with self.assertRaisesRegex(acquire.Failure, "pdfium_patch_pin_mismatch"):
+                    acquire.pdfium_checkout(lock, self.source)
+        self.assert_not_applied()
+
+    def test_symlink_target_and_ancestor_are_rejected(self):
+        outside = self.root / "outside.cpp"
+        outside.write_bytes(b"user work\n")
+        self.target.unlink()
+        self.target.symlink_to(outside)
+        with self.assertRaisesRegex(acquire.Failure, "symlink_path"):
+            self.acquire()
+        self.target.unlink()
+        self.target.parent.rmdir()
+        self.target.parent.symlink_to(self.root)
+        with self.assertRaisesRegex(acquire.Failure, "symlink_path"):
+            self.acquire()
+        self.assertEqual(outside.read_bytes(), b"user work\n")
+        self.assert_not_applied()
+
+    def test_missing_target_and_target_mode_are_rejected(self):
+        self.target.chmod(0o755)
+        with self.assertRaisesRegex(acquire.Failure, "pdfium_patch_target_mode"):
+            self.acquire()
+        self.target.unlink()
+        with self.assertRaisesRegex(acquire.Failure, "pdfium_patch_target_mode"):
+            self.acquire()
+        self.assert_not_applied()
+
+    def test_wrong_head_tree_and_deps_are_rejected(self):
+        for revision in self.base:
+            with self.subTest(revision=revision):
+                original = self.base[revision]
+                self.base[revision] = "0" * 40
+                with self.assertRaises(acquire.Failure):
+                    self.acquire()
+                self.base[revision] = original
+        self.assert_not_applied()
+
+    def test_pristine_content_with_dirty_path_or_mode_is_rejected(self):
+        for raw in (self.approved_diff(), ":100644 100755 " + "1" * 40 + " " + "0" * 40 + " M\tDEPS"):
+            with self.subTest(raw=raw):
+                self.raw = raw
+                with self.assertRaisesRegex(acquire.Failure, "pdfium_dirty_source"):
+                    self.acquire()
+        self.assert_not_applied()
+
+    def test_reentry_rejects_extra_path_wrong_path_and_mode(self):
+        self.target.write_bytes(b"synthetic patched\n")
+        expected = self.approved_diff()
+        for raw in (expected + "\n" + expected.replace(acquire.PDFIUM_PATCH["target"], "DEPS"), expected.replace(acquire.PDFIUM_PATCH["target"], "DEPS"), expected.replace(":100644 100644", ":100644 100755"), ""):
+            with self.subTest(raw=raw):
+                self.raw = raw
+                with self.assertRaisesRegex(acquire.Failure, "pdfium_dirty_source"):
+                    self.acquire()
+        self.assert_not_applied()
+
+    def test_staged_deleted_and_hidden_sources_are_rejected(self):
+        for field, value, reason in (("staged", "DEPS\0", "pdfium_staged_source"), ("deleted", "DEPS", "missing_git_source"), ("flags", "h DEPS", "pdfium_hidden_source"), ("flags", "S DEPS", "pdfium_hidden_source")):
+            with self.subTest(field=field):
+                original = getattr(self, field)
+                setattr(self, field, value)
+                with self.assertRaisesRegex(acquire.Failure, reason):
+                    self.acquire()
+                setattr(self, field, original)
+        self.assert_not_applied()
+
+    def test_receipt_missing_or_tampered_patch_fails_before_graph(self):
+        lock_hash = self.hash(acquire.LOCK_PATH)
+        expected = acquire.pdfium_patch_receipt(self.lock)
+        for patch in (None, dict(expected, baseCommit="0" * 40), dict(expected, sha256="0" * 64), dict(expected, afterSha256="0" * 64), dict(expected, target="../escape")):
+            with self.subTest(patch=patch):
+                receipt = {"lockHash": lock_hash, "arch": "arm64", "host": "arm64", "pdfiumPatch": patch}
+                (self.root / "acquisition.json").write_text(json.dumps(receipt))
+                with mock.patch.object(acquire, "source_graph") as graph:
+                    with self.assertRaisesRegex(acquire.Failure, "pdfium_patch_receipt_mismatch"):
+                        acquire.validate_receipt(self.lock, self.root, "arm64", "arm64", self.root / "downloads")
+                graph.assert_not_called()
+
+    def test_cached_receipt_does_not_authorize_changed_lock_metadata(self):
+        lock = json.loads(json.dumps(self.lock))
+        lock["pdfium"]["patch"]["sha256"] = "0" * 64
+        receipt = {"lockHash": self.hash(acquire.LOCK_PATH), "arch": "arm64", "host": "arm64", "pdfiumPatch": acquire.pdfium_patch_receipt(self.lock)}
+        (self.root / "acquisition.json").write_text(json.dumps(receipt))
+        with self.assertRaisesRegex(acquire.Failure, "pdfium_patch_pin_mismatch"):
+            acquire.validate_receipt(lock, self.root, "arm64", "arm64", self.root / "downloads")
+
+    def test_old_lock_receipt_fails_without_rewriting_or_applying(self):
+        receipt = {"lockHash": "0" * 64, "arch": "arm64", "host": "arm64", "pdfiumPatch": acquire.pdfium_patch_receipt(self.lock)}
+        path = self.root / "acquisition.json"
+        path.write_text(json.dumps(receipt))
+        original = path.read_bytes()
+        with self.assertRaisesRegex(acquire.Failure, "acquisition_pin_or_arch_mismatch"):
+            acquire.fetch(self.lock, self.root, "arm64", "arm64", self.root / "downloads")
+        self.assertEqual(path.read_bytes(), original)
+        self.assert_not_applied()
+
+    def test_new_acquisition_receipt_captures_patch_result(self):
+        graph = {"repositories": [], "archives": [], "pdfiumPatch": self.acquire()}
+        with mock.patch.object(acquire, "download"), mock.patch.object(acquire, "pypi_asset", return_value="https://files.pythonhosted.org/synthetic"), mock.patch.object(acquire, "source_graph", return_value=graph):
+            receipt = acquire.fetch(self.lock, self.root, "arm64", "arm64", self.root / "downloads")
+        persisted = json.loads((self.root / "acquisition.json").read_text())
+        self.assertEqual(persisted, receipt)
+        self.assertEqual(receipt["lockHash"], self.hash(acquire.LOCK_PATH))
+        self.assertEqual(receipt["pdfiumPatch"], {"baseCommit": self.lock["pdfium"]["commit"], **acquire.PDFIUM_PATCH})
 
 
 class WheelTests(IsolatedTest):

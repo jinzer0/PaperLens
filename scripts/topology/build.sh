@@ -27,6 +27,11 @@ try:
     for stage in ("fetch", "pdfium", "runtime"):
         if acquire.main(["--arch", arch, "--stage", stage]):
             raise acquire.Failure("preparation_blocked")
+        if stage == "pdfium":
+            print(acquire.run([
+                sys.executable, "-I", "-B", root / "scripts/topology/verify_pdfium_roll.py",
+                "--arch", arch,
+            ], cwd=root))
     work = root / ".build/topology" / arch
     products = work / "products"
     acquire.run([

@@ -1,6 +1,6 @@
 {
   "schemaRevision": "topology-v1",
-  "approvalCommit": "7fe18449bef4a01c827c9df44b5c2b00f9cfd68b",
+  "approvalCommit": "fd8f8b93f726350e3b00ea5dcf2193925561e79f",
   "team": "397452Z366",
   "toolchain": {"developerDir": "/Applications/Xcode.app/Contents/Developer", "xcode": "27.0", "build": "27A266a", "sdk": "27.0", "swift": "6.4", "deploymentTarget": "15.0"},
   "pdfium": {
@@ -8,6 +8,7 @@
     "commit": "ad5bc13610718aefe737bd9b2f1b258d08e39428",
     "tree": "7a17f761fbcaca163cef3575ed98a0a2058dbb3d",
     "depsBlob": "169680f06af94277eba6ec9e9597635b40092daf",
+    "patch": {"path": "scripts/topology/patches/pdfium-bounded-roll.patch", "sha256": "3bc8f7337144cbfe6a6c7d97fc4b470c97c370c0a1f6285c34e08295e64ccded", "target": "core/fpdfapi/page/cpdf_psengine.cpp", "beforeSha256": "deb4d8dbe96ba81a803c0930b5acf3a4e47af863c5b04929b9b6c9973435f5a6", "afterSha256": "296d940f32ed604db4f61218f96d677704e40e72ded0c73eb018850aa29fc2a7"},
     "sourcePins": {
       "build": "299066ef2d5d1396f97e582627880cebe33f497a",
       "buildtools": "9e7655f4ee433ef4c6efcffd57e379db8f8c0432",

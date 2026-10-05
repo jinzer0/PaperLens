@@ -62,7 +62,25 @@
     "upstreamSourcePatched": false,
     "warningsSuppressed": false,
     "dependencyPinsChanged": false,
-    "buildDriverNote": "The launcher deliberately rejects a non-3.13 build driver; the actual recipe was retried using the already verified packaged Python 3.13.16 on PATH"
+    "buildDriverNote": "The cached build-driver symlink rejected a different interpreter path; the actual recipe was retried using the already verified packaged Python 3.13.16 on PATH"
+  },
+  "approvedPatchAttempt": {
+    "implementationApproval": "fd8f8b93f726350e3b00ea5dcf2193925561e79f",
+    "approvalRecord": "https://github.com/jinzer0/PaperLens/issues/2#issuecomment-5991884172",
+    "patchSHA256": "3bc8f7337144cbfe6a6c7d97fc4b470c97c370c0a1f6285c34e08295e64ccded",
+    "actualResultingSourceSHA256": "296d940f32ed604db4f61218f96d677704e40e72ded0c73eb018850aa29fc2a7",
+    "initialAndRepeatedAcquisition": "pass",
+    "pythonTopologyTests": {"tests": 133, "failures": 0, "driver": "3.13.16"},
+    "pdfiumCompilation": "blocked",
+    "remainingDiagnosticCount": 2,
+    "remainingDiagnosticLines": [453, 454],
+    "remainingDiagnostic": "unsafe pointer arithmetic on stack.end() - n and begin_it - j",
+    "confirmedCause": "core/fxcrt/span.h explicitly changes iterator types from checked iterators to ordinary pointers; wrapping the array does not remove caller pointer arithmetic",
+    "realNumericStackRegression": "harness implemented, but not compiled or executed because the real static library remains unavailable",
+    "runtimePackagingCheck": "actual staged prefix validated after accounting for pip 26.2.1 already contained in the verified approved CPython archive; no added download or changed version pin",
+    "buildDriver": "verified original Python 3.13.16 retained in runtime.pre-bounded-roll; old generated receipts and launcher binding preserved",
+    "warningSuppression": false,
+    "newSlicingProposalApplied": false
   },
   "notPerformed": ["complete PaperLens application link", "nested Developer ID signing and final inventory", "signed XPC and packaged SDK/CLI execution", "actual sandbox negative-access attribution", "physical Intel execution", "notarization", "stapling including validation", "Gatekeeper assessment", "remote CI", "artifact upload", "public distribution"],
   "fixture": {"dedicatedAccountConfigured": false, "dedicatedProfileActive": false, "permissionsChanged": false},

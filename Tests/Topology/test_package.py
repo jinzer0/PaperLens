@@ -44,7 +44,7 @@ class PackagingTests(unittest.TestCase):
         self.file("runtime/lib/python3.13/encodings/__init__.py")
         self.file("runtime/include/python3.13/patchlevel.h", b'#define PY_VERSION "3.13.16"\n')
         site = runtime / "lib/python3.13/site-packages"
-        for name, version in package.PINS.items():
+        for name, version in (package.PINS | package.PYTHON_BUNDLED_DISTRIBUTIONS).items():
             info = site / (name.replace("-", "_") + "-" + version + ".dist-info")
             info.mkdir(parents=True)
             (info / "METADATA").write_text(f"Name: {name}\nVersion: {version}\n")
@@ -142,6 +142,22 @@ class PackagingTests(unittest.TestCase):
             package.validate_runtime(runtime)
         record.write_text("")
         with self.assertRaisesRegex(package.Failure, "cli_executable_ambiguous"):
+            package.validate_runtime(runtime)
+
+    def test_bundled_pip_is_required_and_cannot_authorize_extra_distributions(self):
+        runtime, _, _ = self.runtime()
+        site = runtime / "lib/python3.13/site-packages"
+        metadata = site / "pip-26.2.1.dist-info/METADATA"
+        metadata.write_text("Name: pip\nVersion: 26.2.2\n")
+        with self.assertRaisesRegex(package.Failure, "runtime_distribution_mismatch"):
+            package.validate_runtime(runtime)
+        metadata.write_text("Name: pip\nVersion: 26.2.1\n")
+        extra = site / "unexpected-1.0.dist-info"
+        extra.mkdir()
+        (extra / "METADATA").write_text("Name: unexpected\nVersion: 1.0\n")
+        (extra / "WHEEL").write_text("Wheel-Version: 1.0\n")
+        (extra / "RECORD").write_text("")
+        with self.assertRaisesRegex(package.Failure, "runtime_distribution_mismatch"):
             package.validate_runtime(runtime)
 
     def test_framework_preserves_prefix_and_moves_actual_cli(self):

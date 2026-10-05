@@ -34,6 +34,9 @@ PINS = {
     "annotated-types": "0.8.0", "packaging": "26.3", "pydantic": "2.13.5",
     "pydantic-core": "2.46.5", "typing-extensions": "4.16.0", "typing-inspection": "0.4.4",
 }
+# Already contained in the hash-pinned standalone CPython archive, not an
+# additional wheel download. Preserve the complete approved interpreter prefix.
+PYTHON_BUNDLED_DISTRIBUTIONS = {"pip": "26.2.1"}
 BUNDLES = (
     ("", IDENTITY, "PaperLens", {SANDBOX: True, NETWORK: True}, "PaperLensApp/App/PaperLens.entitlements"),
     ("Contents/XPCServices/PDFiumXPC.xpc", IDENTITY + ".PDFiumXPC", "PDFiumXPC", {SANDBOX: True}, "PDFiumXPC/PDFiumXPC.entitlements"),
@@ -160,7 +163,7 @@ def validate_runtime(runtime):
         required_file(runtime, (metadata.parent / "RECORD").relative_to(runtime).as_posix())
         if name == "openai-codex-cli-bin":
             cli_info = metadata.parent
-    require(distributions == PINS, "runtime_distribution_mismatch")
+    require(distributions == PINS | PYTHON_BUNDLED_DISTRIBUTIONS, "runtime_distribution_mismatch")
     require(cli_info is not None, "cli_distribution_missing")
     candidates = []
     with (cli_info / "RECORD").open(newline="") as stream:
