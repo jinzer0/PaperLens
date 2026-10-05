@@ -38,7 +38,8 @@ enum TopologyIdentity {
   static func container(_ identifier: String) -> URL? {
     guard Bundle.main.bundleIdentifier == identifier, let home = accountHome()
     else { return nil }
-    let expected = home
+    let expected =
+      home
       .appendingPathComponent("Library/Containers/\(identifier)/Data", isDirectory: true)
     let actual = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true).standardizedFileURL
     var info = stat()
@@ -122,6 +123,30 @@ enum TopologyFixtures {
 
   static func marker(_ alias: String, runID: String) -> Data {
     alias == "PDF" ? syntheticPDF : Data("PaperLens topology canary\n".utf8)
+  }
+
+  static func publishReport(_ report: Data, directory: Int32) -> Bool {
+    let temporary = UUID().uuidString.lowercased() + ".report"
+    let fd = openat(
+      directory, temporary, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
+    guard fd >= 0 else { return false }
+    defer {
+      close(fd)
+      unlinkat(directory, temporary, 0)
+    }
+    let written = report.withUnsafeBytes { bytes -> Bool in
+      var offset = 0
+      while offset < bytes.count {
+        let count = Darwin.write(fd, bytes.baseAddress!.advanced(by: offset), bytes.count - offset)
+        if count < 0 && errno == EINTR { continue }
+        guard count > 0 else { return false }
+        offset += count
+      }
+      return true
+    }
+    guard written, fsync(fd) == 0 else { return false }
+    // Publication cannot replace a prior report, even if it races the verifier.
+    return renameatx_np(directory, temporary, directory, "report.json", UInt32(RENAME_EXCL)) == 0
   }
 
   // Walk with directory descriptors: neither a pre-existing symlink nor a

@@ -1,27 +1,49 @@
+import AppKit
 import Darwin
 import Foundation
+import OSLog
 import SwiftUI
+
+private let topologyLog = Logger(
+  subsystem: "io.github.jinzer0.PaperLens.TopologySmoke", category: "lifecycle")
 
 @main
 struct PaperLensApp: App {
-  @StateObject private var model = TopologyModel()
+  @NSApplicationDelegateAdaptor(TopologyApplicationDelegate.self) private var delegate
 
   var body: some Scene {
     WindowGroup("PaperLens — Topology Prototype") {
-      VStack(alignment: .leading, spacing: 16) {
-        Text("Signed topology smoke").font(.title)
-        Text("격리 프로토타입 전용 · 인증, 논문 열기, 추출 기능 없음")
-        Text("Runtime: \(model.runtime)")
-        Text("Fixture profile: \(model.fixtures)")
-        Text(model.status).textSelection(.enabled)
-        Button("Run topology smoke") { model.run() }.disabled(model.running)
-        Text("거부 errno만으로 sandbox PASS를 판정하지 않습니다. 두 CPU / P-1 검증 결과가 아닙니다.")
-          .font(.caption)
-      }
-      .padding(24)
-      .frame(minWidth: 540, minHeight: 250)
-      .task { model.automate() }
+      TopologyView(model: delegate.model)
     }
+  }
+}
+
+@MainActor
+private final class TopologyApplicationDelegate: NSObject, NSApplicationDelegate {
+  let model = TopologyModel()
+
+  func applicationDidFinishLaunching(_ notification: Notification) {
+    topologyLog.notice("application_finished_launching")
+    model.automate()
+  }
+}
+
+private struct TopologyView: View {
+  @ObservedObject var model: TopologyModel
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 16) {
+      Text("Signed topology smoke").font(.title)
+      Text("격리 프로토타입 전용 · 인증, 논문 열기, 추출 기능 없음")
+      Text("Runtime: \(model.runtime)")
+      Text("Fixture profile: \(model.fixtures)")
+      Text(model.status).textSelection(.enabled)
+      Button("Run topology smoke") { model.run() }.disabled(model.running)
+      Text("거부 errno만으로 sandbox PASS를 판정하지 않습니다. 두 CPU / P-1 검증 결과가 아닙니다.")
+        .font(.caption)
+    }
+    .padding(24)
+    .frame(minWidth: 540, minHeight: 250)
   }
 }
 
@@ -36,6 +58,7 @@ private final class TopologyModel: ObservableObject {
 
   func automate() {
     guard !automated, CommandLine.arguments.contains("--topology-smoke") else { return }
+    topologyLog.notice("smoke_automation_invoked")
     automated = true
     run()
   }
@@ -128,6 +151,9 @@ private final class TopologyCoordinator: NSObject, ProviderFrameReceiver, @unche
   func start() { queue.async { self.connect() } }
 
   private func connect() {
+    topologyLog.notice(
+      "smoke_connect account_valid=\(TopologyIdentity.accountHome() != nil, privacy: .public) container_valid=\(TopologyIdentity.container(TopologyIdentity.main) != nil, privacy: .public) map_valid=\(TopologyFixtures.groupMapMatches(), privacy: .public)"
+    )
     guard TopologyIdentity.container(TopologyIdentity.main) != nil,
       let contract = Bundle.main.url(forResource: "contract", withExtension: "json")
     else {
@@ -574,6 +600,9 @@ private final class TopologyCoordinator: NSObject, ProviderFrameReceiver, @unche
       "p1": "unverified", "actualTwoCPU": false,
     ]
     let saved = save(TopologyFixtures.json(report))
+    topologyLog.notice(
+      "smoke_finish provider=\(self.providerRuntimeStatus, privacy: .public) pdfium=\(self.pdfiumRuntimeStatus, privacy: .public) report_saved=\(saved, privacy: .public)"
+    )
     worker?.invalidate()
     worker = nil
     completion(runtimeStatus, fixtureStatus, saved)
@@ -585,17 +614,6 @@ private final class TopologyCoordinator: NSObject, ProviderFrameReceiver, @unche
         root.appendingPathComponent("Library/Application Support/PaperLensTopology"), create: true)
     else { return false }
     defer { close(directory) }
-    let temporary = UUID().uuidString.lowercased() + ".report"
-    let fd = openat(
-      directory, temporary, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
-    guard fd >= 0 else { return false }
-    defer {
-      close(fd)
-      unlinkat(directory, temporary, 0)
-    }
-    let count = report.withUnsafeBytes { Darwin.write(fd, $0.baseAddress!, report.count) }
-    guard count == report.count, fsync(fd) == 0 else { return false }
-    // Atomic replacement of this app's fixed report, never an argv-selected path.
-    return renameat(directory, temporary, directory, "report.json") == 0
+    return TopologyFixtures.publishReport(report, directory: directory)
   }
 }
