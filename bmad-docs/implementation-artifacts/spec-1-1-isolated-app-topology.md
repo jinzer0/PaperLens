@@ -1,5 +1,5 @@
 ---
-title: 'Story 1.1 — 현재 계정 arm64 검증과 Intel 동적 검증 면제안'
+title: 'Story 1.1 — 기존 증거 보존형 재시험 및 실행 중 거부 귀속 제안'
 type: feature
 created: 2026-10-05
 status: draft
@@ -47,7 +47,7 @@ context:
 
 ## Code Map
 
-기존 구현·검증 checkpoint는 `fe2ea0ea378b5b3704c47970fa5554f7c4960457`다. 승인된 Xcode linker로 두 CPU 전체 앱 build·nested 서명·정적 integrity 및 arm64 숫자 stack/InitLibrary 회귀는 통과했다. 이번 제안은 현재 계정 synthetic fixture 선택과 Intel 동적 검증 면제이며 미적용이다.
+현재 checkpoint는 `56ee4a5b1e7655465ee492a36bba268b5f5c2751`다. `cd102dc039683e0716ac0669c4b8b03c38bdd9e9`의 서명된 앱에서 arm64 SDK/CLI 및 PDFium XPC 초기화·보고서와 정상 prototype 창을 관측했다. 두 CPU build/signature는 통과했으나 39개 case는 inconclusive다. 과거 run의 정확한 synthetic alias/nonce에 맞는 OS 거부 메시지 27건은 live signed actor/PID·연산별 통제 연결이 부족한 후보 증거이며 PASS가 아니다. 이번 제안은 기존 보고서를 손대지 않는 재시험과 실행 중 증거 연결이며, 새 SHA 승인 전 구현하지 않는다. 과거 PDFium/linker/profile recipe의 성공·실패 기록은 역사적 근거로 보존한다.
 
 - `PaperLens.xcodeproj/project.pbxproj` — Main/XPC/Agent targets, 두 CPU 별도 빌드, macOS 15 deployment target과 embedding/signing 구성.
 - `PaperLensApp/App/`, `PDFiumXPC/`, `ProviderAgent/` — Main launch coordinator, no-network worker, 별도 identity의 packaged Agent. 각 target의 Info.plist/entitlements도 같은 경계에 둔다.
@@ -60,7 +60,7 @@ context:
 
 **Execution:**
 
-- [ ] Preflight — 고정 toolchain/stack/Team과 두 CPU build/signature는 fe2ea0ea에서 검증됐다. 새 profile/map·현재 UID·container·기존 report/fixture 충돌을 확인한다. Intel 동적 실행은 이번 범위에서 면제하며 notary credential은 조회하지 않는다.
+- [ ] Preflight — 고정 toolchain/stack/Team과 두 CPU build/signature는 56ee4a5에서 검증됐다. current-user signed map·현재 UID·container·새 run namespace 충돌을 확인한다. 과거 report/fixture는 보존한다. Intel 동적 실행은 계속 면제하며 notary credential은 조회하지 않는다.
 - [ ] Launch/topology — 아래 embedded XPC 후보와 entitlement map을 사용해 독립 identity와 private zone을 검증한다. Main sandbox를 상속한 일반 child를 별도 Agent로 오인하지 않는다. 이 revision의 후보 입력·fixture 계약을 근거로 새 SHA 승인을 받은 뒤 prototype을 구현한다. 문서 근거는 실제 격리 성공의 증거가 아니다.
 - [ ] 실제 구성요소 — PDFium은 승인 commit `ad5bc13610718aefe737bd9b2f1b258d08e39428`의 complete static library를 PDFiumXPC에 링크·초기화하고 Agent는 packaged official Python SDK/runtime/CLI 실행을 확인한다. PDF 추출·인증 요청 없이 실제 loader/process topology를 검증한다. 후보 버전/hash는 재현용으로 기록하되 P-2 최종 lock으로 표기하지 않는다.
 - [ ] 최소 wire — 아래 `topology-v1` 제안의 fields/numeric limits를 `Contracts/ProviderRPC`에서 단일 정의하고 native/Agent 양쪽이 같은 fixtures로 검증한다. 제품 operation별 P-3/Story 1.9 계약 완료로 승격하지 않는다.
@@ -130,14 +130,15 @@ Agent는 자기가 해석한 private container 안에만 cwd/HOME/TMPDIR/CODEX_H
 - Frame: unsigned 32-bit big-endian **JSON byte 수**, 이어서 UTF-8 JSON object. body `1..65536` bytes, frame 최대 `65540` bytes. prefix 초과를 allocation 전에 거절한다. JSON depth 최대 8, object key 최대 16, array 최대 32 items, string 최대 256 UTF-8 bytes. 중복 key·invalid UTF-8·NaN·unknown field를 거절한다.
 - Request: 정확히 `{kind:"request", id:UUID, method:enum, timeoutMs:integer, params:object}`. UUID는 lowercase canonical UUID v4 문자열이고 연결 간에도 재사용하지 않는다. `timeoutMs`는 `1..10000`, 수신 시점부터 monotonic deadline으로 측정한다.
 - Terminal: 성공은 정확히 `{kind:"result", id, result:object}`, 실패는 `{kind:"error", id, code:enum}`. error code는 `versionMismatch`, `handshakeRequired`, `unknownMethod`, `invalidParams`, `busy`, `cancelled`, `timeout`, `unavailable`, `internal`뿐이다. path/exception/SDK text/message 필드는 없다.
-- 첫 request는 `hello`, 연결 후 5000 ms 안에 완료해야 한다. version은 major `1`, minor `0`, capabilities는 정확히 `["topology-v1"]`; major 불일치는 `versionMismatch` 후 연결 종료, minor는 양쪽 최소값을 선택하고 이 revision에서 0만 지원한다. handshake 전 probe를 수행하지 않는다.
+- 첫 request는 `hello`, 연결 후 5000 ms 안에 완료해야 한다. 새 revision은 major `1`, minor `1`, capabilities는 정확히 `["topology-v1"]`다. 다른 major/지원하지 않는 minor는 `versionMismatch` 후 연결 종료하며 minor0 negotiation/fallback은 없다. handshake 전 probe를 수행하지 않는다.
 
 | Method | 정확한 params | 성공 result |
 | --- | --- | --- |
-| `hello` | `{major:integer, minor:integer, capabilities:[string]}` | `{major:1, minor:0, capabilities:["topology-v1"]}` |
+| `hello` | `{major:integer, minor:integer, capabilities:[string]}` | `{major:1, minor:1, capabilities:["topology-v1"]}` |
 | `topology.runtime` | `{}` | `{sdkImported:bool, cliInitialized:bool, architecture:"arm64" 또는 "x86_64"}` |
 | `topology.prepare` | `{runID:UUID}` | `{prepared:bool}` — Agent 자기 zone의 synthetic canary만 생성 |
-| `topology.probe` | `{runID:UUID, caseID:enum}` | `{outcome:"allowed" 또는 "denied" 또는 "inconclusive", reason:enum}` |
+| `topology.identity` | `{runID:UUID}` | `{bridgePID:positive-int32, pythonPID:positive-int32}` — 준비된 run의 live binding 후보; 독립 OS 검증 전 신뢰 금지 |
+| `topology.probe` | `{runID:UUID, caseID:enum}` | `{outcome:"allowed" 또는 "denied" 또는 "inconclusive", reason:enum, syscallObserved:bool, syscallResult:int32, errno:nonnegative-int32, beganAtNs:nonnegative-int64, endedAtNs:nonnegative-int64}` |
 | `topology.cleanup` | `{runID:UUID}` | `{absent:bool}` — 자기 소유 시험 canary만 정리; 제품 purge 아님 |
 | `topology.wait` | `{durationMs:integer}` (`1..5000`) | `{elapsed:bool}` — cancellation/deadline 경쟁 검증용, I/O 없음 |
 | `cancel` | `{targetID:UUID}` | `{accepted:bool}` |
@@ -330,7 +331,61 @@ Agent는 signed map과 runID만으로 M/E/G 경로를 계산한다. 보호 canar
 
 Network 통제 endpoint는 시험 harness의 `127.0.0.1:18765`이며 고정 synthetic nonce만 송수신한다. Main/Agent 연결 성공을 전후 확인하고 PDFium의 connect 거부를 검사한다. Agent의 inbound listen 검사는 `127.0.0.1:18766`에서 수행하고 비-sandbox harness로 전후 정상 bind/listen control을 둔다. 각 network 작업 timeout은 2000 ms다. 이미 사용 중인 port의 process를 중단하지 않으며 EADDRINUSE/ECONNREFUSED/timeout은 sandbox PASS가 아니다. loopback 거부가 실제로 성립하지 않으면 성공으로 꾸미지 않는다.
 
-Manifest 필드는 `schemaRevision, sourceCommit, artifactHash, fixtureMapHash, entitlementHash, OSBuild, actualCPU, codeIdentityRefs`로 고정한다. Case 필드는 `runID, caseID, fixtureID, actorInstanceRef, operation, ownerPre, ownerPost, sameUIDControl, expectedRootMatched, posixACLControl, syscallResult, errno, sandboxDenialRef, promptObserved, verdict`다. `verdict`는 pass/failed/blocked/inconclusive다. denied syscall과 정상 control, 해당 actor/operation/fixture로 귀속되는 OS App Sandbox denial 관측이 모두 있어야 거부 PASS다. raw OS 로그는 저장하지 않으며 denial reference는 safe-code projection만 가리킨다. 개인 절대경로·username·marker 내용·환경·credential은 저장하지 않고 M/A/C/E/G/PDF alias를 사용한다.
+Manifest 필드는 `schemaRevision, sourceCommit, artifactHash, fixtureMapHash, entitlementHash, OSBuild, actualCPU, codeIdentityRefs`를 유지한다. Case의 기존 필드 `runID, caseID, fixtureID, actorInstanceRef, operation, ownerPre, ownerPost, sameUIDControl, expectedRootMatched, posixACLControl, syscallResult, errno, sandboxDenialRef, promptObserved, verdict`를 유지하고 아래 새 계약의 `syscallObserved, intervalRef`를 추가한다. `verdict`는 pass/failed/blocked/inconclusive다. denied syscall과 정상 control, 해당 actor/operation/fixture로 귀속되는 OS App Sandbox denial 관측이 모두 있어야 거부 PASS다. raw OS 로그는 저장하지 않으며 denial reference는 safe-code projection만 가리킨다. 개인 절대경로·username·marker 내용·환경·credential은 저장하지 않고 M/A/C/E/G/PDF alias를 사용한다.
+
+### 제안: 기존 증거 보존형 재시험과 live 귀속
+
+**승인 경계:** 이 절은 미적용 제안이다. 이 문서의 새 commit SHA에 대한 SCOPE 및 IMPLEMENTATION 승인 후에만 source·wire·report 경로를 변경하고 재시험한다. 앞의 topology-v1/profile 구현과 고정 `report.json` 결과는 역사적 baseline이다. 새 구현은 아래 계약만 사용하며 옛 report reader/wire fallback을 유지하지 않는다. frozen intent·architecture·후보 stack/pins/GN/ABI·Team·entitlements·initialize-only 및 Intel 동적 면제를 바꾸지 않는다. PRODUCT/P-1/P-2·공개 배포·공증 승인이 아니다.
+
+#### 1. Run별 exclusive namespace
+
+- `r`은 verifier가 생성한 canonical lowercase UUIDv4다. Main에는 기존 `--topology-smoke --run-id <r>`만 전달한다. 임의 경로/계정/파일 argv나 새로운 shared product group은 없다.
+- 최종 report는 `M0/Library/Application Support/PaperLensTopology/Reports/r/report.json`이다. Main은 SDK/fixture/probe 시작 **전** no-follow directory descriptor로 `Reports/r`을 exclusive 예약한다. 기존 r 디렉터리·파일·symlink는 보존하고 blocked다. 기존 Reports 부모는 같은 UID·non-symlink·안전한 mode/ACL을 확인하며 chmod/ACL 수정으로 복구하지 않는다.
+- 옛 고정 report와 다른 run의 report/fixture는 읽기 fallback·이동·삭제·덮어쓰기·채택하지 않는다. 정상 과거 report의 존재 자체가 새 r 실행을 막지 않지만 동일 r 충돌은 막는다. 임의 다른 앱 container를 탐색하지 않는다.
+- publication은 directory-relative exclusive temporary, complete write/EINTR 처리·fsync·`renameatx_np(..., RENAME_EXCL)`을 사용한다. 이번 invocation 소유 temporary만 inode/device 확인 후 정리한다. 성공/실패 report와 기존 증거는 보존한다. GUI manual 실행도 동일 reserve/collision 경계를 사용한다.
+- 예약 실패는 SDK/XPC resume·일반 finish→save 경로를 모두 우회하고 blocked로 끝낸다. 성공한 예약 descriptor/소유 inode를 publication까지 유지하며 경로를 다시 해석해 기존 namespace를 채택하지 않는다.
+
+#### 2. Live readiness와 independent controls
+
+- fixture 준비·SDK initialize 후, **금지 probe 전에** Main/PDFiumXPC/native Agent/Python이 live인 상태에서 Main이 같은 run 디렉터리의 `ready.json`을 exclusive 발행한다. 허용되는 정보는 runID, artifact/contract hash, phase, 고정 role, PID와 process-birth metadata, code-identity 후보와 case/clock metadata뿐이다. 사용자 경로·UID 값·환경·secret을 넣지 않는다.
+- 이 binding 자료의 raw PID/birth 값은 새로운 명시적 예외로 **invocation 소유 0700 디렉터리/0600 임시 자료와 verifier RAM에만** 둔다. 공개/최종 report·Git·stdout/OS diagnostic에는 넣지 않는다. phase 완료 후 exact inode/device로 소유한 binding/ack temporary만 제거한다. 정리 실패는 기록하고 adoption/광범위 삭제하지 않는다.
+- 비-sandbox verifier는 runID/phase/artifactHash/ready bytes hash를 검증한 뒤 고정된 `continue.json` ACK를 exclusive 작성한다. 경로가 아닌 nonce·phase/hash만 ACK한다. 이미 있는/치환된/잘못된 ACK는 blocked다. Main의 10초 bounded readiness 대기는 기존 ProviderRPC 요청 **사이**에만 두며 수신 중인 요청 deadline을 늘리거나 slot을 풀지 않는다. timeout/cancel은 해당 invocation 정리 후 blocked report로 끝낸다. 이것은 local test harness phase fence이지 새로운 Provider transport/제품 shared zone이 아니다.
+- 마지막 금지 probe 후 `post-ready.json`/`post-continue.json`의 같은 hash-bound fence를 두고, Main/Agent cleanup 및 connection 종료 **전에** independent post-control과 signed actor 재검증을 마친다. fixture를 일찍 제거한 뒤 ENOENT를 정상 통제로 세지 않는다. 모든 handshake file은 closed schema와 크기 상한(각 64KiB)을 검증한다.
+- PDF의 기존 batch reply 이후에는 worker symlink가 이미 없어질 수 있다. 따라서 PDF `inspect` **내부**에서 private owner·고정-target symlink를 먼저 준비하고 pre-ready→pre-control→continue→probe batch→post-ready→post-control→release→cleanup→reply 순서를 지킨다. 경로는 OS로 확인한 worker container `W0=H/Library/Containers/io.github.jinzer0.PaperLens.PDFiumXPC/Data` 안의 이번 `Library/Application Support/PaperLensTopology/r`뿐이다. worker는 Main container를 읽지 않고 verifier가 이 고정 synthetic worker namespace만 조회·ACK한다. 링크는 해당 연산의 pre/post 통제가 끝날 때까지 소유 상태로 유지한다. Main도 inspect reply를 받자마자 worker를 invalidate하지 않고 final live binding 재검증 후 종료한다.
+- PDF의 pre/post fence 대기는 각각 최대2000ms이며 inspect의 기존10000ms **안에 포함**된다. deadline이 먼저 끝나면 다음 probe/late work를 실행하지 않는다. Main/Worker phase 대기는 timer/terminal/cancel 처리를 맡는 executor를 동기 block하지 않는다. 전후 통제 snapshot이 batch 내 여러 case에 사용되면 동일 fixture/소유 generation과 해당 연산 구간을 실제로 포괄한다는 근거를 명시한다. per-operation 근거가 부족한 항목은 inconclusive이며 snapshot을 임의 복제해 PASS하지 않는다.
+- verifier는 **이번 r의 M/A/C/E/G/PDF와 고정 synthetic symlink만** descriptor-relative no-follow로 검사한다. regular/type·같은 UID·mode(디렉터리0700/파일0600)·nlink1·같은 inode/device·public marker/시험 PDF·추가 extended ACL 부재를 pre/post 확인한다. 소유자 자체 검사와 같은 UID 비-sandbox read/write 통제를 분리한다. marker 확인 후 같은 bytes를 쓰며 복원·create/truncate하지 않는다. symlink 연산은 owner가 생성한 고정 target·inode를 따로 확인하고 일반 control이 symlink를 따라 user 파일을 읽지 않게 한다.
+- ACL 부재는 live descriptor의 Darwin ACL API 의미를 따르고 ACL entry가 있거나 API 오류면 성공으로 세지 않는다. TCC/FDA/ACL로 외부 통제가 막히거나 prompt 여부를 입증할 수 없으면 inconclusive/blocked다. FDA 부여·권한 초기화·prompt 수락·기존 권한을 clean이라고 추론하지 않는다. 필요한 prompt 관측은 해당 run의 명시적 manual evidence로 남긴다.
+
+#### 3. Actor identity와 최소 typed 계약 변경
+
+- Main↔native Agent/PDFiumXPC는 `resume` 전 기존 exact identifier+Team+Developer ID signing requirement를 유지한다. public `NSXPCConnection.processIdentifier/effectiveUserIdentifier`를 사용하고 PID0·다른 UID·조회 실패는 unverified다. private audit-token API나 이름만 맞는 pgrep으로 대체하지 않는다.
+- verifier는 actual live process의 OS birth identity와 `SecCode` guest signing requirement/code identity를 독립 확인한다. expected identifier/Team·manifest의 signed Mach-O/CDHash와 연결하고 PID/birth/signature를 probe 전후 재검증한다. PID 재사용·다른 parent·identity 변경·종료 후 정적 codesign만 있는 경우 귀속 PASS 금지다. 다른 사용자/앱의 프로세스나 데이터를 탐색하지 않고 ready에 지정된 이번 actor만 조회한다.
+- expected CDHash는 manifest가 hash 검증한 signed Mach-O에 대한 `SecStaticCode`에서 얻어 live guest CDHash와 비교한다. 파일의 signedSHA256을 CDHash처럼 사용하지 않으며 source/static signature만으로 runtime binding을 대체하지 않는다.
+- PID 기반 SecCode lookup 전후 birth metadata를 bracket 확인하고 live/non-zombie 상태를 요구한다. connection invalidation·spawn 종료·재시작은 기존 run의 binding을 무효화하며 새 process를 같은 reference로 재결합하지 않는다. Python interpreter의 live signature뿐 아니라 signed packaged agent script/contract provenance도 별도로 확인한다.
+- 기존 ProviderRPC에 정확히 한 metadata method `topology.identity`를 추가한다: params `{runID: uuid}`, result `{bridgePID: positive-int32, pythonPID: positive-int32}`. Python의 getppid/getpid 주장은 단독 증거가 아니다. native bridge의 실제 owned spawn PID와 XPC peer PID, OS parent/birth/signature가 모두 맞아야 한다. identity 조회는 handshake 후 해당 준비 run에서만 허용한다.
+- native bridge는 기존 frame stream의 해당 identity request ID/runID/result만 좁게 검증하고 `bridgePID==native getpid()`, `pythonPID==그 연결이 보관한 owned posix_spawn PID`를 확인한 동일 result를 전달한다. Main은 별도로 bridgePID가 **Main의 outbound Agent XPC peer PID**와 같은지 확인한다. bridge의 inbound peer는 Main이므로 그 PID를 bridge getpid와 비교하지 않는다. 별도 native operation/endpoint/reply schema를 만들지 않는다. 응답 누락·mismatch·다른 run/request·죽은 child는 fail closed다.
+- `topology.probe` result의 기존 outcome/reason에 `syscallObserved:boolean`, `syscallResult:int32`, `errno:nonnegative-int32`, `beganAtNs:nonnegative-int64`, `endedAtNs:nonnegative-int64`를 추가한다. 개별 negative syscall의 원래 반환값·즉시 errno와 실제 관측 구간을 기록한다. aggregate own-zone/control-failure 등 syscall 관측이 없으면 `syscallObserved=false`와 무시되는 numeric0을 사용하며 PASS 근거로 쓰지 않는다. error/terminal winner·timeout·cancel·queue/slot 계약은 그대로다.
+- hello는 major1/minor1로 갱신하고 모든 bundled peer·validator·tests가 같은 새 closed schema를 사용한다. minor0 result/schema를 남기거나 호환 fallback하지 않는다. capability `topology-v1`, stdio framing, handshake5000ms/최대 request10000ms, outstanding/queue/stream 등 모든 numeric limits는 유지한다. SDK↔CLI protocol과 dependency pin은 바꾸지 않는다.
+- PDFTopologyService에는 bounded metadata-only `identify(_ runID: String, withReply: (Data) -> Void)`를 연결당 한 번 허용하여 첫 probe 전에 live worker PID를 얻고 public XPC PID와 대조한다. UTF-8 closed reply는 정확히 `{runID:canonical-lowercase-UUIDv4, pid:positive-int32}`이고 최대64KiB다. worker는 이 run을 해당 connection에 묶고 같은 run의 inspect만 허용한다. metadata-only identify는 PDFium Init/파일·network probe·nil descriptor 전달을 수행하지 않는다. invalid/repeated/different-run/malformed/late 응답은 blocked이며 rebind나 fallback하지 않는다. PID는 transient binding으로만 사용하고 final report에 복사하지 않는다. 기존 `inspect(_ runID: String, pdf: FileHandle, withReply:)`의 **nonoptional read-only PDF** 계약과 PDF 처리 범위는 유지한다. nil PDF/dev-null 초기화 대체나 새 private Agent RPC를 만들지 않는다.
+- CLI는 initialize-only로 닫힌 뒤 없어질 수 있다. 현재 file/network case의 Agent actor는 실제 syscall을 수행하는 Python이며 native bridge와 CLI를 같은 actor라고 부르지 않는다. CLI의 signed runtime/owned parent/reap 증거는 별도 initialize 증거다. 새로운 CLI file probe나 인증/AI 요청을 추가하지 않는다.
+
+#### 4. OS denial projection과 case verdict
+
+- final `schemaRevision`은 `topology-evidence-v2`로 바꾼다. final actor binding/control/interval/denial 테이블은 role·opaque `actorInstanceRef`·manifest codeIdentityRef·pre/post 검증 boolean·alias·closed operation·safe reason/ref만 남긴다. raw PID/birth/path/name/log·UID·환경·marker 내용은 남기지 않는다. 기존 case의 `actorInstanceRef`, 새 `syscallObserved/intervalRef`, `sandboxDenialRef`는 이 테이블을 참조한다. unknown/unbound/ref mismatch는 fail closed다. report 최대1MiB/case256 경계는 유지한다.
+- OS 수집은 이번 actor PID, run 구간, 정확한 signed-map synthetic alias/operation으로 제한한다. bounded live/query output을 RAM에서 파싱하고 safe-code projection만 저장한다. raw log 파일·환경 덤프·개인 절대경로를 생성하지 않는다. 과거27 후보 메시지나 process name만으로 현재 case를 승격하지 않는다.
+- 각 native/Python probe는 동일 clock 기준으로 start/end 구간을 기록한다. OS event timestamp clock/단위·epoch·uncertainty가 실제로 호환됨을 확인하고 **하나의 case**로만 귀속되는 메시지만 연결한다. receipt mtime/host wallclock/로그 수신 시각/메시지 순서만으로 구간 일치를 추론하지 않는다. read와 symlinkRead가 같은 target/OS operation으로 겹치거나 clock 해석이 불가능하면 inconclusive다.
+- 금지 write는 O_WRONLY 기반의 원래 write syscall과 별도 marker 검증 read/control을 분리한다. read 거부 메시지를 write 거부 근거로 세지 않는다. 정상 metadata/marker 확인 없이 파일을 쓰거나 rollback하지 않는다. symlinkRead의 resolved target alias와 owner link 검증을 연결한다. message 중복 개수는 별도 case 수가 아니다.
+- network denial은 runID가 메시지 path에 없는 경우가 있으므로 실제 signed actor/PID·closed network operation·단일 probe 구간·고정 port 전후 control까지 일치해야 한다. operation은 실제 syscall stage이며 bind 거부를 listen 거부로 승격하지 않는다. 선행 bind 실패 때문에 listen이 실행되지 않으면 listen 관측은 false/inconclusive다. port 장애/불분명한 endpoint/EPERM만으로 PASS하지 않는다. PDF 전달 fd의 EBADF는 read-only fd capability 증거이며 OS Sandbox denial과 별도 판정한다.
+- negative PASS는 observed denied syscall + expected target/operation + live signed actor binding + owner/same-UID/POSIX/ACL pre/post controls + 명확한 OS App Sandbox denial + 해당 run의 prompt/TCC 통제 근거가 **모두** 충족될 때만 가능하다. 금지 접근이 실제 성공하면 failed다. fixture/identity/readiness가 없으면 blocked, 귀속/통제가 불명확하면 inconclusive다. 39건 전부 PASS를 보장하거나 빈 항목을 정상값으로 채우지 않는다.
+
+#### 5. 구현·검증 순서 및 승인 제외
+
+1. 새 SHA 승인 후 report namespace·no-replace와 reserved-run 사전 충돌 검사를 구현하고 file/symlink/replay/race/partial-write 보존 회귀를 실행한다.
+2. 단일 contract와 두 언어 schema/metadata를 갱신하고 peer/parent/birth/PID reuse·unknown method/version·raw metadata redaction·false/unobserved syscall·deadline/slot 유지 회귀를 실행한다.
+3. phase ready/ACK pre/post fence와 독립 descriptor/ACL controls, bounded OS projection을 연결한다. 잘못된 actor·동일 이름 다른 PID·exit/reuse·clock 불일치·alias escape·duplicate/ambiguous logs·network false positives·TCC-blocked control 회귀를 추가한다.
+4. approvalCommit만 새 승인 SHA로 갱신하고 stack/GN/patch/ABI/권한 pins가 그대로임을 검증한다. 두 CPU complete build/inside-out 서명/static inventory 및 현재 provenance를 다시 검증한다.
+5. 현재 계정 native arm64·새 r에서만 명시적 consent로 실행한다. verifier의 report **관측 대기**는230초(기존 serial169초 envelope+새 identity 요청 두10초+두10초 phase fence+21초 관측 여유)로 제한한다. PDF identify도10000ms 내에서 한 번만 수행한다. 이는 RPC/SDK/network deadline 연장이나 Main whole-run timeout이 아니며 cleanup의 기존 bounded wait는 별도다. 다른 run/process/사용 중인 port를 강제 종료하지 않는다.
+6. 기존 report/fixture를 그대로 둔 채 새 증거·한계와 targeted local commit을 제시한다. 원본 두 CPU Story AC, PRODUCT/P-1/P-2, notarization/Gatekeeper/clean-machine 및 release 완료를 주장하지 않는다. Push/PR/remote CI/notary/upload/distribution은 별도 human instruction 없이는 하지 않는다.
 
 ### 승인된 toolchain 설치와 실제 실패 기록
 
@@ -355,7 +410,7 @@ Manifest 필드는 `schemaRevision, sourceCommit, artifactHash, fixtureMapHash, 
 
 시험 harness는 sandbox 거부와 Unix mode/ACL/TCC 거부를 구분해야 한다. owner가 시험 전후 canary 존재와 정상 read/write를 확인하고 같은 user의 통제 실행에서 비교한다. app-group entitlement가 없다는 정적 증거와 실제 다른 group canary 접근 거부 증거를 구분한다. group canary가 없으면 그 동적 검사는 `blocked`이며 새 shared group 권한을 제품에 부여해 통과시키지 않는다. 보호 데이터를 검사하기 위해 실제 사용자 container를 탐색하지 않는다.
 
-Apple은 macOS 14+에서 다른 앱 container 접근 시 사용자 승인 요청이 발생할 수 있다고 설명한다 [A4]. 시험은 추가 접근 승인/FDA가 없는 clean-machine 상태를 기록하고 수행한다. prompt를 승인해 격리를 우회하지 않으며, prompt·사용자 거부·sandbox 자동 거부를 서로 다른 관측으로 남긴다. 사용자 거부만 관측한 경우 sandbox 격리 PASS가 아니라 `inconclusive`로 기록한다. 기존 사용자 환경의 TCC/권한을 초기화하거나 변경하지 않는다.
+Apple은 macOS 14+에서 다른 앱 container 접근 시 사용자 승인 요청이 발생할 수 있다고 설명한다 [A4]. 이번 시험은 승인된 현재 계정이며 기존 grant 부재나 clean-machine 상태를 주장하지 않는다. prompt를 승인해 격리를 우회하지 않으며, prompt·사용자 거부·sandbox 자동 거부를 서로 다른 관측으로 남긴다. 사용자 거부만 관측한 경우 sandbox 격리 PASS가 아니라 `inconclusive`로 기록한다. 기존 사용자 환경의 TCC/권한을 초기화하거나 변경하지 않는다.
 
 ### 조사 근거
 
@@ -386,10 +441,10 @@ Apple은 macOS 14+에서 다른 앱 container 접근 시 사용자 승인 요청
 
 - `scripts/topology/build.sh --arch <cpu>` — 고정 입력 취득/hash 검증 → PDFium static build → Xcode `PaperLensTopology` scheme Release build → inside-out signing·inventory. source commit과 승인 compiler/SDK/Team이 다르면 중단한다. 후보 artifact의 다운로드/hash 검사와 local signing은 구현 승인 범위에 포함되며 원격 CI/notary 제출은 포함되지 않는다.
 - `xcodebuild -project PaperLens.xcodeproj -scheme PaperLensTopology -configuration Release -destination 'platform=macOS,arch=arm64' test` — ProviderRPC frame 분할/합침, zero/oversize prefix, invalid UTF-8/중복 key, version mismatch, unknown method, capacity+1, cancel/result/deadline 경쟁, EOF/restart/중복 terminal 및 synthetic fixture validation을 검사한다. Intel host에서는 `arch=x86_64`로 실행한다. unit 성공을 signed process 격리 증거로 세지 않는다.
-- `scripts/topology/verify.sh --arch <cpu> --bundle .build/topology/<cpu>/PaperLens.app` — 실제 host CPU/Rosetta 여부·clean fixture profile을 확인하고 모든 positive/negative case와 safe evidence를 수집한다. 다른 CPU이면 그 실행 증거를 blocked로 기록하며 자동 Rosetta 대체를 하지 않는다. fixture/group/signing 준비 실패도 blocked다.
+- `scripts/topology/verify.sh --arch arm64 --bundle .build/topology/arm64/PaperLens.app --confirm-current-profile` — 실제 native host CPU/Rosetta 여부·current-user signed map·새 exclusive run namespace를 확인하고 positive/negative case와 safe evidence를 수집한다. x86_64는 static 검사만 실행하며 dynamic 면제/미검증을 기록한다. 자동 Rosetta 대체, fixture/group/signing 준비 실패의 PASS 처리 또는 clean-profile 추론은 하지 않는다.
 - 각 bundle에 `codesign --verify --strict --verbose=2` 및 nested entitlement/runtime 검사를 수행한다. **별도 공증 제출 지시 이후에만** `xcrun stapler validate`와 `spctl --assess --type execute --verbose=2` 및 clean-machine GUI launch를 검증한다. CLI 검사만으로 GUI/실제 process 경계 증거를 대신하지 않는다.
 
-**완료 기준의 단계 구분:** 명세 입력 고정 → 이 Spec SHA의 IMPLEMENTATION 승인 → 취득/컴파일/unit → signed arm64 실행 → 실제 Intel 실행 → 별도 지시된 notarization/Gatekeeper 검증 순으로 증거를 쌓는다. 뒤 단계가 막혀도 앞의 성공을 기록할 수 있지만 Story done/P-1 PASS로 승격하지 않는다. 새로운 계약·권한·dependency pin 변경은 원래 Ask First 경계를 따른다.
+**완료 기준의 단계 구분:** 새 명세 commit 고정 → 해당 SHA의 SCOPE 및 IMPLEMENTATION 승인 → 컴파일/unit·두 CPU build/sign/static → signed arm64 재시험/live 귀속 순으로 이번 prototype의 증거를 쌓는다. 실제 Intel 동적 실행은 계속 면제/미검증이며 notarization/Gatekeeper는 별도 human instruction 대상이다. 뒤 단계가 막혀도 앞의 성공을 기록할 수 있지만 원본 Story done/P-1 PASS로 승격하지 않는다. 새로운 계약·권한·dependency pin 변경은 원래 Ask First 경계를 따른다.
 
 ### 기존 승인 범위의 실행 증거
 
