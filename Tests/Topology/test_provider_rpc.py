@@ -11,12 +11,15 @@ rpc = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(rpc)
 
 ID = "01234567-89ab-4cde-8123-456789abcdef"
+PROBE = {"outcome": "denied", "reason": "permissionDenied", "syscallObserved": True,
+         "syscallResult": -1, "errno": 13, "beganAtNs": 1, "endedAtNs": 2}
 CASES = [
-    ("hello", {"major": 1, "minor": 0, "capabilities": ["topology-v1"]},
-     {"major": 1, "minor": 0, "capabilities": ["topology-v1"]}),
+    ("hello", {"major": 1, "minor": 1, "capabilities": ["topology-v1"]},
+     {"major": 1, "minor": 1, "capabilities": ["topology-v1"]}),
     ("topology.runtime", {}, {"sdkImported": True, "cliInitialized": False, "architecture": "arm64"}),
     ("topology.prepare", {"runID": ID}, {"prepared": True}),
-    ("topology.probe", {"runID": ID, "caseID": "ownZoneReadWrite"}, {"outcome": "denied", "reason": "permissionDenied"}),
+    ("topology.identity", {"runID": ID}, {"bridgePID": 1, "pythonPID": 2147483647}),
+    ("topology.probe", {"runID": ID, "caseID": "ownZoneReadWrite"}, PROBE),
     ("topology.cleanup", {"runID": ID}, {"absent": True}),
     ("topology.wait", {"durationMs": 1}, {"elapsed": True}),
     ("cancel", {"targetID": ID}, {"accepted": False}),
@@ -58,6 +61,9 @@ class ProviderRPCTests(unittest.TestCase):
                 for key in params:
                     missing = {name: item for name, item in params.items() if name != key}
                     self.rejects(lambda: rpc.validate_request(request(method, missing)), "invalidParams")
+                for key in result:
+                    missing = {name: item for name, item in result.items() if name != key}
+                    self.rejects(lambda: rpc.validate_terminal({**terminal, "result": missing}, method))
 
     def test_unknown_method_and_invalid_params_are_not_framing_failures(self):
         unknown = request("arbitrary.execute", {"command": "not-executed"})
@@ -81,7 +87,7 @@ class ProviderRPCTests(unittest.TestCase):
     def test_large_integer_versions_are_not_narrowed_or_rejected(self):
         for number in ("18446744073709551617", "-18446744073709551617", "9" * 5000):
             body = ('{"kind":"request","id":"' + ID + '","method":"hello","timeoutMs":1,'
-                    '"params":{"major":' + number + ',"minor":0,"capabilities":["topology-v1"]}}')
+                    '"params":{"major":' + number + ',"minor":1,"capabilities":["topology-v1"]}}')
             decoded = rpc.decode_frame(raw(body))
             rpc.validate_request(decoded)
             self.assertNotEqual(decoded["params"]["major"], 1)
@@ -114,12 +120,12 @@ class ProviderRPCTests(unittest.TestCase):
             rpc.validate_request(request("topology.wait", {"durationMs": value}))
         for value in (0, 5001, True, 1.0, "1", None):
             self.rejects(lambda: rpc.validate_request(request("topology.wait", {"durationMs": value})), "invalidParams")
-        # Negotiation, not the schema, handles major-version mismatch.
+        # Connection admission, not the schema, handles version mismatch.
         rpc.validate_request(request("hello", {"major": 2, "minor": 1, "capabilities": ["topology-v1"]}))
-        for params in ({"major": True, "minor": 0, "capabilities": ["topology-v1"]},
-                       {"major": 1, "minor": 0.0, "capabilities": ["topology-v1"]},
-                       {"major": 1, "minor": 0, "capabilities": []},
-                       {"major": 1, "minor": 0, "capabilities": ["topology-v1", "unknown"]}):
+        for params in ({"major": True, "minor": 1, "capabilities": ["topology-v1"]},
+                       {"major": 1, "minor": 1.0, "capabilities": ["topology-v1"]},
+                       {"major": 1, "minor": 1, "capabilities": []},
+                       {"major": 1, "minor": 1, "capabilities": ["topology-v1", "unknown"]}):
             self.rejects(lambda: rpc.validate_request(request("hello", params)), "invalidParams")
         for method, _, result in CASES:
             for key, value in result.items():
@@ -129,7 +135,48 @@ class ProviderRPCTests(unittest.TestCase):
         for architecture in ("arm64", "x86_64"):
             rpc.validate_terminal({"kind": "result", "id": ID, "result": {"sdkImported": True, "cliInitialized": True, "architecture": architecture}}, "topology.runtime")
         self.rejects(lambda: rpc.validate_terminal({"kind": "result", "id": ID, "result": {"sdkImported": True, "cliInitialized": True, "architecture": "aarch64"}}, "topology.runtime"))
-        self.rejects(lambda: rpc.validate_terminal({"kind": "result", "id": ID, "result": {"major": 2, "minor": 0, "capabilities": ["topology-v1"]}}, "hello"))
+        self.rejects(lambda: rpc.validate_terminal({"kind": "result", "id": ID, "result": {"major": 2, "minor": 1, "capabilities": ["topology-v1"]}}, "hello"))
+
+    def test_exact_hello_result_and_identity_boundaries(self):
+        for major, minor in ((1, 0), (1, 2), (2, 1), (True, 1), (1, True), (1, 1.0)):
+            self.rejects(lambda: rpc.validate_terminal(
+                {"kind": "result", "id": ID, "result": {"major": major, "minor": minor, "capabilities": ["topology-v1"]}}, "hello"))
+        self.rejects(lambda: rpc.validate_request(request("topology.identity", {"runID": "invalid"})), "invalidParams")
+        for key in ("bridgePID", "pythonPID"):
+            for value in (1, 2147483647):
+                rpc.validate_terminal({"kind": "result", "id": ID, "result": {"bridgePID": 1, "pythonPID": 1, key: value}}, "topology.identity")
+            for value in (0, -1, 2147483648, True, False, 1.0, "1", None, 10 ** 100):
+                self.rejects(lambda: rpc.validate_terminal(
+                    {"kind": "result", "id": ID, "result": {"bridgePID": 1, "pythonPID": 1, key: value}}, "topology.identity"))
+
+    def test_probe_observation_types_ranges_and_coherence(self):
+        def validate(result):
+            rpc.validate_terminal(rpc.decode_frame(rpc.encode_frame(
+                {"kind": "result", "id": ID, "result": result})), "topology.probe")
+
+        unobserved = {**PROBE, "syscallObserved": False, "syscallResult": 0,
+                      "errno": 0, "beganAtNs": 0, "endedAtNs": 0}
+        validate(unobserved)
+        for key in ("syscallResult", "errno", "beganAtNs", "endedAtNs"):
+            self.rejects(lambda: validate({**unobserved, key: 1}))
+            for value in (True, False, 1.0, "1", None):
+                self.rejects(lambda: validate({**PROBE, key: value}))
+        for value in (0, 1, "true", None):
+            self.rejects(lambda: validate({**PROBE, "syscallObserved": value}))
+        for changes in ({"syscallResult": -2147483648},
+                        {"syscallResult": 2147483647, "errno": 0},
+                        {"syscallResult": 0, "errno": 0}, {"errno": 0}, {"beganAtNs": 0},
+                        {"errno": 2147483647},
+                        {"beganAtNs": 9223372036854775806, "endedAtNs": 9223372036854775807}):
+            validate({**PROBE, **changes})
+        for changes in ({"syscallResult": -2147483649}, {"syscallResult": 2147483648},
+                        {"errno": -1}, {"errno": 2147483648},
+                        {"beganAtNs": -1}, {"beganAtNs": 9223372036854775808},
+                        {"endedAtNs": -1}, {"endedAtNs": 9223372036854775808},
+                        {"endedAtNs": 0}, {"endedAtNs": 1},
+                        {"beganAtNs": 3}, {"syscallResult": 0}, {"syscallResult": 1}):
+            self.rejects(lambda: validate({**PROBE, **changes}))
+        self.rejects(lambda: validate({"outcome": "denied", "reason": "permissionDenied"}))
 
     def test_closed_probe_and_error_enums(self):
         case_ids = ["ownZoneReadWrite", "mainCanaryRead", "mainCanaryWrite", "externalCanaryRead", "externalCanaryWrite",
@@ -140,8 +187,8 @@ class ProviderRPCTests(unittest.TestCase):
         self.rejects(lambda: rpc.validate_request(request("topology.probe", {"runID": ID, "caseID": "arbitraryPath"})), "invalidParams")
         for outcome in ("allowed", "denied", "inconclusive"):
             for reason in ("none", "permissionDenied", "missingFixture", "controlFailed", "unexpectedErrno"):
-                rpc.validate_terminal({"kind": "result", "id": ID, "result": {"outcome": outcome, "reason": reason}}, "topology.probe")
-        for result in ({"outcome": "success", "reason": "none"}, {"outcome": "allowed", "reason": "ENOENT"}):
+                rpc.validate_terminal({"kind": "result", "id": ID, "result": {**PROBE, "outcome": outcome, "reason": reason}}, "topology.probe")
+        for result in ({**PROBE, "outcome": "success", "reason": "none"}, {**PROBE, "outcome": "allowed", "reason": "ENOENT"}):
             self.rejects(lambda: rpc.validate_terminal({"kind": "result", "id": ID, "result": result}, "topology.probe"))
         for code in ("versionMismatch", "handshakeRequired", "unknownMethod", "invalidParams", "busy", "cancelled", "timeout", "unavailable", "internal"):
             rpc.validate_terminal({"kind": "error", "id": ID, "code": code}, "hello")

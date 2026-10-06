@@ -25,6 +25,8 @@ private final class PythonBridge: NSObject, ProviderFrameTransport, @unchecked S
   private let decoder = ProviderFrameDecoder()
   private var closed = false
   private var runtimeDirectory: TopologyOwnedFixtures?
+  private var identityRequests: [String: String] = [:]
+  private var identityRun: String?
 
   init(connection: NSXPCConnection) {
     self.connection = connection
@@ -68,8 +70,23 @@ private final class PythonBridge: NSObject, ProviderFrameTransport, @unchecked S
       }
       do {
         // The Python endpoint owns semantic admission and its bounded
-        // unknownMethod/invalidParams terminals. Only framing is checked here.
-        _ = try ProviderRPC.decode(frame)
+        // unknownMethod/invalidParams terminals; native checks are limited to
+        // framing and correlation of the identity candidate below.
+        let object = try ProviderRPC.decode(frame)
+        if object["method"] as? String == "topology.identity" {
+          // Semantic errors still belong to Python. Correlate only a request
+          // accepted by the central closed schema, never an arbitrary payload.
+          if (try? ProviderRPC.validateRequest(object)) != nil,
+            let identifier = object["id"] as? String,
+            let params = object["params"] as? [String: Any],
+            let run = params["runID"] as? String
+          {
+            guard self.identityRequests[identifier] == nil else {
+              throw ProviderRPCError.protocolViolation
+            }
+            self.identityRequests[identifier] = run
+          }
+        }
         self.pending.append(frame)
         self.flush()
       } catch {
@@ -283,6 +300,7 @@ private final class PythonBridge: NSObject, ProviderFrameTransport, @unchecked S
         return
       }
       for frame in frames {
+        try validateIdentity(frame)
         outgoingFrames += 1
         outgoingBytes += frame.count
         remote.receiveFrame(frame)
@@ -296,6 +314,38 @@ private final class PythonBridge: NSObject, ProviderFrameTransport, @unchecked S
         }
       }
     } catch { stop() }
+  }
+
+  private func validateIdentity(_ frame: Data) throws {
+    let object = try ProviderRPC.decode(frame)
+    guard let identifier = object["id"] as? String else {
+      throw ProviderRPCError.protocolViolation
+    }
+    let result = object["result"] as? [String: Any]
+    guard let run = identityRequests.removeValue(forKey: identifier) else {
+      if result?["bridgePID"] != nil || result?["pythonPID"] != nil {
+        throw ProviderRPCError.protocolViolation
+      }
+      return
+    }
+    try ProviderRPC.validateTerminal(object, method: "topology.identity")
+    // Python owns unavailable/timeout/cancel admission. Only successful
+    // candidates establish a binding, and it cannot move to another run.
+    guard object["kind"] as? String == "result" else { return }
+    guard identityRun == nil || identityRun == run,
+      let bridge = result?["bridgePID"] as? NSNumber,
+      let python = result?["pythonPID"] as? NSNumber,
+      bridge.int32Value == getpid(), python.int32Value == pid, pid > 0
+    else { throw ProviderRPCError.protocolViolation }
+    var info = siginfo_t()
+    var status: Int32
+    repeat {
+      status = waitid(P_PID, id_t(pid), &info, WEXITED | WNOHANG | WNOWAIT)
+    } while status < 0 && errno == EINTR
+    guard status == 0, info.si_pid == 0, getpgid(pid) == pid, kill(pid, 0) == 0 else {
+      throw ProviderRPCError.protocolViolation
+    }
+    identityRun = run
   }
 
   private func discardErrors() {
@@ -358,6 +408,8 @@ private final class PythonBridge: NSObject, ProviderFrameTransport, @unchecked S
     errors = -1
     for frame in pending { release(frame.count) }
     pending.removeAll()
+    identityRequests.removeAll()
+    identityRun = nil
     let old = connection
     connection = nil
     old?.invalidate()

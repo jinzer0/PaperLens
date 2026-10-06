@@ -197,6 +197,16 @@ def _matches(value, schema):
             or any(not _matches(value[key], rule) for key, rule in fields.items())
         ):
             return False
+        observation = schema.get("syscallObservation")
+        if observation is not None:
+            result, error, began, ended = (
+                value[observation[key]] for key in ("result", "errno", "began", "ended")
+            )
+            if not value[observation["observed"]]:
+                if any(number != 0 for number in (result, error, began, ended)):
+                    return False
+            elif began >= ended or (result >= 0 and error != 0):
+                return False
     elif kind == "array":
         if type(value) is not list or any(not _matches(item, schema["items"]) for item in value):
             return False

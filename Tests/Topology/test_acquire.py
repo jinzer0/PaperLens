@@ -669,6 +669,16 @@ class WheelTests(IsolatedTest):
 
 
 class EvidenceTests(IsolatedTest):
+    def report(self, **changes):
+        actors = [{"role": role, "actorInstanceRef": "actor-" + str(verify.uuid.uuid4()), "identityVerified": False} for role in verify.ROLES]
+        python = next(a["actorInstanceRef"] for a in actors if a["role"] == "Python")
+        row = {"caseID": "mainCanaryRead", "actorInstanceRef": python, "operation": "read", "fixtureID": "M",
+               "ownerPre": "unverified", "ownerPost": "unverified", "sameUIDControl": "unverified", "posixACLControl": "unverified",
+               "expectedRootMatched": True, "promptObserved": "unverified", "syscallResult": -1, "errno": 13,
+               "syscallObserved": True, "intervalRef": "mainCanaryRead", "sandboxDenialRef": None, "verdict": "inconclusive"}
+        row.update(changes)
+        return {"schemaRevision": "topology-evidence-v2", "runID": "01234567-89ab-4cde-8fab-0123456789ab", "actorBindings": actors, "cases": [row]}
+
     def invoke(self, arch="arm64", consent=False):
         output = io.StringIO()
         args = ["--arch", arch, "--bundle", str(self.root / "PaperLens.app")]
@@ -721,17 +731,19 @@ class EvidenceTests(IsolatedTest):
             verify.main(["--arch", "arm64", "--bundle", str(self.root), "--confirm-clean-profile"])
         self.assertEqual(error.exception.code, 2)
 
-    def test_existing_report_is_untouched_before_read_or_owner_launch(self):
+    def test_existing_report_is_untouched_and_does_not_block_new_namespace(self):
         report = self.root / "Library/Containers" / verify.IDENTITY / "Data/Library/Application Support/PaperLensTopology/report.json"
         report.parent.mkdir(parents=True)
         report.write_bytes(b"existing owner evidence")
         before = report.stat()
         with mock.patch.object(verify, "current_home", return_value=self.root), mock.patch.object(verify, "read_json") as read, mock.patch.object(verify, "Controls") as controls, mock.patch.object(verify, "GroupOwner") as owner, mock.patch.object(verify, "command") as launch:
-            with self.assertRaisesRegex(acquire.Failure, "existing_owner_report_preserved"):
+            owner.return_value.start.side_effect = acquire.Failure("group_owner_fixture_unavailable")
+            owner.return_value.finish.return_value = None
+            with self.assertRaisesRegex(acquire.Failure, "group_owner_fixture_unavailable"):
                 verify.gui_run(self.root / "PaperLens.app", verify.base_evidence("arm64"))
         read.assert_not_called()
-        controls.assert_not_called()
-        owner.assert_not_called()
+        controls.return_value.start.assert_not_called()
+        owner.return_value.start.assert_called_once()
         launch.assert_not_called()
         self.assertEqual(report.read_bytes(), b"existing owner evidence")
         after = report.stat()
@@ -741,8 +753,10 @@ class EvidenceTests(IsolatedTest):
         report = self.root / "Library/Containers" / verify.IDENTITY / "Data/Library/Application Support/PaperLensTopology/report.json"
         report.parent.mkdir(parents=True)
         report.symlink_to("missing-owner-report")
-        with mock.patch.object(verify, "current_home", return_value=self.root), mock.patch.object(verify, "read_json") as read, mock.patch.object(verify, "command") as launch:
-            with self.assertRaisesRegex(acquire.Failure, "existing_owner_report_preserved"):
+        with mock.patch.object(verify, "current_home", return_value=self.root), mock.patch.object(verify, "read_json") as read, mock.patch.object(verify, "GroupOwner") as owner, mock.patch.object(verify, "command") as launch:
+            owner.return_value.start.side_effect = acquire.Failure("group_owner_fixture_unavailable")
+            owner.return_value.finish.return_value = None
+            with self.assertRaisesRegex(acquire.Failure, "group_owner_fixture_unavailable"):
                 verify.gui_run(self.root, verify.base_evidence("arm64"))
         read.assert_not_called()
         launch.assert_not_called()
@@ -773,17 +787,17 @@ class EvidenceTests(IsolatedTest):
 
     def test_errno_alone_and_untrusted_denial_ref_never_pass(self):
         run_id = "01234567-89ab-4cde-8fab-0123456789ab"
-        row = {"caseID": "mainCanaryRead", "actorInstanceRef": "agent-1", "operation": "read", "fixtureID": "M", "errno": 13, "syscallResult": -1, "verdict": "pass", "sandboxDenialRef": "/private/log/secret"}
-        report = {"schemaRevision": "topology-v1", "runID": run_id, "cases": [row]}
+        report = self.report(verdict="pass", sandboxDenialRef="/private/log/secret")
+        row = report["cases"][0]
         projected = verify.project_cases(report, run_id)[0]
-        self.assertEqual(projected["verdict"], "inconclusive")
+        self.assertEqual(projected["verdict"], "blocked")
         self.assertIsNone(projected["sandboxDenialRef"])
         row["promptObserved"] = True
-        self.assertEqual(verify.project_cases(report, run_id)[0]["verdict"], "inconclusive")
+        self.assertEqual(verify.project_cases(report, run_id)[0]["verdict"], "blocked")
 
     def test_unsafe_report_alias_is_rejected(self):
         run_id = "01234567-89ab-4cde-8fab-0123456789ab"
-        report = {"schemaRevision": "topology-v1", "runID": run_id, "cases": [{"caseID": "read", "actorInstanceRef": "agent", "operation": "read", "fixtureID": "/Users/private"}]}
+        report = self.report(fixtureID="/Users/private")
         with self.assertRaisesRegex(acquire.Failure, "unsafe_fixture_alias"):
             verify.project_cases(report, run_id)
 
@@ -831,6 +845,424 @@ class EvidenceTests(IsolatedTest):
                 control.check_external()
         read.assert_not_called()
         write.assert_not_called()
+
+
+class LiveAttributionTests(IsolatedTest):
+    run_id = "01234567-89ab-4cde-8fab-0123456789ab"
+    contract_hash = "a" * 64
+
+    def report(self, **changes):
+        return EvidenceTests.report(self, **changes)
+
+    def ready(self, phase="pre", worker=False):
+        aliases = ("M", "A", "C", "E", "G") if worker else ("A", "C")
+        roles = ("PDFiumXPC",) if worker else verify.ROLES
+        return {"schemaRevision": verify.READINESS, "runID": self.run_id, "phase": phase,
+                "contractHash": self.contract_hash, "clock": "darwin-uptime-ns", "ownerControl": True,
+                "actors": [{"role": role, "pid": 100 + verify.ROLES.index(role)} for role in roles],
+                "links": [{"alias": alias, "name": alias + ".link"} for alias in aliases], "intervals": []}
+
+    def identities(self, candidates=None):
+        candidates = self.ready()["actors"] if candidates is None else candidates
+        names = {"Main": verify.IDENTITY, "ProviderAgent": verify.IDENTITY + ".ProviderAgent",
+                 "Python": verify.IDENTITY + ".ProviderAgent.Python", "PDFiumXPC": verify.IDENTITY + ".PDFiumXPC"}
+        return {"status": "verified", "timebase": {"numerator": 125, "denominator": 3},
+                "actors": [{"role": a["role"], "pid": a["pid"], "parentPID": 101 if a["role"] == "Python" else 1,
+                            "birthSec": 123, "birthUsec": 456, "codeIdentityRef": names[a["role"]], "verified": True} for a in candidates]}
+
+    def observer(self):
+        bundle = self.root / "PaperLens.app"
+        contract = bundle / "Contents/Resources/contract.json"
+        contract.parent.mkdir(parents=True)
+        contract.write_bytes(b"synthetic closed contract")
+        controls = [mock.Mock(paths=verify.fixture_paths(self.root, self.run_id), rows={}),
+                    mock.Mock(paths=verify.fixture_paths(self.root, self.run_id), rows={})]
+        observer = verify.ReadinessObserver(self.root, self.run_id, bundle, "b" * 64, self.root / "helper", controls, mock.Mock(), mock.Mock())
+        self.addCleanup(lambda: [os.close(d) for d, _ in observer.directories.values()])
+        return observer
+
+    def write_ready(self, observer, phase="pre", worker=False):
+        path = observer.paths[1 if worker else 0]
+        path.mkdir(mode=0o700, parents=True, exist_ok=True)
+        os.chmod(path, 0o700)
+        if not worker:
+            os.chmod(path.parent, 0o700)
+        ready = self.ready(phase, worker)
+        ready["contractHash"] = observer.contract_hash
+        filename = "ready.json" if phase == "pre" else "post-ready.json"
+        data = json.dumps(ready).encode()
+        with (path / filename).open("xb") as stream:
+            os.fchmod(stream.fileno(), 0o600)
+            stream.write(data)
+        return path, data
+
+    def bound_observer(self, report):
+        identities = verify.actor_records(self.identities(), self.ready()["actors"])
+        return mock.Mock(bindings=identities, post_bindings=identities,
+                         intervals={row["caseID"]: {"caseID": row["caseID"], "beganAtNs": 10, "endedAtNs": 20} for row in report["cases"]},
+                         controls=[mock.Mock(rows={}), mock.Mock(rows={})], owner_control={}, denials=[])
+
+    def test_new_run_collision_shapes_preserve_every_file(self):
+        for worker in (False, True):
+            for shape in ("directory", "file", "symlink"):
+                with self.subTest(worker=worker, shape=shape):
+                    run = str(verify.uuid.uuid4())
+                    path = verify.run_paths(self.root, run)[int(worker)]
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    if shape == "directory":
+                        path.mkdir()
+                        (path / "report.json").write_bytes(b"existing evidence")
+                    elif shape == "file":
+                        path.write_bytes(b"existing evidence")
+                    else:
+                        path.symlink_to("missing")
+                    info = path.lstat()
+                    with self.assertRaisesRegex(acquire.Failure, "existing_run_preserved"):
+                        verify.collision_preflight(self.root, run)
+                    self.assertEqual((info.st_dev, info.st_ino, info.st_mode, info.st_mtime_ns),
+                                     (path.lstat().st_dev, path.lstat().st_ino, path.lstat().st_mode, path.lstat().st_mtime_ns))
+                    if shape == "directory":
+                        self.assertEqual((path / "report.json").read_bytes(), b"existing evidence")
+
+    def test_same_run_collision_stops_before_owner_controls_compile_or_launch(self):
+        path = verify.run_paths(self.root, self.run_id)[0]
+        path.mkdir(parents=True)
+        with mock.patch.object(verify, "current_home", return_value=self.root), mock.patch.object(verify.uuid, "uuid4", return_value=verify.uuid.UUID(self.run_id)), mock.patch.object(verify, "Controls") as controls, mock.patch.object(verify, "GroupOwner") as owner, mock.patch.object(verify, "compile_actor_helper") as compiler, mock.patch.object(verify, "command") as launch:
+            with self.assertRaisesRegex(acquire.Failure, "existing_run_preserved"):
+                verify.gui_run(self.root / "PaperLens.app", verify.base_evidence("arm64"))
+        for action in (controls, owner, compiler, launch):
+            action.assert_not_called()
+
+    def test_phase_contract_is_closed_and_replay_and_bool_pid_fail(self):
+        ready = self.ready()
+        verify.ready_message(ready, self.run_id, "pre", self.contract_hash)
+        for changes in ({"extra": "private"}, {"phase": "post"}, {"contractHash": "b" * 64}, {"runID": str(verify.uuid.uuid4())},
+                        {"clock": "wall-clock"}, {"ownerControl": 1}, {"actors": [{"role": "PDFiumXPC", "pid": True}]},
+                        {"links": [{"alias": "A", "name": "../A.link"}, {"alias": "C", "name": "C.link"}]},
+                        {"intervals": [{"caseID": "mainCanaryRead", "beganAtNs": 20, "endedAtNs": 10}]}):
+            with self.subTest(changes=changes), self.assertRaises(acquire.Failure):
+                verify.ready_message(dict(ready, **changes), self.run_id, "pre", self.contract_hash)
+
+    def test_worker_candidate_is_only_the_main_bound_worker(self):
+        ready = self.ready(worker=True)
+        verify.ready_message(ready, self.run_id, "pre", self.contract_hash, worker=True)
+        records = verify.actor_records(self.identities(), self.ready()["actors"])
+        worker = verify.actor_records(self.identities(ready["actors"]), ready["actors"])
+        verify.same_generation({"PDFiumXPC": records["PDFiumXPC"]}, worker)
+        worker["PDFiumXPC"]["pid"] += 1
+        with self.assertRaisesRegex(acquire.Failure, "actor_generation_changed"):
+            verify.same_generation({"PDFiumXPC": records["PDFiumXPC"]}, worker)
+
+    def test_birth_reuse_parent_signature_and_unverified_identity_fail_closed(self):
+        candidates = self.ready()["actors"]
+        original = verify.actor_records(self.identities(), candidates)
+        for field, replacement in (("parentPID", 999), ("codeIdentityRef", verify.IDENTITY + ".ProviderAgent.PythonRuntime"), ("verified", False), ("pid", True), ("birthUsec", 1_000_000)):
+            response = self.identities()
+            python = next(a for a in response["actors"] if a["role"] == "Python")
+            python[field] = replacement
+            with self.subTest(field=field), self.assertRaises(acquire.Failure):
+                verify.actor_records(response, candidates)
+        changed = verify.actor_records(self.identities(), candidates)
+        changed["Python"]["birthSec"] += 1
+        with self.assertRaisesRegex(acquire.Failure, "actor_generation_changed"):
+            verify.same_generation(original, changed)
+
+    def test_ack_hashes_exact_bytes_and_controls_precede_release(self):
+        observer = self.observer()
+        path, data = self.write_ready(observer)
+        records = verify.actor_records(self.identities(), self.ready()["actors"])
+        with mock.patch.object(verify, "no_acl", return_value=True), mock.patch.object(observer, "query", return_value=records):
+            observer.controls[0].observe.side_effect = lambda *args: self.assertFalse((path / "continue.json").exists())
+            observer.poll()
+        ack = json.loads((path / "continue.json").read_bytes())
+        self.assertEqual(set(ack), {"schemaRevision", "runID", "phase", "readyHash", "artifactHash"})
+        self.assertEqual(ack["readyHash"], hashlib.sha256(data).hexdigest())
+        self.assertEqual(ack["artifactHash"], "b" * 64)
+        self.assertEqual(stat.S_IMODE((path / "continue.json").stat().st_mode), 0o600)
+        observer.withdraw()
+        self.assertTrue((path / "continue.json").exists())  # Ready still owned by native.
+        (path / "ready.json").unlink()
+        observer.withdraw()
+        self.assertFalse((path / "continue.json").exists())
+        self.assertTrue(path.is_dir())
+
+    def test_ack_is_invisible_until_complete_exclusive_publication(self):
+        observer = self.observer()
+        path, data = self.write_ready(observer)
+        records = verify.actor_records(self.identities(), self.ready()["actors"])
+        original_write = os.write
+        def partial_write(descriptor, payload):
+            self.assertFalse((path / "continue.json").exists())
+            return original_write(descriptor, payload[:1])
+        with mock.patch.object(verify, "no_acl", return_value=True), mock.patch.object(observer, "query", return_value=records), mock.patch.object(verify.os, "write", side_effect=partial_write):
+            observer.poll()
+        ack = json.loads((path / "continue.json").read_bytes())
+        self.assertEqual(ack["readyHash"], hashlib.sha256(data).hexdigest())
+        self.assertEqual((path / "continue.json").stat().st_nlink, 1)
+        self.assertEqual({p.name for p in path.iterdir()}, {"ready.json", "continue.json"})
+
+    def test_ack_replacement_is_preserved_and_replay_not_adopted(self):
+        observer = self.observer()
+        path, _ = self.write_ready(observer)
+        records = verify.actor_records(self.identities(), self.ready()["actors"])
+        with mock.patch.object(verify, "no_acl", return_value=True), mock.patch.object(observer, "query", return_value=records):
+            observer.poll()
+        ack = path / "continue.json"
+        ack.rename(path / "held-owned-ack")  # Hold old inode so reuse cannot hide replacement.
+        ack.write_bytes(b"other owner")
+        (path / "ready.json").unlink()
+        with self.assertRaisesRegex(acquire.Failure, "ack_inode_replaced"):
+            observer.withdraw()
+        self.assertEqual(ack.read_bytes(), b"other owner")
+        self.assertTrue((path / "held-owned-ack").exists())
+
+    def test_ready_replacement_and_parent_permissions_fail_without_adoption(self):
+        observer = self.observer()
+        path, _ = self.write_ready(observer)
+        records = verify.actor_records(self.identities(), self.ready()["actors"])
+        with mock.patch.object(verify, "no_acl", return_value=True), mock.patch.object(observer, "query", return_value=records):
+            path.parent.chmod(0o755)
+            with self.assertRaisesRegex(acquire.Failure, "unsafe_live_inode"):
+                observer.poll()
+            self.assertFalse((path / "continue.json").exists())
+            path.parent.chmod(0o700)
+            observer.poll()
+        (path / "ready.json").rename(path / "held-ready")
+        (path / "ready.json").write_bytes(b"replacement")
+        with self.assertRaisesRegex(acquire.Failure, "readiness_inode_replaced"):
+            observer.withdraw()
+        self.assertTrue((path / "continue.json").exists())
+        self.assertEqual((path / "ready.json").read_bytes(), b"replacement")
+
+    def test_post_controls_owner_and_generation_checks_precede_main_ack(self):
+        observer = self.observer()
+        path, _ = self.write_ready(observer)
+        records = verify.actor_records(self.identities(), self.ready()["actors"])
+        with mock.patch.object(verify, "no_acl", return_value=True), mock.patch.object(observer, "query", return_value=records), mock.patch.object(verify, "collect_os_evidence", return_value=[]):
+            observer.poll()
+            (path / "ready.json").unlink()
+            observer.withdraw()
+            self.write_ready(observer, phase="post")
+            observer.controls[0].observe.side_effect = lambda *args: self.assertFalse((path / "post-continue.json").exists())
+            observer.external.finish.side_effect = lambda: self.assertFalse((path / "post-continue.json").exists())
+            observer.owner.finish.side_effect = lambda **kwargs: self.assertFalse((path / "post-continue.json").exists())
+            observer.poll()
+        observer.external.finish.assert_called_once()
+        observer.owner.finish.assert_called_once()
+        self.assertTrue((path / "post-continue.json").exists())
+
+    def test_existing_ack_is_not_overwritten(self):
+        observer = self.observer()
+        path, _ = self.write_ready(observer)
+        (path / "continue.json").write_bytes(b"existing ack")
+        records = verify.actor_records(self.identities(), self.ready()["actors"])
+        with mock.patch.object(verify, "no_acl", return_value=True), mock.patch.object(observer, "query", return_value=records), self.assertRaises(FileExistsError):
+            observer.poll()
+        self.assertEqual((path / "continue.json").read_bytes(), b"existing ack")
+
+    def test_ready_inode_modes_hardlinks_acl_and_size_are_rejected(self):
+        directory = self.root / "private"
+        directory.mkdir(mode=0o700)
+        path = directory / "ready.json"
+        path.write_bytes(b"{}")
+        descriptor = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+        self.addCleanup(os.close, descriptor)
+        with mock.patch.object(verify, "no_acl", return_value=True):
+            path.chmod(0o644)
+            with self.assertRaisesRegex(acquire.Failure, "unsafe_live_inode"):
+                verify.read_at(descriptor, "ready.json", 65536)
+            path.chmod(0o600)
+            os.link(path, directory / "held")
+            with self.assertRaisesRegex(acquire.Failure, "unsafe_live_inode"):
+                verify.read_at(descriptor, "ready.json", 65536)
+            (directory / "held").unlink()
+            path.write_bytes(b"x" * 65537)
+            with self.assertRaisesRegex(acquire.Failure, "evidence_size_limit"):
+                verify.read_at(descriptor, "ready.json", 65536)
+        with mock.patch.object(verify, "no_acl", return_value=False), self.assertRaisesRegex(acquire.Failure, "unsafe_live_inode"):
+            verify.read_at(descriptor, "ready.json", 65536)
+
+    def fixture_control(self):
+        path = self.root / "private/marker"
+        path.parent.mkdir(mode=0o700)
+        path.write_bytes(b"PaperLens topology canary\n")
+        path.chmod(0o600)
+        control = verify.LiveControls({"M": path})
+        self.addCleanup(control.close)
+        return control, path
+
+    def test_fixture_fd_control_checks_marker_before_unchanged_first_byte(self):
+        control, path = self.fixture_control()
+        original = path.read_bytes()
+        real_pwrite = os.pwrite
+        writes = []
+        def write(descriptor, data, offset):
+            writes.append((data, offset))
+            return real_pwrite(descriptor, data, offset)
+        with mock.patch.object(verify, "no_acl", return_value=True), mock.patch.object(verify.os, "pwrite", side_effect=write):
+            self.assertTrue(control.file("M", "pre"))
+            self.assertTrue(control.file("M", "post"))
+        self.assertEqual(writes, [(original[:1], 0), (original[:1], 0)])
+        self.assertEqual(path.read_bytes(), original)
+
+    def test_replaced_fixture_bad_marker_and_acl_never_get_written(self):
+        control, path = self.fixture_control()
+        with mock.patch.object(verify, "no_acl", return_value=True):
+            control.file("M", "pre")
+            path.rename(path.with_name("held"))
+            path.write_bytes(b"PaperLens topology canary\n")
+            path.chmod(0o600)
+            with mock.patch.object(verify.os, "pwrite") as write, self.assertRaisesRegex(acquire.Failure, "fixture_generation_changed"):
+                control.file("M", "post")
+            write.assert_not_called()
+            path.write_bytes(b"private, not a public marker")
+            with mock.patch.object(verify.os, "pwrite") as write, self.assertRaisesRegex(acquire.Failure, "fixture_marker_unproven"):
+                control.file("M", "post")
+            write.assert_not_called()
+        with mock.patch.object(verify, "no_acl", return_value=False), mock.patch.object(verify.os, "pwrite") as write, self.assertRaisesRegex(acquire.Failure, "unsafe_live_inode"):
+            control.file("M", "post")
+        write.assert_not_called()
+
+    def test_fixed_link_controls_reject_other_target_and_reused_owner_root(self):
+        control, target = self.fixture_control()
+        links = self.root / "links"
+        links.mkdir(mode=0o700)
+        link = links / "M.link"
+        link.symlink_to(target)
+        with mock.patch.object(verify, "no_acl", return_value=True):
+            self.assertTrue(control.link(links, "M", "Python", "pre"))
+            link.rename(links / "held-link")
+            link.symlink_to(self.root / "real-data")
+            with self.assertRaisesRegex(acquire.Failure, "fixture_link_unproven"):
+                control.link(links, "M", "Python", "post")
+            link.unlink()
+            link.symlink_to(target)
+            with self.assertRaisesRegex(acquire.Failure, "fixture_generation_changed"):
+                control.link(links, "M", "Python", "post")
+
+    def test_false_observed_missing_binding_and_ref_mismatch_cannot_pass(self):
+        report = self.report(syscallObserved=False, syscallResult=0, errno=0, verdict="pass")
+        observer = self.bound_observer(report)
+        self.assertEqual(verify.project_cases(report, self.run_id, observer)[0]["verdict"], "inconclusive")
+        self.assertEqual(verify.project_cases(report, self.run_id)[0]["verdict"], "blocked")
+        for changes, reason in (({"intervalRef": "other"}, "report_interval_join_mismatch"),
+                                ({"actorInstanceRef": "actor-" + str(verify.uuid.uuid4())}, "report_actor_join_mismatch"),
+                                ({"errno": True}, "invalid_report_syscall"), ({"syscallResult": 2**31}, "invalid_report_syscall"),
+                                ({"beganAtNs": 1}, "raw_report_metadata"), ({"operation": "bind"}, "report_operation_join_mismatch")):
+            bad = self.report(**changes)
+            with self.subTest(changes=changes), self.assertRaisesRegex(acquire.Failure, reason):
+                verify.project_cases(bad, self.run_id)
+
+    def test_same_uid_controls_do_not_prove_tcc_or_prompt_absence(self):
+        report = self.report(verdict="pass", promptObserved=False)
+        observer = self.bound_observer(report)
+        observer.controls[0].rows = {("Main", "M", "file"): {"preVerified": True, "postVerified": True}}
+        row = verify.project_cases(report, self.run_id, observer)[0]
+        self.assertTrue(row["sameUIDControl"])
+        self.assertTrue(row["posixACLControl"])
+        self.assertEqual(row["promptObserved"], "unverified")
+        self.assertEqual(row["verdict"], "inconclusive")
+
+    def test_forbidden_success_fails_and_safe_final_projection_has_no_raw_metadata(self):
+        report = self.report(syscallResult=1, errno=0, verdict="pass", sandboxDenialRef="/Users/private/log")
+        observer = self.bound_observer(report)
+        evidence = verify.base_evidence("arm64")
+        evidence["cases"] = verify.project_cases(report, self.run_id, observer, evidence)
+        self.assertEqual(evidence["cases"][0]["verdict"], "failed")
+        encoded = json.dumps(evidence)
+        for forbidden in ("/Users/", "birthSec", "birthUsec", "parentPID", "beganAtNs", "endedAtNs", '"pid"'):
+            self.assertNotIn(forbidden, encoded)
+        self.assertIsNone(evidence["cases"][0]["sandboxDenialRef"])
+        self.assertTrue(evidence["cases"][0]["intervalRef"].startswith("interval-"))
+
+    def test_positive_pdf_descriptor_capabilities_are_not_sandbox_pass(self):
+        for operation, value, code in (("descriptorRead", len(verify.synthetic_pdf()), 0), ("descriptorWrite", -1, errno.EBADF)):
+            report = self.report(caseID="PDFiumXPC.PDF." + operation, intervalRef="PDFiumXPC.PDF." + operation,
+                                 operation=operation, fixtureID="PDF", syscallResult=value, errno=code, verdict="pass")
+            report["cases"][0]["actorInstanceRef"] = next(a["actorInstanceRef"] for a in report["actorBindings"] if a["role"] == "PDFiumXPC")
+            evidence = verify.base_evidence("arm64")
+            observer = self.bound_observer(report)
+            observer.controls[1].rows = {("PDFiumXPC", "PDF", "file"): {
+                "controlRef": "control-" + str(verify.uuid.uuid4()), "role": "PDFiumXPC", "alias": "PDF",
+                "operation": "readWrite", "preVerified": True, "postVerified": True, "reason": "same-uid-not-tcc-proof"}}
+            rows = verify.project_cases(report, self.run_id, observer, evidence)
+            self.assertEqual(rows[0]["verdict"], "inconclusive")
+            self.assertEqual(evidence["automated"][-1]["verdict"], "pass")
+            self.assertEqual(evidence["automated"][-1]["reason"], "descriptor-capability-not-sandbox-proof")
+
+    def test_clock_ambiguity_and_network_actual_stage_are_not_promoted(self):
+        bindings = verify.actor_records(self.identities(), self.ready()["actors"])
+        paths = verify.fixture_paths(self.root, self.run_id)
+        file_event = {"processID": 102, "eventMessage": f"Sandbox: Python(102) deny(1) file-read-data {paths['M']}", "machTimestamp": 10}
+        bind_event = {"processID": 102, "eventMessage": "Sandbox: Python(102) deny(1) network-bind 127.0.0.1:18766"}
+        rows = verify.safe_denial_projection([file_event, file_event, bind_event], bindings, paths, {"mainCanaryRead": {"beganAtNs": 10, "endedAtNs": 20}})
+        self.assertEqual(len(rows), 2)
+        self.assertEqual({row["operation"] for row in rows}, {"read", "bind"})
+        self.assertTrue(all(not row["attributed"] and row["reason"] == "clock-unproven" for row in rows))
+        self.assertNotIn("listen", {row["operation"] for row in rows})
+        encoded = json.dumps(rows)
+        self.assertNotIn(str(self.root), encoded)
+        self.assertNotIn("machTimestamp", encoded)
+        wrong = dict(file_event, processID=103)
+        boolean = dict(file_event, processID=True)
+        escaped = dict(file_event, eventMessage=file_event["eventMessage"] + "/../real")
+        self.assertEqual(verify.safe_denial_projection([wrong, boolean, escaped], bindings, paths, {}), [])
+
+    def test_kernel_logger_pid_is_not_the_denied_process_pid(self):
+        bindings = verify.actor_records(self.identities(), self.ready()["actors"])
+        paths = verify.fixture_paths(self.root, self.run_id)
+        event = {"processID": 0, "eventMessage": f"Sandbox: Python(102) deny(1) file-write-data {paths['M']}"}
+        rows = verify.safe_denial_projection([event], bindings, paths, {})
+        self.assertEqual(len(rows), 1)
+        self.assertEqual((rows[0]["role"], rows[0]["alias"], rows[0]["operation"]), ("Python", "M", "write"))
+        self.assertFalse(rows[0]["attributed"])
+        unknown = dict(event, eventMessage=event["eventMessage"].replace("(102)", "(999)"))
+        self.assertEqual(verify.safe_denial_projection([unknown], bindings, paths, {}), [])
+
+    def test_historical_native_schema_has_no_reader_fallback(self):
+        report = self.report()
+        report["schemaRevision"] = "topology-v1"
+        with self.assertRaisesRegex(acquire.Failure, "stale_or_invalid_report"):
+            verify.project_cases(report, self.run_id)
+
+    def test_bounded_query_refuses_expired_deadline_before_start(self):
+        with mock.patch.object(verify.subprocess, "Popen") as launch, self.assertRaisesRegex(acquire.Failure, "evidence_query_timeout"):
+            verify.bounded_query(["never-run"], time.monotonic() - 1)
+        launch.assert_not_called()
+
+    def test_bounded_query_limits_output_and_kills_only_owned_query(self):
+        read_fd, write_fd = os.pipe()
+        error_read, error_write = os.pipe()
+        reader = os.fdopen(read_fd, "rb", buffering=0)
+        errors = os.fdopen(error_read, "rb", buffering=0)
+        with os.fdopen(write_fd, "wb", buffering=0) as writer:
+            writer.write(b"x" * 4097)
+        os.close(error_write)
+        process = mock.Mock(stdout=reader, stderr=errors, stdin=None)
+        process.poll.return_value = None
+        with mock.patch.object(verify.subprocess, "Popen", return_value=process) as launch, self.assertRaisesRegex(acquire.Failure, "evidence_query_limit"):
+            verify.bounded_query(["owned-query-only"], time.monotonic() + 1, maximum=4096)
+        process.kill.assert_called_once()
+        process.wait.assert_called_once_with(timeout=2)
+        self.assertTrue(reader.closed)
+        self.assertTrue(errors.closed)
+        self.assertEqual(launch.call_args.args[0], ["owned-query-only"])
+
+    def test_os_query_is_known_pid_fixed_target_and_operation_scoped(self):
+        bindings = verify.actor_records(self.identities(), self.ready()["actors"])
+        paths = verify.fixture_paths(self.root, self.run_id)
+        with mock.patch.object(verify, "bounded_query", return_value=(0, b"[]")) as query:
+            self.assertEqual(verify.collect_os_evidence(bindings, paths, {}, time.monotonic() + 1), [])
+        arguments = query.call_args.args[0]
+        self.assertEqual(arguments[:3], ["/usr/bin/log", "show", "--last"])
+        predicate = arguments[-1]
+        for pid in (100, 101, 102, 103):
+            self.assertIn(f"processID == {pid}", predicate)
+        self.assertIn(self.run_id, predicate)
+        self.assertIn("file-write-data", predicate)
+        self.assertIn("network-bind", predicate)
+        self.assertNotIn("process ==", predicate)
+        self.assertEqual(query.call_args.kwargs["maximum"], 1024**2)
 
 
 class CurrentProfileTests(IsolatedTest):

@@ -16,6 +16,7 @@ import stat
 import subprocess
 import sys
 import threading
+import time
 import uuid
 
 # The signed resources directory is the only additional import root.
@@ -95,6 +96,7 @@ class Fixtures:
     def __init__(self) -> None:
         self.prepared: set[str] = set()
         self.owned: dict[str, dict[Path, tuple[int, int] | None]] = {}
+        self.links: dict[str, dict[Path, str]] = {}
 
     @staticmethod
     def identity(path: Path) -> tuple[int, int]:
@@ -114,7 +116,7 @@ class Fixtures:
     def prepare(self, run: str) -> dict:
         paths = self.own_paths(run)
         root, _ = self.roots()
-        if run in self.prepared or any(p.parent.exists() for p in paths):
+        if run in self.prepared or any(os.path.lexists(p.parent) for p in paths):
             raise FileExistsError('existingFixture')
         created: dict[Path, tuple[int, int]] = {}
         try:
@@ -132,7 +134,15 @@ class Fixtures:
                     info = os.fstat(output.fileno())
                     created[path] = (info.st_dev, info.st_ino)
                     output.write(MARKER)
+            links = {}
+            for alias, target in self.targets(run).items():
+                link = paths[0].parent / (alias + '.link')
+                link.symlink_to(target)
+                created[link] = self.identity(link)
+                links[link] = str(target)
             self.owned[run] = {owned: created[owned] for path in paths for owned in (path.parent, path)}
+            self.owned[run].update({link: created[link] for link in links})
+            self.links[run] = links
             self.prepared.add(run)
             return {'prepared': True}
         except BaseException:
@@ -140,7 +150,7 @@ class Fixtures:
                 try:
                     if self.identity(path) != identity:
                         continue
-                    if path.is_dir():
+                    if stat.S_ISDIR(path.lstat().st_mode):
                         path.rmdir()
                     else:
                         path.unlink()
@@ -152,103 +162,202 @@ class Fixtures:
     def cleanup(self, run: str) -> dict:
         paths = self.own_paths(run)
         if run not in self.prepared:
-            return {'absent': not any(p.parent.exists() for p in paths)}
+            return {'absent': not any(os.path.lexists(p.parent) for p in paths)}
         owned = self.owned[run]
         for path in paths:
             try:
-                if self.identity(path.parent) != owned[path.parent] or path.parent.is_symlink():
+                parent_info = path.parent.lstat()
+                if ((parent_info.st_dev, parent_info.st_ino) != owned[path.parent]
+                        or not stat.S_ISDIR(parent_info.st_mode)
+                        or parent_info.st_uid != os.getuid()
+                        or stat.S_IMODE(parent_info.st_mode) != 0o700):
                     raise PermissionError('fixtureReplaced')
             except FileNotFoundError:
                 owned[path.parent] = None
                 owned[path] = None
                 continue
             # Remove only the known files created by this process; never recursively delete fixtures.
-            for link in ('main.link', 'external.link', 'group.link'):
-                candidate = path.parent / link
-                if candidate.is_symlink():
+            for candidate, target in self.links[run].items():
+                if candidate.parent != path.parent:
+                    continue
+                try:
+                    if (self.identity(candidate) != owned[candidate]
+                            or not candidate.is_symlink() or os.readlink(candidate) != target):
+                        raise PermissionError('fixtureReplaced')
+                except FileNotFoundError:
+                    owned[candidate] = None
+                else:
                     candidate.unlink()
+                    owned[candidate] = None
             try:
                 if self.identity(path) != owned[path] or path.is_symlink():
                     raise PermissionError('fixtureReplaced')
             except FileNotFoundError:
                 owned[path] = None
             else:
+                fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                try:
+                    info = os.fstat(fd)
+                    if (not self.valid_canary(info)
+                            or (info.st_dev, info.st_ino) != owned[path]
+                            or os.pread(fd, len(MARKER) + 1, 0) != MARKER):
+                        raise PermissionError('fixtureReplaced')
+                finally:
+                    os.close(fd)
                 path.unlink()
                 owned[path] = None
             path.parent.rmdir()
             owned[path.parent] = None
         self.prepared.remove(run)
         del self.owned[run]
-        return {'absent': not any(p.parent.exists() for p in paths)}
+        del self.links[run]
+        return {'absent': not any(os.path.lexists(p.parent) for p in paths)}
+
+    def targets(self, run: str) -> dict[str, Path]:
+        root, main = self.roots()
+        return {
+            'M': main / 'Library/Application Support/PaperLensTopology' / run / 'db.canary',
+            'E': root.parents[3] / 'Library/Application Support/PaperLensTopologyFixtureHost' / run / 'external.canary',
+            'G': root.parents[3] / 'Library/Group Containers' / GROUP_ID / 'PaperLensTopology' / run / 'group.canary',
+        }
+
+    @staticmethod
+    def observation(outcome: str = 'inconclusive', reason: str = 'controlFailed', *,
+                    observed: bool = False, result: int = 0, error: int = 0,
+                    began: int = 0, ended: int = 0) -> dict:
+        return {'outcome': outcome, 'reason': reason, 'syscallObserved': observed,
+                'syscallResult': result, 'errno': error, 'beganAtNs': began, 'endedAtNs': ended}
+
+    @classmethod
+    def denial(cls, error: OSError, *, began: int, ended: int) -> dict:
+        # This is only a syscall observation, never a sandbox PASS verdict.
+        code = error.errno or 0
+        denied = code in (errno.EACCES, errno.EPERM)
+        reason = 'permissionDenied' if denied else 'missingFixture' if code == errno.ENOENT else 'unexpectedErrno'
+        return cls.observation('denied' if denied else 'inconclusive', reason,
+                               observed=True, result=-1, error=code, began=began, ended=ended)
 
     def probe(self, run: str, case: str) -> dict:
-        root, main = self.roots()
-        own, cache = self.own_paths(run)
         if run not in self.prepared:
-            return {'outcome': 'inconclusive', 'reason': 'missingFixture'}
+            return self.observation(reason='missingFixture')
+        own, cache = self.own_paths(run)
         if case == 'inboundListen':
             try:
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
                     sock.settimeout(2)
-                    sock.bind(('127.0.0.1', 18766))
-                    sock.listen(1)
-                return {'outcome': 'allowed', 'reason': 'none'}
-            except OSError as error:
-                return self.denial(error)
-        if case == 'ownZoneReadWrite':
-            try:
-                for path in (own, cache):
-                    self.access(path, write=False)
-                    self.access(path, write=True)
-                return {'outcome': 'allowed', 'reason': 'none'}
+                    try:
+                        sock.bind(('127.0.0.1', 18766))
+                    except OSError:
+                        # The contracted operation is listen, not the preceding bind.
+                        return self.observation()
+                    began = time.monotonic_ns()
+                    try:
+                        sock.listen(1)
+                    except OSError as error:
+                        ended = time.monotonic_ns()
+                        return self.denial(error, began=began, ended=ended)
+                    ended = time.monotonic_ns()
+                    return self.observation('allowed', 'none', observed=True,
+                                            began=began, ended=ended)
             except OSError:
-                return {'outcome': 'inconclusive', 'reason': 'controlFailed'}
-        targets = {
-            'main': main / 'Library/Application Support/PaperLensTopology' / run / 'db.canary',
-            'external': root.parents[3] / 'Library/Application Support/PaperLensTopologyFixtureHost' / run / 'external.canary',
-            'group': root.parents[3] / 'Library/Group Containers' / GROUP_ID / 'PaperLensTopology' / run / 'group.canary',
-        }
-        key = 'main' if case.startswith('main') else 'external' if case.startswith('external') else 'group'
-        path = targets[key]
+                return self.observation()
+        if case == 'ownZoneReadWrite':
+            for path in (own, cache):
+                for write in (False, True):
+                    if self.access(path, write=write)['outcome'] != 'allowed':
+                        return self.observation()
+            return self.observation('allowed', 'none')
+        key = 'M' if case.startswith('main') else 'E' if case.startswith('external') else 'G'
+        path = self.targets(run)[key]
         follow = 'Symlink' in case
         if follow:
             link = own.parent / (key + '.link')
             try:
-                link.symlink_to(path)
-            except FileExistsError:
-                if not link.is_symlink() or os.readlink(link) != str(path):
-                    raise PermissionError('fixtureReplaced')
+                if (self.identity(own.parent) != self.owned[run][own.parent]
+                        or not link.is_symlink() or self.identity(link) != self.owned[run][link]
+                        or os.readlink(link) != self.links[run][link]):
+                    return self.observation()
+                # Traversal of the resolved target must succeed before a leaf
+                # attempt through the retained link can be target evidence.
+                target_parent = self.parent_descriptor(path.parent)
+                os.close(target_parent)
+            except OSError:
+                return self.observation()
             path = link
-        try:
-            self.access(path, write=case.endswith('Write'), follow=follow)
-            return {'outcome': 'allowed', 'reason': 'none'}
-        except OSError as error:
-            return self.denial(error)
+        return self.access(path, write=case.endswith('Write'), follow=follow)
 
     @staticmethod
-    def access(path: Path, *, write: bool, follow: bool = False) -> None:
-        flags = os.O_RDWR if write else os.O_RDONLY
-        flags |= os.O_NONBLOCK
+    def parent_descriptor(path: Path) -> int:
+        # The pinned Darwin runtime exposes O_SEARCH. Traversal must not
+        # request directory-data reads before the actual fixed leaf syscall.
+        flags = os.O_SEARCH | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK
+        fd = os.open(path.anchor, flags)
+        try:
+            for component in path.parts[1:]:
+                child = os.open(component, flags, dir_fd=fd)
+                os.close(fd)
+                fd = child
+            return fd
+        except BaseException:
+            os.close(fd)
+            raise
+
+    @staticmethod
+    def valid_canary(info: os.stat_result) -> bool:
+        return (stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid()
+                and stat.S_IMODE(info.st_mode) == 0o600 and info.st_nlink == 1
+                and info.st_size == len(MARKER))
+
+    @classmethod
+    def access(cls, path: Path, *, write: bool, follow: bool = False) -> dict:
+        try:
+            parent = cls.parent_descriptor(path.parent)
+        except OSError:
+            return cls.observation()
+        flags = (os.O_WRONLY if write else os.O_RDONLY) | os.O_NONBLOCK
         if not follow:
             flags |= os.O_NOFOLLOW
-        fd = os.open(path, flags)
+        fd = -1
         try:
+            began = time.monotonic_ns()
+            try:
+                fd = os.open(path.name, flags, dir_fd=parent)
+            except OSError as error:
+                ended = time.monotonic_ns()
+                return cls.denial(error, began=began, ended=ended)
+            ended = time.monotonic_ns()
             info = os.fstat(fd)
-            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
-                raise OSError(errno.EINVAL, 'notFixture')
-            if os.pread(fd, len(MARKER) + 1, 0) != MARKER:
-                raise OSError(errno.EINVAL, 'controlFailed')
+            if not cls.valid_canary(info):
+                return cls.observation()
             if write:
-                os.pwrite(fd, MARKER[:1], 0)
+                # A read/control denial must not be reported as write denial.
+                control = os.open(path.name, (flags & ~os.O_WRONLY) | os.O_RDONLY,
+                                  dir_fd=parent)
+                try:
+                    other = os.fstat(control)
+                    if (not cls.valid_canary(other)
+                            or (info.st_dev, info.st_ino) != (other.st_dev, other.st_ino)
+                            or os.pread(control, len(MARKER) + 1, 0) != MARKER):
+                        return cls.observation()
+                finally:
+                    os.close(control)
+            began = time.monotonic_ns()
+            try:
+                result = os.pwrite(fd, MARKER, 0) if write else os.pread(fd, len(MARKER) + 1, 0)
+            except OSError as error:
+                ended = time.monotonic_ns()
+                return cls.denial(error, began=began, ended=ended)
+            ended = time.monotonic_ns()
+            if (write and result != len(MARKER)) or (not write and result != MARKER):
+                return cls.observation()
+            return cls.observation('allowed', 'none', observed=True,
+                                   result=result if write else len(result), began=began, ended=ended)
+        except OSError:
+            return cls.observation()
         finally:
-            os.close(fd)
-
-    @staticmethod
-    def denial(error: OSError) -> dict:
-        # The harness must correlate an OS sandbox denial and positive controls.
-        if error.errno in (errno.EACCES, errno.EPERM):
-            return {'outcome': 'denied', 'reason': 'permissionDenied'}
-        return {'outcome': 'inconclusive', 'reason': 'missingFixture' if error.errno == errno.ENOENT else 'unexpectedErrno'}
+            if fd >= 0:
+                os.close(fd)
+            os.close(parent)
 
 
 @dataclass
@@ -479,15 +588,13 @@ class Server:
         if method == 'hello':
             if self.ready:
                 self.error(identifier, 'invalidParams', method)
-            elif params['major'] != 1:
+            elif params['major'] != 1 or params['minor'] != 1:
                 self.error(identifier, 'versionMismatch', method)
                 self.closed = True
-            elif min(params['minor'], 0) != 0:
-                self.error(identifier, 'invalidParams', method)
             else:
                 self.ready = True
                 self.emit({'kind': 'result', 'id': identifier, 'result': {
-                    'major': 1, 'minor': 0, 'capabilities': ['topology-v1']}}, method)
+                    'major': 1, 'minor': 1, 'capabilities': ['topology-v1']}}, method)
             return
         if not self.ready:
             self.error(identifier, 'handshakeRequired', method)
@@ -534,6 +641,10 @@ class Server:
                 result = await asyncio.shield(worker)
             elif method == 'topology.prepare':
                 result = self.fixtures.prepare(params['runID'])
+            elif method == 'topology.identity':
+                if params['runID'] not in self.fixtures.prepared:
+                    raise PermissionError('missingFixture')
+                result = {'bridgePID': os.getppid(), 'pythonPID': os.getpid()}
             elif method == 'topology.cleanup':
                 result = self.fixtures.cleanup(params['runID'])
             else:

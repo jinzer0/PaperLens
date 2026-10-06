@@ -21,7 +21,8 @@ let package = Package(
         "FixtureGroupOwner.swift", "FixtureGroupOwner-Info.plist",
         "FixtureGroupOwner.entitlements", "fixture-map.json", "test_acquire.py", "test_agent.py",
         "test_package.py", "test_provider_rpc.py",
-        "ReportPublicationTests.swift", "PDFiumRollTests.cpp", "test_pdfium_roll.py",
+        "ReportPublicationTests.swift", "ActorIdentityProbe.swift",
+        "PDFiumRollTests.cpp", "test_pdfium_roll.py",
       ],
       sources: ["ProviderRPCTests.swift"]
     ),

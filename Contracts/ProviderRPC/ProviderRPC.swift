@@ -269,6 +269,25 @@ private struct Contract {
           else { return false }
         }
       }
+      if let observation = schema["syscallObservation"] as? [String: String] {
+        guard let observedKey = observation["observed"],
+          let observed = object[observedKey] as? Bool,
+          let resultKey = observation["result"], let result = object[resultKey] as? NSNumber,
+          let errnoKey = observation["errno"], let error = object[errnoKey] as? NSNumber,
+          let beganKey = observation["began"], let began = object[beganKey] as? NSNumber,
+          let endedKey = observation["ended"], let ended = object[endedKey] as? NSNumber
+        else { return false }
+        // Field schemas above guarantee exact bounded integers before these comparisons.
+        if !observed {
+          if [result, error, began, ended].contains(where: { $0.int64Value != 0 }) {
+            return false
+          }
+        } else if began.compare(ended) != .orderedAscending
+          || (result.int64Value >= 0 && error.int64Value != 0)
+        {
+          return false
+        }
+      }
     case "array":
       guard let array = value as? [Any], let itemSchema = schema["items"] as? [String: Any] else {
         return false

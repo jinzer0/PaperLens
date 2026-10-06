@@ -27,6 +27,13 @@ final class ProviderRPCTests: XCTestCase {
     ["kind": "result", "id": id, "result": result]
   }
 
+  private var probe: [String: Any] {
+    [
+      "outcome": "denied", "reason": "permissionDenied", "syscallObserved": true,
+      "syscallResult": -1, "errno": 13, "beganAtNs": 1, "endedAtNs": 2,
+    ]
+  }
+
   private func raw(_ body: Data) -> Data {
     let count = UInt32(body.count)
     var frame = prefix(count)
@@ -57,17 +64,18 @@ final class ProviderRPCTests: XCTestCase {
   private var cases: [(String, [String: Any], [String: Any])] {
     [
       (
-        "hello", ["major": 1, "minor": 0, "capabilities": ["topology-v1"]],
-        ["major": 1, "minor": 0, "capabilities": ["topology-v1"]]
+        "hello", ["major": 1, "minor": 1, "capabilities": ["topology-v1"]],
+        ["major": 1, "minor": 1, "capabilities": ["topology-v1"]]
       ),
       (
         "topology.runtime", [:],
         ["sdkImported": true, "cliInitialized": false, "architecture": "arm64"]
       ),
       ("topology.prepare", ["runID": id], ["prepared": true]),
+      ("topology.identity", ["runID": id], ["bridgePID": 1, "pythonPID": 2_147_483_647]),
       (
         "topology.probe", ["runID": id, "caseID": "ownZoneReadWrite"],
-        ["outcome": "denied", "reason": "permissionDenied"]
+        probe
       ),
       ("topology.cleanup", ["runID": id], ["absent": true]),
       ("topology.wait", ["durationMs": 1], ["elapsed": true]),
@@ -111,6 +119,11 @@ final class ProviderRPCTests: XCTestCase {
       var badResult = result
       badResult["message"] = "forbidden"
       rejects { try ProviderRPC.validateTerminal(terminal(badResult), method: method) }
+      for key in result.keys {
+        var missing = result
+        missing.removeValue(forKey: key)
+        rejects { try ProviderRPC.validateTerminal(terminal(missing), method: method) }
+      }
       rejects { try ProviderRPC.validateTerminal(terminal([:]), method: method) }
     }
   }
@@ -184,7 +197,7 @@ final class ProviderRPCTests: XCTestCase {
     ] {
       let body =
         "{\"kind\":\"request\",\"id\":\"\(id)\",\"method\":\"hello\",\"timeoutMs\":1,"
-        + "\"params\":{\"major\":\(number),\"minor\":0,\"capabilities\":[\"topology-v1\"]}}"
+        + "\"params\":{\"major\":\(number),\"minor\":1,\"capabilities\":[\"topology-v1\"]}}"
       let decoded = try ProviderRPC.decode(raw(body))
       try ProviderRPC.validateRequest(decoded)
       try ProviderRPC.validateRequest(ProviderRPC.decode(ProviderRPC.encode(decoded)))
@@ -209,14 +222,14 @@ final class ProviderRPCTests: XCTestCase {
         try ProviderRPC.validateRequest(request("topology.wait", params: ["durationMs": value]))
       }
     }
-    // A well-formed mismatch reaches the connection's version negotiation.
+    // A well-formed mismatch reaches the connection's version admission.
     try ProviderRPC.validateRequest(
       request("hello", params: ["major": 2, "minor": 1, "capabilities": ["topology-v1"]]))
     let invalidHello: [[String: Any]] = [
-      ["major": true, "minor": 0, "capabilities": ["topology-v1"]],
-      ["major": 1, "minor": 0.0, "capabilities": ["topology-v1"]],
-      ["major": 1, "minor": 0, "capabilities": [] as [String]],
-      ["major": 1, "minor": 0, "capabilities": ["topology-v1", "unknown"]],
+      ["major": true, "minor": 1, "capabilities": ["topology-v1"]],
+      ["major": 1, "minor": 1.0, "capabilities": ["topology-v1"]],
+      ["major": 1, "minor": 1, "capabilities": [] as [String]],
+      ["major": 1, "minor": 1, "capabilities": ["topology-v1", "unknown"]],
     ]
     for params in invalidHello {
       rejects(.invalidParams) { try ProviderRPC.validateRequest(request("hello", params: params)) }
@@ -241,7 +254,7 @@ final class ProviderRPCTests: XCTestCase {
     }
     rejects {
       try ProviderRPC.validateTerminal(
-        terminal(["major": 2, "minor": 0, "capabilities": ["topology-v1"]]), method: "hello")
+        terminal(["major": 2, "minor": 1, "capabilities": ["topology-v1"]]), method: "hello")
     }
     let fractional = raw(
       "{\"kind\":\"request\",\"id\":\"\(id)\",\"method\":\"topology.wait\",\"timeoutMs\":1,\"params\":{\"durationMs\":1.0}}"
@@ -251,6 +264,71 @@ final class ProviderRPCTests: XCTestCase {
       "{\"kind\":\"request\",\"id\":\"\(id)\",\"method\":\"topology.wait\",\"timeoutMs\":1e0,\"params\":{\"durationMs\":1}}"
     )
     rejects { try ProviderRPC.validateRequest(ProviderRPC.decode(exponent)) }
+  }
+
+  func testExactHelloResultAndIdentityBoundaries() throws {
+    let versions: [(Any, Any)] = [(1, 0), (1, 2), (2, 1), (true, 1), (1, true), (1, 1.0)]
+    for (major, minor) in versions {
+      rejects {
+        try ProviderRPC.validateTerminal(
+          terminal(["major": major, "minor": minor, "capabilities": ["topology-v1"]]),
+          method: "hello")
+      }
+    }
+    rejects(.invalidParams) {
+      try ProviderRPC.validateRequest(request("topology.identity", params: ["runID": "invalid"]))
+    }
+    for key in ["bridgePID", "pythonPID"] {
+      for value in [1, 2_147_483_647] {
+        var result: [String: Any] = ["bridgePID": 1, "pythonPID": 1]
+        result[key] = value
+        try ProviderRPC.validateTerminal(
+          ProviderRPC.decode(ProviderRPC.encode(terminal(result))), method: "topology.identity")
+      }
+      for value in [0, -1, 2_147_483_648, true, false, 1.0, "1", NSNull(), UInt64.max] as [Any] {
+        var result: [String: Any] = ["bridgePID": 1, "pythonPID": 1]
+        result[key] = value
+        rejects { try ProviderRPC.validateTerminal(terminal(result), method: "topology.identity") }
+      }
+    }
+  }
+
+  func testProbeObservationTypesRangesAndCoherence() throws {
+    func validate(_ result: [String: Any]) throws {
+      try ProviderRPC.validateTerminal(
+        ProviderRPC.decode(ProviderRPC.encode(terminal(result))), method: "topology.probe")
+    }
+    var unobserved = probe
+    unobserved["syscallObserved"] = false
+    for key in ["syscallResult", "errno", "beganAtNs", "endedAtNs"] { unobserved[key] = 0 }
+    try validate(unobserved)
+    for key in ["syscallResult", "errno", "beganAtNs", "endedAtNs"] {
+      rejects { try validate(unobserved.merging([key: 1]) { _, new in new }) }
+      for value in [true, false, 1.0, "1", NSNull()] as [Any] {
+        rejects { try validate(probe.merging([key: value]) { _, new in new }) }
+      }
+    }
+    for value in [0, 1, "true", NSNull()] as [Any] {
+      rejects { try validate(probe.merging(["syscallObserved": value]) { _, new in new }) }
+    }
+    let valid: [[String: Any]] = [
+      ["syscallResult": -2_147_483_648], ["syscallResult": 2_147_483_647, "errno": 0],
+      ["syscallResult": 0, "errno": 0], ["errno": 0], ["errno": 2_147_483_647], ["beganAtNs": 0],
+      ["beganAtNs": Int64.max - 1, "endedAtNs": Int64.max],
+    ]
+    for changes in valid { try validate(probe.merging(changes) { _, new in new }) }
+    let invalid: [[String: Any]] = [
+      ["syscallResult": -2_147_483_649], ["syscallResult": 2_147_483_648],
+      ["errno": -1], ["errno": 2_147_483_648],
+      ["beganAtNs": -1], ["beganAtNs": UInt64(Int64.max) + 1],
+      ["endedAtNs": -1], ["endedAtNs": UInt64(Int64.max) + 1],
+      ["endedAtNs": 0], ["endedAtNs": 1],
+      ["beganAtNs": 3], ["syscallResult": 0], ["syscallResult": 1],
+    ]
+    for changes in invalid {
+      rejects { try validate(probe.merging(changes) { _, new in new }) }
+    }
+    rejects { try validate(["outcome": "denied", "reason": "permissionDenied"]) }
   }
 
   func testClosedProbeAndErrorEnums() throws {
@@ -273,13 +351,17 @@ final class ProviderRPCTests: XCTestCase {
         "none", "permissionDenied", "missingFixture", "controlFailed", "unexpectedErrno",
       ] {
         try ProviderRPC.validateTerminal(
-          terminal(["outcome": outcome, "reason": reason]), method: "topology.probe")
+          terminal(probe.merging(["outcome": outcome, "reason": reason]) { _, new in new }),
+          method: "topology.probe")
       }
     }
     for result in [
       ["outcome": "success", "reason": "none"], ["outcome": "allowed", "reason": "ENOENT"],
     ] {
-      rejects { try ProviderRPC.validateTerminal(terminal(result), method: "topology.probe") }
+      rejects {
+        try ProviderRPC.validateTerminal(
+          terminal(probe.merging(result) { _, new in new }), method: "topology.probe")
+      }
     }
     for code in [
       "versionMismatch", "handshakeRequired", "unknownMethod", "invalidParams", "busy", "cancelled",

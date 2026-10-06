@@ -1,4 +1,5 @@
 import asyncio
+from contextlib import ExitStack
 import errno
 import importlib.util
 import json
@@ -24,6 +25,12 @@ from provider_rpc import ProtocolError, decode_frame
 def request(method, params=None, timeout=1000):
     return {'kind': 'request', 'id': str(uuid.uuid4()), 'method': method,
             'timeoutMs': timeout, 'params': params or {}}
+
+
+def fixture_root(directory):
+    root = Path(directory).resolve() / 'Library/Containers' / agent.AGENT_ID / 'Data'
+    root.mkdir(parents=True)
+    return root
 
 
 class Runtime:
@@ -55,7 +62,7 @@ class BlockingRuntime(Runtime):
 class ServerTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.server = agent.Server(runtime=Runtime())
-        self.server.accept(request('hello', {'major': 1, 'minor': 0, 'capabilities': ['topology-v1']}))
+        self.server.accept(request('hello', {'major': 1, 'minor': 1, 'capabilities': ['topology-v1']}))
         await self.take()
 
     async def asyncTearDown(self):
@@ -147,6 +154,34 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
         fresh = agent.Server(runtime=Runtime())
         fresh.accept(request('topology.runtime'))
         self.assertEqual(decode_frame(fresh.outgoing.get_nowait()[1])['code'], 'handshakeRequired')
+
+    async def test_unsupported_minor_never_negotiates(self):
+        for minor in (0, 2):
+            fresh = agent.Server(runtime=Runtime())
+            fresh.accept(request('hello', {'major': 1, 'minor': minor,
+                                          'capabilities': ['topology-v1']}))
+            self.assertEqual(decode_frame(fresh.outgoing.get_nowait()[1])['code'], 'versionMismatch')
+            self.assertTrue(fresh.closed)
+            self.assertFalse(fresh.ready)
+
+    async def test_identity_requires_exact_prepared_run_and_live_python_values(self):
+        run = str(uuid.uuid4())
+        self.server.accept(request('topology.identity', {'runID': run}))
+        self.assertEqual((await self.take())['code'], 'unavailable')
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as stack:
+            root = fixture_root(directory)
+            stack.enter_context(patch.object(self.server.fixtures, 'roots', return_value=(root, root)))
+            self.server.accept(request('topology.prepare', {'runID': run}))
+            self.assertEqual((await self.take())['result'], {'prepared': True})
+            self.server.accept(request('topology.identity', {'runID': str(uuid.uuid4())}))
+            self.assertEqual((await self.take())['code'], 'unavailable')
+            self.server.accept(request('topology.identity', {'runID': run}))
+            self.assertEqual((await self.take())['result'],
+                             {'bridgePID': os.getppid(), 'pythonPID': os.getpid()})
+            self.server.accept(request('topology.cleanup', {'runID': run}))
+            self.assertEqual((await self.take())['result'], {'absent': True})
+            self.server.accept(request('topology.identity', {'runID': run}))
+            self.assertEqual((await self.take())['code'], 'unavailable')
 
     async def test_queue_overflow_fails_closed(self):
         for _ in range(4):
@@ -437,13 +472,14 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual(fixtures.roots(), (
             self.container, self.home / 'Library/Containers' / agent.MAIN_ID / 'Data'))
         fixtures.prepare(run)
-        with patch.object(fixtures, 'access') as access:
+        expected = agent.Fixtures.observation('allowed', 'none')
+        with patch.object(fixtures, 'access', return_value=expected) as access:
             for case, target in (
                 ('mainRead', self.home / 'Library/Containers' / agent.MAIN_ID / 'Data/Library/Application Support/PaperLensTopology' / run / 'db.canary'),
                 ('externalRead', self.home / 'Library/Application Support/PaperLensTopologyFixtureHost' / run / 'external.canary'),
                 ('groupRead', self.home / 'Library/Group Containers' / agent.GROUP_ID / 'PaperLensTopology' / run / 'group.canary'),
             ):
-                self.assertEqual(fixtures.probe(run, case), {'outcome': 'allowed', 'reason': 'none'})
+                self.assertEqual(fixtures.probe(run, case), expected)
                 access.assert_called_with(target, write=False, follow=False)
         self.assertEqual(fixtures.cleanup(run), {'absent': True})
 
@@ -581,11 +617,182 @@ class ProfileTests(unittest.TestCase):
 
 class FixtureTests(unittest.TestCase):
 
+    def test_retained_links_keep_exact_inode_and_target_until_cleanup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory).resolve()
+            root = home / 'Library/Containers' / agent.AGENT_ID / 'Data'
+            main = home / 'Library/Containers' / agent.MAIN_ID / 'Data'
+            root.mkdir(parents=True)
+            fixtures = agent.Fixtures()
+            run = str(uuid.uuid4())
+            with patch.object(fixtures, 'roots', return_value=(root, main)):
+                fixtures.prepare(run)
+                own, _ = fixtures.own_paths(run)
+                targets = fixtures.targets(run)
+                for alias, case in (('M', 'mainCanarySymlinkRead'),
+                                    ('E', 'externalCanarySymlinkRead'),
+                                    ('G', 'foreignGroupCanarySymlinkRead')):
+                    target = targets[alias]
+                    target.parent.mkdir(parents=True, mode=0o700)
+                    target.write_bytes(agent.MARKER)
+                    target.chmod(0o600)
+                    link = own.parent / (alias + '.link')
+                    before = fixtures.identity(link)
+                    self.assertEqual(os.readlink(link), str(target))
+                    reply = fixtures.probe(run, case)
+                    self.assertEqual(reply['outcome'], 'allowed')
+                    self.assertTrue(reply['syscallObserved'])
+                    self.assertEqual(fixtures.identity(link), before)
+                    self.assertEqual(os.readlink(link), str(target))
+                self.assertEqual(fixtures.cleanup(run), {'absent': True})
+                self.assertTrue(all(target.read_bytes() == agent.MARKER for target in targets.values()))
+
+    def test_replaced_link_is_not_adopted_probed_or_removed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = fixture_root(directory)
+            fixtures = agent.Fixtures()
+            run = str(uuid.uuid4())
+            with patch.object(fixtures, 'roots', return_value=(root, root)):
+                fixtures.prepare(run)
+                own, _ = fixtures.own_paths(run)
+                link = own.parent / 'M.link'
+                target = os.readlink(link)
+                link.rename(root / 'retained-original-link')
+                link.symlink_to(target)
+                with patch.object(fixtures, 'access') as access:
+                    self.assertEqual(fixtures.probe(run, 'mainCanarySymlinkRead'),
+                                     fixtures.observation())
+                    access.assert_not_called()
+                with self.assertRaisesRegex(PermissionError, 'fixtureReplaced'):
+                    fixtures.cleanup(run)
+                self.assertEqual(os.readlink(link), target)
+                self.assertTrue(own.exists())
+
+    def test_ancestor_denial_and_aggregate_are_not_leaf_observations(self):
+        with patch.object(agent.Fixtures, 'parent_descriptor', side_effect=OSError(errno.EACCES, 'ancestor')):
+            self.assertEqual(agent.Fixtures.access(Path('/synthetic/leaf'), write=False),
+                             agent.Fixtures.observation())
+        with tempfile.TemporaryDirectory() as directory:
+            root = fixture_root(directory)
+            fixtures = agent.Fixtures()
+            run = str(uuid.uuid4())
+            with patch.object(fixtures, 'roots', return_value=(root, root)):
+                self.assertEqual(fixtures.probe(run, 'ownZoneReadWrite'),
+                                 fixtures.observation(reason='missingFixture'))
+                fixtures.prepare(run)
+                self.assertEqual(fixtures.probe(run, 'ownZoneReadWrite'),
+                                 fixtures.observation('allowed', 'none'))
+                with patch.object(fixtures, 'access', return_value=fixtures.observation()):
+                    self.assertEqual(fixtures.probe(run, 'ownZoneReadWrite'), fixtures.observation())
+                fixtures.cleanup(run)
+
+    def test_cleanup_preserves_same_inode_modified_canary(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = fixture_root(directory)
+            fixtures = agent.Fixtures()
+            run = str(uuid.uuid4())
+            with patch.object(fixtures, 'roots', return_value=(root, root)):
+                fixtures.prepare(run)
+                own, _ = fixtures.own_paths(run)
+                original = fixtures.identity(own)
+                own.write_bytes(b'x' * len(agent.MARKER))
+                with self.assertRaisesRegex(PermissionError, 'fixtureReplaced'):
+                    fixtures.cleanup(run)
+                self.assertEqual(fixtures.identity(own), original)
+                self.assertEqual(own.read_bytes(), b'x' * len(agent.MARKER))
+                self.assertIn(run, fixtures.prepared)
+
+    def test_write_open_denial_is_observed_but_marker_read_denial_is_not(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory).resolve() / 'canary'
+            path.write_bytes(agent.MARKER)
+            path.chmod(0o600)
+            original_open = os.open
+            for denied_flag, observed in ((os.O_WRONLY, True), (os.O_RDONLY, False)):
+                flags_seen = []
+                def denied_leaf(name, flags, *args, **kwargs):
+                    if name == path.name:
+                        flags_seen.append(flags)
+                        if flags & os.O_ACCMODE == denied_flag:
+                            raise OSError(errno.EACCES, 'leaf')
+                    return original_open(name, flags, *args, **kwargs)
+                with self.subTest(denied_flag=denied_flag), \
+                        patch.object(agent.os, 'open', side_effect=denied_leaf), \
+                        patch.object(agent.os, 'pwrite') as write, \
+                        patch.object(agent.time, 'monotonic_ns', side_effect=range(100, 200)):
+                    result = agent.Fixtures.access(path, write=True)
+                    self.assertEqual(result['syscallObserved'], observed)
+                    self.assertEqual(flags_seen[0] & os.O_ACCMODE, os.O_WRONLY)
+                    self.assertTrue(all(flags & os.O_ACCMODE != os.O_RDWR for flags in flags_seen))
+                    write.assert_not_called()
+                    if observed:
+                        self.assertEqual((result['syscallResult'], result['errno']), (-1, errno.EACCES))
+                        self.assertEqual((result['beganAtNs'], result['endedAtNs']), (100, 101))
+                    else:
+                        self.assertEqual(result, agent.Fixtures.observation())
+                self.assertEqual(path.read_bytes(), agent.MARKER)
+
+    def test_write_requires_marker_control_and_records_original_pwrite(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory).resolve() / 'canary'
+            path.write_bytes(b'x' * len(agent.MARKER))
+            path.chmod(0o600)
+            with patch.object(agent.os, 'pwrite') as write:
+                self.assertEqual(agent.Fixtures.access(path, write=True), agent.Fixtures.observation())
+                write.assert_not_called()
+            path.write_bytes(agent.MARKER)
+            with patch.object(agent.os, 'pwrite', side_effect=OSError(errno.EPERM, 'write')), \
+                    patch.object(agent.time, 'monotonic_ns', side_effect=(10, 20, 30, 40)):
+                result = agent.Fixtures.access(path, write=True)
+            self.assertEqual(result, agent.Fixtures.observation('denied', 'permissionDenied',
+                             observed=True, result=-1, error=errno.EPERM, began=30, ended=40))
+            self.assertEqual(path.read_bytes(), agent.MARKER)
+
+    def test_read_records_individual_syscall_not_descriptor_number(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory).resolve() / 'canary'
+            path.write_bytes(agent.MARKER)
+            path.chmod(0o600)
+            with patch.object(agent.time, 'monotonic_ns', side_effect=(10, 20, 30, 40)):
+                result = agent.Fixtures.access(path, write=False)
+            self.assertEqual(result, agent.Fixtures.observation('allowed', 'none',
+                             observed=True, result=len(agent.MARKER), began=30, ended=40))
+            with patch.object(agent.os, 'pread', side_effect=OSError(errno.EACCES, 'read')), \
+                    patch.object(agent.time, 'monotonic_ns', side_effect=(10, 20, 30, 40)):
+                result = agent.Fixtures.access(path, write=False)
+            self.assertEqual(result, agent.Fixtures.observation('denied', 'permissionDenied',
+                             observed=True, result=-1, error=errno.EACCES, began=30, ended=40))
+
+    def test_bind_failure_never_becomes_listen_denial(self):
+        fixtures = agent.Fixtures()
+        run = str(uuid.uuid4())
+        fixtures.prepared.add(run)
+        for stage in ('bind', 'listen', 'success'):
+            sock = unittest.mock.MagicMock()
+            sock.__enter__.return_value = sock
+            if stage != 'success':
+                getattr(sock, stage).side_effect = OSError(errno.EPERM, stage)
+            with self.subTest(stage=stage), patch.object(fixtures, 'own_paths', return_value=(Path('/a'), Path('/c'))), \
+                    patch.object(agent.socket, 'socket', return_value=sock), \
+                    patch.object(agent.time, 'monotonic_ns', side_effect=(100, 200)):
+                result = fixtures.probe(run, 'inboundListen')
+            if stage == 'bind':
+                self.assertEqual(result, fixtures.observation())
+                sock.listen.assert_not_called()
+            else:
+                self.assertTrue(result['syscallObserved'])
+                self.assertEqual((result['beganAtNs'], result['endedAtNs']), (100, 200))
+                self.assertEqual(result['syscallResult'], -1 if stage == 'listen' else 0)
+                self.assertEqual(result['errno'], errno.EPERM if stage == 'listen' else 0)
+                self.assertEqual(result['outcome'], 'denied' if stage == 'listen' else 'allowed')
+
     def test_errno_is_observation_not_sandbox_pass(self):
-        self.assertEqual(agent.Fixtures.denial(OSError(errno.ENOENT, 'path')),
-                         {'outcome': 'inconclusive', 'reason': 'missingFixture'})
-        value = agent.Fixtures.denial(OSError(errno.EACCES, 'private'))
-        self.assertEqual(value, {'outcome': 'denied', 'reason': 'permissionDenied'})
+        self.assertEqual(agent.Fixtures.denial(OSError(errno.ENOENT, 'path'), began=10, ended=20),
+                         agent.Fixtures.observation('inconclusive', 'missingFixture',
+                            observed=True, result=-1, error=errno.ENOENT, began=10, ended=20))
+        value = agent.Fixtures.denial(OSError(errno.EACCES, 'private'), began=10, ended=20)
+        self.assertEqual(value, agent.Fixtures.observation('denied', 'permissionDenied',
+                            observed=True, result=-1, error=errno.EACCES, began=10, ended=20))
         self.assertNotIn('verdict', value)
 
     def test_private_directory_never_follows_symlink_or_chmods(self):
@@ -604,20 +811,25 @@ class FixtureTests(unittest.TestCase):
 
     def test_probe_never_truncates_or_creates_missing_file(self):
         with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / 'canary'
-            with self.assertRaises(FileNotFoundError):
-                agent.Fixtures.access(path, write=True)
+            path = Path(directory).resolve() / 'canary'
+            result = agent.Fixtures.access(path, write=True)
+            self.assertEqual(result['reason'], 'missingFixture')
+            self.assertTrue(result['syscallObserved'])
+            self.assertFalse(path.exists())
             path.write_bytes(agent.MARKER)
-            agent.Fixtures.access(path, write=True)
+            path.chmod(0o600)
+            result = agent.Fixtures.access(path, write=True)
+            self.assertEqual(result['outcome'], 'allowed')
+            self.assertEqual(result['syscallResult'], len(agent.MARKER))
+            self.assertTrue(result['syscallObserved'])
             self.assertEqual(path.read_bytes(), agent.MARKER)
             path.write_bytes(b'not a canary')
-            with self.assertRaises(OSError):
-                agent.Fixtures.access(path, write=False)
+            self.assertEqual(agent.Fixtures.access(path, write=False), agent.Fixtures.observation())
 
     def test_prepare_open_failure_rolls_back_only_new_paths(self):
         for failed_open in (1, 2):
             with self.subTest(failed_open=failed_open), tempfile.TemporaryDirectory() as directory:
-                root = Path(directory)
+                root = fixture_root(directory)
                 prior = root / 'Library/Application Support/PaperLensTopology'
                 prior.mkdir(parents=True, mode=0o700)
                 sentinel = prior / 'prior-fixture'
@@ -646,7 +858,7 @@ class FixtureTests(unittest.TestCase):
 
     def test_prepare_never_rolls_back_prior_run_directory(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = fixture_root(directory)
             fixtures = agent.Fixtures()
             run = str(uuid.uuid4())
             with patch.object(fixtures, 'roots', return_value=(root, root)):
@@ -659,7 +871,7 @@ class FixtureTests(unittest.TestCase):
 
     def test_cleanup_retry_accepts_already_deleted_owned_paths(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = fixture_root(directory)
             fixtures = agent.Fixtures()
             run = str(uuid.uuid4())
             with patch.object(fixtures, 'roots', return_value=(root, root)):
@@ -684,7 +896,7 @@ class FixtureTests(unittest.TestCase):
     def test_cleanup_retry_refuses_replaced_directory_or_file(self):
         for replacement in ('directory', 'file', 'deleted-file', 'deleted-directory', 'symlink'):
             with self.subTest(replacement=replacement), tempfile.TemporaryDirectory() as directory:
-                root = Path(directory)
+                root = fixture_root(directory)
                 fixtures = agent.Fixtures()
                 run = str(uuid.uuid4())
                 with patch.object(fixtures, 'roots', return_value=(root, root)):

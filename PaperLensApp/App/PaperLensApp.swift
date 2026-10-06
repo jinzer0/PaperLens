@@ -1,4 +1,5 @@
 import AppKit
+import CoreFoundation
 import Darwin
 import Foundation
 import OSLog
@@ -98,6 +99,7 @@ private final class TopologyModel: ObservableObject {
 private final class TopologyCoordinator: NSObject, ProviderFrameReceiver, @unchecked Sendable {
   private struct Request {
     let method: String
+    let deadline: UInt64
     let completion: ([String: Any]?) -> Void
   }
   private let queue = DispatchQueue(label: "PaperLens.Main.topology")
@@ -135,10 +137,22 @@ private final class TopologyCoordinator: NSObject, ProviderFrameReceiver, @unche
   private var cases: [[String: Any]] = []
   private var terminals: [[String: String]] = []
   private var own: TopologyOwnedFixtures?
+  private var reservation: TopologyReportReservation?
+  private var actorCandidates: [[String: Any]] = []
+  private let actorRefs = Dictionary(
+    uniqueKeysWithValues: ["Main", "ProviderAgent", "Python", "PDFiumXPC"].map {
+      ($0, "actor-" + UUID().uuidString.lowercased())
+    })
+  private var phasePending = false
+  private var phaseContinuation: (() -> Void)?
+  private var workerIdentityPending = false
+  private var workerIdentityDeadline: UInt64 = 0
+  private var workerIdentityContinuation: (() -> Void)?
   private var ownerPre = false
   private var agentOwnerPre: String?
   private var agentOwnerPost: String?
   private var pdfPending = false
+  private var pdfDeadline: UInt64 = 0
   private var pdfContinuation: (() -> Void)?
   private var pdfHandle: FileHandle?
   private let completion: @Sendable (String, String, Bool) -> Void
@@ -154,7 +168,17 @@ private final class TopologyCoordinator: NSObject, ProviderFrameReceiver, @unche
     topologyLog.notice(
       "smoke_connect account_valid=\(TopologyIdentity.accountHome() != nil, privacy: .public) container_valid=\(TopologyIdentity.container(TopologyIdentity.main) != nil, privacy: .public) map_valid=\(TopologyFixtures.groupMapMatches(), privacy: .public)"
     )
-    guard TopologyIdentity.container(TopologyIdentity.main) != nil,
+    guard let root = TopologyIdentity.container(TopologyIdentity.main),
+      let reservation = TopologyReportReservation(container: root, runID: runID)
+    else {
+      // No service is resumed and no ordinary finish/save path is entered
+      // when exclusive reservation fails. Existing evidence stays untouched.
+      finished = true
+      completion("blocked", "blocked", false)
+      return
+    }
+    self.reservation = reservation
+    guard
       let contract = Bundle.main.url(forResource: "contract", withExtension: "json")
     else {
       finish()
@@ -188,7 +212,7 @@ private final class TopologyCoordinator: NSObject, ProviderFrameReceiver, @unche
     self.connection = connection
     connection.resume()
     request(
-      "hello", params: ["major": 1, "minor": 0, "capabilities": ["topology-v1"]],
+      "hello", params: ["major": 1, "minor": 1, "capabilities": ["topology-v1"]],
       timeout: handshakeTimeoutMs
     ) { value in
       guard value != nil else {
@@ -248,7 +272,8 @@ private final class TopologyCoordinator: NSObject, ProviderFrameReceiver, @unche
         failConnection()
         return nil
       }
-      requests[id] = Request(method: method, completion: completion)
+      let deadline = DispatchTime.now().uptimeNanoseconds + UInt64(timeout) * 1_000_000
+      requests[id] = Request(method: method, deadline: deadline, completion: completion)
       requestCount += 1
       guard let connection,
         let proxy = connection.remoteObjectProxyWithErrorHandler({ [weak self] _ in
@@ -269,7 +294,7 @@ private final class TopologyCoordinator: NSObject, ProviderFrameReceiver, @unche
           self.outgoingBytes -= size
         }
       }
-      queue.asyncAfter(deadline: .now() + .milliseconds(timeout)) { [weak self] in
+      queue.asyncAfter(deadline: DispatchTime(uptimeNanoseconds: deadline)) { [weak self] in
         guard let self, let pending = self.requests.removeValue(forKey: id) else { return }
         self.completedIDs.insert(id)
         self.completedMethods[id] = pending.method
@@ -293,6 +318,7 @@ private final class TopologyCoordinator: NSObject, ProviderFrameReceiver, @unche
   }
 
   func receiveFrame(_ frame: Data) {
+    let receivedAt = DispatchTime.now().uptimeNanoseconds
     admission.lock()
     let wasAccepting = acceptingIncoming
     let allowed =
@@ -332,6 +358,20 @@ private final class TopologyCoordinator: NSObject, ProviderFrameReceiver, @unche
           return
         }
         try ProviderRPC.validateTerminal(envelope, method: pending.method)
+        if receivedAt >= pending.deadline {
+          self.requests.removeValue(forKey: id)
+          self.completedIDs.insert(id)
+          self.completedMethods[id] = pending.method
+          self.localTerminals.insert(id)
+          self.terminals.append([
+            "id": id, "method": pending.method, "origin": "local", "code": "timeout",
+          ])
+          if self.handshaken && pending.method != "cancel" {
+            self.request("cancel", params: ["targetID": id], timeout: 1000) { _ in }
+          }
+          pending.completion(nil)
+          return
+        }
         self.requests.removeValue(forKey: id)
         self.completedIDs.insert(id)
         self.completedMethods[id] = pending.method
@@ -378,7 +418,7 @@ private final class TopologyCoordinator: NSObject, ProviderFrameReceiver, @unche
       return
     }
     self.own = own
-    guard own.create("M"), own.create("PDF"), own.check() else {
+    guard own.create("M"), own.create("PDF"), own.prepareLinks(["A", "C"]), own.check() else {
       fixtureStatus = "failed"
       finish()
       return
@@ -391,16 +431,40 @@ private final class TopologyCoordinator: NSObject, ProviderFrameReceiver, @unche
         return
       }
       self.fixtureStatus = "inconclusive"
-      self.agentProbe("ownZoneReadWrite") {
-        for alias in ["A", "C"] {
-          for operation in ["read", "write", "symlinkRead"] {
-            self.cases.append(
-              TopologyFixtures.probe(
-                runID: self.runID, actor: "Main", alias: alias,
-                operation: operation, symlinkDirectory: own.descriptor))
+      self.request("topology.identity", params: ["runID": self.runID]) { identity in
+        guard let identity,
+          let bridge = Self.integer(identity["bridgePID"]), bridge > 0,
+          let python = Self.integer(identity["pythonPID"]), python > 0,
+          self.connection?.processIdentifier == Int32(bridge),
+          self.connection?.effectiveUserIdentifier == getuid()
+        else {
+          self.abortReadiness()
+          return
+        }
+        self.actorCandidates = [
+          ["role": "Main", "pid": Int(getpid())],
+          ["role": "ProviderAgent", "pid": Int(bridge)],
+          ["role": "Python", "pid": Int(python)],
+        ]
+        self.identifyPDF {
+          guard self.actorCandidates.count == 4 else {
+            self.abortReadiness()
+            return
+          }
+          self.fence("pre") {
+            self.agentProbe("ownZoneReadWrite") {
+              for alias in ["A", "C"] {
+                for operation in ["read", "write", "symlinkRead"] {
+                  self.cases.append(
+                    TopologyFixtures.probe(
+                      runID: self.runID, actor: "Main", alias: alias,
+                      operation: operation, symlinkDirectory: own.descriptor))
+                }
+              }
+              self.inspectPDF { self.probeAgent(index: 0) }
+            }
           }
         }
-        self.inspectPDF { self.probeAgent(index: 0) }
       }
     }
   }
@@ -415,11 +479,13 @@ private final class TopologyCoordinator: NSObject, ProviderFrameReceiver, @unche
   private func probeAgent(index: Int) {
     guard index < Self.agentCases.count else {
       agentProbe("ownZoneReadWrite") {
-        self.request("topology.cleanup", params: ["runID": self.runID]) { value in
-          if value?["absent"] as? Bool != true { self.fixtureStatus = "failed" }
-          self.cases.append(
-            TopologyFixtures.network(runID: self.runID, actor: "Main.post", expectAllowed: true))
-          self.finish()
+        self.cases.append(
+          TopologyFixtures.network(runID: self.runID, actor: "Main.post", expectAllowed: true))
+        self.fence("post") {
+          self.request("topology.cleanup", params: ["runID": self.runID]) { value in
+            if value?["absent"] as? Bool != true { self.fixtureStatus = "failed" }
+            self.finish()
+          }
         }
       }
       return
@@ -443,16 +509,20 @@ private final class TopologyCoordinator: NSObject, ProviderFrameReceiver, @unche
           : caseID.hasSuffix("Write") ? "write" : caseID == "inboundListen" ? "listen" : "read"
       var row = TopologyFixtures.observation(
         runID: self.runID, actor: "Agent", alias: alias, operation: operation,
-        result: -1, matched: value != nil)
+        result: Int(Self.integer(value?["syscallResult"]) ?? 0),
+        error: Int32(Self.integer(value?["errno"]) ?? 0), matched: value != nil,
+        observed: value?["syscallObserved"] as? Bool == true,
+        beganAtNs: Self.integer(value?["beganAtNs"]) ?? 0,
+        endedAtNs: Self.integer(value?["endedAtNs"]) ?? 0)
       row["caseID"] = caseID
-      // ProviderRPC deliberately has no errno field; never invent one.
-      row["errno"] = NSNull()
-      row["syscallResult"] = NSNull()
+      row["intervalRef"] = caseID
       row["outcome"] = value?["outcome"] ?? "inconclusive"
       row["reason"] = value?["reason"] ?? "controlFailed"
       if value?["reason"] as? String == "missingFixture" {
         row["verdict"] = "blocked"
-      } else if value?["outcome"] as? String == "allowed" {
+      } else if value?["outcome"] as? String == "allowed",
+        ownZone || value?["syscallObserved"] as? Bool == true
+      {
         row["verdict"] = ownZone ? "pass" : "failed"
       } else if ownZone {
         row["verdict"] = "inconclusive"
@@ -466,21 +536,93 @@ private final class TopologyCoordinator: NSObject, ProviderFrameReceiver, @unche
           self.agentOwnerPost = state
           row["caseID"] = "ownZoneReadWrite.post"
         }
+        row["intervalRef"] = row["caseID"]
       }
       self.cases.append(row)
       completion()
     }
   }
 
-  private func inspectPDF(completion: @escaping () -> Void) {
-    guard let pdf = own?.readOnlyPDF() else {
-      fixtureStatus = "failed"
-      completion()
+  private static func integer(_ value: Any?) -> Int64? {
+    guard let number = value as? NSNumber,
+      CFGetTypeID(number) != CFBooleanGetTypeID(),
+      ["c", "s", "i", "l", "q", "C", "S", "I", "L", "Q"].contains(
+        String(cString: number.objCType)),
+      number.compare(NSNumber(value: Int64.max)) != .orderedDescending,
+      number.compare(NSNumber(value: Int64.min)) != .orderedAscending
+    else { return nil }
+    return number.int64Value
+  }
+
+  private static func boolean(_ value: Any?) -> Bool? {
+    guard let number = value as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID()
+    else { return nil }
+    return number.boolValue
+  }
+
+  private func peersMatch() -> Bool {
+    guard actorCandidates.count == 4,
+      let agent = actorCandidates.first(where: { $0["role"] as? String == "ProviderAgent" }),
+      let pdf = actorCandidates.first(where: { $0["role"] as? String == "PDFiumXPC" }),
+      let bridgePID = Self.integer(agent["pid"]), let workerPID = Self.integer(pdf["pid"])
+    else { return false }
+    return connection?.processIdentifier == Int32(bridgePID)
+      && connection?.effectiveUserIdentifier == getuid()
+      && worker?.processIdentifier == Int32(workerPID)
+      && worker?.effectiveUserIdentifier == getuid()
+  }
+
+  private func fence(_ phase: String, completion: @escaping () -> Void) {
+    guard !finished, !phasePending, requests.isEmpty,
+      let reservation, let own, own.check(), own.checkLinks(), peersMatch()
+    else {
+      abortReadiness()
       return
     }
-    pdfHandle = pdf
-    pdfContinuation = completion
-    pdfPending = true
+    phasePending = true
+    phaseContinuation = completion
+    let intervals: [[String: Any]] =
+      phase == "post"
+      ? cases.compactMap { row in
+        guard row["syscallObserved"] as? Bool == true,
+          let caseID = row["caseID"] as? String,
+          let began = Self.integer(row["beganAtNs"]), let ended = Self.integer(row["endedAtNs"]),
+          began > 0, ended >= began
+        else { return nil }
+        return ["caseID": caseID, "beganAtNs": began, "endedAtNs": ended]
+      } : []
+    TopologyReadiness.fence(
+      directory: reservation.descriptor, runID: runID, phase: phase,
+      actors: actorCandidates, links: own.links, intervals: intervals,
+      ownerControl: own.check() && own.checkLinks(), timeoutMs: 10000
+    ) { [weak self] accepted in
+      guard let self else { return }
+      self.queue.async {
+        guard !self.finished, self.phasePending else { return }
+        self.phasePending = false
+        let continuation = self.phaseContinuation
+        self.phaseContinuation = nil
+        guard accepted, self.peersMatch() else {
+          self.abortReadiness()
+          return
+        }
+        continuation?()
+      }
+    }
+  }
+
+  private func abortReadiness() {
+    guard !finished else { return }
+    fixtureStatus = "blocked"
+    phasePending = false
+    phaseContinuation = nil
+    request("topology.cleanup", params: ["runID": runID]) { _ in self.finish() }
+  }
+
+  private func identifyPDF(completion: @escaping () -> Void) {
+    workerIdentityPending = true
+    workerIdentityDeadline = DispatchTime.now().uptimeNanoseconds + 10_000_000_000
+    workerIdentityContinuation = completion
     let worker = NSXPCConnection(serviceName: TopologyIdentity.worker)
     worker.setCodeSigningRequirement(TopologyIdentity.requirement(TopologyIdentity.worker))
     worker.remoteObjectInterface = NSXPCInterface(with: PDFTopologyService.self)
@@ -492,46 +634,116 @@ private final class TopologyCoordinator: NSObject, ProviderFrameReceiver, @unche
       let proxy = worker.remoteObjectProxyWithErrorHandler({ [weak self] _ in self?.workerFailed() }
       ) as? PDFTopologyService
     else {
+      completeWorkerIdentity(nil)
+      return
+    }
+    proxy.identify(runID) { [weak self] bytes in
+      guard let self else { return }
+      let receivedAt = DispatchTime.now().uptimeNanoseconds
+      self.queue.async { self.completeWorkerIdentity(bytes, receivedAt: receivedAt) }
+    }
+    queue.asyncAfter(deadline: DispatchTime(uptimeNanoseconds: workerIdentityDeadline)) {
+      [weak self] in
+      self?.completeWorkerIdentity(nil)
+    }
+  }
+
+  private func completeWorkerIdentity(_ bytes: Data?, receivedAt: UInt64? = nil) {
+    guard workerIdentityPending, !finished else { return }
+    workerIdentityPending = false
+    let continuation = workerIdentityContinuation
+    workerIdentityContinuation = nil
+    if let receivedAt, receivedAt < workerIdentityDeadline,
+      let bytes, bytes.count <= 65536,
+      let value = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any],
+      Set(value.keys) == Set(["runID", "pid"]), value["runID"] as? String == runID,
+      let pid = Self.integer(value["pid"]), (1...Int64(Int32.max)).contains(pid),
+      worker?.processIdentifier == Int32(pid), worker?.effectiveUserIdentifier == getuid()
+    {
+      actorCandidates.append(["role": "PDFiumXPC", "pid": Int(pid)])
+    } else {
+      pdfiumRuntimeStatus = "blocked"
+    }
+    continuation?()
+  }
+
+  private func inspectPDF(completion: @escaping () -> Void) {
+    guard peersMatch(), let worker, let pdf = own?.readOnlyPDF() else {
+      fixtureStatus = "blocked"
+      completion()
+      return
+    }
+    pdfHandle = pdf
+    pdfContinuation = completion
+    pdfPending = true
+    pdfDeadline = DispatchTime.now().uptimeNanoseconds + 10_000_000_000
+    guard
+      let proxy = worker.remoteObjectProxyWithErrorHandler({ [weak self] _ in
+        self?.workerFailed()
+      }) as? PDFTopologyService
+    else {
       completePDF(nil)
       return
     }
     proxy.inspect(runID, pdf: pdf) { [weak self] bytes in
       guard let self else { return }
-      self.queue.async { self.completePDF(bytes) }
+      let receivedAt = DispatchTime.now().uptimeNanoseconds
+      self.queue.async { self.completePDF(bytes, receivedAt: receivedAt) }
     }
-    queue.asyncAfter(deadline: .now() + .seconds(10)) { [weak self] in self?.completePDF(nil) }
+    queue.asyncAfter(deadline: DispatchTime(uptimeNanoseconds: pdfDeadline)) { [weak self] in
+      self?.completePDF(nil)
+    }
   }
 
-  private func workerFailed() { queue.async { self.completePDF(nil) } }
+  private func workerFailed() {
+    queue.async {
+      guard !self.finished else { return }
+      if self.workerIdentityPending {
+        self.completeWorkerIdentity(nil)
+      } else if self.pdfPending {
+        self.completePDF(nil)
+      } else if self.phasePending {
+        self.abortReadiness()
+      }
+    }
+  }
 
-  private func completePDF(_ bytes: Data?) {
+  private func completePDF(_ bytes: Data?, receivedAt: UInt64? = nil) {
     guard pdfPending else { return }
     pdfPending = false
     defer {
-      worker?.invalidate()
-      worker = nil
       try? pdfHandle?.close()
       pdfHandle = nil
       let continuation = pdfContinuation
       pdfContinuation = nil
       continuation?()
     }
-    guard let bytes, bytes.count <= 32768,
+    guard let receivedAt, receivedAt < pdfDeadline,
+      let bytes, bytes.count <= 32768,
       let report = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any],
       Set(report.keys) == Set(["status", "pdfiumInitialized", "expectedRootMatched", "cases"]),
-      report["pdfiumInitialized"] as? Bool == true,
-      let matched = report["expectedRootMatched"] as? Bool,
+      let workerStatus = report["status"] as? String,
+      ["inconclusive", "blocked", "failed"].contains(workerStatus),
+      let initialized = Self.boolean(report["pdfiumInitialized"]),
+      let matched = Self.boolean(report["expectedRootMatched"]),
       let rows = report["cases"] as? [[String: Any]], rows.count <= 19
     else {
       pdfiumRuntimeStatus = "failed"
       fixtureStatus = "failed"
       return
     }
+    guard initialized else {
+      pdfiumRuntimeStatus = report["status"] as? String == "blocked" ? "blocked" : "failed"
+      fixtureStatus = pdfiumRuntimeStatus
+      return
+    }
     pdfiumRuntimeStatus = "pass"
-    guard matched, rows.count == 19 else {
+    if workerStatus == "failed" || workerStatus == "blocked" { fixtureStatus = workerStatus }
+    guard matched else {
       fixtureStatus = "blocked"
       return
     }
+    if rows.count < 19 && fixtureStatus != "failed" { fixtureStatus = "blocked" }
     var safe: [[String: Any]] = []
     for row in rows {
       guard row["runID"] as? String == runID, row["actorInstanceRef"] as? String == "PDFiumXPC",
@@ -540,9 +752,13 @@ private final class TopologyCoordinator: NSObject, ProviderFrameReceiver, @unche
         let operation = row["operation"] as? String,
         ["read", "write", "symlinkRead", "descriptorRead", "descriptorWrite", "connect"].contains(
           operation),
-        let result = row["syscallResult"] as? Int, (-1...4096).contains(result),
-        let code = row["errno"] as? Int, (0...4096).contains(code),
-        let root = row["expectedRootMatched"] as? Bool,
+        let result = Self.integer(row["syscallResult"]), (-1...4096).contains(result),
+        let code = Self.integer(row["errno"]), (0...Int64(Int32.max)).contains(code),
+        let observed = Self.boolean(row["syscallObserved"]),
+        let began = Self.integer(row["beganAtNs"]), let ended = Self.integer(row["endedAtNs"]),
+        observed
+          ? (began > 0 && ended >= began) : (began == 0 && ended == 0 && result == 0 && code == 0),
+        let root = Self.boolean(row["expectedRootMatched"]),
         let verdict = row["verdict"] as? String,
         ["pass", "failed", "blocked", "inconclusive"].contains(verdict)
       else {
@@ -551,13 +767,18 @@ private final class TopologyCoordinator: NSObject, ProviderFrameReceiver, @unche
       }
       var item = TopologyFixtures.observation(
         runID: runID, actor: "PDFiumXPC", alias: alias,
-        operation: operation, result: result, error: Int32(code), matched: root)
+        operation: operation, result: Int(result), error: Int32(code), matched: root,
+        observed: observed, beganAtNs: began, endedAtNs: ended)
       if alias == "PDF" && ["descriptorRead", "descriptorWrite"].contains(operation) {
         item["verdict"] = verdict
+      } else if observed && verdict == "failed" {
+        // Async connect completion can establish forbidden success even
+        // while the recorded immediate syscall tuple is EINPROGRESS.
+        item["verdict"] = "failed"
       }
       safe.append(item)
     }
-    guard Set(safe.compactMap { $0["caseID"] as? String }).count == 19 else {
+    guard Set(safe.compactMap { $0["caseID"] as? String }).count == rows.count else {
       fixtureStatus = "failed"
       return
     }
@@ -567,8 +788,12 @@ private final class TopologyCoordinator: NSObject, ProviderFrameReceiver, @unche
   private func finish() {
     guard !finished else { return }
     finished = true
+    phasePending = false
+    phaseContinuation = nil
+    workerIdentityPending = false
+    workerIdentityContinuation = nil
     failConnection()
-    let ownerPost = own?.check() ?? false
+    let ownerPost = (own?.check() ?? false) && (own?.checkLinks() ?? false)
     if let own {
       if !ownerPost { fixtureStatus = "failed" }
       for index in cases.indices
@@ -590,12 +815,25 @@ private final class TopologyCoordinator: NSObject, ProviderFrameReceiver, @unche
     runtimeStatus =
       providerRuntimeStatus == "failed" || pdfiumRuntimeStatus == "failed"
       ? "failed" : pdfiumRuntimeStatus == "pass" ? "pass" : "blocked"
+    let bindings: [[String: Any]] = ["Main", "ProviderAgent", "Python", "PDFiumXPC"].map {
+      ["role": $0, "actorInstanceRef": actorRefs[$0]!, "identityVerified": false]
+    }
+    let safeCases: [[String: Any]] = cases.map { original in
+      var row = original
+      let candidate = row["actorInstanceRef"] as? String ?? ""
+      let role = candidate == "Agent" ? "Python" : candidate.hasPrefix("Main") ? "Main" : candidate
+      row["actorInstanceRef"] = actorRefs[role] ?? "unbound"
+      row.removeValue(forKey: "beganAtNs")
+      row.removeValue(forKey: "endedAtNs")
+      return row
+    }
     let report: [String: Any] = [
-      "schemaRevision": "topology-v1", "runID": runID,
+      "schemaRevision": "topology-evidence-v2", "runID": runID,
       "runtimeStatus": runtimeStatus, "runtime": runtimeResult,
       "providerRuntimeStatus": providerRuntimeStatus,
       "pdfiumRuntimeStatus": pdfiumRuntimeStatus,
-      "fixtureStatus": fixtureStatus, "cases": cases, "terminals": terminals,
+      "fixtureStatus": fixtureStatus, "cases": safeCases, "terminals": terminals,
+      "actorBindings": bindings,
       "isolationVerdict": fixtureStatus == "failed" ? "failed" : "inconclusive",
       "p1": "unverified", "actualTwoCPU": false,
     ]
@@ -609,11 +847,7 @@ private final class TopologyCoordinator: NSObject, ProviderFrameReceiver, @unche
   }
 
   private func save(_ report: Data) -> Bool {
-    guard let root = TopologyIdentity.container(TopologyIdentity.main),
-      let directory = TopologyFixtures.directory(
-        root.appendingPathComponent("Library/Application Support/PaperLensTopology"), create: true)
-    else { return false }
-    defer { close(directory) }
-    return TopologyFixtures.publishReport(report, directory: directory)
+    guard report.count <= 1024 * 1024 else { return false }
+    return reservation?.publish(report) ?? false
   }
 }
