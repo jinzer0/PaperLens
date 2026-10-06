@@ -23,6 +23,7 @@ SCRIPTS = Path(__file__).resolve().parents[2] / "scripts/topology"
 sys.path.insert(0, str(SCRIPTS))
 import acquire
 import verify
+import diagnose_eof
 import package as packaging
 
 
@@ -2094,6 +2095,412 @@ class GroupOwnerTests(IsolatedTest):
             writer.write(b"x" * 4097)
             with self.assertRaisesRegex(acquire.Failure, "group_owner_response_limit"):
                 owner.receive(time.monotonic() + 1)
+
+
+class EOFDiagnosticTests(IsolatedTest):
+    run_id = "01234567-89ab-4cde-8fab-0123456789ab"
+    artifact = "a" * 64
+
+    class Pipe:
+        def __init__(self, fd):
+            self.fd = fd
+            self.closed = False
+
+        def fileno(self):
+            return self.fd
+
+        def close(self):
+            self.closed = True
+
+    class Process:
+        def __init__(self, status=None):
+            self.stdout = EOFDiagnosticTests.Pipe(10)
+            self.stderr = EOFDiagnosticTests.Pipe(11)
+            self.status = status
+            self.calls = []
+
+        def poll(self):
+            return self.status
+
+        def terminate(self):
+            self.calls.append("terminate")
+            self.status = 0
+
+        def kill(self):
+            self.calls.append("kill")
+            self.status = -9
+
+        def wait(self, timeout):
+            self.calls.append(("wait", timeout))
+            return self.status
+
+    class Selector:
+        def __init__(self):
+            self.entries = {}
+            self.reads = []
+
+        def register(self, pipe, events, output):
+            self.entries[pipe.fd] = mock.Mock(fileobj=pipe, data=output)
+
+        def unregister(self, pipe):
+            return self.entries.pop(pipe.fd)
+
+        def get_map(self):
+            return self.entries
+
+        def select(self, timeout):
+            if self.reads:
+                return [(self.entries[self.reads.pop(0)], 1)]
+            return []
+
+        def close(self):
+            self.entries.clear()
+
+    def collector(self, hooks, status=None):
+        bindings = {role: {"pid": 100 + index} for index, role in enumerate(verify.ROLES)}
+        process = hooks.test_process
+        process.status = status
+        collector = verify.OSCollector(bindings, verify.fixture_paths(self.root, self.run_id), deadline=230)
+        collector.start()
+        collector.lifecycle_complete = True
+        return collector, process
+
+    def context(self, read=None):
+        stack = contextlib.ExitStack()
+        stack.enter_context(mock.patch.object(verify.time, "monotonic", return_value=0.75))
+        stack.enter_context(mock.patch.object(verify.selectors, "DefaultSelector", self.Selector))
+        process = self.Process()
+        stack.enter_context(mock.patch.object(verify.subprocess, "Popen", return_value=process))
+        stack.enter_context(mock.patch.object(verify.os, "set_blocking"))
+        if read is not None:
+            stack.enter_context(mock.patch.object(verify.os, "read", side_effect=read))
+        hooks = stack.enter_context(diagnose_eof.Hooks())
+        hooks.test_process = process
+        self.addCleanup(stack.close)
+        return hooks
+
+    def test_fixed_slots_unknown_defaults_and_raw_rejection(self):
+        hooks = diagnose_eof.Hooks()
+        self.assertEqual(set(hooks.receipt["milestones"]), set(diagnose_eof.SLOTS))
+        self.assertTrue(all(row == diagnose_eof.unknown() for row in hooks.receipt["milestones"].values()))
+        diagnose_eof.validate_receipt(hooks.receipt)
+        for field, value in (("pid", 10), ("path", "/Users/private"), ("duration", 1), ("header", "raw")):
+            bad = json.loads(json.dumps(hooks.receipt))
+            bad["milestones"]["start-before"][field] = value
+            with self.subTest(field=field), self.assertRaises(acquire.Failure):
+                diagnose_eof.validate_receipt(bad)
+        bad = json.loads(json.dumps(hooks.receipt))
+        bad["milestones"]["start-before"]["reaped"] = False
+        with self.assertRaises(acquire.Failure):
+            diagnose_eof.validate_receipt(bad)
+
+    def test_actual_argv_timeout_rounding_and_original_deadlines(self):
+        hooks = self.context()
+        collector, process = self.collector(hooks)
+        self.assertEqual(hooks.receipt["cliTimeout"], 224)
+        self.assertEqual((collector.deadline, collector.observer_deadline), (225, 230))
+        self.assertEqual(hooks.receipt["milestones"]["start-before"]["processState"], "not-started")
+        self.assertEqual(hooks.receipt["milestones"]["start-after"]["processState"], "running")
+        hooks.receipt["cliTimeout"] = None
+        hooks.bind_process(self.Process(), ["other", "--timeout", "224"])
+        self.assertIsNone(hooks.receipt["cliTimeout"])
+        self.assertEqual(process.calls, [])
+
+    def test_exit_with_registered_pipes_is_not_eof_and_close_is_unknown(self):
+        hooks = self.context()
+        collector, process = self.collector(hooks, status=0)
+        hooks.sample("mainpost-after")
+        row = hooks.receipt["milestones"]["mainpost-after"]
+        self.assertEqual((row["processState"], row["stdoutState"], row["stderrState"]), ("exit-zero", "registered", "registered"))
+        collector.selector.close()
+        process.stdout.close()
+        process.stderr.close()
+        hooks.sample("after-cleanup")
+        self.assertEqual(hooks.receipt["milestones"]["after-cleanup"]["stdoutState"], "unknown")
+        self.assertFalse(hooks.eof)
+
+    def test_no_popen_means_no_computed_timeout_substitute(self):
+        hooks = self.context()
+        with mock.patch.object(verify.time, "monotonic", return_value=225):
+            collector, process = self.collector(hooks)
+        self.assertIsNone(collector.process)
+        self.assertIsNone(hooks.receipt["cliTimeout"])
+        self.assertEqual(collector.failure, ("timed-out", "collector-insufficient-budget"))
+        self.assertEqual(hooks.receipt["milestones"]["start-after"]["processState"], "not-started")
+
+    def test_only_original_readzero_and_successful_unregister_record_eof(self):
+        reads = []
+        def read(fd, size):
+            reads.append((fd, size))
+            return b""
+        hooks = self.context(read=read)
+        collector, process = self.collector(hooks, status=0)
+        collector.selector.reads = [10, 11]
+        collector.drain()
+        self.assertEqual(reads, [(10, 8192), (11, 8192)])
+        hooks.sample("report-tail")
+        self.assertEqual(hooks.eof, {"stdoutState", "stderrState"})
+        row = hooks.receipt["milestones"]["report-tail"]
+        self.assertEqual((row["stdoutState"], row["stderrState"]), ("eof-observed", "eof-observed"))
+        self.assertTrue(collector.eof_observed)
+
+    def test_unregistration_without_zero_and_failed_unregister_do_not_claim_eof(self):
+        hooks = self.context()
+        collector, process = self.collector(hooks)
+        collector.selector.unregister(process.stdout)
+        self.assertFalse(hooks.eof)
+        hooks.draining = True
+        hooks.zero.add(10)
+        with self.assertRaises(KeyError):
+            collector.selector.unregister(process.stdout)
+        self.assertFalse(hooks.eof)
+
+    def test_target_early_return_late_samples_and_first_slot_immutability(self):
+        hooks = self.context()
+        collector, process = self.collector(hooks)
+        collector.selector.reads = [10]
+        with mock.patch.object(verify.time, "monotonic", return_value=224.9):
+            hooks.sample()
+        with mock.patch.object(verify.time, "monotonic", return_value=225), mock.patch.object(verify.os, "read") as read:
+            collector.drain()
+            read.assert_not_called()
+        first = dict(hooks.receipt["milestones"]["first-at-target"])
+        self.assertEqual(collector.failure, ("timed-out", "collector-timeout"))
+        self.assertEqual(first["processState"], "running")
+        self.assertFalse(first["sourceFailure"])
+        process.status = 0
+        with mock.patch.object(verify.time, "monotonic", return_value=226):
+            hooks.sample()
+        self.assertEqual(hooks.receipt["milestones"]["first-at-target"], first)
+        self.assertEqual(hooks.receipt["milestones"]["last-before-target"]["targetRelation"], "before")
+        self.assertEqual(len(hooks.receipt["milestones"]), 8)
+
+    def test_forced_stop_is_separate_from_cleanup_and_completion(self):
+        hooks = self.context()
+        collector, process = self.collector(hooks)
+        rows, state = collector.finish({})
+        hooks.sample("after-cleanup")
+        before = hooks.receipt["milestones"]["before-stop"]
+        after = hooks.receipt["milestones"]["after-cleanup"]
+        self.assertEqual((before["processState"], before["stopRequested"]), ("running", False))
+        self.assertEqual((after["processState"], after["stopRequested"], after["reaped"], after["frozen"]), ("exit-zero", True, True, True))
+        self.assertFalse(state["queryCompleted"])
+        self.assertEqual(state["reason"], "collector-stop-before-eof")
+        self.assertFalse(hooks.receipt["milestones"]["report-tail"]["observed"])
+
+    def test_original_return_exception_and_hook_restoration(self):
+        failure = RuntimeError("private raw failure")
+        original = verify.OSCollector.start
+        with mock.patch.object(verify.OSCollector, "start", side_effect=failure), mock.patch.object(verify.selectors, "DefaultSelector", self.Selector):
+            with diagnose_eof.Hooks() as hooks:
+                bindings = {role: {"pid": 100 + index} for index, role in enumerate(verify.ROLES)}
+                collector = verify.OSCollector(bindings, verify.fixture_paths(self.root, self.run_id), deadline=230)
+                with self.assertRaises(RuntimeError) as observed:
+                    collector.start()
+                self.assertIs(observed.exception, failure)
+                self.assertFalse(hooks.receipt["milestones"]["start-after"]["observed"])
+        self.assertIs(verify.OSCollector.start, original)
+
+    def test_first_actual_stop_is_not_overwritten_by_later_kill(self):
+        hooks = self.context()
+        collector, process = self.collector(hooks)
+        with mock.patch.object(process, "wait", side_effect=[subprocess.TimeoutExpired("owned", 0.1), 0]):
+            collector.finish({})
+        self.assertEqual(process.calls, ["terminate", "kill"])
+        row = hooks.receipt["milestones"]["before-stop"]
+        self.assertEqual((row["processState"], row["stopRequested"]), ("running", False))
+        self.assertFalse(collector.state["queryCompleted"])
+
+    def test_after_cleanup_is_actual_gui_return_or_exception_boundary(self):
+        cleaned = []
+        failure = RuntimeError("original")
+        def gui(*args, **kwargs):
+            try:
+                raise failure
+            finally:
+                cleaned.append(True)
+                collector.closed = True
+        with mock.patch.object(verify, "gui_run", gui):
+            hooks = self.context()
+            collector, process = self.collector(hooks)
+            with self.assertRaises(RuntimeError) as observed:
+                verify.gui_run("bundle", {})
+            self.assertIs(observed.exception, failure)
+            self.assertEqual(cleaned, [True])
+            self.assertTrue(hooks.receipt["milestones"]["after-cleanup"]["frozen"])
+            hooks.stack.close()
+
+    def test_mainpost_and_report_tail_require_actual_successful_boundaries(self):
+        observer = mock.Mock(done=set(), run_id=self.run_id, artifact_hash=self.artifact)
+        def poll(value):
+            value.done.add((0, "post"))
+            return "original"
+        def tail(value):
+            verify.require(True, "report_lifecycle_incomplete")
+            value.collector.drain()
+            return "tail-return"
+        with mock.patch.object(verify.ReadinessObserver, "poll", poll), mock.patch.object(verify.ReadinessObserver, "tail", tail):
+            hooks = self.context()
+            collector, process = self.collector(hooks)
+            observer.collector = collector
+            self.assertEqual(verify.ReadinessObserver.poll(observer), "original")
+            self.assertTrue(hooks.receipt["milestones"]["mainpost-after"]["observed"])
+            self.assertFalse(hooks.receipt["milestones"]["report-tail"]["observed"])
+            self.assertEqual(verify.ReadinessObserver.tail(observer), "tail-return")
+            self.assertTrue(hooks.receipt["milestones"]["report-tail"]["observed"])
+            hooks.stack.close()
+
+    def test_failed_mainpost_return_or_report_validation_cannot_create_slots(self):
+        observer = mock.Mock(done=set())
+        failure = acquire.Failure("report_lifecycle_incomplete")
+        def poll(value):
+            value.done.add((0, "post"))
+            raise failure
+        def tail(value):
+            verify.require(False, "report_lifecycle_incomplete")
+            value.collector.drain()
+        with mock.patch.object(verify.ReadinessObserver, "poll", poll), mock.patch.object(verify.ReadinessObserver, "tail", tail):
+            hooks = self.context()
+            collector, process = self.collector(hooks)
+            observer.collector = collector
+            with self.assertRaises(acquire.Failure) as observed:
+                verify.ReadinessObserver.poll(observer)
+            self.assertIs(observed.exception, failure)
+            with self.assertRaises(acquire.Failure):
+                verify.ReadinessObserver.tail(observer)
+            self.assertFalse(hooks.receipt["milestones"]["mainpost-after"]["observed"])
+            self.assertFalse(hooks.receipt["milestones"]["report-tail"]["observed"])
+            hooks.stack.close()
+
+    def safe_values(self):
+        receipt = diagnose_eof.Hooks().receipt
+        receipt.update(runID=self.run_id, artifactHash=self.artifact)
+        evidence = verify.base_evidence("arm64")
+        evidence["manifest"]["artifactHash"] = self.artifact
+        evidence["groupOwner"]["runID"] = self.run_id
+        summary = diagnose_eof.project_output(json.dumps(evidence), receipt)
+        summary.update(priorReportsPreserved=True, priorReportsHash="b" * 64)
+        return receipt, evidence, summary
+
+    def test_safe_join_and_raw_capture_never_projected(self):
+        receipt, evidence, summary = self.safe_values()
+        evidence["privateRaw"] = "/Users/private PID 123 timestamp header"
+        self.assertNotIn("private", json.dumps(diagnose_eof.project_output(json.dumps(evidence), receipt)))
+        evidence["groupOwner"]["runID"] = str(verify.uuid.uuid4())
+        with self.assertRaisesRegex(acquire.Failure, "diagnostic_join_invalid"):
+            diagnose_eof.project_output(json.dumps(evidence), receipt)
+        evidence["groupOwner"]["runID"] = self.run_id
+        evidence["osCollection"]["reason"] = "/Users/private"
+        with self.assertRaises(acquire.Failure):
+            diagnose_eof.project_output(json.dumps(evidence), receipt)
+        capture = diagnose_eof.Capture()
+        capture.maximum = 4
+        capture.write("1234")
+        with self.assertRaises(acquire.Failure):
+            capture.write("5")
+
+    def test_exclusive_output_collision_and_extra_raw_fields_preserve_bytes(self):
+        receipt, evidence, summary = self.safe_values()
+        directory = self.root / ".build/topology/arm64"
+        directory.mkdir(parents=True)
+        existing = directory / ("eof-diagnostic-" + self.run_id + ".json")
+        existing.write_bytes(b"preserve")
+        before = existing.stat()
+        with mock.patch.object(verify, "ROOT", self.root):
+            with self.assertRaises(FileExistsError):
+                diagnose_eof.save(receipt, summary)
+            summary["raw"] = "/Users/private"
+            with self.assertRaises(acquire.Failure):
+                diagnose_eof.save(receipt, summary)
+        self.assertEqual(existing.read_bytes(), b"preserve")
+        self.assertEqual((existing.stat().st_ino, existing.stat().st_mode), (before.st_ino, before.st_mode))
+
+    def test_exclusive_safe_output_success_and_second_destination_collision(self):
+        receipt, evidence, summary = self.safe_values()
+        directory = self.root / ".build/topology/arm64"
+        directory.mkdir(parents=True)
+        with mock.patch.object(verify, "ROOT", self.root):
+            diagnose_eof.save(receipt, summary)
+        first = directory / ("eof-diagnostic-" + self.run_id + ".json")
+        second = directory / ("eof-evidence-" + self.run_id + ".json")
+        self.assertEqual(json.loads(first.read_bytes()), receipt)
+        self.assertEqual(json.loads(second.read_bytes()), summary)
+        self.assertEqual(stat.S_IMODE(first.stat().st_mode), 0o600)
+        other = str(verify.uuid.uuid4())
+        receipt["runID"] = other
+        collision = directory / ("eof-evidence-" + other + ".json")
+        collision.write_bytes(b"preserve second")
+        before = collision.stat()
+        with mock.patch.object(verify, "ROOT", self.root), self.assertRaises(FileExistsError):
+            diagnose_eof.save(receipt, summary)
+        self.assertEqual(collision.read_bytes(), b"preserve second")
+        self.assertEqual(collision.stat().st_ino, before.st_ino)
+
+    def test_original_run_failure_and_report_changes_are_not_hidden_or_retried(self):
+        prior = {(None, "report.json"): (1, 2, 0o600, b"safe")}
+        prior.update({(run_id, "report.json"): (1, index + 3, 0o600, b"safe") for index, run_id in enumerate(diagnose_eof.PRIOR_RUNS)})
+        failure = RuntimeError("original raw error")
+        argv = ["--arch", "arm64", "--bundle", "bundle", "--confirm-current-profile"]
+        with mock.patch.object(diagnose_eof, "report_snapshot", return_value=prior), mock.patch.object(verify, "main", side_effect=failure) as invocation:
+            with self.assertRaises(RuntimeError) as observed:
+                diagnose_eof.run(argv)
+        self.assertIs(observed.exception, failure)
+        invocation.assert_called_once_with(argv, manual_observer=None)
+        changed = dict(prior)
+        changed[(None, "report.json")] = (1, 2, 0o600, b"changed")
+        with mock.patch.object(diagnose_eof, "report_snapshot", side_effect=[prior, changed]), mock.patch.object(verify, "main", return_value=2) as invocation:
+            with self.assertRaisesRegex(acquire.Failure, "diagnostic_prior_report_changed"):
+                diagnose_eof.run(argv)
+        invocation.assert_called_once()
+
+    def test_secondary_preservation_failures_keep_original_exception_primary(self):
+        prior = {(None, "report.json"): (1, 2, 0o600, b"safe")}
+        prior.update({(run_id, "report.json"): (1, index + 3, 0o600, b"safe") for index, run_id in enumerate(diagnose_eof.PRIOR_RUNS)})
+        changed = dict(prior)
+        changed[(None, "report.json")] = (1, 2, 0o600, b"changed")
+        argv = ["--arch", "arm64", "--bundle", "bundle", "--confirm-current-profile"]
+        original_start = verify.OSCollector.start
+        for secondary in (changed, OSError("private secondary path")):
+            with self.subTest(secondary=type(secondary).__name__):
+                failure = RuntimeError("original raw error")
+                with mock.patch.object(diagnose_eof, "report_snapshot", side_effect=[prior, secondary]), mock.patch.object(verify, "main", side_effect=failure) as invocation:
+                    with self.assertRaises(RuntimeError) as observed:
+                        diagnose_eof.run(argv)
+                self.assertIs(observed.exception, failure)
+                self.assertEqual(failure.__notes__, ["EOF diagnostic report preservation check also failed; raw details withheld."])
+                self.assertIs(verify.OSCollector.start, original_start)
+                invocation.assert_called_once_with(argv, manual_observer=None)
+
+    def test_nine_prior_reports_snapshot_and_one_original_run_preserve_bytes(self):
+        root = self.root / "Library/Containers" / verify.IDENTITY / "Data/Library/Application Support/PaperLensTopology"
+        root.mkdir(parents=True, mode=0o700)
+        (root / "report.json").write_bytes(b"fixed")
+        for index, run_id in enumerate(diagnose_eof.PRIOR_RUNS):
+            directory = root / "Reports" / run_id
+            directory.mkdir(parents=True, mode=0o700)
+            (directory / "report.json").write_bytes(bytes([index]))
+        receipt, evidence, summary = self.safe_values()
+        def main(argv, manual_observer=None):
+            print(json.dumps(evidence))
+            return 2
+        # No live verifier calls: use real safe file reads and fake invocation.
+        with mock.patch.object(verify, "current_home", return_value=self.root), mock.patch.object(verify, "no_acl", return_value=True):
+            before = diagnose_eof.report_snapshot()
+            with mock.patch.object(verify, "main", side_effect=main) as invocation, mock.patch.object(diagnose_eof.Hooks, "__enter__", return_value=mock.Mock(receipt=receipt)), mock.patch.object(diagnose_eof.Hooks, "__exit__", return_value=False):
+                status, result, projected = diagnose_eof.run(["--arch", "arm64", "--bundle", "bundle", "--confirm-current-profile"])
+            self.assertEqual(diagnose_eof.report_snapshot(), before)
+        invocation.assert_called_once()
+        self.assertEqual(status, 2)
+        self.assertTrue(projected["priorReportsPreserved"])
+        self.assertEqual(len(before), 9)
+
+    def test_cli_contains_original_raw_exception_and_does_not_save(self):
+        output = io.StringIO()
+        with mock.patch.object(diagnose_eof, "run", side_effect=RuntimeError("/Users/private log PID")), mock.patch.object(diagnose_eof, "save") as save, contextlib.redirect_stderr(output):
+            self.assertEqual(diagnose_eof.main(["--arch", "arm64", "--bundle", "private", "--confirm-current-profile"]), 2)
+        self.assertNotIn("/Users/", output.getvalue())
+        self.assertNotIn("PID", output.getvalue())
+        save.assert_not_called()
 
 
 if __name__ == "__main__":

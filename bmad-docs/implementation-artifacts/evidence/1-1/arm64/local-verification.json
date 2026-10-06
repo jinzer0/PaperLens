@@ -333,11 +333,65 @@
     "localEvidence": [".build/topology/arm64/natural-eof-live.json", ".build/topology/arm64/natural-eof-preservation-complete.json", ".build/topology/<arch>/natural-eof-reviewed-static.json"],
     "scope": "Approved local current-account synthetic-only prototype. Dirty runtime snapshot precedes this evidence update and local commit; later commit-bound packages are static-only, not another dynamic trial. Historical named evidence unchanged. Story/product/clean-machine/Gatekeeper/distribution blocked; no remote execution authorization"
   },
+  "approvedEOFDiagnosticRetest": {
+    "date": "2026-10-06",
+    "scopeApproval": "bea3f4830fb650b5334149b7ca5ab3a082596f7a",
+    "implementationApproval": "bea3f4830fb650b5334149b7ca5ab3a082596f7a",
+    "approvalRecord": "https://github.com/jinzer0/PaperLens/issues/2#issuecomment-6015575743",
+    "sourceBaseCommitAtBuild": "bea3f4830fb650b5334149b7ca5ab3a082596f7a",
+    "sourceDirtyAtBuild": true,
+    "sourceTreeHashAtBuild": "2554760b9d6bff243ea5054eacb80300d1966aff159c0ec245aa8c8153cec2da",
+    "dependencyLockSHA256": "e4aa484ccf778a7ffbc504ed8e86bcfe78a85aaabb16aa945b4e8b5d99116274",
+    "implementation": {
+      "driver": "Invocation-local original-call hooks in scripts/topology/diagnose_eof.py; exact eight fixed slots, closed enums/booleans/null, timeout from actual owned Popen argv, bounded RAM capture and exclusive fixed-path safe outputs",
+      "EOF": "Only original drain read-zero followed by successful owned selector unregister; process exit, missing registration, selector/pipe close and forced-stop results do not fabricate natural EOF",
+      "preservation": "Fixed report plus eight named prior per-run reports compared in RAM for device/inode/mode/bytes; safe aggregate content digest only; original exceptions remain primary when secondary preservation checking fails, with a fixed sanitized note",
+      "unchanged": "Verifier product source, native sources/wire, evidence-v2, actor lifecycle, collector semantics, observer230s/target-minus5s/Main10s/Worker2s/RPC/SDK/network bounds, pins and entitlements unchanged except exact approval SHA metadata"
+    },
+    "regressions": {
+      "pythonTopology": {"command": "python3.13 -I -B -m unittest discover -s Tests/Topology -p 'test_*.py'", "tests": 252, "failures": 0, "driver": "3.13.16"},
+      "coverage": ["eight bounded slots and unknown/null defaults", "raw field rejection and exact run/artifact joins", "actual argv timeout, target boundaries and unchanged original calls", "read-zero/unregister versus close, exit with registered pipes", "successful Mainpost/report boundary versus validation failure", "first stop versus later kill and cleanup", "primary original exception plus secondary snapshot/change failure", "single invocation, exclusive output collisions and nine report preservation"],
+      "independentStaticReview": "Exception-precedence finding repaired with combined-failure regression; rereview CLEAR, no gates/live activity by reviewers",
+      "nativeScope": "Both full Release builds compile unchanged native sources; historical Swift tests not rerun",
+      "warningsRetained": "Mocked asyncio two-second slow-task diagnostic retained, no suppression",
+      "whitespace": "git diff --check pass; no project Python formatter configured"
+    },
+    "arm64": {"fullReleaseBuild": "pass", "insideOutDeveloperIDSigning": "pass", "finalStaticInventory": "pass", "artifactHashAtRuntime": "2e2e4e1dbc6f4d183eba08e8be2237bdc5acdb0b5b176455bfa9e791e7f84c51", "numericPDFiumRegressionAndInitDestroy": "native_pass"},
+    "x86_64": {"fullReleaseCrossBuild": "pass", "insideOutDeveloperIDSigning": "pass", "finalStaticInventory": "pass", "artifactHashAtStaticVerification": "ad59d87bd7fcec9db21f53d46c9a02c104bef6af2ab2baeff0d5c81293cdc058", "numericRegressionCompileLink": "pass", "numericRegressionExecution": "blocked_cross_cpu", "actualIntelExecution": false, "dynamicScope": "explicitly waived, support unverified"},
+    "signedInvocation": {
+      "runID": "91e55823-a4ea-494e-9546-704ebaeb5691", "actualCPU": "arm64", "OSBuild": "25G241", "verifierExit": 2,
+      "reportSHA256": "c6872de15ebdd7a246ee91ae62e4009819a0f98369e316be165e393788dc133a",
+      "matchingReportAndSymmetricRelease": "pass", "providerSDKCLIInitialize": "pass", "PDFiumXPCInitDestroy": "pass", "readOnlyPDFDescriptorCapabilities": "pass, not sandbox attribution",
+      "liveSignedPrePostActors": 4, "independentPrePostControls": 31, "observedSyscallIntervals": 36,
+      "caseVerdicts": {"total": 39, "pass": 0, "failed": 0, "inconclusive": 38, "blocked": 1},
+      "osCollection": {"status": "timed-out", "queryCompleted": false, "scopeVerified": false, "truncated": false, "reason": "collector-timeout"},
+      "safeDenialCandidates": 0, "manualActors": 4, "manualAllUnknown": true, "humanReceiptsSupplied": false,
+      "OSDenialClockAndEffectiveTCC": "unverified", "aggregateVerdict": "blocked", "invocations": 1
+    },
+    "diagnosticReceipt": {
+      "runID": "91e55823-a4ea-494e-9546-704ebaeb5691", "artifactHash": "2e2e4e1dbc6f4d183eba08e8be2237bdc5acdb0b5b176455bfa9e791e7f84c51", "cliTimeout": 220,
+      "milestones": {
+        "start-before": {"observed": true, "processState": "not-started", "stdoutState": "unknown", "stderrState": "unknown", "targetRelation": "before", "observerRelation": "before", "pendingFrame": false, "sourceFailure": false, "frozen": false, "reaped": false, "stopRequested": false},
+        "start-after": {"observed": true, "processState": "running", "stdoutState": "registered", "stderrState": "registered", "targetRelation": "before", "observerRelation": "before", "pendingFrame": false, "sourceFailure": false, "frozen": false, "reaped": false, "stopRequested": false},
+        "mainpost-after": {"observed": true, "processState": "running", "stdoutState": "registered", "stderrState": "registered", "targetRelation": "before", "observerRelation": "before", "pendingFrame": false, "sourceFailure": false, "frozen": false, "reaped": false, "stopRequested": false},
+        "report-tail": {"observed": true, "processState": "running", "stdoutState": "registered", "stderrState": "registered", "targetRelation": "before", "observerRelation": "before", "pendingFrame": false, "sourceFailure": false, "frozen": false, "reaped": false, "stopRequested": false},
+        "last-before-target": {"observed": true, "processState": "running", "stdoutState": "registered", "stderrState": "registered", "targetRelation": "before", "observerRelation": "before", "pendingFrame": false, "sourceFailure": false, "frozen": false, "reaped": false, "stopRequested": false},
+        "first-at-target": {"observed": true, "processState": "running", "stdoutState": "registered", "stderrState": "registered", "targetRelation": "at-or-after", "observerRelation": "before", "pendingFrame": false, "sourceFailure": false, "frozen": false, "reaped": false, "stopRequested": false},
+        "before-stop": {"observed": true, "processState": "running", "stdoutState": "registered", "stderrState": "registered", "targetRelation": "at-or-after", "observerRelation": "before", "pendingFrame": false, "sourceFailure": true, "frozen": false, "reaped": false, "stopRequested": false},
+        "after-cleanup": {"observed": true, "processState": "exit-nonzero", "stdoutState": "unknown", "stderrState": "unknown", "targetRelation": "at-or-after", "observerRelation": "before", "pendingFrame": false, "sourceFailure": true, "frozen": true, "reaped": true, "stopRequested": true}
+      }
+    },
+    "diagnosis": "At the first observed target boundary and immediately before owned stop, the collector process was still running with both pipes registered and no observed EOF. This distinguishes an alive source from a process already exited at those samples; it does not establish why the public CLI timeout did not finish before the target. Timer start/units/startup or scheduling cause remains unknown. Forced-stop nonzero exit/reap after cleanup is not natural completion",
+    "preservation": {"historicalReports": 9, "allSameInodeBytesAndMode": true, "historicalReportsRelocated": false, "newReportRetained": true, "readyACKFilesAbsent": true, "priorGeneratedOutputsPreserved": 18, "preFixPackageAndStaticReceiptsPreserved": 6, "permissionsTCCFDAACLChanged": false, "rawMetadataPersisted": false},
+    "sourceSnapshots": "Initial251-test packages preserved; exception-only driver/test fix followed by252-test final union, same native products repackaged and signed/static-verified against final tree. No additional live trial. Runtime precedes evidence update/local commit; postcommit packages are static-only",
+    "localEvidence": [".build/topology/arm64/eof-diagnostic-91e55823-a4ea-494e-9546-704ebaeb5691.json", ".build/topology/arm64/eof-evidence-91e55823-a4ea-494e-9546-704ebaeb5691.json", ".build/topology/arm64/eof-parent-evidence-91e55823-a4ea-494e-9546-704ebaeb5691.json", ".build/topology/<arch>/eof-diagnostic-reviewed-static.json"],
+    "scope": "Approved diagnostic-only local current-account synthetic prototype. Observation overhead does not establish causal timing or coverage; no delay offset, target extension, extra stream/trial or collector behavior change. Historical named evidence preserved. Story/product/clean-machine/Gatekeeper/distribution blocked; no push/PR/remote authorization"
+  },
   "notPerformed": ["actual sandbox negative-access attribution", "physical Intel execution", "notarization", "stapling including validation", "Gatekeeper assessment", "remote CI", "artifact upload", "public distribution"],
   "fixture": {"profile": "current-user", "dedicatedAccountConfigured": false, "dedicatedProfileActive": false, "permissionsChanged": false, "syntheticControlsObserved": true},
   "actualTwoCPU": false,
   "storyStatus": "blocked",
   "aggregateVerdict": "blocked",
   "productGates": {"P-1": "unproven", "P-2": "unproven", "P-3": "unproven", "P-4": "unproven", "P-5": "unproven", "P-6": "unproven"},
-  "limitations": ["Named earlier attempts are historical; latest signed collector, initialization, live actor/control and preserved-report trial is approvedNaturalEOFTailRetest", "Unit, preparation, cross-build and static signing alone are not signed runtime or two-CPU proof", "Each artifact/runtime hash belongs to its recorded source snapshot; the dirty trial precedes this evidence update and final commit-bound packaging", "27 historical deny candidates are not current-run proof; current isolation has38 inconclusive and1 blocked, with incomplete OS collection, no authenticated denial-clock or current effective TCC/prompt-absence proof", "The fixed historical and prior live reports stay at original inode/path/bytes; new exclusively reserved Reports/runID/report.json permits fresh runs without adopting or replacing old evidence", "Normal prototype GUI content remains separately bound to cd102dc; no claim that historical zero-window cause or clean-machine/Gatekeeper GUI evidence is resolved", "Intel dynamic is waived, not passed or product support proof", "Material scope/architecture/recipe changes still require exact-SHA reapproval; current approved local prototype does not authorize remote operations"]
+  "limitations": ["Named earlier attempts are historical; latest signed collector diagnostic, initialization, live actor/control and preserved-report trial is approvedEOFDiagnosticRetest", "Unit, preparation, cross-build and static signing alone are not signed runtime or two-CPU proof", "Each artifact/runtime hash belongs to its recorded source snapshot; the dirty trial precedes this evidence update and final commit-bound packaging", "27 historical deny candidates are not current-run proof; current isolation has38 inconclusive and1 blocked, with incomplete OS collection, no authenticated denial-clock or current effective TCC/prompt-absence proof", "The fixed historical and prior live reports stay at original inode/path/bytes; new exclusively reserved Reports/runID/report.json permits fresh runs without adopting or replacing old evidence", "Normal prototype GUI content remains separately bound to cd102dc; no claim that historical zero-window cause or clean-machine/Gatekeeper GUI evidence is resolved", "Intel dynamic is waived, not passed or product support proof", "Material scope/architecture/recipe changes still require exact-SHA reapproval; current approved local prototype does not authorize remote operations"]
 }
