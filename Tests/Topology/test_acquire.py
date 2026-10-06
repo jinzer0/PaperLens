@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import plistlib
 import stat
+import subprocess
 import sys
 import tarfile
 import tempfile
@@ -871,6 +872,11 @@ class LiveAttributionTests(IsolatedTest):
                             "birthSec": 123, "birthUsec": 456, "codeIdentityRef": names[a["role"]], "verified": True} for a in candidates]}
 
     def observer(self):
+        collector = mock.Mock()
+        collector.finish.return_value = ([], verify.collection_state("timed-out", "collector-stop-before-eof"))
+        patcher = mock.patch.object(verify, "OSCollector", return_value=collector)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         bundle = self.root / "PaperLens.app"
         contract = bundle / "Contents/Resources/contract.json"
         contract.parent.mkdir(parents=True)
@@ -973,7 +979,11 @@ class LiveAttributionTests(IsolatedTest):
         records = verify.actor_records(self.identities(), self.ready()["actors"])
         with mock.patch.object(verify, "no_acl", return_value=True), mock.patch.object(observer, "query", return_value=records):
             observer.controls[0].observe.side_effect = lambda *args: self.assertFalse((path / "continue.json").exists())
+            verify.OSCollector.return_value.start.side_effect = lambda: self.assertFalse((path / "continue.json").exists())
             observer.poll()
+        verify.OSCollector.assert_called_once()
+        self.assertEqual(set(verify.OSCollector.call_args.args[0]), set(verify.ROLES))
+        observer.collector.start.assert_called_once()
         ack = json.loads((path / "continue.json").read_bytes())
         self.assertEqual(set(ack), {"schemaRevision", "runID", "phase", "readyHash", "artifactHash"})
         self.assertEqual(ack["readyHash"], hashlib.sha256(data).hexdigest())
@@ -1038,7 +1048,7 @@ class LiveAttributionTests(IsolatedTest):
         observer = self.observer()
         path, _ = self.write_ready(observer)
         records = verify.actor_records(self.identities(), self.ready()["actors"])
-        with mock.patch.object(verify, "no_acl", return_value=True), mock.patch.object(observer, "query", return_value=records), mock.patch.object(verify, "collect_os_evidence", return_value=[]):
+        with mock.patch.object(verify, "no_acl", return_value=True), mock.patch.object(observer, "query", return_value=records):
             observer.poll()
             (path / "ready.json").unlink()
             observer.withdraw()
@@ -1046,6 +1056,7 @@ class LiveAttributionTests(IsolatedTest):
             observer.controls[0].observe.side_effect = lambda *args: self.assertFalse((path / "post-continue.json").exists())
             observer.external.finish.side_effect = lambda: self.assertFalse((path / "post-continue.json").exists())
             observer.owner.finish.side_effect = lambda **kwargs: self.assertFalse((path / "post-continue.json").exists())
+            observer.collector.finish.side_effect = lambda *args: (self.assertFalse((path / "post-continue.json").exists()) or [], verify.collection_state("timed-out", "collector-stop-before-eof"))
             observer.poll()
         observer.external.finish.assert_called_once()
         observer.owner.finish.assert_called_once()
@@ -1190,13 +1201,29 @@ class LiveAttributionTests(IsolatedTest):
             self.assertEqual(evidence["automated"][-1]["verdict"], "pass")
             self.assertEqual(evidence["automated"][-1]["reason"], "descriptor-capability-not-sandbox-proof")
 
+    def test_duplicate_denials_keep_distinct_refs_after_final_actor_join(self):
+        report = self.report()
+        observer = self.bound_observer(report)
+        paths = verify.fixture_paths(self.root, self.run_id)
+        event = {"subsystem": "com.apple.sandbox.reporting", "category": "violation", "processID": 0,
+                 "eventMessage": f"Sandbox: Python(102) deny(1) file-read-data {paths['M']}"}
+        observer.denials = verify.safe_denial_projection([event, event], observer.bindings, paths, observer.intervals)
+        evidence = verify.base_evidence("arm64")
+        verify.project_cases(report, self.run_id, observer, evidence)
+        self.assertEqual(len(evidence["denials"]), 2)
+        self.assertEqual(len({row["denialRef"] for row in evidence["denials"]}), 2)
+        self.assertEqual(evidence["denials"][0]["actorInstanceRef"], evidence["denials"][1]["actorInstanceRef"])
+        self.assertTrue(all(not row["attributed"] and not row["clockVerified"] for row in evidence["denials"]))
+        self.assertNotIn(str(self.root), json.dumps(evidence))
+
     def test_clock_ambiguity_and_network_actual_stage_are_not_promoted(self):
         bindings = verify.actor_records(self.identities(), self.ready()["actors"])
         paths = verify.fixture_paths(self.root, self.run_id)
-        file_event = {"processID": 102, "eventMessage": f"Sandbox: Python(102) deny(1) file-read-data {paths['M']}", "machTimestamp": 10}
-        bind_event = {"processID": 102, "eventMessage": "Sandbox: Python(102) deny(1) network-bind 127.0.0.1:18766"}
+        file_event = {"subsystem": "com.apple.sandbox.reporting", "category": "violation", "processID": 102, "eventMessage": f"Sandbox: Python(102) deny(1) file-read-data {paths['M']}", "machTimestamp": 10}
+        bind_event = {"subsystem": "com.apple.sandbox.reporting", "category": "violation", "processID": 102, "eventMessage": "Sandbox: Python(102) deny(1) network-bind 127.0.0.1:18766"}
         rows = verify.safe_denial_projection([file_event, file_event, bind_event], bindings, paths, {"mainCanaryRead": {"beganAtNs": 10, "endedAtNs": 20}})
-        self.assertEqual(len(rows), 2)
+        self.assertEqual(len(rows), 3)
+        self.assertEqual(len({row["denialRef"] for row in rows}), 3)
         self.assertEqual({row["operation"] for row in rows}, {"read", "bind"})
         self.assertTrue(all(not row["attributed"] and row["reason"] == "clock-unproven" for row in rows))
         self.assertNotIn("listen", {row["operation"] for row in rows})
@@ -1211,7 +1238,7 @@ class LiveAttributionTests(IsolatedTest):
     def test_kernel_logger_pid_is_not_the_denied_process_pid(self):
         bindings = verify.actor_records(self.identities(), self.ready()["actors"])
         paths = verify.fixture_paths(self.root, self.run_id)
-        event = {"processID": 0, "eventMessage": f"Sandbox: Python(102) deny(1) file-write-data {paths['M']}"}
+        event = {"subsystem": "com.apple.sandbox.reporting", "category": "violation", "processID": 0, "eventMessage": f"Sandbox: Python(102) deny(1) file-write-data {paths['M']}"}
         rows = verify.safe_denial_projection([event], bindings, paths, {})
         self.assertEqual(len(rows), 1)
         self.assertEqual((rows[0]["role"], rows[0]["alias"], rows[0]["operation"]), ("Python", "M", "write"))
@@ -1251,18 +1278,401 @@ class LiveAttributionTests(IsolatedTest):
     def test_os_query_is_known_pid_fixed_target_and_operation_scoped(self):
         bindings = verify.actor_records(self.identities(), self.ready()["actors"])
         paths = verify.fixture_paths(self.root, self.run_id)
-        with mock.patch.object(verify, "bounded_query", return_value=(0, b"[]")) as query:
-            self.assertEqual(verify.collect_os_evidence(bindings, paths, {}, time.monotonic() + 1), [])
-        arguments = query.call_args.args[0]
-        self.assertEqual(arguments[:3], ["/usr/bin/log", "show", "--last"])
-        predicate = arguments[-1]
+        predicate = verify.collector_predicate(bindings, paths)
+        self.assertIn('subsystem == "com.apple.sandbox.reporting"', predicate)
+        self.assertIn('category == "violation"', predicate)
         for pid in (100, 101, 102, 103):
-            self.assertIn(f"processID == {pid}", predicate)
+            self.assertIn(f"processIdentifier == {pid}", predicate)
+        self.assertIn("composedMessage CONTAINS", predicate)
+        self.assertNotIn("processID ==", predicate)
+        self.assertNotIn("eventMessage CONTAINS", predicate)
         self.assertIn(self.run_id, predicate)
         self.assertIn("file-write-data", predicate)
         self.assertIn("network-bind", predicate)
         self.assertNotIn("process ==", predicate)
-        self.assertEqual(query.call_args.kwargs["maximum"], 1024**2)
+
+
+class OSCollectionTests(IsolatedTest):
+    run_id = "01234567-89ab-4cde-8fab-0123456789ab"
+
+    def collector(self):
+        bindings = {role: {"pid": 100 + index} for index, role in enumerate(verify.ROLES)}
+        collector = verify.OSCollector(bindings, verify.fixture_paths(self.root, self.run_id))
+        self.addCleanup(lambda: collector.finish({}))
+        return collector
+
+    def event(self, collector, stage="file-write-data", multiline=False):
+        denial = f"deny(1) {stage} {collector.paths['M']}"
+        message = f"Sandbox: Python(102) {denial}"
+        if multiline:
+            message += f"\nViolation: {denial}\nProcess: Python [102]"
+        return {"subsystem": "com.apple.sandbox.reporting", "category": "violation", "processID": 0,
+                "eventMessage": message}
+
+    def ended_process(self, collector, code=0):
+        # Pure mocks: no subprocesses, logging or real OS records.
+        process = mock.Mock(stdout=mock.Mock(), stderr=mock.Mock())
+        process.poll.return_value = code
+        process.wait.return_value = code
+        collector.process = process
+        collector.selector.close()
+        collector.selector = mock.Mock()
+        collector.selector.get_map.return_value = {}
+        collector.selector.select.return_value = []
+        return process
+
+    def test_documented_multiline_crosschecks_and_single_line(self):
+        collector = self.collector()
+        for multiline in (False, True):
+            row = verify.denial_candidate(self.event(collector, multiline=multiline), collector.bindings, collector.paths, {})
+            self.assertEqual((row["role"], row["alias"], row["operation"]), ("Python", "M", "write"))
+            self.assertTrue(row["producerVerified"] and row["targetVerified"])
+            self.assertFalse(row["clockVerified"] or row["attributed"])
+            self.assertEqual(row["caseAssociation"], "unverified")
+        event = self.event(collector, multiline=True)
+        for message in (event["eventMessage"].replace("Process: Python [102]", "Process: Other [102]"),
+                        event["eventMessage"].replace("[102]", "[103]"),
+                        event["eventMessage"].replace("Violation: deny(1) file-write-data", "Violation: deny(1) file-read-data"),
+                        "Sandbox: Python(102)", event["eventMessage"] + "\nUnknown Field: private",
+                        event["eventMessage"].replace("file-write-data", "file-write-create")):
+            with self.subTest(message=message), self.assertRaises(acquire.Failure):
+                verify.denial_candidate(dict(event, eventMessage=message), collector.bindings, collector.paths, {})
+
+    def test_rich_aligned_apple_record_is_checked_and_diagnostics_are_ram_only(self):
+        collector = self.collector()
+        event = self.event(collector)
+        event["eventMessage"] += (f"\n\nViolation:       deny(1) file-write-data {collector.paths['M']}"
+                                 "\nProcess:         Python [102]\nPath:            /synthetic/private/Python"
+                                 "\nIdentifier:      synthetic.python\nVersion:         1.0 (1)"
+                                 "\nCode Type:       arm64 (Native)\nLoad Address:    0x0000000100000000"
+                                 "\nParent Process:  Agent [101]\nResponsible:     /synthetic/private/SampleApp"
+                                 "\nUser ID:         501\n\nThread 0 (id: 551548):"
+                                 "\n0 libsystem_kernel.dylib 0x0000000000001234 synthetic_call + 8"
+                                 "\n1 synthetic.dylib 0x0000000000005678 synthetic_entry + 16")
+        for code_type in ("arm64", "x86_64", "ARM-64", "X86-64"):
+            candidate = verify.denial_candidate(dict(event, eventMessage=event["eventMessage"].replace("arm64 (Native)", code_type + " (Native)")),
+                                                collector.bindings, collector.paths, {})
+            self.assertTrue(candidate["producerVerified"])
+            self.assertFalse(candidate["clockVerified"])
+        collector.feed(json.dumps(event).encode() + b"\n")
+        self.assertIsNone(collector.failure)
+        self.ended_process(collector)
+        rows, state = collector.finish({})
+        self.assertEqual(state["status"], "complete-nonempty")
+        self.assertEqual(rows[0]["operation"], "write")
+        for private in ("synthetic_call", "/synthetic/private", "Thread", "Load Address", "User ID"):
+            self.assertNotIn(private, json.dumps(rows))
+        for change in (event["eventMessage"].replace("Python [102]", "Python [103]"),
+                       event["eventMessage"] + "\nprivate free text",
+                       event["eventMessage"].replace("1 synthetic.dylib", "2 synthetic.dylib"),
+                       event["eventMessage"].replace("User ID:         501", "User ID:         private"),
+                       event["eventMessage"].replace("0x0000000100000000", "0xnothex"),
+                       event["eventMessage"].replace("Thread 0 (id: 551548):", "Thread 0 (id: unknown):"),
+                       event["eventMessage"].replace("Thread 0 (id: 551548):", "Thread 2147483648 (id: 551548):"),
+                       event["eventMessage"].replace("/synthetic/private/SampleApp", "relative/SampleApp"),
+                       event["eventMessage"] + "\n[…]", event["eventMessage"] + "\n[...]"):
+            with self.assertRaises(acquire.Failure):
+                verify.denial_candidate(dict(event, eventMessage=change),
+                                        {role: {"pid": 100 + i} for i, role in enumerate(verify.ROLES)},
+                                        verify.fixture_paths(self.root, self.run_id), {})
+
+    def test_owned_header_and_blank_separators_are_exact_and_byte_counted(self):
+        collector = self.collector()
+        data = collector.expected_header + b"\n\n" + json.dumps(self.event(collector)).encode() + b"\n"
+        collector.feed(data)
+        self.assertEqual(collector.total, len(data))
+        self.assertEqual(len(collector.events), 1)
+        self.ended_process(collector)
+        self.assertEqual(collector.finish({})[1]["status"], "complete-nonempty")
+        collector = self.collector()
+        collector.feed(b"\n\n")
+        self.ended_process(collector)
+        self.assertEqual(collector.finish({})[1]["status"], "complete-empty")
+        for banner in (b'Filtering the log data using "TRUEPREDICATE"\n', b"unexpected banner\n", b" \n"):
+            collector = self.collector()
+            collector.feed(banner)
+            self.assertEqual(collector.failure, ("invalid", "parser-input-invalid"))
+
+    def test_reformatted_owned_predicate_header_requires_exact_semantic_filter(self):
+        collector = self.collector()
+        predicate = verify.collector_predicate(collector.bindings, collector.paths)
+        variants = [" ( " + predicate + " ) ",
+                    predicate.replace(" == ", " = ").replace(" AND ", " && ").replace(" OR ", " || "),
+                    predicate.replace("processIdentifier == 0 OR processIdentifier == 100 OR processIdentifier == 101",
+                                      "(processIdentifier == 101 OR processIdentifier == 100) OR (processIdentifier == 0)"),
+                    predicate.replace("subsystem ==", "(subsystem ==").replace('"com.apple.sandbox.reporting" AND',
+                                                                                 '"com.apple.sandbox.reporting") AND'),
+                    predicate.replace("sandbox.reporting", "sandbox\\u002ereporting")]
+        for rendered in variants:
+            current = self.collector()
+            header = ('Filtering the log data using "' + rendered + '"\n').encode()
+            current.feed(header + json.dumps(self.event(current)).encode() + b"\n")
+            self.assertIsNone(current.failure)
+            self.assertEqual(len(current.events), 1)
+            self.assertEqual(current.total, len(header) + len(json.dumps(self.event(current)).encode()) + 1)
+        invalid = [predicate.replace("processIdentifier == 100", "processIdentifier == 999"),
+                   predicate.replace("127.0.0.1:18766", "127.0.0.1:18767"),
+                   predicate.replace(" AND ", " OR ", 1),
+                   predicate.replace("CONTAINS", "BEGINSWITH"),
+                   predicate.replace("processIdentifier == 0 OR", "processIdentifier == 0 AND", 1),
+                   predicate + ' OR processIdentifier == 999', predicate[:-1],
+                   predicate + ' AND composedMessage CONTAINS "unapproved"',
+                   predicate.replace("processIdentifier", "processID"),
+                   predicate.replace("composedMessage", "eventMessage"),
+                   predicate.replace("category ==", "unknown =="),
+                   "(" * 65 + predicate + ")" * 65]
+        for rendered in invalid:
+            current = self.collector()
+            current.feed(('Filtering the log data using "' + rendered + '"\n').encode())
+            self.assertEqual(current.failure, ("invalid", "parser-input-invalid"))
+
+    def test_unknown_producer_subject_and_targets_are_not_candidates(self):
+        collector = self.collector()
+        event = self.event(collector)
+        for changes in ({"subsystem": "unknown"}, {"category": "debug"}, {"processID": 103}, {"processID": True}, {"truncated": True},
+                        {"eventMessage": event["eventMessage"].replace("(102)", "(999)")},
+                        {"eventMessage": event["eventMessage"] + "/private"},
+                        {"eventMessage": "Sandbox: Python(102) deny(1) network-bind 127.0.0.1:18765"}):
+            self.assertEqual(verify.safe_denial_projection([dict(event, **changes)], collector.bindings, collector.paths, {}), [])
+        missing = dict(event)
+        del missing["subsystem"]
+        self.assertEqual(verify.safe_denial_projection([missing], collector.bindings, collector.paths, {}), [])
+
+    def test_clock_epochs_and_overlapping_reads_do_not_create_unique_proof(self):
+        collector = self.collector()
+        events = [dict(self.event(collector, "file-read-data"), machTimestamp=stamp, timestamp="untrusted date")
+                  for stamp in (10, 10**18, 1.25)]
+        intervals = {"mainCanaryRead": {"beganAtNs": 10, "endedAtNs": 20},
+                     "mainCanarySymlinkRead": {"beganAtNs": 10, "endedAtNs": 20}}
+        rows = verify.safe_denial_projection(events, collector.bindings, collector.paths, intervals)
+        self.assertEqual(len(rows), 3)
+        self.assertTrue(all(row["caseAssociation"] == "ambiguous" and not row["clockVerified"] and not row["attributed"] for row in rows))
+        for forbidden in ("machTimestamp", "timestamp", str(self.root), "processID", "Python(102)"):
+            self.assertNotIn(forbidden, json.dumps(rows))
+
+    def test_ndjson_partial_record_then_eof_is_invalid_not_empty(self):
+        collector = self.collector()
+        encoded = json.dumps(self.event(collector)).encode()
+        collector.feed(encoded[:20])
+        self.assertEqual(collector.events, [])
+        collector.feed(encoded[20:] + b"\n")
+        self.assertEqual(len(collector.events), 1)
+        collector.feed(b'{"eventMessage":')
+        self.ended_process(collector)
+        rows, state = collector.finish({})
+        self.assertEqual(len(rows), 1)
+        self.assertEqual((state["status"], state["reason"]), ("invalid", "parser-partial-eof"))
+        self.assertFalse(state["queryCompleted"])
+        self.assertEqual(collector.events, [])
+        self.assertEqual(collector.pending, bytearray())
+
+    def test_nonblocking_drain_consumes_both_eofs_and_keeps_only_safe_projection(self):
+        collector = self.collector()
+        process = self.ended_process(collector)
+        output = mock.Mock(fileobj=process.stdout, data=True)
+        errors = mock.Mock(fileobj=process.stderr, data=False)
+        record = json.dumps(self.event(collector, multiline=True)).encode() + b"\n"
+        collector.selector.select.side_effect = [[(output, 1), (errors, 1)], [(output, 1)], []]
+        with mock.patch.object(verify.os, "read", side_effect=[record, b"", b""]):
+            collector.drain()
+        self.assertEqual(collector.selector.unregister.call_count, 2)
+        self.assertTrue(all(call.args == (0,) for call in collector.selector.select.call_args_list))
+        self.assertEqual(collector.total, len(record))
+        collector.selector.select.side_effect = None
+        rows, state = collector.finish({})
+        self.assertEqual(state["status"], "complete-nonempty")
+        self.assertFalse(state["scopeVerified"])
+        self.assertEqual(rows[0]["alias"], "M")
+        self.assertNotIn(str(self.root), json.dumps(rows))
+
+    def test_observer_deadline_and_failed_reap_are_not_complete(self):
+        collector = self.collector()
+        process = self.ended_process(collector, None)
+        collector.deadline = time.monotonic() - 1
+        process.wait.side_effect = subprocess.TimeoutExpired("owned", 0.1)
+        _, state = collector.finish({})
+        self.assertEqual((state["status"], state["reason"]), ("timed-out", "collector-reap-timeout"))
+        self.assertFalse(state["queryCompleted"])
+        self.assertEqual(process.wait.call_count, 3)
+        self.assertTrue(all(call.kwargs["timeout"] == 0 for call in process.wait.call_args_list))
+        self.assertTrue(collector.closed)
+
+    def test_zero_fence_reap_timeout_retains_owner_and_later_reaps_without_changing_evidence(self):
+        collector = self.collector()
+        process = self.ended_process(collector, None)
+        process.wait.side_effect = subprocess.TimeoutExpired("owned", 0)
+        rows, state = collector.finish({}, deadline=time.monotonic() - 1)
+        self.assertTrue(collector.closed)
+        self.assertFalse(collector.reaped)
+        self.assertIs(collector.process, process)
+        self.assertTrue(all(call.kwargs["timeout"] == 0 for call in process.wait.call_args_list))
+        process.poll.return_value = -9
+        process.wait.side_effect = None
+        process.wait.return_value = -9
+        self.assertEqual(collector.finish({}, deadline=time.monotonic() + 0.1), (rows, state))
+        self.assertTrue(collector.reaped)
+        self.assertEqual(state["reason"], "collector-reap-timeout")
+        self.assertFalse(state["queryCompleted"])
+
+    def test_main_fence_never_borrows_new_wait_time(self):
+        collector = self.collector()
+        process = self.ended_process(collector, None)
+        process.wait.return_value = -15
+        _, state = collector.finish({}, deadline=time.monotonic() - 1)
+        self.assertFalse(state["queryCompleted"])
+        self.assertTrue(all(call.kwargs["timeout"] == 0 for call in process.wait.call_args_list))
+
+    def test_empty_nonempty_nonzero_and_owned_cancel_are_distinct(self):
+        for code, event, expected in ((0, False, "complete-empty"), (0, True, "complete-nonempty"), (1, False, "unavailable"),
+                                      (None, False, "timed-out")):
+            with self.subTest(code=code, event=event):
+                collector = self.collector()
+                if event:
+                    collector.feed(json.dumps(self.event(collector)).encode() + b"\n")
+                process = self.ended_process(collector, code)
+                if code is None:
+                    process.poll.side_effect = [None, 0]
+                    process.wait.side_effect = [subprocess.TimeoutExpired("owned", 0.1), -9]
+                rows, state = collector.finish({})
+                self.assertEqual(state["status"], expected)
+                self.assertEqual(state["queryCompleted"], code == 0)
+                self.assertFalse(state["scopeVerified"])
+                self.assertFalse(state["truncated"])
+                if code is None:
+                    process.terminate.assert_called_once()
+                    process.kill.assert_called_once()
+                    self.assertEqual(process.wait.call_count, 2)
+                else:
+                    process.terminate.assert_not_called()
+                self.assertTrue(collector.closed)
+                process.stdout.close.assert_called_once()
+                process.stderr.close.assert_called_once()
+                self.assertEqual(collector.finish({}), (rows, state))
+
+    def test_parser_and_stderr_and_all_limits_fail_closed_without_raw_persistence(self):
+        for mode, expected, reason in (("bad", "invalid", "parser-input-invalid"),
+                                       ("stderr", "unavailable", "collector-access-or-source-error"),
+                                       ("record", "truncated", "record-limit"),
+                                       ("raw", "truncated", "raw-limit"),
+                                       ("candidates", "truncated", "candidate-limit")):
+            with self.subTest(mode=mode):
+                collector = self.collector()
+                if mode == "bad":
+                    collector.feed(b'{"subsystem":"unknown"}\n')
+                elif mode == "stderr":
+                    collector.feed(b"private permission diagnostic", output=False)
+                elif mode == "record":
+                    collector.feed(b"x" * 16385)
+                elif mode == "raw":
+                    collector.total = 1024**2 - 1
+                    collector.feed(b"xx", output=False)
+                else:
+                    record = json.dumps(self.event(collector)).encode() + b"\n"
+                    for _ in range(257):
+                        collector.feed(record)
+                self.ended_process(collector)
+                with mock.patch.object(verify.Path, "write_bytes") as disk:
+                    rows, state = collector.finish({})
+                disk.assert_not_called()
+                self.assertEqual((state["status"], state["reason"]), (expected, reason))
+                self.assertFalse(state["queryCompleted"])
+                self.assertLessEqual(len(rows), 256)
+                self.assertEqual(collector.events, [])
+                self.assertEqual(collector.pending, bytearray())
+                self.assertEqual(collector.bindings, {})
+                self.assertNotIn(str(self.root), json.dumps({"state": state, "rows": rows}))
+
+    def test_start_failure_access_timeout_and_unproved_readiness(self):
+        for failure, expected in ((OSError(errno.ENOENT, "private"), ("unavailable", "collector-start-failed")),
+                                  (PermissionError(errno.EACCES, "private"), ("unavailable", "collector-access-denied"))):
+            collector = self.collector()
+            with mock.patch.object(verify.subprocess, "Popen", side_effect=failure):
+                collector.start()
+            _, state = collector.finish({})
+            self.assertEqual((state["status"], state["reason"]), expected)
+        collector = self.collector()
+        collector.deadline = time.monotonic() - 1
+        with mock.patch.object(verify.subprocess, "Popen") as launch:
+            collector.start()
+        launch.assert_not_called()
+        self.assertEqual(collector.finish({})[1]["status"], "timed-out")
+        collector = self.collector()
+        process = self.ended_process(collector)
+        with mock.patch.object(verify.subprocess, "Popen", return_value=process) as launch, mock.patch.object(verify.os, "set_blocking"):
+            collector.start()
+        self.assertFalse(collector.state["queryCompleted"] or collector.state["scopeVerified"])
+        argv = launch.call_args.args[0]
+        self.assertEqual(argv[:5], ["/usr/bin/log", "stream", "--style", "ndjson", "--timeout"])
+        self.assertNotIn("--ignore-dropped", argv)
+        self.assertNotIn("--last", argv)
+
+
+class ManualObservationTests(IsolatedTest):
+    run_id = "01234567-89ab-4cde-8fab-0123456789ab"
+
+    def evidence(self):
+        evidence = verify.base_evidence("arm64")
+        evidence["manifest"]["artifactHash"] = "b" * 64
+        evidence["actorBindings"] = [{"actorInstanceRef": "actor-" + self.run_id, "role": "Python",
+                                       "preVerified": True, "postVerified": True}]
+        evidence["cases"] = [{"actorInstanceRef": "actor-" + self.run_id, "promptObserved": "unverified", "verdict": "inconclusive"}]
+        return evidence
+
+    def receipt(self, **changes):
+        return {"runID": self.run_id, "artifactHash": "b" * 64, "actorInstanceRef": "actor-" + self.run_id,
+                "fdaStatus": "not-listed", "prompt": "not-observed", "coverage": "complete",
+                "grantChange": "none-observed", **changes}
+
+    def test_bound_complete_receipt_is_human_observation_not_effective_tcc(self):
+        evidence = self.evidence()
+        verify.project_manual_observations(evidence, self.run_id, [self.receipt()])
+        self.assertEqual(evidence["manualObservations"], [self.receipt()])
+        self.assertEqual(evidence["cases"][0]["verdict"], "inconclusive")
+        self.assertEqual(evidence["cases"][0]["promptObserved"], "unverified")
+
+    def test_missing_partial_unknown_and_incomplete_bindings_never_claim_absence(self):
+        for receipts in (None, [], [self.receipt(coverage="partial")], [self.receipt(coverage="unknown")]):
+            evidence = self.evidence()
+            verify.project_manual_observations(evidence, self.run_id, receipts)
+            row = evidence["manualObservations"][0]
+            self.assertEqual((row["fdaStatus"], row["prompt"], row["grantChange"]), ("unknown", "unknown", "unknown"))
+        evidence["actorBindings"][0]["postVerified"] = False
+        with self.assertRaisesRegex(acquire.Failure, "manual-receipt"):
+            verify.project_manual_observations(evidence, self.run_id, [self.receipt()])
+        self.assertEqual(evidence["manualObservations"], [])
+
+    def test_wrong_run_artifact_actor_enum_unknown_fields_and_duplicates_fail_closed(self):
+        for changes in ({"runID": str(verify.uuid.uuid4())}, {"artifactHash": "c" * 64},
+                        {"actorInstanceRef": "actor-unbound"}, {"fdaStatus": "denied"}, {"prompt": True},
+                        {"coverage": "full"}, {"grantChange": "none"}, {"person": "private"}):
+            evidence = self.evidence()
+            with self.subTest(changes=changes), self.assertRaisesRegex(acquire.Failure, "manual-receipt"):
+                verify.project_manual_observations(evidence, self.run_id, [self.receipt(**changes)])
+            self.assertEqual(evidence["manualObservations"][0]["prompt"], "unknown")
+        with self.assertRaisesRegex(acquire.Failure, "manual-receipt"):
+            verify.project_manual_observations(self.evidence(), self.run_id, [self.receipt(), self.receipt()])
+
+    def test_partial_positive_prompt_blocks_without_retroactive_ack_claim(self):
+        evidence = self.evidence()
+        self.assertTrue(verify.project_manual_observations(evidence, self.run_id, [self.receipt(prompt="observed", coverage="partial")]))
+        self.assertEqual(evidence["cases"][0], {"actorInstanceRef": "actor-" + self.run_id, "promptObserved": True, "verdict": "blocked"})
+        self.assertEqual(evidence["manualObservations"][0]["prompt"], "observed")
+        self.assertEqual(evidence["automated"][-1]["reason"], "human-prompt-observed-final-blocked")
+
+    def test_callback_context_is_opaque_and_bounded_errors_do_not_persist_text(self):
+        evidence = self.evidence()
+        callback = mock.Mock(return_value=[self.receipt()])
+        verify.receive_manual_observations(evidence, self.run_id, callback, time.monotonic() + 1)
+        self.assertEqual(callback.call_args.args[0], {"runID": self.run_id, "artifactHash": "b" * 64,
+                                                   "actorInstanceRefs": ("actor-" + self.run_id,)})
+        with self.assertRaisesRegex(acquire.Failure, "manual-callback-invalid"):
+            verify.receive_manual_observations(evidence, self.run_id, mock.Mock(side_effect=ValueError("private")), time.monotonic() + 1)
+        thread = mock.Mock()
+        thread.is_alive.return_value = True
+        with mock.patch.object(verify.threading, "Thread", return_value=thread), self.assertRaisesRegex(acquire.Failure, "manual-callback-timeout"):
+            verify.receive_manual_observations(evidence, self.run_id, callback, time.monotonic() + 1)
+        self.assertLessEqual(thread.join.call_args.kwargs["timeout"], 0.05)
+        self.assertEqual(evidence["manualObservations"][0]["prompt"], "unknown")
 
 
 class CurrentProfileTests(IsolatedTest):

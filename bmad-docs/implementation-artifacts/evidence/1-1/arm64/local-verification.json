@@ -225,11 +225,72 @@
     "localEvidence": [".build/topology/arm64/live-retest-dynamic.json", ".build/topology/arm64/live-retest-preservation-complete.json", ".build/topology/<arch>/live-retest-bundle-static.json"],
     "scope": "Current-account synthetic-only local prototype. Dirty pre-evidence-update runtime snapshot; later commit-bound packages require regenerated provenance and are not another runtime trial. No original two-CPU Story, product/P-1/P-2, clean-machine/Gatekeeper or distribution PASS. No push/PR/remote CI/notary/stapler/upload. One failed parent summary JSON serialization was retained locally; completed safe receipt replaces no earlier file. Mocked asyncio two-second diagnostic remains visible."
   },
+  "approvedOSCollectionAndManualObservationRetest": {
+    "date": "2026-10-06",
+    "scopeApproval": "7fbc78d813151d485000719c469926188cc27421",
+    "implementationApproval": "7fbc78d813151d485000719c469926188cc27421",
+    "approvalRecord": "https://github.com/jinzer0/PaperLens/issues/2#issuecomment-6012757196",
+    "sourceBaseCommitAtBuild": "7fbc78d813151d485000719c469926188cc27421",
+    "sourceDirtyAtBuild": true,
+    "sourceTreeHashAtBuild": "29dfd9ce3c584b207927e7fb2ccd0590a6cab7698fe1f134c677b48c785c52b9",
+    "dependencyLockSHA256": "dcba8122ba5df5a978ae87a98b68dfdb9d2bd8d1e6f097285f5cb2ac3667fc47",
+    "pinsArchitectureEntitlementsNativeWireAndDeadlinesChanged": false,
+    "implementation": {
+      "collector": "Invocation-owned public log stream prepared before Mainpre ACK, drained nonblocking in RAM through Mainpost signed/control rechecks; raw limit1MiB, record16KiB, candidates256; no retrospective query or ignore-dropped option",
+      "predicate": "Documented public processIdentifier/composedMessage fields; bounded closed AST binds reformatted source header to the exact invocation predicate; NDJSON processID/eventMessage remain distinct output fields",
+      "parser": "Producer/category, subject PID distinct from PID0 logger, exact synthetic target/stage; aligned Sandbox/Violation/Process and closed rich diagnostics/Thread frames; conflicting/partial/unknown/oversize input fails closed",
+      "lifecycle": "Frozen collection evidence is separate from retained owned-child reap responsibility; post-ACK nonblocking retries and bounded remaining-budget cleanup; no successful actual reap claim inferred solely from static review",
+      "manualAPI": "gui_run/main optional manual_observer(context) callback returns None or closed human receipts bound to runID/artifactHash/pre-post verified actorInstanceRef; context exposes opaque refs only, intake wait at most50ms within observer deadline; no CLI/path input or permission changes",
+      "manualLimit": "Receipts arrive after final refs; an observed prompt blocks the final result, not a fictional retroactive probe stop. Missing observations remain unknown; not-listed/not-observed never prove effective TCC grant absence",
+      "clock": "No public verified CLI event-clock-to-probe uptime mapping or uncertainty bound; clockVerified/attributed remain false"
+    },
+    "regressions": {
+      "pythonTopology": {"command": "python3.13 -I -B -m unittest discover -s Tests/Topology -p 'test_*.py'", "tests": 220, "failures": 0, "driver": "3.13.16"},
+      "coverage": ["normal EOF empty/nonempty versus nonzero/start/access/timeout/partial/truncation", "exact and semantically reformatted owned headers versus widened PID/target/operator filters", "documented rich multiline and conflicting/unknown/partial/backtrace records", "PID0 versus denied subject, exact stage and bind-failed listen unobserved", "1MiB/16KiB/256 RAM limits and raw-data redaction", "exhausted-fence then later owned reap without altering frozen timeout evidence", "distinct repeated-event references through final actor join", "wrong run/artifact/actor/enum, missing/partial manual receipt, prompt observed and callback timeout"],
+      "independentStaticReview": "F1 source framing, F2 rich grammar, F3 reap ownership and F4 event-reference multiplicity repaired; re-review CLEAR; subsequent bounded predicate AST review CLEAR, not live proof",
+      "nativeScope": "Native sources/helpers/wire unchanged; both CPU full Release builds exercise unchanged native compilation. Earlier native/Swift tests are historical, not new runs",
+      "warningsRetained": "Mocked asyncio two-second diagnostic and previously documented native build warnings; no suppression"
+    },
+    "arm64": {"fullReleaseBuild": "pass", "insideOutDeveloperIDSigning": "pass", "staticInventory": "pass", "artifactHashAtRuntime": "5b460363fba43cd59ca3ff56f4ac716066067c5817a20fdf81d5099dfb2dfe4b", "numericPDFiumCases": 19, "numericRegressionAndInitDestroy": "native_pass"},
+    "x86_64": {"fullReleaseCrossBuild": "pass", "insideOutDeveloperIDSigning": "pass", "staticInventory": "pass", "artifactHashAtStaticVerification": "24e18f39a802797a07c4059fe2999c703be4e29bda1060cab710c843efca138d", "numericRegressionExecution": "blocked_cross_cpu", "actualIntelExecution": false, "dynamicScope": "explicitly waived, support unverified"},
+    "signedInvocation": {
+      "runID": "3eeec5dd-b9b8-4de7-84ec-4184c7875832",
+      "actualCPU": "arm64",
+      "OSBuild": "25G241",
+      "schemaRevision": "topology-evidence-v2",
+      "reportSHA256": "33a924c0c68227cf6c24d60e94a98ddd3aaf9ffe7b2771b639aff85c5d85ae2e",
+      "matchingReport": "pass",
+      "providerSDKCLIInitialize": "pass",
+      "PDFiumXPCInitDestroy": "pass",
+      "readOnlyPDFDescriptorCapabilities": "pass, not sandbox attribution",
+      "liveSignedPrePostActors": ["Main", "ProviderAgent", "Python", "PDFiumXPC"],
+      "independentControls": {"total": 31, "preAndPostVerified": 31},
+      "observedSyscallIntervals": 36,
+      "caseVerdicts": {"total": 39, "pass": 0, "failed": 0, "inconclusive": 38, "blocked": 1},
+      "osCollection": {"status": "timed-out", "queryCompleted": false, "scopeVerified": false, "truncated": false, "reason": "collector-stop-before-eof"},
+      "collectionInterpretation": "Actual canonical source header no longer rejected. Stream stopped at final actor/control boundary before natural normal EOF, so this is incomplete collection, not trusted empty/absence evidence",
+      "safeDenialCandidates": 0,
+      "manualObservations": {"actors": 4, "fdaStatus": "unknown", "prompt": "unknown", "coverage": "unknown", "grantChange": "unknown", "humanReceiptsSupplied": false},
+      "OSDenialClockAndEffectiveTCC": "unverified",
+      "verifierExit": 2,
+      "aggregateVerdict": "blocked"
+    },
+    "precedingTrials": {
+      "reportsRetained": 5,
+      "runIDs": ["ec1f04d7-b183-4c52-9084-536589d354d6", "18542572-8c31-4275-9bfe-6dba4ddecfa1", "3d0e3c1f-f160-46b0-bb53-f3fe58a655a5", "8cc02d20-70ca-49f6-b3fd-fc418997855d", "f82829ae-4854-45c5-8516-e40ad665b1ee"],
+      "collection": "invalid/parser-input-invalid; current source header rendering and canonical public predicate fields subsequently repaired",
+      "diagnostics": "Three invocation-local wrapper trials inspected source framing only in RAM and persisted closed booleans/counts; no raw log/header/predicate/path/PID persisted",
+      "scope": "All earlier trial snapshots remain historical; each has38 inconclusive+1 blocked, not a successful final-source collector run"
+    },
+    "preservation": {"historicalFixedReportSHA256": "f787ae29335ec162d2a02f77258c5344d71403610bc5c6bdf191a15d2dcd212e", "priorLiveReportSHA256": "6a6448b38a1fa4afeb6a7c02fb6df728ec59894a7b35d06839a55a4a474ba1c3", "bothSameInodeBytesAndMode": true, "historicalReportsRelocated": false, "allSixNewReportsRetained": true, "allNewReadyAndACKFilesAbsent": true, "permissionsTCCFDAACLChanged": false},
+    "localEvidence": [".build/topology/arm64/os-collection-canonical-live.json", ".build/topology/arm64/os-collection-preservation-complete.json", ".build/topology/<arch>/os-collection-canonical-static.json"],
+    "scope": "Approved current-account synthetic-only local prototype. Dirty runtime snapshot precedes this evidence update and local commit; refreshed commit-bound packages are not another dynamic run. Intel dynamic waived. No Story/product/clean-machine/Gatekeeper/distribution PASS or remote authorization. One parent receipt attempt failed before file creation due to confusing runtime projected manifest with packaging provenance; corrected complete receipt preserves all earlier reports. Synthetic-only public Foundation predicate formatter did not query OS records or prove sandbox behavior."
+  },
   "notPerformed": ["actual sandbox negative-access attribution", "physical Intel execution", "notarization", "stapling including validation", "Gatekeeper assessment", "remote CI", "artifact upload", "public distribution"],
   "fixture": {"profile": "current-user", "dedicatedAccountConfigured": false, "dedicatedProfileActive": false, "permissionsChanged": false, "syntheticControlsObserved": true},
   "actualTwoCPU": false,
   "storyStatus": "blocked",
   "aggregateVerdict": "blocked",
   "productGates": {"P-1": "unproven", "P-2": "unproven", "P-3": "unproven", "P-4": "unproven", "P-5": "unproven", "P-6": "unproven"},
-  "limitations": ["Named earlier attempts are historical; latest signed initialization, live actor/control and preserved-report trial is approvedLiveReportPreservingRetest", "Unit, preparation, cross-build and static signing alone are not signed runtime or two-CPU proof", "Each artifact/runtime hash belongs to its recorded source snapshot; the dirty trial precedes this evidence update and final commit-bound packaging", "27 historical deny candidates are not current-run proof; current isolation has38 inconclusive and1 blocked, with no authenticated denial-clock or current TCC/prompt-absence proof", "The fixed historical report stays at its original inode/path/bytes; new exclusively reserved Reports/runID/report.json permits a fresh run without adopting or replacing old evidence", "Normal prototype GUI content remains separately bound to cd102dc; no claim that historical zero-window cause or clean-machine/Gatekeeper GUI evidence is resolved", "Intel dynamic is waived, not passed or product support proof", "Material scope/architecture/recipe changes still require exact-SHA reapproval; current approved local prototype does not authorize remote operations"]
+  "limitations": ["Named earlier attempts are historical; latest signed collector, initialization, live actor/control and preserved-report trial is approvedOSCollectionAndManualObservationRetest", "Unit, preparation, cross-build and static signing alone are not signed runtime or two-CPU proof", "Each artifact/runtime hash belongs to its recorded source snapshot; the dirty trial precedes this evidence update and final commit-bound packaging", "27 historical deny candidates are not current-run proof; current isolation has38 inconclusive and1 blocked, with incomplete OS collection, no authenticated denial-clock or current effective TCC/prompt-absence proof", "The fixed historical and prior live reports stay at original inode/path/bytes; new exclusively reserved Reports/runID/report.json permits fresh runs without adopting or replacing old evidence", "Normal prototype GUI content remains separately bound to cd102dc; no claim that historical zero-window cause or clean-machine/Gatekeeper GUI evidence is resolved", "Intel dynamic is waived, not passed or product support proof", "Material scope/architecture/recipe changes still require exact-SHA reapproval; current approved local prototype does not authorize remote operations"]
 }

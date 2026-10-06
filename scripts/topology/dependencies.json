@@ -1,6 +1,6 @@
 {
   "schemaRevision": "topology-v1",
-  "approvalCommit": "1aaa95c72ceb463d62ebf32720b5332aa7b0a1e3",
+  "approvalCommit": "7fbc78d813151d485000719c469926188cc27421",
   "team": "397452Z366",
   "toolchain": {"developerDir": "/Applications/Xcode.app/Contents/Developer", "xcode": "27.0", "build": "27A266a", "sdk": "27.0", "swift": "6.4", "deploymentTarget": "15.0", "systemLinkerVersion": "27037.1"},
   "pdfium": {

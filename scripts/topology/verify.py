@@ -72,6 +72,8 @@ def base_evidence(arch, actual="unknown"):
         "intelDynamic": result("intelDynamic", "blocked", "approved_prototype_waiver_support_unverified"),
         "actualTwoCPU": False,
         "actorBindings": [], "controls": [], "intervals": [], "denials": [],
+        "osCollection": collection_state("unavailable", "collector-not-started"),
+        "manualObservations": [],
         "cases": [], "verdict": "blocked", "storyDone": False, "p1": "unverified",
     }
 
@@ -797,6 +799,8 @@ class ReadinessObserver:
         self.owner_control = {}
         self.owner_post = None
         self.denials = []
+        self.collector = None
+        self.os_collection = collection_state("unavailable", "collector-not-started")
 
     def query(self, candidates, seconds):
         status, data = bounded_query([self.helper, "--bundle", self.bundle], time.monotonic() + seconds,
@@ -819,6 +823,10 @@ class ReadinessObserver:
             del self.pending[key]
 
     def poll(self):
+        if self.collector is not None:
+            self.collector.drain()
+            if self.collector.closed:
+                self.collector.reap(time.monotonic())
         self.withdraw()
         for index, path in enumerate(self.paths):
             role = "Main" if index == 0 else "PDFiumXPC"
@@ -869,9 +877,13 @@ class ReadinessObserver:
                     self.intervals[interval["caseID"]] = interval
                 # Re-bracket after descriptor controls before releasing actors.
                 same_generation(records, self.query(ready["actors"], 0.7 if index == 1 else 2))
+                if phase == "pre" and index == 0:
+                    # Prepared before the first probe ACK. CLI stream has no
+                    # authenticated ready/coverage handshake; never invent one.
+                    self.collector = OSCollector(self.bindings, self.controls[0].paths, getattr(self, "deadline", None))
+                    self.collector.start()
                 if phase == "post" and index == 0:
-                    self.denials = collect_os_evidence(self.bindings, self.controls[0].paths, self.intervals,
-                                                      min(fence_deadline, time.monotonic() + 1))
+                    self.denials, self.os_collection = self.collector.finish(self.intervals, fence_deadline - 0.05)
                 require(time.monotonic() < fence_deadline, "readiness_control_timeout")
                 require(file_identity(os.stat(ready_name, dir_fd=directory, follow_symlinks=False)) == file_identity(ready_info), "readiness_inode_replaced")
                 require(read_at(directory, ready_name, 65536)[0] == data, "readiness_bytes_changed")
@@ -915,6 +927,11 @@ class ReadinessObserver:
         # No cleanup of ready, fixture, report or unknown/replaced ACKs. Native
         # consumes/removes its ready first; only then withdraw our owned ACK.
         try:
+            if self.collector is not None:
+                self.denials, self.os_collection = self.collector.finish(self.intervals)
+                cleanup_deadline = min(self.collector.deadline, time.monotonic() + 0.3)
+                while not self.collector.reaped and time.monotonic() < cleanup_deadline:
+                    self.collector.reap(cleanup_deadline)
             self.withdraw()
         finally:
             for descriptor, _ in self.directories.values():
@@ -928,64 +945,401 @@ class ReadinessObserver:
 
 
 def safe_denial_projection(events, bindings, paths, intervals):
-    """Exact nonce/PID/stage matches remain candidates, not denial proof.
-
-    Public log timestamps do not establish uptime epoch/uncertainty semantics.
-    Never promote wall clock, receipt ordering or machTimestamp by assumption.
-    """
-    projected = {}
+    """Project only producer/subject/target-checked candidates; no clock proof."""
+    projected = []
     if type(events) is not list:
         return []
     for event in events:
-        if type(event) is not dict or not int_range(event.get("processID"), 0, 2**31 - 1):
+        try:
+            row = denial_candidate(event, bindings, paths, intervals)
+        except (Failure, ValueError, TypeError):
             continue
-        message = event.get("eventMessage")
-        if not isinstance(message, str) or len(message) > 8192:
+        # Preserve separate events, including identical stages: collapsing
+        # marker/case reads or retries would manufacture uniqueness.
+        row["denialRef"] = "denial-" + packaging.json_hash(dict(row, ordinal=len(projected)))
+        projected.append(row)
+        if len(projected) == 256:
+            break
+    return projected
+
+
+def collection_state(status, reason):
+    return {"status": status, "queryCompleted": status in ("complete-empty", "complete-nonempty"),
+            "scopeVerified": False, "truncated": status == "truncated", "reason": reason}
+
+
+def denial_candidate(event, bindings, paths, intervals):
+    """Apple Sandbox/Violation/Process form, or its producer-verified one-line form.
+
+    Closed diagnostic fields and numbered thread/backtrace frames stay in RAM;
+    unknown structure, elision and conflicts are rejected. The
+    logger PID (including kernel PID0) is distinct from the denied subject.
+    CLI date/machTimestamp/receipt order have no proven uptime mapping here.
+    """
+    require(type(event) is dict and event.get("subsystem") == "com.apple.sandbox.reporting"
+            and event.get("category") == "violation", "producer-unverified")
+    require(event.get("truncated", False) is False and event.get("isTruncated", False) is False,
+            "record-invalid")
+    require(int_range(event.get("processID"), 0, 2**31 - 1), "subject-unverified")
+    message = event.get("eventMessage")
+    require(isinstance(message, str) and len(message.encode("utf-8")) <= 16384, "record-invalid")
+    lines = message.splitlines()
+    require(lines and lines[0], "record-invalid")
+    header = re.fullmatch(r"Sandbox:[ \t]+([^\n()]{1,128})\(([0-9]+)\)(?:[ \t]+(deny\([0-9]+\) .+))?", lines[0])
+    require(header is not None, "parser-unsupported")
+    violation = header[3]
+    process_seen = False
+    violation_seen = False
+    diagnostics = set()
+    backtrace = False
+    frame = 0
+    for line in lines[1:]:
+        if not line.strip():
+            continue  # Documented blank diagnostic separators, still byte-bounded.
+        thread = re.fullmatch(r"[ \t]*Thread ([0-9]{1,10}) \(id: ([0-9]{1,20})\):", line)
+        if thread is not None:
+            require(not backtrace and int_range(int(thread[1]), 0, 2**31 - 1)
+                    and int_range(int(thread[2]), 0, 2**64 - 1), "parser-unsupported")
+            backtrace = True
             continue
-        match = re.fullmatch(r"Sandbox: [^\n]{1,128}\(([0-9]+)\) deny\([0-9]+\) (file-read-data|file-write-data) (.+)", message)
-        alias = operation = None
-        if match:
-            alias = next((a for a, path in paths.items() if str(path) == match[3]), None)
-            operation = {"file-read-data": "read", "file-write-data": "write"}[match[2]]
+        field = re.fullmatch(r"[ \t]*([A-Za-z][A-Za-z ]*):[ \t]*(.*)", line)
+        if backtrace and field is None:
+            entry = re.fullmatch(r"[ \t]*([0-9]+)[ \t]+[^\s]+[ \t]+0x[0-9a-fA-F]+[ \t]+[^\n]+", line)
+            require(entry is not None and int(entry[1]) == frame, "parser-unsupported")
+            frame += 1
+            continue
+        require(field is not None and not backtrace, "parser-unsupported")
+        key, value = field[1].rstrip(), field[2]
+        if key == "Violation":
+            stated = value
+            require(not violation_seen and (violation is None or violation == stated), "parser-conflict")
+            violation = stated
+            violation_seen = True
+        elif key == "Process":
+            process = re.fullmatch(r"([^\n()]{1,128})[ \t]+\[([0-9]+)\]", value)
+            require(not process_seen and process is not None and process[1].strip() == header[1].strip()
+                    and int(process[2]) == int(header[2]), "parser-conflict")
+            process_seen = True
+        elif key in ("Path", "Identifier", "Version", "Code Type", "Load Address", "Parent Process", "Responsible", "User ID"):
+            require(key not in diagnostics and value and len(value) <= 1024, "parser-conflict")
+            if key == "Responsible" and value.startswith("/"):
+                require(not any(ord(character) < 32 or ord(character) == 127 for character in value), "parser-unsupported")
+            elif key in ("Parent Process", "Responsible"):
+                require(re.fullmatch(r"[^\n\[\]]+[ \t]+\[[0-9]+\]", value) is not None, "parser-unsupported")
+            elif key == "User ID":
+                require(re.fullmatch(r"[0-9]+", value) is not None, "parser-unsupported")
+            elif key == "Code Type":
+                require(re.fullmatch(r"(?i:ARM-64|ARM64|X86-64|X86_64)(?: \((?:Native|Translated)\))?", value) is not None, "parser-unsupported")
+            elif key == "Load Address":
+                require(re.fullmatch(r"0x[0-9a-fA-F]{1,16}", value) is not None, "parser-unsupported")
+            elif key == "Path":
+                require(value.startswith("/") and "\x00" not in value, "parser-unsupported")
+            diagnostics.add(key)
+        elif key == "Backtrace":
+            require(not value, "parser-unsupported")
+            backtrace = True
         else:
-            match = re.fullmatch(r"Sandbox: [^\n]{1,128}\(([0-9]+)\) deny\([0-9]+\) network-(outbound|bind|inbound) (?:TCP )?127\.0\.0\.1:(18765|18766)", message)
-            if match:
-                operation = {"outbound": "connect", "bind": "bind", "inbound": "listen"}[match[2]]
-                if match[3] == ("18765" if operation == "connect" else "18766"):
-                    alias = "network"
-        if alias is None or match is None:
-            continue
-        subject = int(match[1])
-        # The kernel logger is PID0; the denied subject is the bounded PID
-        # in its closed Sandbox message, independently bound to this run.
-        role = next((r for r, a in bindings.items() if a["pid"] == subject), None)
-        if role is None or event["processID"] not in (0, subject):
-            continue
-        row = {"role": role, "alias": alias, "operation": operation,
-               "attributed": False, "reason": "clock-unproven"}
-        digest = packaging.json_hash(row)
-        row["denialRef"] = "denial-" + digest
-        projected[digest] = row
-    return list(projected.values())
+            raise Failure("parser-unsupported")
+    require(not backtrace or frame > 0, "parser-partial")
+    require(not (diagnostics or backtrace) or process_seen and violation_seen, "parser-partial")
+    require(violation is not None, "parser-partial")
+    stage = re.fullmatch(r"deny\([0-9]+\) (file-read-data|file-write-data|network-outbound|network-bind|network-inbound) (.+)", violation)
+    require(stage is not None, "stage-unsupported")
+    subject = int(header[2])
+    roles = [role for role, actor in bindings.items() if actor["pid"] == subject]
+    require(len(roles) == 1 and event["processID"] in (0, subject), "subject-unverified")
+    operation = {"file-read-data": "read", "file-write-data": "write", "network-outbound": "connect",
+                 "network-bind": "bind", "network-inbound": "listen"}[stage[1]]
+    if stage[1].startswith("file-"):
+        aliases = [alias for alias, path in paths.items() if str(path) == stage[2]]
+        require(len(aliases) == 1, "target-unverified")
+        alias = aliases[0]
+    else:
+        target = stage[2].removeprefix("TCP ")
+        require(target == ("127.0.0.1:18765" if operation == "connect" else "127.0.0.1:18766"), "target-unverified")
+        alias = "network"
+    matches = [case for case in intervals if case_contract(case) == (roles[0], alias, operation)]
+    # A read denial cannot distinguish direct/marker/symlink reads. Even a
+    # single matching case lacks event-clock proof, and must stay unverified.
+    ambiguous = len(matches) > 1 or operation == "read"
+    return {"role": roles[0], "alias": alias, "operation": operation, "attributed": False,
+            "producerVerified": True, "targetVerified": True, "clockVerified": False,
+            "caseAssociation": "ambiguous" if ambiguous else "unverified", "reason": "clock-unproven"}
 
 
-def collect_os_evidence(bindings, paths, intervals, deadline):
-    if not bindings:
-        return []
+def collector_predicate(bindings, paths):
     pids = sorted({a["pid"] for a in bindings.values()})
+    require(len(pids) == 4 and set(bindings) == set(ROLES)
+            and all(int_range(pid, 1, 2**31 - 1) for pid in pids), "collector-binding-invalid")
     stages = ("file-read-data", "file-write-data", "network-outbound", "network-bind", "network-inbound")
     targets = [str(path) for path in paths.values()] + ["127.0.0.1:18765", "127.0.0.1:18766"]
-    predicate = ("(processID == 0 OR " + " OR ".join(f"processID == {pid}" for pid in pids) + ") AND ("
-                 + " OR ".join("eventMessage CONTAINS " + json.dumps(f"({pid}) deny(") for pid in pids) + ") AND eventMessage CONTAINS \"deny\" AND ("
-                 + " OR ".join("eventMessage CONTAINS " + json.dumps(stage) for stage in stages) + ") AND ("
-                 + " OR ".join("eventMessage ENDSWITH " + json.dumps(target, ensure_ascii=False) for target in targets) + ")")
-    try:
-        status, data = bounded_query(["/usr/bin/log", "show", "--last", "230s", "--style", "json", "--predicate", predicate], deadline, maximum=1024**2)
-        if status != 0:
-            return []
-        return safe_denial_projection(decode_json(data), bindings, paths, intervals)
-    except (Failure, OSError, ValueError, subprocess.TimeoutExpired):
-        return []
+    return ("subsystem == \"com.apple.sandbox.reporting\" AND category == \"violation\" AND (processIdentifier == 0 OR "
+                 + " OR ".join(f"processIdentifier == {pid}" for pid in pids) + ") AND ("
+                 + " OR ".join("composedMessage CONTAINS " + json.dumps(f"({pid})") for pid in pids) + ") AND composedMessage CONTAINS \"deny(\" AND ("
+                 + " OR ".join("composedMessage CONTAINS " + json.dumps(stage) for stage in stages) + ") AND ("
+                 + " OR ".join("composedMessage CONTAINS " + json.dumps(target, ensure_ascii=False) for target in targets) + ")")
+
+
+def predicate_shape(text):
+    """Closed owned-filter grammar, not an arbitrary NSPredicate evaluator.
+
+    NSPredicate.description may regroup associative AND/OR expressions or
+    change spacing/quoted escapes. Preserve every comparison and literal;
+    only associative grouping and commutative order are normalized.
+    """
+    require(isinstance(text, str) and len(text.encode()) <= 16384, "collector-header-invalid")
+    token = re.compile(r'\s*(==|=|&&|\|\||\(|\)|AND\b|OR\b|CONTAINS\b|subsystem\b|category\b|processIdentifier\b|composedMessage\b|[0-9]+|"(?:[^"\\\x00-\x1f]|\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4}))*")')
+    tokens = []
+    offset = 0
+    while offset < len(text):
+        if not text[offset:].strip():
+            break
+        match = token.match(text, offset)
+        require(match is not None and len(tokens) < 1024, "collector-header-invalid")
+        tokens.append(match[1])
+        offset = match.end()
+    position = 0
+
+    def combine(operator, children):
+        flattened = []
+        for child in children:
+            flattened.extend(child[1] if child[0] == operator else (child,))
+        return (operator, tuple(sorted(flattened))) if len(flattened) > 1 else flattened[0]
+
+    def expression(level, depth):
+        nonlocal position
+        require(depth <= 64, "collector-header-invalid")
+        if level < 2:
+            operators = ("OR", "||") if level == 0 else ("AND", "&&")
+            children = [expression(level + 1, depth)]
+            while position < len(tokens) and tokens[position] in operators:
+                position += 1
+                children.append(expression(level + 1, depth))
+            return combine(operators[0], children)
+        require(position < len(tokens), "collector-header-invalid")
+        if tokens[position] == "(":
+            position += 1
+            child = expression(0, depth + 1)
+            require(position < len(tokens) and tokens[position] == ")", "collector-header-invalid")
+            position += 1
+            return child
+        require(position + 2 < len(tokens), "collector-header-invalid")
+        field, operator, literal = tokens[position:position + 3]
+        require(field in ("subsystem", "category", "processIdentifier", "composedMessage"), "collector-header-invalid")
+        if field == "processIdentifier":
+            require(operator in ("==", "=") and re.fullmatch(r"[0-9]{1,10}", literal)
+                    and int_range(int(literal), 0, 2**31 - 1), "collector-header-invalid")
+            value = int(literal)
+        else:
+            require(operator in (("CONTAINS",) if field == "composedMessage" else ("==", "="))
+                    and literal.startswith('"'), "collector-header-invalid")
+            value = decode_json(literal)
+            require(isinstance(value, str), "collector-header-invalid")
+        position += 3
+        return ("comparison", field, "==" if operator == "=" else operator, value)
+
+    shape = expression(0, 0)
+    require(position == len(tokens), "collector-header-invalid")
+    return shape
+
+
+def owned_filter_header(record, expected):
+    prefix = b'Filtering the log data using "'
+    if not record.startswith(prefix):
+        return False
+    require(record.endswith(b'"'), "collector-header-invalid")
+    reported = record[len(prefix):-1].decode("utf-8")
+    require(predicate_shape(reported) == expected, "collector-header-invalid")
+    return True
+
+
+class OSCollector:
+    """Invocation-owned nonblocking public stream; all raw bytes stay in RAM.
+
+    No public CLI ready marker proves first-probe coverage. scopeVerified is
+    therefore always false, even for normal EOF; this is not negative proof.
+    Polling does no waiting. Final stop/reap spends at most three 100ms waits,
+    capped by the supplied Main fence (with 50ms left for ACK publication),
+    not a retrospective query, within Main's existing reserved fence slack.
+    """
+    maximum = 1024**2
+    record_maximum = 16384
+    candidate_maximum = 256
+
+    def __init__(self, bindings, paths, deadline=None):
+        self.bindings, self.paths = dict(bindings), dict(paths)
+        self.deadline = deadline if deadline is not None else time.monotonic() + 230
+        self.process = None
+        self.selector = selectors.DefaultSelector()
+        self.pending = bytearray()
+        self.total = 0
+        self.events = []
+        self.state = collection_state("unavailable", "collector-not-started")
+        self.failure = None
+        # closed freezes evidence/raw ingestion, not owned-child cleanup.
+        self.closed = False
+        self.reaped = False
+        self.header_seen = False
+        self.expected_header = ('Filtering the log data using "' + collector_predicate(bindings, paths) + '"').encode()
+        self.expected_predicate = predicate_shape(collector_predicate(bindings, paths))
+        self.rows = []
+
+    def start(self):
+        try:
+            require(time.monotonic() < self.deadline, "collector-timeout")
+            predicate = collector_predicate(self.bindings, self.paths)
+            self.process = subprocess.Popen(["/usr/bin/log", "stream", "--style", "ndjson", "--timeout",
+                                             str(max(1, int(self.deadline - time.monotonic()))), "--predicate", predicate],
+                                            env=clean_env(), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            for pipe, output in ((self.process.stdout, True), (self.process.stderr, False)):
+                os.set_blocking(pipe.fileno(), False)
+                self.selector.register(pipe, selectors.EVENT_READ, output)
+            self.state = collection_state("unavailable", "coverage-unproven")
+        except OSError as error:
+            self.failure = ("unavailable", "collector-access-denied" if error.errno in (errno.EACCES, errno.EPERM) else "collector-start-failed")
+        except Failure:
+            self.failure = ("invalid", "collector-binding-invalid") if time.monotonic() < self.deadline else ("timed-out", "collector-timeout")
+
+    def feed(self, data, output=True):
+        self.total += len(data)
+        if self.total > self.maximum:
+            self.failure = ("truncated", "raw-limit")
+            return
+        if not output:
+            # Never project stderr text, including tool diagnostics.
+            if data:
+                self.failure = ("unavailable", "collector-access-or-source-error")
+            return
+        self.pending.extend(data)
+        while b"\n" in self.pending:
+            end = self.pending.index(b"\n")
+            if end > self.record_maximum:
+                self.failure = ("truncated", "record-limit")
+                return
+            record = bytes(self.pending[:end])
+            del self.pending[:end + 1]
+            if record == b"":
+                continue
+            try:
+                if owned_filter_header(record, self.expected_predicate):
+                    require(not self.header_seen and not self.events, "collector-header-invalid")
+                    self.header_seen = True
+                    continue
+                event = decode_json(record)
+                denial_candidate(event, self.bindings, self.paths, {})
+                if len(self.events) >= self.candidate_maximum:
+                    self.failure = ("truncated", "candidate-limit")
+                    return
+                self.events.append(event)
+            except (Failure, ValueError, TypeError, UnicodeError):
+                self.failure = ("invalid", "parser-input-invalid")
+                return
+        if len(self.pending) > self.record_maximum:
+            self.failure = ("truncated", "record-limit")
+
+    def drain(self):
+        if self.closed or self.process is None or self.failure is not None:
+            return
+        # Bound each poll as well as total bytes: a busy source cannot hold ACK.
+        try:
+            for _ in range(128):
+                ready = self.selector.select(0)
+                if not ready:
+                    break
+                for key, _ in ready:
+                    try:
+                        data = os.read(key.fileobj.fileno(), 8192)
+                    except BlockingIOError:
+                        continue
+                    if data:
+                        self.feed(data, key.data)
+                    else:
+                        self.selector.unregister(key.fileobj)
+                    if self.failure is not None:
+                        return
+            if time.monotonic() >= self.deadline and self.process.poll() is None:
+                self.failure = ("timed-out", "collector-timeout")
+        except OSError:
+            self.failure = ("unavailable", "collector-read-failed")
+
+    def finish(self, intervals, deadline=None):
+        if self.closed:
+            self.reap(deadline)
+            return self.rows, self.state
+        deadline = self.deadline if deadline is None else min(deadline, self.deadline)
+        def wait_budget():
+            return max(0, min(0.1, deadline - time.monotonic()))
+        self.drain()
+        try:
+            if self.process is not None:
+                forced = self.process.poll() is None
+                if forced:
+                    self.failure = self.failure or ("timed-out", "collector-stop-before-eof")
+                    self.process.terminate()
+                try:
+                    status = self.process.wait(timeout=wait_budget())
+                    self.reaped = True
+                except subprocess.TimeoutExpired:
+                    self.process.kill()
+                    try:
+                        status = self.process.wait(timeout=wait_budget())
+                        self.reaped = True
+                    except subprocess.TimeoutExpired:
+                        status = None
+                        self.failure = ("timed-out", "collector-reap-timeout")
+                self.drain()
+                if not forced and self.failure is None:
+                    if status != 0:
+                        self.failure = ("unavailable", "collector-nonzero-exit")
+                    elif self.selector.get_map() or self.pending:
+                        self.failure = ("invalid", "parser-partial-eof")
+                    else:
+                        self.state = collection_state("complete-nonempty" if self.events else "complete-empty",
+                                                      "normal-eof-clock-unproven" if self.events else "normal-eof-empty-coverage-unproven")
+            self.rows = safe_denial_projection(self.events, self.bindings, self.paths, intervals)
+        except OSError:
+            self.failure = ("unavailable", "collector-read-failed")
+        finally:
+            # Always kill/reap only our collector, never an actor or unrelated
+            # port owner. Reap timeout is a failure, never trusted completion.
+            if self.process is not None:
+                try:
+                    if self.process.poll() is None:
+                        self.process.kill()
+                        self.process.wait(timeout=wait_budget())
+                        self.reaped = True
+                except (OSError, subprocess.TimeoutExpired):
+                    self.failure = ("timed-out", "collector-reap-timeout")
+                for pipe in (self.process.stdout, self.process.stderr):
+                    if pipe is not None:
+                        pipe.close()
+            if self.failure is not None:
+                self.state = collection_state(*self.failure)
+            self.selector.close()
+            self.pending.clear()
+            self.events.clear()
+            self.bindings.clear()
+            self.paths.clear()
+            self.expected_header = b""
+            self.expected_predicate = None
+            self.closed = True
+        return self.rows, self.state
+
+    def reap(self, deadline=None):
+        """Frozen evidence is independent of retained owned-child responsibility."""
+        if self.process is None:
+            self.reaped = True
+            return
+        if self.reaped:
+            return
+        deadline = self.deadline if deadline is None else min(deadline, self.deadline)
+        try:
+            if self.process.poll() is None:
+                self.process.kill()
+            self.process.wait(timeout=max(0, min(0.1, deadline - time.monotonic())))
+            self.reaped = True
+        except (OSError, subprocess.TimeoutExpired):
+            pass  # Keep the handle and retry during later polls/cleanup.
 
 
 def candidate_bindings(report):
@@ -1056,7 +1410,8 @@ def project_cases(report, run_id, observer=None, evidence=None):
                                                 "reason": "same-uid-not-tcc-proof"})
             for candidate in observer.denials:
                 projection = dict(candidate, actorInstanceRef=refs_by_role[candidate["role"]])
-                projection.pop("denialRef", None)
+                # Include the existing opaque event identity in the joined
+                # digest: identical events must not collapse after actor join.
                 projection["denialRef"] = "denial-" + packaging.json_hash(projection)
                 evidence["denials"].append(projection)
     projected = []
@@ -1134,6 +1489,8 @@ def project_cases(report, run_id, observer=None, evidence=None):
                     row["verdict"] = "blocked" if row["verdict"] != "failed" else "failed"
         # No case PASS without current-run manual TCC/prompt and compatible OS
         # clocks. fd read/EBADF is capability evidence, not sandbox attribution.
+        if row["promptObserved"] is True and row["verdict"] != "failed":
+            row["verdict"] = "blocked"
         if evidence is not None and capability and bound and row["syscallObserved"]:
             valid = ((row["operation"] == "descriptorRead" and row["syscallResult"] == len(synthetic_pdf()) and row["errno"] == 0)
                      or (row["operation"] == "descriptorWrite" and row["syscallResult"] == -1 and row["errno"] == errno.EBADF))
@@ -1163,7 +1520,83 @@ def project_statuses(report):
     return projected
 
 
-def gui_run(bundle, evidence):
+def project_manual_observations(evidence, run_id, receipts=None):
+    """Closed human records; never an effective TCC/FDA or clock assertion."""
+    artifact = evidence["manifest"]["artifactHash"]
+    actors = [row["actorInstanceRef"] for row in evidence["actorBindings"]
+              if row["preVerified"] is True and row["postVerified"] is True]
+    defaults = [{"runID": run_id, "artifactHash": artifact, "actorInstanceRef": ref,
+                 "fdaStatus": "unknown", "prompt": "unknown", "coverage": "unknown", "grantChange": "unknown"}
+                for ref in actors]
+    evidence["manualObservations"] = defaults
+    if receipts is None:
+        return False
+    require(type(receipts) is list and len(receipts) <= len(actors), "manual-receipt-invalid")
+    enums = {"fdaStatus": {"granted", "not-listed", "unknown"},
+             "prompt": {"observed", "not-observed", "unknown"},
+             "coverage": {"complete", "partial", "unknown"},
+             "grantChange": {"grant-change-observed", "none-observed", "unknown"}}
+    fields = {"runID", "artifactHash", "actorInstanceRef", *enums}
+    supplied = {}
+    for receipt in receipts:
+        require(type(receipt) is dict and set(receipt) == fields, "manual-receipt-invalid")
+        require(receipt["runID"] == run_id and receipt["artifactHash"] == artifact
+                and receipt["actorInstanceRef"] in actors and receipt["actorInstanceRef"] not in supplied,
+                "manual-receipt-unbound")
+        require(all(isinstance(receipt[key], str) and receipt[key] in allowed for key, allowed in enums.items()),
+                "manual-receipt-invalid")
+        row = dict(receipt)
+        if row["coverage"] != "complete":
+            # A positive observation still mandates stop; absence claims from
+            # partial observations must not turn into automatic no/defaults.
+            row["fdaStatus"] = "unknown"
+            row["prompt"] = "observed" if row["prompt"] == "observed" else "unknown"
+            row["grantChange"] = "grant-change-observed" if row["grantChange"] == "grant-change-observed" else "unknown"
+        supplied[row["actorInstanceRef"]] = row
+    evidence["manualObservations"] = [supplied.get(row["actorInstanceRef"], row) for row in defaults]
+    prompt = any(row["prompt"] == "observed" for row in supplied.values())
+    if prompt:
+        observed_refs = {row["actorInstanceRef"] for row in supplied.values() if row["prompt"] == "observed"}
+        for case in evidence["cases"]:
+            if case.get("actorInstanceRef") in observed_refs:
+                case["promptObserved"] = True
+            if case["verdict"] != "failed":
+                case["verdict"] = "blocked"
+        # Final references arrive after probes: block this run, without
+        # pretending to have withheld a previously consumed ACK retroactively.
+        evidence["automated"].append(result("currentRunPromptStop", "blocked", "human-prompt-observed-final-blocked", executed=True))
+    return prompt
+
+
+def receive_manual_observations(evidence, run_id, callback, deadline):
+    """callback(context) -> closed receipt list, from already-recorded humans.
+
+    context has runID, artifactHash, actorInstanceRefs (tuple of verified opaque
+    refs). Called once after final joins, before verifier cleanup. No CLI/file
+    intake. A 50ms RAM-only mailbox prevents waiting for a human or extending
+    the observer deadline; late callbacks cannot mutate evidence or release ACK.
+    """
+    project_manual_observations(evidence, run_id)
+    if callback is None:
+        return
+    require(callable(callback), "manual-callback-invalid")
+    context = {"runID": run_id, "artifactHash": evidence["manifest"]["artifactHash"],
+               "actorInstanceRefs": tuple(row["actorInstanceRef"] for row in evidence["manualObservations"])}
+    mailbox = []
+    def receive():
+        try:
+            mailbox.append((True, callback(context)))
+        except Exception:
+            mailbox.append((False, None))
+    thread = threading.Thread(target=receive, daemon=True)
+    thread.start()
+    thread.join(timeout=max(0, min(0.05, deadline - time.monotonic())))
+    require(not thread.is_alive(), "manual-callback-timeout")
+    require(mailbox and mailbox[0][0], "manual-callback-invalid")
+    project_manual_observations(evidence, run_id, mailbox[0][1])
+
+
+def gui_run(bundle, evidence, manual_observer=None):
     home = current_home()
     run_id = str(uuid.uuid4())
     collision_preflight(home, run_id)
@@ -1183,6 +1616,7 @@ def gui_run(bundle, evidence):
         status, _, _ = command(["/usr/bin/open", "-n", bundle, "--args", "--topology-smoke", "--run-id", run_id])
         require(status == 0, "gui_launch_failed")
         deadline = time.monotonic() + 230
+        observer.deadline = deadline
         while time.monotonic() < deadline:
             observer.poll()
             if 0 in observer.directories:
@@ -1196,6 +1630,8 @@ def gui_run(bundle, evidence):
             if data is not None:
                 report = decode_json(data)
                 evidence["cases"] = project_cases(report, run_id, observer, evidence)
+                evidence["osCollection"] = dict(observer.os_collection)
+                receive_manual_observations(evidence, run_id, manual_observer, deadline)
                 evidence["automated"].extend(project_statuses(report))
                 evidence["automated"].append(result("guiLaunch", "pass", "matching_synthetic_run_report"))
                 evidence["automated"].append(result("osDenialClock", "inconclusive", "clock-unproven", executed=True))
@@ -1207,6 +1643,7 @@ def gui_run(bundle, evidence):
         try:
             if observer is not None:
                 observer.close()
+                evidence["osCollection"] = dict(observer.os_collection)
         finally:
             try:
                 if controls_started:
@@ -1230,7 +1667,7 @@ def gui_run(bundle, evidence):
                 evidence["automated"].append(result("groupOwnerPost", "failed" if owner.ready else "blocked", "group_owner_post_not_proven", executed=owner.process is not None))
 
 
-def main(argv=None):
+def main(argv=None, manual_observer=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--arch", required=True, choices=ARCHES)
     parser.add_argument("--bundle", required=True, type=Path)
@@ -1257,7 +1694,7 @@ def main(argv=None):
         else:
             current_home()
             evidence["manual"][0] = result("currentProfile", "inconclusive", "synthetic_only_consent_not_clean_tcc_fda_proof", executed=True)
-            gui_run(args.bundle.absolute(), evidence)
+            gui_run(args.bundle.absolute(), evidence, manual_observer=manual_observer)
     except (Failure, packaging.Failure) as error:
         failed = str(error) in {"inventory_hash_mismatch", "artifact_hash_mismatch", "inventory_coverage_mismatch", "manifest_code_policy_mismatch", "manifest_code_kind_mismatch", "inventory_link_mismatch", "manifest_arch_mismatch", "acquisition_hash_mismatch", "dependency_lock_mismatch", "acquisition_manifest_mismatch", "source_provenance_mismatch", "signed_identifier_mismatch", "signed_team_mismatch", "signed_entitlements_mismatch", "binary_architecture_mismatch", "fixture_map_mismatch"}
         evidence["automated"].append(result("verification", "failed" if failed else "blocked", str(error), executed=True))
