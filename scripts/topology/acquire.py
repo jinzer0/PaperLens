@@ -253,7 +253,7 @@ def load_lock():
     lock = json.loads(LOCK_PATH.read_text())
     require(lock["schemaRevision"] == "topology-v1" and len(lock["wheels"]) == 8, "invalid_dependency_lock")
     require(lock["pdfium"]["commit"] == "ad5bc13610718aefe737bd9b2f1b258d08e39428", "pdfium_pin_mismatch")
-    require(lock["approvalCommit"] == "7fbc78d813151d485000719c469926188cc27421" and lock["pdfium"].get("patch") == PDFIUM_PATCH, "pdfium_patch_pin_mismatch")
+    require(lock["approvalCommit"] == "832b1b903b2877259ebd8b79b992c6473dfd4d99" and lock["pdfium"].get("patch") == PDFIUM_PATCH, "pdfium_patch_pin_mismatch")
     require(lock["pdfium"]["gnArgs"].get("use_lld") is False and lock["toolchain"].get("systemLinkerVersion") == "27037.1", "pdfium_linker_pin_mismatch")
     for arch in ARCHES:
         select_asset(lock["python"], arch)

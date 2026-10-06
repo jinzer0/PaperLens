@@ -883,7 +883,10 @@ class ReadinessObserver:
                     self.collector = OSCollector(self.bindings, self.controls[0].paths, getattr(self, "deadline", None))
                     self.collector.start()
                 if phase == "post" and index == 0:
-                    self.denials, self.os_collection = self.collector.finish(self.intervals, fence_deadline - 0.05)
+                    # ACK must not wait for finalization. Detect EOF before the
+                    # final signed/control checks, then release the native run.
+                    self.collector.drain()
+                    self.collector.lifecycle_complete = True
                 require(time.monotonic() < fence_deadline, "readiness_control_timeout")
                 require(file_identity(os.stat(ready_name, dir_fd=directory, follow_symlinks=False)) == file_identity(ready_info), "readiness_inode_replaced")
                 require(read_at(directory, ready_name, 65536)[0] == data, "readiness_bytes_changed")
@@ -923,15 +926,47 @@ class ReadinessObserver:
                         pass
                 self.done.add(key)
 
+    def tail(self, directory, data, info, report):
+        """Validate the matching report and symmetric release before natural EOF."""
+        project_cases(report, self.run_id, self)
+        descriptor = os.open("report.json", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=directory)
+        try:
+            require(file_identity(private_fd(descriptor)) == file_identity(info), "report_inode_replaced")
+            def unchanged():
+                require(file_identity(private_fd(descriptor)) == file_identity(info), "report_inode_replaced")
+                current, current_info = read_at(directory, "report.json", 1024**2)
+                require(file_identity(current_info) == file_identity(info), "report_inode_replaced")
+                require(current == data and os.pread(descriptor, len(data) + 1, 0) == data, "report_bytes_changed")
+            unchanged()
+            while self.pending and time.monotonic() < self.deadline:
+                self.poll()
+                unchanged()
+                if self.pending:
+                    time.sleep(min(0.01, max(0, self.deadline - time.monotonic())))
+            require(not self.pending, "ack_consumption_timeout")
+            require(self.done == {(0, "pre"), (0, "post"), (1, "pre"), (1, "post")}, "report_lifecycle_incomplete")
+            while self.collector.failure is None and time.monotonic() < self.collector.deadline:
+                self.collector.drain()
+                unchanged()
+                if self.collector.process is None or (self.collector.process.poll() is not None and not self.collector.selector.get_map()):
+                    break
+                time.sleep(min(0.01, max(0, self.collector.deadline - time.monotonic())))
+            self.denials, self.os_collection = self.collector.finish(self.intervals, self.deadline)
+            unchanged()
+        finally:
+            os.close(descriptor)
+
     def close(self):
         # No cleanup of ready, fixture, report or unknown/replaced ACKs. Native
         # consumes/removes its ready first; only then withdraw our owned ACK.
         try:
             if self.collector is not None:
-                self.denials, self.os_collection = self.collector.finish(self.intervals)
-                cleanup_deadline = min(self.collector.deadline, time.monotonic() + 0.3)
+                self.denials, self.os_collection = self.collector.finish(self.intervals, getattr(self, "deadline", None))
+                cleanup_deadline = min(self.collector.observer_deadline, time.monotonic() + 0.3)
                 while not self.collector.reaped and time.monotonic() < cleanup_deadline:
                     self.collector.reap(cleanup_deadline)
+                if not self.collector.reaped:
+                    self.os_collection = collection_state("timed-out", "collector-reap-timeout")
             self.withdraw()
         finally:
             for descriptor, _ in self.directories.values():
@@ -1158,9 +1193,8 @@ class OSCollector:
 
     No public CLI ready marker proves first-probe coverage. scopeVerified is
     therefore always false, even for normal EOF; this is not negative proof.
-    Polling does no waiting. Final stop/reap spends at most three 100ms waits,
-    capped by the supplied Main fence (with 50ms left for ACK publication),
-    not a retrospective query, within Main's existing reserved fence slack.
+    Polling does no waiting. Natural tail ends five seconds before the absolute
+    observer deadline; bounded owned reap uses only that existing reserve.
     """
     maximum = 1024**2
     record_maximum = 16384
@@ -1168,7 +1202,10 @@ class OSCollector:
 
     def __init__(self, bindings, paths, deadline=None):
         self.bindings, self.paths = dict(bindings), dict(paths)
-        self.deadline = deadline if deadline is not None else time.monotonic() + 230
+        self.observer_deadline = deadline if deadline is not None else time.monotonic() + 230
+        self.deadline = self.observer_deadline - 5
+        self.lifecycle_complete = False
+        self.eof_observed = False
         self.process = None
         self.selector = selectors.DefaultSelector()
         self.pending = bytearray()
@@ -1186,10 +1223,13 @@ class OSCollector:
 
     def start(self):
         try:
-            require(time.monotonic() < self.deadline, "collector-timeout")
             predicate = collector_predicate(self.bindings, self.paths)
+            timeout = int(self.deadline - time.monotonic())
+            if timeout <= 0:
+                self.failure = ("timed-out", "collector-insufficient-budget")
+                return
             self.process = subprocess.Popen(["/usr/bin/log", "stream", "--style", "ndjson", "--timeout",
-                                             str(max(1, int(self.deadline - time.monotonic()))), "--predicate", predicate],
+                                             str(timeout), "--predicate", predicate],
                                             env=clean_env(), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             for pipe, output in ((self.process.stdout, True), (self.process.stderr, False)):
                 os.set_blocking(pipe.fileno(), False)
@@ -1240,6 +1280,9 @@ class OSCollector:
     def drain(self):
         if self.closed or self.process is None or self.failure is not None:
             return
+        if not self.eof_observed and time.monotonic() >= self.deadline:
+            self.failure = ("timed-out", "collector-timeout")
+            return
         # Bound each poll as well as total bytes: a busy source cannot hold ACK.
         try:
             for _ in range(128):
@@ -1255,10 +1298,20 @@ class OSCollector:
                         self.feed(data, key.data)
                     else:
                         self.selector.unregister(key.fileobj)
+                        if not self.lifecycle_complete:
+                            self.failure = ("invalid", "collector-early-eof")
                     if self.failure is not None:
                         return
-            if time.monotonic() >= self.deadline and self.process.poll() is None:
+            status = self.process.poll()
+            if not self.lifecycle_complete and (status is not None or not self.selector.get_map()):
+                self.failure = ("invalid", "collector-early-eof")
+            elif time.monotonic() >= self.deadline and (status is None or self.selector.get_map()):
                 self.failure = ("timed-out", "collector-timeout")
+            elif status is not None and not self.selector.get_map():
+                if not self.eof_observed and time.monotonic() >= self.deadline:
+                    self.failure = ("timed-out", "collector-timeout")
+                else:
+                    self.eof_observed = True
         except OSError:
             self.failure = ("unavailable", "collector-read-failed")
 
@@ -1266,7 +1319,7 @@ class OSCollector:
         if self.closed:
             self.reap(deadline)
             return self.rows, self.state
-        deadline = self.deadline if deadline is None else min(deadline, self.deadline)
+        deadline = self.observer_deadline if deadline is None else min(deadline, self.observer_deadline)
         def wait_budget():
             return max(0, min(0.1, deadline - time.monotonic()))
         self.drain()
@@ -1332,7 +1385,7 @@ class OSCollector:
             return
         if self.reaped:
             return
-        deadline = self.deadline if deadline is None else min(deadline, self.deadline)
+        deadline = self.observer_deadline if deadline is None else min(deadline, self.observer_deadline)
         try:
             if self.process.poll() is None:
                 self.process.kill()
@@ -1622,13 +1675,14 @@ def gui_run(bundle, evidence, manual_observer=None):
             if 0 in observer.directories:
                 directory = observer.directories[0][0]
                 try:
-                    data, _ = read_at(directory, "report.json", 1024**2)
+                    data, info = read_at(directory, "report.json", 1024**2)
                 except FileNotFoundError:
                     data = None
             else:
                 data = None
             if data is not None:
                 report = decode_json(data)
+                observer.tail(directory, data, info, report)
                 evidence["cases"] = project_cases(report, run_id, observer, evidence)
                 evidence["osCollection"] = dict(observer.os_collection)
                 receive_manual_observations(evidence, run_id, manual_observer, deadline)

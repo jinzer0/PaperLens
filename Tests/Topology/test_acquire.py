@@ -879,7 +879,7 @@ class LiveAttributionTests(IsolatedTest):
         self.addCleanup(patcher.stop)
         bundle = self.root / "PaperLens.app"
         contract = bundle / "Contents/Resources/contract.json"
-        contract.parent.mkdir(parents=True)
+        contract.parent.mkdir(parents=True, exist_ok=True)
         contract.write_bytes(b"synthetic closed contract")
         controls = [mock.Mock(paths=verify.fixture_paths(self.root, self.run_id), rows={}),
                     mock.Mock(paths=verify.fixture_paths(self.root, self.run_id), rows={})]
@@ -1056,11 +1056,112 @@ class LiveAttributionTests(IsolatedTest):
             observer.controls[0].observe.side_effect = lambda *args: self.assertFalse((path / "post-continue.json").exists())
             observer.external.finish.side_effect = lambda: self.assertFalse((path / "post-continue.json").exists())
             observer.owner.finish.side_effect = lambda **kwargs: self.assertFalse((path / "post-continue.json").exists())
-            observer.collector.finish.side_effect = lambda *args: (self.assertFalse((path / "post-continue.json").exists()) or [], verify.collection_state("timed-out", "collector-stop-before-eof"))
             observer.poll()
         observer.external.finish.assert_called_once()
         observer.owner.finish.assert_called_once()
+        observer.collector.finish.assert_not_called()
+        self.assertTrue(observer.collector.lifecycle_complete)
         self.assertTrue((path / "post-continue.json").exists())
+
+    def tail_report(self):
+        observer = self.observer()
+        path = observer.paths[0]
+        path.mkdir(parents=True, mode=0o700)
+        report = self.report()
+        report["runID"] = self.run_id
+        data = json.dumps(report).encode()
+        file = path / "report.json"
+        file.write_bytes(data)
+        file.chmod(0o600)
+        directory = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+        self.addCleanup(os.close, directory)
+        observer.deadline = time.monotonic() + 230
+        observer.done = {(0, "pre"), (0, "post"), (1, "pre"), (1, "post")}
+        bound = self.bound_observer(report)
+        observer.bindings, observer.post_bindings, observer.intervals = bound.bindings, bound.post_bindings, bound.intervals
+        observer.collector = verify.OSCollector.return_value
+        observer.collector.deadline = observer.deadline - 5
+        observer.collector.failure = None
+        observer.collector.process.poll.return_value = None
+        observer.collector.selector.get_map.return_value = {1: "stdout", 2: "stderr"}
+        return observer, directory, data, file.stat(), report, file
+
+    def test_matching_report_waits_for_withdrawal_then_delayed_two_pipe_eof(self):
+        observer, directory, data, info, report, file = self.tail_report()
+        observer.pending[(0, "post")] = "owned ack"
+        def withdraw():
+            observer.pending.clear()
+        def drain():
+            self.assertFalse(observer.pending)
+            observer.collector.process.poll.return_value = 0
+            observer.collector.selector.get_map.return_value = {2: "stderr"} if observer.collector.drain.call_count == 1 else {}
+        observer.collector.drain.side_effect = drain
+        with mock.patch.object(verify, "no_acl", return_value=True), mock.patch.object(observer, "poll", side_effect=withdraw) as poll:
+            observer.tail(directory, data, info, report)
+        poll.assert_called_once()
+        self.assertEqual(observer.collector.drain.call_count, 2)
+        observer.collector.finish.assert_called_once_with(observer.intervals, observer.deadline)
+        self.assertEqual(file.read_bytes(), data)
+        self.assertEqual(file.stat().st_ino, info.st_ino)
+        self.assertEqual(observer.bindings, observer.post_bindings)
+
+    def test_tail_preserves_replaced_report_and_rejects_changed_bytes(self):
+        for replacement in (False, True):
+            with self.subTest(replacement=replacement):
+                # A fresh synthetic namespace for each case, never an old report.
+                self.run_id = str(verify.uuid.uuid4())
+                observer, directory, data, info, report, file = self.tail_report()
+                def change():
+                    if replacement:
+                        file.rename(file.parent / "held-report")
+                    file.write_bytes(b"other evidence")
+                    file.chmod(0o600)
+                observer.collector.drain.side_effect = change
+                with mock.patch.object(verify, "no_acl", return_value=True), self.assertRaisesRegex(acquire.Failure, "report_(inode_replaced|bytes_changed)"):
+                    observer.tail(directory, data, info, report)
+                observer.collector.finish.assert_not_called()
+                self.assertEqual(file.read_bytes(), b"other evidence")
+                if replacement:
+                    self.assertEqual((file.parent / "held-report").read_bytes(), data)
+
+    def test_tail_rejects_incomplete_release_before_waiting_for_eof(self):
+        observer, directory, data, info, report, _ = self.tail_report()
+        observer.done.remove((1, "post"))
+        with mock.patch.object(verify, "no_acl", return_value=True), self.assertRaisesRegex(acquire.Failure, "report_lifecycle_incomplete"):
+            observer.tail(directory, data, info, report)
+        observer.collector.drain.assert_not_called()
+        observer.collector.finish.assert_not_called()
+
+    def test_tail_ack_timeout_does_not_start_natural_wait(self):
+        observer, directory, data, info, report, _ = self.tail_report()
+        observer.pending[(0, "post")] = "unconsumed ack"
+        with mock.patch.object(verify, "no_acl", return_value=True), mock.patch.object(observer, "poll", side_effect=acquire.Failure("ack_consumption_timeout")), self.assertRaisesRegex(acquire.Failure, "ack_consumption_timeout"):
+            observer.tail(directory, data, info, report)
+        observer.collector.drain.assert_not_called()
+        observer.collector.finish.assert_not_called()
+
+    def test_tail_target_budget_does_not_extend_observer_or_invent_eof(self):
+        observer, directory, data, info, report, _ = self.tail_report()
+        observer.deadline, observer.collector.deadline = 330.0, 325.0
+        with mock.patch.object(verify, "no_acl", return_value=True), mock.patch.object(verify.time, "monotonic", return_value=325.0), mock.patch.object(verify.time, "sleep") as sleep:
+            observer.tail(directory, data, info, report)
+        observer.collector.drain.assert_not_called()
+        observer.collector.finish.assert_called_once_with(observer.intervals, 330.0)
+        sleep.assert_not_called()
+        self.assertFalse(observer.os_collection["queryCompleted"])
+        self.assertEqual(observer.deadline, 330.0)
+
+    def test_tail_source_failure_stops_before_deadline_without_discarding_report(self):
+        observer, directory, data, info, report, file = self.tail_report()
+        observer.collector.failure = ("truncated", "raw-limit")
+        observer.collector.finish.return_value = ([], verify.collection_state("truncated", "raw-limit"))
+        with mock.patch.object(verify, "no_acl", return_value=True), mock.patch.object(verify.time, "sleep") as sleep:
+            observer.tail(directory, data, info, report)
+        observer.collector.drain.assert_not_called()
+        sleep.assert_not_called()
+        self.assertEqual(observer.os_collection["reason"], "raw-limit")
+        self.assertFalse(observer.os_collection["queryCompleted"])
+        self.assertEqual(file.read_bytes(), data)
 
     def test_existing_ack_is_not_overwritten(self):
         observer = self.observer()
@@ -1315,6 +1416,7 @@ class OSCollectionTests(IsolatedTest):
         process.poll.return_value = code
         process.wait.return_value = code
         collector.process = process
+        collector.lifecycle_complete = True  # Model completed Mainpost checks.
         collector.selector.close()
         collector.selector = mock.Mock()
         collector.selector.get_map.return_value = {}
@@ -1489,6 +1591,7 @@ class OSCollectionTests(IsolatedTest):
         collector = self.collector()
         process = self.ended_process(collector, None)
         collector.deadline = time.monotonic() - 1
+        collector.observer_deadline = collector.deadline
         process.wait.side_effect = subprocess.TimeoutExpired("owned", 0.1)
         _, state = collector.finish({})
         self.assertEqual((state["status"], state["reason"]), ("timed-out", "collector-reap-timeout"))
@@ -1522,6 +1625,79 @@ class OSCollectionTests(IsolatedTest):
         self.assertFalse(state["queryCompleted"])
         self.assertTrue(all(call.kwargs["timeout"] == 0 for call in process.wait.call_args_list))
 
+    def test_early_eof_before_mainpost_never_becomes_complete(self):
+        collector = self.collector()
+        self.ended_process(collector)
+        collector.lifecycle_complete = False
+        collector.drain()
+        collector.lifecycle_complete = True
+        _, state = collector.finish({})
+        self.assertEqual((state["status"], state["reason"]), ("invalid", "collector-early-eof"))
+        self.assertFalse(state["queryCompleted"] or state["scopeVerified"])
+
+    def test_single_pipe_early_eof_is_incomplete_even_while_process_is_alive(self):
+        collector = self.collector()
+        process = self.ended_process(collector, None)
+        collector.lifecycle_complete = False
+        output = mock.Mock(fileobj=process.stdout, data=True)
+        collector.selector.select.return_value = [(output, 1)]
+        collector.selector.get_map.return_value = {2: "stderr"}
+        with mock.patch.object(verify.os, "read", return_value=b""):
+            collector.drain()
+        self.assertEqual(collector.failure, ("invalid", "collector-early-eof"))
+        collector.selector.select.return_value = []
+        process.poll.return_value = 0
+        process.wait.return_value = 0
+        self.assertFalse(collector.finish({})[1]["queryCompleted"])
+
+    def test_eof_observed_before_target_can_finalize_in_existing_reserve(self):
+        collector = self.collector()
+        self.ended_process(collector)
+        collector.deadline, collector.observer_deadline = 325.0, 330.0
+        with mock.patch.object(verify.time, "monotonic", return_value=324.9):
+            collector.drain()
+        self.assertTrue(collector.eof_observed)
+        with mock.patch.object(verify.time, "monotonic", return_value=325.1):
+            _, state = collector.finish({})
+        self.assertTrue(state["queryCompleted"])
+        self.assertFalse(state["scopeVerified"])
+
+    def test_exit_and_pipe_eof_first_observed_after_target_is_not_completion(self):
+        collector = self.collector()
+        self.ended_process(collector)
+        collector.deadline, collector.observer_deadline = 325.0, 330.0
+        with mock.patch.object(verify.time, "monotonic", return_value=325.1):
+            _, state = collector.finish({})
+        self.assertEqual(state["reason"], "collector-timeout")
+        self.assertFalse(state["queryCompleted"])
+
+    def test_one_pipe_missing_and_nonzero_exit_never_complete(self):
+        for code, pipes, reason in ((0, {2: "stderr"}, "parser-partial-eof"), (3, {}, "collector-nonzero-exit")):
+            with self.subTest(code=code):
+                collector = self.collector()
+                self.ended_process(collector, code)
+                collector.selector.get_map.return_value = pipes
+                _, state = collector.finish({})
+                self.assertEqual(state["reason"], reason)
+                self.assertFalse(state["queryCompleted"])
+
+    def test_timeout_rounding_reserve_and_insufficient_start_are_absolute(self):
+        for start, timeout in ((100.0, "225"), (100.4, "224"), (323.9, "1"), (324.1, None), (330.0, None)):
+            with self.subTest(start=start):
+                collector = self.collector()
+                collector.observer_deadline, collector.deadline = 330.0, 325.0
+                process = self.ended_process(collector)
+                collector.process = None
+                with mock.patch.object(verify.time, "monotonic", return_value=start), mock.patch.object(verify.os, "set_blocking"), mock.patch.object(verify.subprocess, "Popen", return_value=process) as launch:
+                    collector.start()
+                if timeout is None:
+                    launch.assert_not_called()
+                    self.assertEqual(collector.failure, ("timed-out", "collector-insufficient-budget"))
+                else:
+                    self.assertEqual(launch.call_args.args[0][5], timeout)
+                self.assertEqual(collector.observer_deadline, 330.0)
+                self.assertEqual(collector.deadline, 325.0)
+
     def test_empty_nonempty_nonzero_and_owned_cancel_are_distinct(self):
         for code, event, expected in ((0, False, "complete-empty"), (0, True, "complete-nonempty"), (1, False, "unavailable"),
                                       (None, False, "timed-out")):
@@ -1531,7 +1707,7 @@ class OSCollectionTests(IsolatedTest):
                     collector.feed(json.dumps(self.event(collector)).encode() + b"\n")
                 process = self.ended_process(collector, code)
                 if code is None:
-                    process.poll.side_effect = [None, 0]
+                    process.poll.side_effect = [None, None, 0]
                     process.wait.side_effect = [subprocess.TimeoutExpired("owned", 0.1), -9]
                 rows, state = collector.finish({})
                 self.assertEqual(state["status"], expected)

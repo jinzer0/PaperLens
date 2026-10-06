@@ -286,11 +286,58 @@
     "localEvidence": [".build/topology/arm64/os-collection-canonical-live.json", ".build/topology/arm64/os-collection-preservation-complete.json", ".build/topology/<arch>/os-collection-canonical-static.json"],
     "scope": "Approved current-account synthetic-only local prototype. Dirty runtime snapshot precedes this evidence update and local commit; refreshed commit-bound packages are not another dynamic run. Intel dynamic waived. No Story/product/clean-machine/Gatekeeper/distribution PASS or remote authorization. One parent receipt attempt failed before file creation due to confusing runtime projected manifest with packaging provenance; corrected complete receipt preserves all earlier reports. Synthetic-only public Foundation predicate formatter did not query OS records or prove sandbox behavior."
   },
+  "approvedNaturalEOFTailRetest": {
+    "date": "2026-10-06",
+    "scopeApproval": "832b1b903b2877259ebd8b79b992c6473dfd4d99",
+    "implementationApproval": "832b1b903b2877259ebd8b79b992c6473dfd4d99",
+    "approvalRecord": "https://github.com/jinzer0/PaperLens/issues/2#issuecomment-6014587172",
+    "sourceBaseCommitAtBuild": "832b1b903b2877259ebd8b79b992c6473dfd4d99",
+    "sourceDirtyAtBuild": true,
+    "sourceTreeHashAtBuild": "62913b848e9b54b7010e4ccbdc8a023df31c491a42ea51ce675a0feddf00889d",
+    "dependencyLockSHA256": "07c530b94aa48a8ff36b29f8438eb035b9027421c93ab3237e79297631d0bcf4",
+    "implementation": {
+      "release": "Mainpost signed actor/control/interval checks precede ACK; healthy collector is not finalized there. Native lifecycle and fences unchanged",
+      "budget": "Single observer230s deadline, collector target minus5s, positive integer floor timeout at actual start; insufficient budget fails closed; no fabricated EOF or deadline extension",
+      "tail": "Matching private report descriptor/inode/bytes and existing joins validated; symmetric ACK withdrawal and all four phases required before nonblocking two-pipe natural tail; report preserved throughout",
+      "completion": "Early EOF, source/partial/nonzero/limit/target failures are incomplete. Only observed normal exit0 plus both EOFs and full bounded framing completes; scopeVerified and clockVerified remain false",
+      "cleanup": "Frozen evidence and owned reap separated; only original observer reserve used; unconfirmed return reap reports timeout. Actor identity is Mainpost-bound, not EOF-lifetime proof"
+    },
+    "regressions": {
+      "pythonTopology": {"command": "python3.13 -I -B -m unittest discover -s Tests/Topology -p 'test_*.py'", "tests": 232, "failures": 0, "driver": "3.13.16"},
+      "coverage": ["alive collector at Mainpost without finalization", "withdrawal before report-bound delayed two-pipe EOF", "incomplete release and retained ACK timeout", "replaced or changed report preservation", "early EOF and partial/nonzero/limit failures", "positive timeout rounding, five-second reserve and absolute target", "observed EOF finalization versus frozen evidence and owned reap"],
+      "independentStaticReview": "CLEAR, no blocking findings; review is not runtime/coverage proof. Reviewer inadvertently ran read-only diff whitespace check despite no-gates instruction; no source changes or other gates",
+      "nativeScope": "Native sources/helpers/wire unchanged. Both full Release builds compile them; historical Swift tests not rerun",
+      "warningsRetained": "Mocked asyncio two-second slow-task diagnostic retained; no suppression",
+      "whitespace": "git diff --check pass; no project Python formatter configured"
+    },
+    "arm64": {"fullReleaseBuild": "pass", "insideOutDeveloperIDSigning": "pass", "staticInventory": "pass", "artifactHashAtRuntime": "80f4a08a2462879f1c7b921e98a0ad91a05c8e02d5c612e249d405e7b56d14ea", "numericPDFiumRegressionAndInitDestroy": "native_pass"},
+    "x86_64": {"fullReleaseCrossBuild": "pass", "insideOutDeveloperIDSigning": "pass", "staticInventory": "pass", "artifactHashAtStaticVerification": "feefe99c90a1232ea0f113ebf5ef9190b2991277c341488b3e2fc79ca8eff8ae", "numericRegressionCompileLink": "pass", "numericRegressionExecution": "blocked_cross_cpu", "actualIntelExecution": false, "dynamicScope": "explicitly waived, support unverified"},
+    "signedInvocation": {
+      "runID": "ab343779-f5f5-488c-b410-7de3a50aeaef",
+      "actualCPU": "arm64", "OSBuild": "25G241", "schemaRevision": "topology-evidence-v2",
+      "reportSHA256": "61d4040b4a62ce019fd58f8148b3da3f447866d95559d1edc75ccebea38e263e",
+      "matchingReportAndSymmetricRelease": "pass",
+      "providerSDKCLIInitialize": "pass", "PDFiumXPCInitDestroy": "pass", "readOnlyPDFDescriptorCapabilities": "pass, not sandbox attribution",
+      "liveSignedPrePostActors": 4, "independentPrePostControls": 31, "observedSyscallIntervals": 36,
+      "caseVerdicts": {"total": 39, "pass": 0, "failed": 0, "inconclusive": 38, "blocked": 1},
+      "osCollection": {"status": "timed-out", "queryCompleted": false, "scopeVerified": false, "truncated": false, "reason": "collector-timeout"},
+      "collectionInterpretation": "ACK/report-bound natural tail executed, but normal exit plus both EOFs were not observed before the collector target. Owned collector stopped at the bounded target; not trusted empty, coverage or negative-denial absence. This trial does not diagnose why public CLI EOF missed the target",
+      "parentInvocationElapsedSeconds": 229.712,
+      "elapsedMeaning": "Parent monotonic duration includes static inspection/setup/cleanup, not authenticated event time or exact observer duration",
+      "safeDenialCandidates": 0,
+      "manualObservations": {"actors": 4, "fdaStatus": "unknown", "prompt": "unknown", "coverage": "unknown", "grantChange": "unknown", "humanReceiptsSupplied": false},
+      "OSDenialClockAndEffectiveTCC": "unverified", "verifierExit": 2, "aggregateVerdict": "blocked"
+    },
+    "preservation": {"historicalReports": 8, "allSameInodeBytesAndMode": true, "historicalReportsRelocated": false, "newReportRetained": true, "readyACKFilesAbsent": true, "priorGeneratedOutputsPreserved": 18, "permissionsTCCFDAACLChanged": false},
+    "preparationFailure": "Initial build stopped on roll_evidence_inputs_changed after approval metadata changed the lock hash. Preserved both prior roll directories/receipts, then rebuilt successfully; no receipt bypass or overwriting",
+    "localEvidence": [".build/topology/arm64/natural-eof-live.json", ".build/topology/arm64/natural-eof-preservation-complete.json", ".build/topology/<arch>/natural-eof-reviewed-static.json"],
+    "scope": "Approved local current-account synthetic-only prototype. Dirty runtime snapshot precedes this evidence update and local commit; later commit-bound packages are static-only, not another dynamic trial. Historical named evidence unchanged. Story/product/clean-machine/Gatekeeper/distribution blocked; no remote execution authorization"
+  },
   "notPerformed": ["actual sandbox negative-access attribution", "physical Intel execution", "notarization", "stapling including validation", "Gatekeeper assessment", "remote CI", "artifact upload", "public distribution"],
   "fixture": {"profile": "current-user", "dedicatedAccountConfigured": false, "dedicatedProfileActive": false, "permissionsChanged": false, "syntheticControlsObserved": true},
   "actualTwoCPU": false,
   "storyStatus": "blocked",
   "aggregateVerdict": "blocked",
   "productGates": {"P-1": "unproven", "P-2": "unproven", "P-3": "unproven", "P-4": "unproven", "P-5": "unproven", "P-6": "unproven"},
-  "limitations": ["Named earlier attempts are historical; latest signed collector, initialization, live actor/control and preserved-report trial is approvedOSCollectionAndManualObservationRetest", "Unit, preparation, cross-build and static signing alone are not signed runtime or two-CPU proof", "Each artifact/runtime hash belongs to its recorded source snapshot; the dirty trial precedes this evidence update and final commit-bound packaging", "27 historical deny candidates are not current-run proof; current isolation has38 inconclusive and1 blocked, with incomplete OS collection, no authenticated denial-clock or current effective TCC/prompt-absence proof", "The fixed historical and prior live reports stay at original inode/path/bytes; new exclusively reserved Reports/runID/report.json permits fresh runs without adopting or replacing old evidence", "Normal prototype GUI content remains separately bound to cd102dc; no claim that historical zero-window cause or clean-machine/Gatekeeper GUI evidence is resolved", "Intel dynamic is waived, not passed or product support proof", "Material scope/architecture/recipe changes still require exact-SHA reapproval; current approved local prototype does not authorize remote operations"]
+  "limitations": ["Named earlier attempts are historical; latest signed collector, initialization, live actor/control and preserved-report trial is approvedNaturalEOFTailRetest", "Unit, preparation, cross-build and static signing alone are not signed runtime or two-CPU proof", "Each artifact/runtime hash belongs to its recorded source snapshot; the dirty trial precedes this evidence update and final commit-bound packaging", "27 historical deny candidates are not current-run proof; current isolation has38 inconclusive and1 blocked, with incomplete OS collection, no authenticated denial-clock or current effective TCC/prompt-absence proof", "The fixed historical and prior live reports stay at original inode/path/bytes; new exclusively reserved Reports/runID/report.json permits fresh runs without adopting or replacing old evidence", "Normal prototype GUI content remains separately bound to cd102dc; no claim that historical zero-window cause or clean-machine/Gatekeeper GUI evidence is resolved", "Intel dynamic is waived, not passed or product support proof", "Material scope/architecture/recipe changes still require exact-SHA reapproval; current approved local prototype does not authorize remote operations"]
 }
