@@ -24,6 +24,7 @@ sys.path.insert(0, str(SCRIPTS))
 import acquire
 import verify
 import diagnose_eof
+import control_log_timeout as log_control
 import package as packaging
 
 
@@ -2501,6 +2502,391 @@ class EOFDiagnosticTests(IsolatedTest):
         self.assertNotIn("/Users/", output.getvalue())
         self.assertNotIn("PID", output.getvalue())
         save.assert_not_called()
+
+
+class LogTimeoutControlTests(IsolatedTest):
+    control_id = "01234567-89ab-4cde-8fab-0123456789ab"
+
+    class Clock:
+        now = 0.0
+
+        def monotonic(self):
+            return self.now
+
+        def sleep(self, duration):
+            self.now += duration
+
+    class Pipe:
+        def __init__(self, fd):
+            self.fd = fd
+            self.closed = False
+
+        def fileno(self):
+            return self.fd
+
+        def close(self):
+            self.closed = True
+
+    class Process:
+        def __init__(self, clock, finish=0, status=0, reap=True):
+            self.clock = clock
+            self.finish = finish
+            self.status = status
+            self.reap = reap
+            self.stdout = LogTimeoutControlTests.Pipe(10)
+            self.stderr = LogTimeoutControlTests.Pipe(11)
+            self.calls = []
+
+        def poll(self):
+            return self.status if self.clock.now >= self.finish else None
+
+        def terminate(self):
+            self.calls.append("terminate")
+
+        def kill(self):
+            self.calls.append("kill")
+
+        def wait(self, timeout):
+            self.calls.append(timeout)
+            if not self.reap or self.calls.count("kill") == 0:
+                self.clock.sleep(timeout)
+                raise subprocess.TimeoutExpired("private command", timeout)
+            self.status = -9
+            self.finish = self.clock.now
+            return self.status
+
+    class Selector:
+        def __init__(self):
+            self.entries = {}
+
+        def register(self, pipe, event, flag):
+            self.entries[pipe.fd] = mock.Mock(fd=pipe.fd, fileobj=pipe, data=flag)
+
+        def unregister(self, pipe):
+            del self.entries[pipe.fd]
+
+        def select(self, timeout):
+            return [(key, 1) for key in self.entries.values()]
+
+        def close(self):
+            pass
+
+    def scenario(self, plans, startup=0, read_error=False, late_read=False, hold_eof=False):
+        clock = self.Clock()
+        launches, processes, reads = [], [], []
+        chunks = {}
+
+        def popen(argv, **kwargs):
+            launches.append((argv, kwargs))
+            plan = plans[len(launches) - 1]
+            clock.sleep(startup)
+            if isinstance(plan, Exception):
+                raise plan
+            process = self.Process(clock, clock.now + plan.get("duration", 0),
+                                   plan.get("status", 0), plan.get("reap", True))
+            processes.append(process)
+            chunks.clear()
+            chunks.update({10: list(plan.get("stdout", [b""])), 11: list(plan.get("stderr", [b""]))})
+            return process
+
+        def read(fd, maximum):
+            reads.append((fd, maximum))
+            if read_error:
+                raise OSError("private path/PID")
+            if late_read:
+                clock.now = 12
+            if (hold_eof or processes[-1].poll() is None) and not chunks[fd]:
+                raise BlockingIOError()
+            if chunks[fd]:
+                chunk = chunks[fd].pop(0)
+                if len(chunk) > maximum:
+                    chunks[fd].insert(0, chunk[maximum:])
+                    chunk = chunk[:maximum]
+                return chunk
+            return b""
+
+        stack = contextlib.ExitStack()
+        self.addCleanup(stack.close)
+        for target, name, value in (
+            (log_control.time, "monotonic", clock.monotonic),
+            (log_control.time, "sleep", clock.sleep),
+            (log_control.subprocess, "Popen", popen),
+            (log_control.selectors, "DefaultSelector", self.Selector),
+            (log_control.os, "set_blocking", lambda *args: None),
+            (log_control.os, "read", read),
+            (log_control, "_preflight", lambda deadline: ("a" * 40, "25A123")),
+        ):
+            stack.enter_context(mock.patch.object(target, name, value))
+        return clock, launches, processes, reads
+
+    def test_normal_two_launches_exact_argv_and_early_exit_are_observations(self):
+        banner = b'Filtering the log data using "processIdentifier = 1 && (processIdentifier == 0)"\n\n'
+        clock, launches, processes, reads = self.scenario([
+            {"duration": 2, "stdout": [banner]}, {"duration": 60}])
+        receipt = log_control.run()
+        self.assertEqual(len(launches), 2)
+        for (name, argument, _), (argv, kwargs) in zip(log_control.CASES, launches):
+            self.assertEqual(argv, ["/usr/bin/log", "stream", "--style", "ndjson", "--timeout",
+                                    argument, "--predicate", log_control.PREDICATE])
+            self.assertEqual(kwargs["stdin"], subprocess.DEVNULL)
+            self.assertEqual(kwargs["stdout"], subprocess.PIPE)
+            self.assertEqual(kwargs["stderr"], subprocess.PIPE)
+            self.assertEqual(kwargs["env"], acquire.clean_env())
+            self.assertEqual(receipt["cases"][name]["status"], "normal-exit")
+            self.assertEqual(processes[0].calls, [])
+        self.assertEqual(receipt["cases"]["integer-two"]["elapsedBand"], "under-5s")
+        self.assertEqual(receipt["cases"]["minute-one"]["elapsedBand"], "12-to-under-75s")
+        self.assertTrue(receipt["budgetWithinLimit"])
+        self.assertTrue(all(maximum <= 8192 for _, maximum in reads))
+
+    def test_start_failure_and_bad_output_prevent_second_launch(self):
+        plans = [OSError("/Users/private"), {"status": 1}, {"stderr": [b"private error"]},
+                 {"stdout": [b'{}\n']}, {"stdout": [b"partial", b""]},
+                 {"stdout": [b'Filtering the log data using "processIdentifier == 0"\n']},
+                 {"stdout": [b'Filtering the log data using "' + log_control.PREDICATE.encode() + b'"\n'] * 2}]
+        expected = ["start-failed", "source-error", "source-error", "invalid-output", "invalid-output",
+                    "invalid-output", "invalid-output"]
+        for plan, status in zip(plans, expected):
+            with self.subTest(status=status, plan=plan):
+                self.scenario([plan])
+                receipt = log_control.run()
+                self.assertEqual(receipt["cases"]["integer-two"]["status"], status)
+                self.assertEqual(receipt["cases"]["minute-one"], log_control.not_run("1m"))
+                self.assertNotIn("private", json.dumps(receipt))
+
+    def test_nonzero_at_target_or_after_startup_prevents_second_launch(self):
+        for startup, duration in ((13, 0), (0, 12)):
+            with self.subTest(startup=startup, duration=duration):
+                clock, launches, processes, reads = self.scenario([
+                    {"status": 1, "duration": duration, "stdout": [], "stderr": []}], startup=startup)
+                receipt = log_control.run()
+                row = receipt["cases"]["integer-two"]
+                self.assertEqual(row["processAtTarget"], "exit-nonzero")
+                self.assertEqual(row["status"], "source-error")
+                self.assertTrue(row["reaped"])
+                self.assertFalse(row["stopRequested"])
+                self.assertEqual(receipt["cases"]["minute-one"], log_control.not_run("1m"))
+                self.assertEqual(len(launches), 1)
+
+    def test_timeout_reap_allows_only_second_planned_launch_without_fake_eof(self):
+        clock, launches, processes, reads = self.scenario([
+            {"duration": 1000, "stdout": [], "stderr": []}, {}])
+        receipt = log_control.run()
+        row = receipt["cases"]["integer-two"]
+        self.assertEqual(row["status"], "forced-timeout")
+        self.assertEqual(row["processAtTarget"], "running")
+        self.assertFalse(row["stdoutEOF"])
+        self.assertFalse(row["stderrEOF"])
+        self.assertTrue(row["stopRequested"])
+        self.assertTrue(row["reaped"])
+        self.assertEqual(processes[0].calls[0], "terminate")
+        self.assertIn("kill", processes[0].calls)
+        self.assertTrue(processes[0].stdout.closed)
+        self.assertEqual(len(launches), 2)
+        self.assertLessEqual(sum(value for value in processes[0].calls if type(value) is float), 0.3)
+
+    def test_unconfirmed_reap_prevents_second_case(self):
+        clock, launches, processes, reads = self.scenario([
+            {"duration": 1000, "stdout": [], "stderr": [], "reap": False}])
+        receipt = log_control.run()
+        self.assertEqual(receipt["cases"]["integer-two"]["status"], "reap-timeout")
+        self.assertFalse(receipt["cases"]["integer-two"]["reaped"])
+        self.assertEqual(len(launches), 1)
+
+    def test_exit_zero_and_close_do_not_substitute_for_readzero(self):
+        clock, launches, processes, reads = self.scenario([
+            {"stdout": [], "stderr": []}, {"stdout": [], "stderr": []}], hold_eof=True)
+        receipt = log_control.run()
+        for name, _, _ in log_control.CASES:
+            row = receipt["cases"][name]
+            self.assertEqual(row["status"], "forced-timeout")
+            self.assertEqual(row["processAtTarget"], "exit-zero")
+            self.assertFalse(row["stdoutEOF"])
+            self.assertFalse(row["stderrEOF"])
+            self.assertFalse(row["stopRequested"])
+            self.assertTrue(row["reaped"])
+        self.assertTrue(all(process.stdout.closed and process.stderr.closed for process in processes))
+        self.assertEqual(len(launches), 2)
+
+    def test_minute_case_has_75_second_cap_instead_of_batch_deadline(self):
+        clock, launches, processes, reads = self.scenario([
+            {}, {"duration": 1000, "stdout": [], "stderr": []}])
+        receipt = log_control.run()
+        row = receipt["cases"]["minute-one"]
+        self.assertEqual(row["status"], "forced-timeout")
+        self.assertEqual(row["elapsedBand"], "75s-or-more")
+        self.assertEqual(row["processAtTarget"], "running")
+        self.assertGreaterEqual(clock.now, 75)
+        self.assertLessEqual(clock.now, 75.3)
+        self.assertEqual(len(launches), 2)
+
+    def test_partial_frame_at_target_is_error_and_does_not_allow_second_case(self):
+        clock, launches, processes, reads = self.scenario([
+            {"duration": 1000, "stdout": [b"partial"], "stderr": []}])
+        receipt = log_control.run()
+        self.assertEqual(receipt["cases"]["integer-two"]["status"], "invalid-output")
+        self.assertFalse(receipt["cases"]["integer-two"]["framingComplete"])
+        self.assertEqual(receipt["cases"]["minute-one"]["status"], "not-run")
+        self.assertEqual(len(launches), 1)
+
+    def test_startup_counts_toward_target_and_batch_overrun_is_not_hidden(self):
+        clock, launches, processes, reads = self.scenario([{}, {}], startup=13)
+        receipt = log_control.run()
+        self.assertEqual(receipt["cases"]["integer-two"]["status"], "forced-timeout")
+        self.assertEqual(receipt["cases"]["integer-two"]["processAtTarget"], "exit-zero")
+        self.assertFalse(receipt["cases"]["integer-two"]["stdoutEOF"])
+        self.assertEqual(receipt["cases"]["minute-one"]["status"], "normal-exit")
+        self.scenario([{}], startup=101)
+        receipt = log_control.run()
+        self.assertFalse(receipt["budgetWithinLimit"])
+        self.assertEqual(receipt["cases"]["minute-one"]["status"], "not-run")
+
+    def test_insufficient_case_budget_never_spawns_and_targets_do_not_grow(self):
+        clock, launches, processes, reads = self.scenario([{}])
+        row, count = log_control._case("1m", 75, 75, 0)
+        self.assertEqual(row, log_control.not_run("1m"))
+        self.assertEqual(launches, [])
+        clock.now = 25
+        row, count = log_control._case("1m", 75, 100, 0)
+        self.assertEqual(row, log_control.not_run("1m"))
+
+    def test_readzero_at_target_is_not_normal_and_io_errors_are_safe(self):
+        self.scenario([{}, {}], late_read=True)
+        receipt = log_control.run()
+        row = receipt["cases"]["integer-two"]
+        self.assertEqual(row["status"], "forced-timeout")
+        self.assertFalse(row["stdoutEOF"])
+        self.scenario([{}], read_error=True)
+        receipt = log_control.run()
+        self.assertEqual(receipt["cases"]["integer-two"]["status"], "source-error")
+        self.assertEqual(receipt["cases"]["minute-one"]["status"], "not-run")
+
+    def test_record_and_batch_caps_fail_closed(self):
+        self.scenario([{"stdout": [b" " * (16384 + 1)]}])
+        receipt = log_control.run()
+        self.assertEqual(receipt["cases"]["integer-two"]["status"], "output-limit")
+        self.scenario([{"stdout": [b"\n" * log_control.MAXIMUM]}, {"stdout": [b"\n"]}])
+        receipt = log_control.run()
+        self.assertEqual(receipt["cases"]["integer-two"]["status"], "normal-exit")
+        self.assertEqual(receipt["cases"]["minute-one"]["status"], "output-limit")
+
+    def test_elapsed_band_edges(self):
+        for duration, band in ((None, "unknown"), (-1, "unknown"), (0, "under-5s"),
+                               (4.999, "under-5s"), (5, "5-to-under-12s"),
+                               (11.999, "5-to-under-12s"), (12, "12-to-under-75s"),
+                               (74.999, "12-to-under-75s"), (75, "75s-or-more")):
+            self.assertEqual(log_control.elapsed_band(duration), band)
+
+    def test_pinned_runtime_and_native_preflight_reject_fallback(self):
+        runtime = self.root / ".build/topology/arm64/runtime.pre-bounded-roll/python/bin/python3.13"
+        runtime.parent.mkdir(parents=True)
+        runtime.write_bytes(b"offline runtime identity")
+        with mock.patch.object(verify, "ROOT", self.root), mock.patch.object(log_control.sys, "executable", str(runtime)), mock.patch.object(log_control.sys, "version_info", (3, 13, 16)), mock.patch.object(log_control.sys, "platform", "darwin"), mock.patch.object(log_control.platform, "machine", return_value="arm64"):
+            with mock.patch.object(log_control, "_query", side_effect=["0", "a" * 40, "25A123"]) as query:
+                self.assertEqual(log_control._preflight(100), ("a" * 40, "25A123"))
+                self.assertEqual([call.args[0] for call in query.call_args_list], [
+                    ["/usr/sbin/sysctl", "-in", "sysctl.proc_translated"],
+                    ["/usr/bin/git", "rev-parse", "HEAD"], ["/usr/bin/sw_vers", "-buildVersion"]])
+            with mock.patch.object(log_control, "_query", return_value="1"):
+                with self.assertRaises(acquire.Failure):
+                    log_control._preflight(100)
+            for version in ((3, 13, 15), (3, 14, 0)):
+                with mock.patch.object(log_control.sys, "version_info", version), mock.patch.object(log_control, "_query") as query:
+                    with self.assertRaises(acquire.Failure):
+                        log_control._preflight(100)
+                    query.assert_not_called()
+            with mock.patch.object(log_control.sys, "executable", sys.executable + ".missing"), mock.patch.object(log_control, "_query") as query:
+                with self.assertRaises((acquire.Failure, OSError)):
+                    log_control._preflight(100)
+                query.assert_not_called()
+            with mock.patch.object(log_control.platform, "machine", return_value="x86_64"), mock.patch.object(log_control, "_query") as query:
+                with self.assertRaises(acquire.Failure):
+                    log_control._preflight(100)
+                query.assert_not_called()
+
+    def test_preflight_query_timeout_and_raw_errors_are_not_adopted(self):
+        with mock.patch.object(log_control.time, "monotonic", return_value=99), mock.patch.object(log_control.subprocess, "run", return_value=mock.Mock(returncode=0, stdout=b"25A123\n", stderr=b"")) as run:
+            self.assertEqual(log_control._query(["/usr/bin/sw_vers", "-buildVersion"], 100), "25A123")
+            self.assertEqual(run.call_args.kwargs["timeout"], 1)
+        for result in (mock.Mock(returncode=1, stdout=b"", stderr=b"private"),
+                       mock.Mock(returncode=0, stdout=b"x" * 257, stderr=b""),
+                       mock.Mock(returncode=0, stdout=b"25A123", stderr=b"private")):
+            with mock.patch.object(log_control.time, "monotonic", return_value=0), mock.patch.object(log_control.subprocess, "run", return_value=result):
+                with self.assertRaises(acquire.Failure):
+                    log_control._query(["/usr/bin/sw_vers", "-buildVersion"], 100)
+        with mock.patch.object(log_control.time, "monotonic", return_value=100), mock.patch.object(log_control.subprocess, "run") as run:
+            with self.assertRaises(acquire.Failure):
+                log_control._query(["/usr/bin/sw_vers", "-buildVersion"], 100)
+            run.assert_not_called()
+
+    def test_preflight_failure_is_fixed_safe_error_without_log_launch(self):
+        with mock.patch.object(log_control, "_preflight", side_effect=OSError("/Users/private PID")), mock.patch.object(log_control.subprocess, "Popen") as popen:
+            with self.assertRaisesRegex(acquire.Failure, "^control_preflight_failed$"):
+                log_control.run()
+            popen.assert_not_called()
+
+    def receipt(self):
+        return {"controlID": self.control_id, "sourceCommit": "a" * 40, "OSBuild": "25A123",
+                "budgetWithinLimit": True, "cases": {name: log_control.not_run(argument)
+                                                      for name, argument, _ in log_control.CASES}}
+
+    def test_safe_schema_rejects_extra_keys_wrong_joins_and_types(self):
+        mutations = [lambda r: r.update(raw="private"),
+                     lambda r: r.update(OSBuild="/Users/private"),
+                     lambda r: r.update(sourceCommit="a" * 39),
+                     lambda r: r.update(budgetWithinLimit=1),
+                     lambda r: r["cases"]["integer-two"].update(timeoutArgument="1m"),
+                     lambda r: r["cases"]["integer-two"].update(stdoutEOF=False),
+                     lambda r: r["cases"]["integer-two"].update(raw="private"),
+                     lambda r: r["cases"]["integer-two"].update(status="normal-exit")]
+        for mutate in mutations:
+            receipt = self.receipt()
+            mutate(receipt)
+            with self.assertRaises((acquire.Failure, ValueError)):
+                log_control.validate_receipt(receipt)
+
+    def test_exclusive_private_write_and_file_symlink_collisions_preserve(self):
+        root = self.root / ".build/topology/arm64"
+        root.mkdir(parents=True)
+        receipt = self.receipt()
+        destination = root / ("log-timeout-control-" + self.control_id + ".json")
+        with mock.patch.object(verify, "ROOT", self.root):
+            log_control.save(receipt)
+            before = destination.stat()
+            data = destination.read_bytes()
+            self.assertEqual(json.loads(data), receipt)
+            self.assertEqual(stat.S_IMODE(before.st_mode), 0o600)
+            with self.assertRaises(FileExistsError):
+                log_control.save(receipt)
+            self.assertEqual(destination.read_bytes(), data)
+            self.assertEqual(destination.stat().st_ino, before.st_ino)
+            other = self.receipt()
+            other["controlID"] = "11234567-89ab-4cde-8fab-0123456789ab"
+            link = root / ("log-timeout-control-" + other["controlID"] + ".json")
+            link.symlink_to(destination)
+            with self.assertRaises(OSError):
+                log_control.save(other)
+            self.assertTrue(link.is_symlink())
+            self.assertEqual(destination.read_bytes(), data)
+
+    def test_cli_emits_only_safe_receipt_or_fixed_error_and_never_retries(self):
+        output, errors = io.StringIO(), io.StringIO()
+        with mock.patch.object(log_control, "run", return_value=self.receipt()) as run, mock.patch.object(log_control, "save") as save:
+            with contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+                self.assertEqual(log_control.main([]), 0)
+            self.assertEqual(json.loads(output.getvalue()), self.receipt())
+            run.assert_called_once_with()
+            save.assert_called_once_with(self.receipt())
+        output, errors = io.StringIO(), io.StringIO()
+        with mock.patch.object(log_control, "run", side_effect=RuntimeError("/Users/private PID")) as run:
+            with contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+                self.assertEqual(log_control.main([]), 2)
+            self.assertEqual(output.getvalue(), "")
+            self.assertEqual(errors.getvalue(), "Log timeout control failed; no raw output emitted.\n")
+            run.assert_called_once_with()
+        with mock.patch.object(log_control, "run") as run, contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(log_control.main(["--predicate", "private"]), 2)
+            run.assert_not_called()
 
 
 if __name__ == "__main__":

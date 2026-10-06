@@ -387,6 +387,37 @@
     "localEvidence": [".build/topology/arm64/eof-diagnostic-91e55823-a4ea-494e-9546-704ebaeb5691.json", ".build/topology/arm64/eof-evidence-91e55823-a4ea-494e-9546-704ebaeb5691.json", ".build/topology/arm64/eof-parent-evidence-91e55823-a4ea-494e-9546-704ebaeb5691.json", ".build/topology/<arch>/eof-diagnostic-reviewed-static.json"],
     "scope": "Approved diagnostic-only local current-account synthetic prototype. Observation overhead does not establish causal timing or coverage; no delay offset, target extension, extra stream/trial or collector behavior change. Historical named evidence preserved. Story/product/clean-machine/Gatekeeper/distribution blocked; no push/PR/remote authorization"
   },
+  "approvedLogTimeoutControlBatch": {
+    "date": "2026-10-06",
+    "scopeApproval": "bad787af81e654588cb814d36a4533cea8b86a52",
+    "implementationApproval": "bad787af81e654588cb814d36a4533cea8b86a52",
+    "approvalRecord": "https://github.com/jinzer0/PaperLens/issues/2#issuecomment-6016627567",
+    "sourceCommitAtRuntime": "bad787af81e654588cb814d36a4533cea8b86a52",
+    "sourceDirtyAtRuntime": true,
+    "scriptSHA256AtRuntime": "98cf8c55723923d62be06754aaf21631ac8859da5feec1c5accf89c2ea81a30a",
+    "implementation": "Diagnostic-only scripts/topology/control_log_timeout.py; fixed contradictory filter selecting no event, planned timeout2/1m cases, startup-inclusive12s/75s targets and100s batch cap; bounded RAM/header/framing/EOF, owned stop/reap<=300ms and exact exclusive safe receipt. Verifier/app/diagnose_eof/native/locks/approval metadata unchanged",
+    "regressions": {
+      "pythonTopology": {"command": "python3.13 -I -B -m unittest discover -s Tests/Topology -p 'test_*.py'", "tests": 271, "failures": 0, "driver": "3.13.16"},
+      "coverage": ["two fixed argv/launch bounds", "inclusive startup and case/batch/reserve caps", "normal/partial/nonzero/limits/read-zero versus close", "allocated cumulative reap wait<=300ms without float tolerance", "nonzero startup crossing and exact-target failure prevents second launch", "failure/not-run, buckets, exact safe schema, pinned native runtime and exclusive collisions"],
+      "initialFailure": "A fake-clock allocated wait sum exceeded0.3 by floating rounding. Source now enforces cumulative allocation as well as absolute end; test tolerance was not weakened",
+      "independentStaticReview": "Target-first nonzero exit misclassification repaired with startup/exact-target regressions; rereview CLEAR, no reviewer gates/live activity",
+      "whitespace": "git diff --check pass; no configured project Python formatter",
+      "warningsRetained": "Mocked asyncio two-second slow-task diagnostic preserved, no suppression"
+    },
+    "controlReceipt": {
+      "controlID": "2427cb88-491c-4665-b04e-b621422fce2d",
+      "sourceCommit": "bad787af81e654588cb814d36a4533cea8b86a52", "OSBuild": "25G241", "budgetWithinLimit": true,
+      "cases": {
+        "integer-two": {"timeoutArgument": "2", "status": "invalid-output", "processAtTarget": "not-observed", "stdoutEOF": false, "stderrEOF": false, "framingComplete": false, "stopRequested": false, "reaped": true, "elapsedBand": "unknown"},
+        "minute-one": {"timeoutArgument": "1m", "status": "not-run", "processAtTarget": "not-observed", "stdoutEOF": null, "stderrEOF": null, "framingComplete": null, "stopRequested": null, "reaped": null, "elapsedBand": "unknown"}
+      }
+    },
+    "interpretation": "One approved batch attempted; first control rejected output as invalid and remaining planned case was not launched under the fail-closed contract. Child reaped without requested stop does not prove normal exit/framing/EOF. No timeout-scale comparison or timer-start conclusion is available. Exact unexpected input subtype is not recoverable from this safe receipt; no raw output was retained or retry performed",
+    "preservation": {"historicalReports": 10, "allSameInodeBytesAndMode": true, "historicalReportsMovedDeletedOrAdopted": false, "previousGeneratedOutputsReplaced": false, "permissionsTCCFDAACLChanged": false, "rawMetadataPersisted": false},
+    "notRepeated": "No additional controls, GUI/signed app trial, initialize, build/sign/package or Intel execution; prior signed/static artifacts remain historical rather than refreshed for this diagnostic-only source snapshot",
+    "localEvidence": [".build/topology/arm64/log-timeout-control-2427cb88-491c-4665-b04e-b621422fce2d.json", ".build/topology/arm64/log-timeout-control-preservation-2427cb88-491c-4665-b04e-b621422fce2d.json"],
+    "scope": "Approved local control driver/tests/evidence only. Runtime driver dirty snapshot is bound by actual script hash, not falsely to the baseline commit. Failed control does not change prior39cases38 inconclusive+1 blocked or OS clock/effective TCC/attribution. Story/product/clean-machine/Gatekeeper/distribution remain blocked; no remote authorization"
+  },
   "notPerformed": ["actual sandbox negative-access attribution", "physical Intel execution", "notarization", "stapling including validation", "Gatekeeper assessment", "remote CI", "artifact upload", "public distribution"],
   "fixture": {"profile": "current-user", "dedicatedAccountConfigured": false, "dedicatedProfileActive": false, "permissionsChanged": false, "syntheticControlsObserved": true},
   "actualTwoCPU": false,
