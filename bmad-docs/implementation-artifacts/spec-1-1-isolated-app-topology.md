@@ -1,5 +1,5 @@
 ---
-title: 'Story 1.1 — OS 거부 수집 상태와 시각·TCC 증거 보완 제안'
+title: 'Story 1.1 — ACK 이후 자연 EOF 수집 종료 제안'
 type: feature
 created: 2026-10-05
 status: draft
@@ -408,6 +408,27 @@ Manifest 필드는 `schemaRevision, sourceCommit, artifactHash, fixtureMapHash, 
 5. **안전한 최종 계약:** 기존 `topology-evidence-v2`의 required fields/opaque joins와 1MiB/256case 한계를 유지하면서 verifier-owned `osCollection`과 `manualObservations`의 closed typed 필드를 추가한다. `osCollection`은 `status`(complete-empty/complete-nonempty/unavailable/timed-out/truncated/invalid), `queryCompleted:boolean`, `scopeVerified:boolean`, `truncated:boolean`, `reason:closed-code`만 허용한다. `manualObservations`는 위 receipt의 closed enum·run/artifact/actor ref만 담는다. denial 참조는 기존 role/alias/operation/attributed/reason에 `producerVerified/targetVerified/clockVerified:boolean`, `caseAssociation`(unique/ambiguous/unverified)을 추가한다. raw timestamp/PID/birth/path/log, 실제 settings 목록, 사람 이름, 자유문은 없다. producer/target 검증과 clock/TCC 검증은 서로 대체하지 않는다. malformed/unknown/unbound evidence는 fail closed이며 옛 schema reader나 fabricated fallback은 만들지 않는다.
 6. **판정과 시간 경계:** 앞 절의 negative PASS 필요조건을 낮추지 않는다. 수집 성공·공식 violation 후보·수동 receipt만으로 PASS하지 않는다. 필요한 clock/effective TCC 통제 근거가 공개·허용 범위에서 확보되지 않으면 최종 결과는 inconclusive/blocked이며39 PASS를 보장하지 않는다. RPC/SDK/network, Main10초/Worker2초 fence, 총 observer230초, 기존 cleanup deadline을 늘리지 않는다. 수집은 기존 관측 여유에서 준비/비동기 수행하고 phase 안에서 무거운 retrospective query로 actor를 오래 붙잡지 않는다. 수집 지연/권한 부족은 finite reason으로 남기며 다른 프로세스/port 강제 종료나 deadline 연장은 없다.
 7. **회귀와 승인 제외:** partial/multiline/oversize/unknown-producer, PID0 vs subject, timeout vs empty, clock domain/epoch/precision/sleep/discontinuity, 중첩 case/marker-read vs write, bind 실패 후 listen 미관측, manual receipt wrong run/artifact/actor/partial/unknown, raw metadata redaction 및 report 보존 회귀를 추가한다. 새 SHA 승인 후에만 verifier/필요한 invocation-local helper/테스트와 승인 SHA metadata를 구현하고 양 CPU build/sign/static 및 새 UUID의 synthetic arm64 실행을 검증한다. native wire1.1·pins·architecture·권한·initialize-only·Intel 면제는 그대로다. Story/product/Gatekeeper/clean-machine/배포·push/PR/CI/notary/upload 승인은 포함하지 않는다.
+
+### 후속 제안: ACK 이후 자연 EOF와 관측 종료의 분리
+
+**승인 경계:** OS 수집/수동 관측 계약은 `7fbc78d813151d485000719c469926188cc27421`의 명시적 SCOPE+IMPLEMENTATION 승인(Issue2#6012757196)으로 구현했고 `184afb0d53605741d61238950b0c9c988fdb9d21`에 로컬 커밋했다. 위 절의 미승인 표현은 당시의 역사적 상태다. 사용자의 이번 “진행해”는 정상 EOF 가능성 조사·명세 작성에 대한 지시다. **이 절은 새 미승인 변경 계약**이며 새 immutable SHA에 대한 SCOPE+IMPLEMENTATION 재승인 전에는 source·실행·report를 바꾸지 않는다.
+
+#### 실제 차단과 선택 근거
+
+- 최종 run `3eeec5dd-b9b8-4de7-84ec-4184c7875832`는 actor4/control31 pre/post와 initialize/read-only fd capability를 검증했지만, Mainpost에서 아직 살아 있는 collector를 종료하여 `timed-out/collector-stop-before-eof`, queryCompleted=false였다. 후보0을 정상 empty나 OS 거부 부재로 해석하지 않았다. 격리38 inconclusive+1 blocked와 기존 보고서는 그대로다.
+- 현재 `ReadinessObserver.poll()`은 Mainpost 통제·signed actor 재검증 직후 ACK 전에 `OSCollector.finish()`를 호출한다. 반면 stream의 `--timeout`은 전체 observer의 남은 시간이다. 정상적인 짧은 probe 실행에서 Mainpost가 먼저 도달하므로, 자연 EOF를 기다리지 않는 한 중단이 정상 경로에서도 구조적으로 발생한다.
+- 이미 확인한 공개 `/usr/bin/log help stream`은 `--timeout <num>[m|h|d]`로 stream을 유한 종료하는 인터페이스를 제공한다. 이는 실제 exit0/양 pipe EOF/coverage 보장이 아니며, SIGTERM/SIGINT 또는 kill을 정상 EOF로 재분류하는 근거도 아니다.
+- **선택:** 기존 stream을 유지하되 Mainpost ACK와 수집 finalization을 분리하고, ACK 소비·withdrawal 및 matching report 확인 후 기존 observer 시간 안에서 자연 종료를 기다린다. Main10초/Worker2초 fence 안에서 기다리지 않는다. 별도 retrospective `log show`, 새 OSLogStore 권한, clock calibration, native wire나 actor 생존 연장 계약은 추가하지 않는다. 빠른 실행도 수집 tail 때문에 수 분 걸릴 수 있으며 정상 완료 자체는 보장하지 않는다.
+
+#### 최소 구현 계약 — 승인 후에만 적용
+
+1. **하나의 절대 예산:** launch 이후 기존 monotonic observer deadline230초를 유지한다. collector는 첫 Mainpre ACK 전에 준비하고 종료 목표를 그 deadline보다5초 앞에 둔다. 실제 시작 시 `floor(remaining-5)`의 양의 초 단위 public CLI timeout을 사용하며 충분한 시간이 없으면 시작/완료 불가의 closed reason을 남긴다. CLI timeout의 rounding·지연으로 목표에 도달했다고 EOF를 만들어 넣지 않는다. 마지막5초는 기존 범위 안의 bounded drain/finalization/manual intake/owned cleanup 여유이며 전체 deadline을 늘리지 않는다.
+2. **Mainpost release:** 기존 마지막 signed generation/control 검사와 interval 확보를 먼저 완료하고 기존 inode/byte-bound Mainpost ACK를 제때 publish한다. 정상 경로에서 살아 있는 collector를 이 단계에서 terminate/kill/finalize하지 않는다. native는 자신의 ready를 제거하고 verifier는 자신의 ACK만 withdrawal한다. matching report와 symmetric withdrawal이 확인되기 전에는 수집 tail을 위해 handshake 또는 native cleanup을 건너뛰지 않는다. Worker2초 및 Main10초 fence, RPC/SDK/network deadline은 unchanged다.
+3. **자연 tail:** matching report의 private descriptor/bytes와 run/artifact/기존 opaque joins를 검사·보존한 상태에서 같은 invocation-owned stream의 두 pipe를 nonblocking RAM으로 계속 drain한다. 마지막 actor/control 검증은 기존 Mainpost 시점에 대한 증거이지 EOF까지 actor가 살아 있었다는 증거가 아니다. tail을 위해 XPC/SDK/fixture를 다시 시작하거나 종료한 owner·canary를 재생성하지 않는다. actor/fixture cleanup 뒤 도착한 event도 clock·case 귀속 검증 없이 negative PASS로 올리지 않는다.
+4. **완료와 범위 분리:** 정상 exit0, stdout/stderr EOF, 완전한 framing, producer/target/parser 조건 및1MiB/16KiB/256 한계 준수가 모두 확인된 경우에만 complete-empty/complete-nonempty 및 queryCompleted=true를 만든다. 첫 Mainpre release부터 마지막 Mainpost 검사까지 유지되지 않은 조기 EOF는 별도의 closed incomplete reason이며 정상 완료로 승격하지 않는다. 공개 CLI에는 인증된 subscription-ready/전체 coverage 계약이 없으므로 정상 EOF만으로 scopeVerified=true, event emission 완결, OS 거부 없음, clockVerified=true 또는 TCC 통과를 주장하지 않는다.
+5. **실패와 소유권:** source error, malformed/partial, oversize, 조기 종료, remaining budget 소진은 기존 closed status와 새 finite reason으로 구별한다. 목표 또는 전체 deadline 내 정상 EOF가 확인되지 않으면 owned collector만 terminate→kill→bounded reap하며 강제 종료는 queryCompleted=false다. evidence freeze와 pending reap ownership을 분리하여 ACK 이후·cleanup까지 남은 예산 내 재시도한다. verifier 반환까지 reap 미확인은 명시적 collector-reap-timeout 제한이지 정상 cleanup이나 반환 이후 소유권 유지 증거가 아니다. EOF 중 출력 한계 도달/비정상 exit/미완전 pipe도 성공으로 숨기지 않는다.
+6. **안전한 evidence-v2와 검증:** 기존 required fields, osCollection의 closed 필드/상태, manualObservations와 opaque actor/control/interval joins를 유지하고 necessary closed reason만 추가한다. native report는 기존 schema·독점 namespace 그대로이며 verifier는 tail finalization 후 최종 safe evidence를 만든다. raw PID/birth/timestamp/path/header/log는 RAM 외에 저장하지 않는다. 수동 receipt 미제공은 unknown, 관측 prompt는 기존 최종 blocked이며 effective TCC 부재로 바꾸지 않는다. 회귀는 조기 EOF, Mainpost 때 alive, ACK timeout/withdrawal, report 검증 후 delayed normal EOF, 양 pipe 불완전/비정상 exit, 자연 종료 전 byte limit,5초 여유/rounding/230초 절대 한계, EOF 후 frozen evidence·owned reap, matching report/과거 report 보존을 포함한다.
+7. **실행 경계:** 새 exact-SHA 승인 후 verifier/테스트/승인 SHA metadata만 구현하고 양 CPU build/sign/static 및 새 UUID의 synthetic signed arm64 실행에서 실제 자연 EOF 또는 정확한 실패를 기록한다. 기존 두 보고서와 모든 추가 보고서/충돌을 보존한다. 정상 EOF가 관측되지 않아도 실패를 정확히 기록하며39 PASS·Story/product 통과를 약속하지 않는다. 현재 계정 synthetic-only, Intel dynamic 면제, pins/architecture/권한/initialize-only 및 push/PR/CI/notary/stapler/spctl/upload/distribution 금지는 unchanged다.
 
 ### 승인된 toolchain 설치와 실제 실패 기록
 
