@@ -1,5 +1,5 @@
 ---
-title: 'Story 1.1 — 기존 증거 보존형 재시험 및 실행 중 거부 귀속 제안'
+title: 'Story 1.1 — OS 거부 수집 상태와 시각·TCC 증거 보완 제안'
 type: feature
 created: 2026-10-05
 status: draft
@@ -386,6 +386,28 @@ Manifest 필드는 `schemaRevision, sourceCommit, artifactHash, fixtureMapHash, 
 4. approvalCommit만 새 승인 SHA로 갱신하고 stack/GN/patch/ABI/권한 pins가 그대로임을 검증한다. 두 CPU complete build/inside-out 서명/static inventory 및 현재 provenance를 다시 검증한다.
 5. 현재 계정 native arm64·새 r에서만 명시적 consent로 실행한다. verifier의 report **관측 대기**는230초(기존 serial169초 envelope+새 identity 요청 두10초+두10초 phase fence+21초 관측 여유)로 제한한다. PDF identify도10000ms 내에서 한 번만 수행한다. 이는 RPC/SDK/network deadline 연장이나 Main whole-run timeout이 아니며 cleanup의 기존 bounded wait는 별도다. 다른 run/process/사용 중인 port를 강제 종료하지 않는다.
 6. 기존 report/fixture를 그대로 둔 채 새 증거·한계와 targeted local commit을 제시한다. 원본 두 CPU Story AC, PRODUCT/P-1/P-2, notarization/Gatekeeper/clean-machine 및 release 완료를 주장하지 않는다. Push/PR/remote CI/notary/upload/distribution은 별도 human instruction 없이는 하지 않는다.
+
+### 후속 제안: OS 수집 상태와 시각·TCC 증거의 분리
+
+**승인 경계:** 앞의 보존형/live 계약은 `1aaa95c72ceb463d62ebf32720b5332aa7b0a1e3`에 대한 SCOPE+IMPLEMENTATION 승인(Issue2#6010417522)으로 구현했고 로컬 commit `6900d76d6a5911dff0412b7c4b6cafaec0ee38a4`에서 검증했다. 앞 절의 “미적용 제안”은 그 승인 전 문서의 역사적 상태다. 이 **후속 절만 새 미승인 변경 계약**이며 이 문서의 새 SHA에 대한 SCOPE+IMPLEMENTATION 재승인 전에는 source·실행·report 계약을 바꾸지 않는다. 사용자는 이번에 조사와 명세 작성을 선택했으며 push/PR나 재구현을 승인하지 않았다.
+
+#### 관측 기준점과 공개 근거
+
+- 실제 run `fe79146b-4f05-423e-8c9e-4482be6249f3`는 네 signed actor pre/post, 독립 통제31개 pre/post, syscall interval36개, SDK/CLI initialize 및 PDFium XPC Init/Destroy/read-only fd capability를 확인했다. 격리39개는38 inconclusive+1 blocked(선행 bind 실패 후 listen 미실행), safe OS 후보0, aggregate blocked다. 기존 report inode/bytes/mode는 그대로다. 이 결과를 clock/TCC 또는 원본 Story PASS로 승격하지 않는다.
+- 현재 collector의 마지막 phase query는 최대1초이며 완료 실패와 정상 empty 결과가 같은 빈 후보 배열이 된다. 현재 one-line fullmatch/8KiB parser는 Apple이 제시한 multiline violation 형태를 배제할 수 있다. 따라서 후보0은 “OS 거부가 없었다”가 아니며 수집 상태·producer·parser coverage·clock·manual evidence를 분리한다.
+- Apple의 [sandbox 진단 문서](https://developer.apple.com/documentation/security/discovering-and-diagnosing-app-sandbox-violations)는 `subsystem:com.apple.sandbox.reporting`, `category:violation` 및 Sandbox/Violation/Process 등을 포함한 multiline record를 보여 준다. process name·PID가 등장하는 문자열 자체나 errno만으로 공식 producer/현재 signed actor를 입증하지 않는다.
+- [`OSLogEntry.date`](https://developer.apple.com/documentation/oslog/oslogentry/date)는 entry timestamp라는 공개 계약이다. [`mach_absolute_time`](https://developer.apple.com/documentation/kernel/1462446-mach_absolute_time)은 임의 시작점의 monotonic ticks이며 sleep 중 증가하지 않는다. 이 문서들만으로 CLI JSON의 `machTimestamp`가 probe의 uptime-ns와 같은 epoch/unit이라는 결론은 나오지 않는다. 날짜 표시 timezone, host wallclock 및 수신 순서도 인증된 event clock이 아니다.
+- Apple의 [sandbox 파일 접근 문서](https://developer.apple.com/documentation/security/accessing-files-from-the-macos-app-sandbox)는 macOS14+ 타 앱 container 승인 요청, 비-sandbox 앱에도 적용되는 보호, FDA 사용자 설정, POSIX/ACL/SIP 등과 EPERM/EACCES의 혼동을 설명한다. 현재 계정의 consent·동일 UID 통제·서명/entitlement 검사만으로 기존 TCC/FDA grant 부재를 주장할 수 없다.
+
+#### 최소 구현 계약 — 승인 후에만 적용
+
+1. **수집 완결성:** verifier의 invocation-owned collector를 첫 negative probe release 전에 준비하고 마지막 actor/control 검증까지 유지한다. 공개 `log` utility 또는 공개 OSLog API만 사용한다. 시작 실패·권한 불가·timeout·출력 상한·parser 불일치·정상 empty·정상 nonempty를 서로 다른 closed safe reason으로 기록한다. 정상 종료/EOF와 크기 한계 준수 없이 queryCompleted=true를 만들지 않는다. `OSLogStore.system` 접근 가능성은 가정하지 않으며 root/sudo/새 entitlement나 log 권한 변경으로 우회하지 않는다.
+2. **좁은 입력과 RAM 한계:** 이번 binding에 지정된 actor, 고정 synthetic target/port, 공식 sandbox producer/category와 run 관측 구간으로 제한한다. kernel logger PID0와 denied-subject PID를 구분한다. multiline record는 독립적인 문서화된 header/Violation 필드를 교차 확인하고 잘림·상충 PID/target/stage·unknown producer는 미검증으로 남긴다. raw record/backtrace/path/name/PID는 verifier RAM에만 두며 디스크/stdout/Git에 저장하지 않는다. 전체 raw buffer 최대1MiB, record 최대16KiB, 최종 후보 최대256개; 한도 초과는 truncated=true이고 collection 완결/PASS 근거가 아니다. 임의 user file/다른 app process 조회 또는 넓은 원시 로그 덤프는 없다.
+3. **시각 증거:** 공개 source-clock 의미와 unit/epoch/sleep/boot continuity, 실제 invocation의 변환 및 uncertainty bound를 모두 검증한 경우에만 clockVerified=true를 허용한다. 조합 가능한 공개 근거가 없으면 이 구현에서 해당 값은 false로 남는다. helper가 emit한 calibration event가 숫자상 맞거나 선형 fit/수신 시각/mtime가 맞는 것만으로 kernel violation clock을 인증하지 않는다. wall-clock discontinuity, sleep, boot 변경, timestamp precision 손실, event emission 지연 의미 불명은 reason을 남기고 inconclusive다. uncertainty를 포함한 구간이 정확히 하나의 실제 case와 맞을 때만 case 귀속 후보를 만든다. read와 marker control/read/symlinkRead, bind와 listen을 섞지 않는다.
+4. **현재 run의 수동 관측:** 별도 closed receipt는 정확한 runID/artifactHash 및 이미 검증된 actorInstanceRef에 묶는다. 허용 관측은 해당 actor의 FDA UI 상태 `granted/not-listed/unknown`, 해당 실행의 prompt `observed/not-observed/unknown`, 관측 범위 `complete/partial/unknown` 및 `grant-change-observed/none-observed/unknown`이다. 이들은 사람의 범위 한정 관측이지 effective TCC 상태를 조회한 증거가 아니다. `not-listed`, `not-observed`, `none-observed`를 자동으로 effective grant 없음이나 완전한 prompt 부재로 변환하지 않는다. 관측 미제공/부분 관측은 unknown/unverified이며 자동 yes/default는 없다. 기존 UI를 사람이 읽는 것 외에 TCC.db/credential 조회, 권한 reset/변경, FDA 부여, prompt 승인, unrelated 화면 캡처/저장을 하지 않는다. prompt가 보이면 승인하여 재시험하지 않고 해당 run을 보수적으로 중단/blocked 처리한다.
+5. **안전한 최종 계약:** 기존 `topology-evidence-v2`의 required fields/opaque joins와 1MiB/256case 한계를 유지하면서 verifier-owned `osCollection`과 `manualObservations`의 closed typed 필드를 추가한다. `osCollection`은 `status`(complete-empty/complete-nonempty/unavailable/timed-out/truncated/invalid), `queryCompleted:boolean`, `scopeVerified:boolean`, `truncated:boolean`, `reason:closed-code`만 허용한다. `manualObservations`는 위 receipt의 closed enum·run/artifact/actor ref만 담는다. denial 참조는 기존 role/alias/operation/attributed/reason에 `producerVerified/targetVerified/clockVerified:boolean`, `caseAssociation`(unique/ambiguous/unverified)을 추가한다. raw timestamp/PID/birth/path/log, 실제 settings 목록, 사람 이름, 자유문은 없다. producer/target 검증과 clock/TCC 검증은 서로 대체하지 않는다. malformed/unknown/unbound evidence는 fail closed이며 옛 schema reader나 fabricated fallback은 만들지 않는다.
+6. **판정과 시간 경계:** 앞 절의 negative PASS 필요조건을 낮추지 않는다. 수집 성공·공식 violation 후보·수동 receipt만으로 PASS하지 않는다. 필요한 clock/effective TCC 통제 근거가 공개·허용 범위에서 확보되지 않으면 최종 결과는 inconclusive/blocked이며39 PASS를 보장하지 않는다. RPC/SDK/network, Main10초/Worker2초 fence, 총 observer230초, 기존 cleanup deadline을 늘리지 않는다. 수집은 기존 관측 여유에서 준비/비동기 수행하고 phase 안에서 무거운 retrospective query로 actor를 오래 붙잡지 않는다. 수집 지연/권한 부족은 finite reason으로 남기며 다른 프로세스/port 강제 종료나 deadline 연장은 없다.
+7. **회귀와 승인 제외:** partial/multiline/oversize/unknown-producer, PID0 vs subject, timeout vs empty, clock domain/epoch/precision/sleep/discontinuity, 중첩 case/marker-read vs write, bind 실패 후 listen 미관측, manual receipt wrong run/artifact/actor/partial/unknown, raw metadata redaction 및 report 보존 회귀를 추가한다. 새 SHA 승인 후에만 verifier/필요한 invocation-local helper/테스트와 승인 SHA metadata를 구현하고 양 CPU build/sign/static 및 새 UUID의 synthetic arm64 실행을 검증한다. native wire1.1·pins·architecture·권한·initialize-only·Intel 면제는 그대로다. Story/product/Gatekeeper/clean-machine/배포·push/PR/CI/notary/upload 승인은 포함하지 않는다.
 
 ### 승인된 toolchain 설치와 실제 실패 기록
 
