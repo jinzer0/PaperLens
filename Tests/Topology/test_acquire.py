@@ -2633,6 +2633,7 @@ class LogTimeoutControlTests(IsolatedTest):
             self.assertEqual(kwargs["stderr"], subprocess.PIPE)
             self.assertEqual(kwargs["env"], acquire.clean_env())
             self.assertEqual(receipt["cases"][name]["status"], "normal-exit")
+            self.assertEqual(receipt["cases"][name]["inputReason"], "none")
             self.assertEqual(processes[0].calls, [])
         self.assertEqual(receipt["cases"]["integer-two"]["elapsedBand"], "under-5s")
         self.assertEqual(receipt["cases"]["minute-one"]["elapsedBand"], "12-to-under-75s")
@@ -2646,13 +2647,99 @@ class LogTimeoutControlTests(IsolatedTest):
                  {"stdout": [b'Filtering the log data using "' + log_control.PREDICATE.encode() + b'"\n'] * 2}]
         expected = ["start-failed", "source-error", "source-error", "invalid-output", "invalid-output",
                     "invalid-output", "invalid-output"]
-        for plan, status in zip(plans, expected):
+        reasons = ["not-observed", "not-observed", "not-observed", "unexpected-record", "partial-eof",
+                   "header-shape-mismatch", "duplicate-header"]
+        for plan, status, reason in zip(plans, expected, reasons):
             with self.subTest(status=status, plan=plan):
                 self.scenario([plan])
                 receipt = log_control.run()
                 self.assertEqual(receipt["cases"]["integer-two"]["status"], status)
+                self.assertEqual(receipt["cases"]["integer-two"]["inputReason"], reason)
                 self.assertEqual(receipt["cases"]["minute-one"], log_control.not_run("1m"))
                 self.assertNotIn("private", json.dumps(receipt))
+
+    def test_closed_header_reasons_do_not_widen_acceptance(self):
+        prefix = b'Filtering the log data using "'
+        banner = prefix + log_control.PREDICATE.encode() + b'"\n'
+        cases = [(prefix + b'processIdentifier == 0\n', "header-envelope-invalid"),
+                 (prefix + b'\xff"\n', "header-envelope-invalid"),
+                 (prefix + b'FALSEPREDICATE"\n', "header-grammar-invalid"),
+                 (prefix + b'processID == 0"\n', "header-grammar-invalid"),
+                 (prefix + b'processIdentifier != 0"\n', "header-grammar-invalid"),
+                 (prefix + b'(' * 65 + log_control.PREDICATE.encode() + b')' * 65 + b'"\n',
+                  "header-grammar-invalid"),
+                 (prefix + b' AND '.join([b'processIdentifier == 0'] * 300) + b'"\n',
+                  "header-grammar-invalid"),
+                 (prefix + b'processIdentifier == 0 OR processIdentifier == 1"\n', "header-shape-mismatch"),
+                 (prefix + b'processIdentifier == 0 AND processIdentifier == 1 AND category == "extra""\n',
+                  "header-shape-mismatch"),
+                 (banner + prefix + b'\xff\n', "duplicate-header"),
+                 (b'{}\n', "unexpected-record"),
+                 (b'other private record\n', "unexpected-record"),
+                 (banner + b'{}\n', "unexpected-record"),
+                 (b' ' + banner, "unexpected-record")]
+        for output, reason in cases:
+            with self.subTest(reason=reason, output=output):
+                clock, launches, processes, reads = self.scenario([{"stdout": [output]}])
+                receipt = log_control.run()
+                row = receipt["cases"]["integer-two"]
+                self.assertEqual(row["status"], "invalid-output")
+                self.assertEqual(row["inputReason"], reason)
+                self.assertEqual(receipt["cases"]["minute-one"], log_control.not_run("1m"))
+                self.assertEqual(len(launches), 1)
+                self.assertNotIn("private", json.dumps(receipt))
+
+    def test_generic_parser_exceptions_only_classify_existing_invalid_output(self):
+        for error in (verify.Failure("private parser detail"), UnicodeError("private parser detail"),
+                      OSError("private source detail"), RuntimeError("private source detail")):
+            with self.subTest(error=type(error).__name__):
+                self.scenario([{}])
+                with mock.patch.object(log_control.os, "read", side_effect=error):
+                    receipt = log_control.run()
+                row = receipt["cases"]["integer-two"]
+                parser = isinstance(error, (verify.Failure, UnicodeError))
+                self.assertEqual(row["status"], "invalid-output" if parser else "source-error")
+                self.assertEqual(row["inputReason"], "parser-exception" if parser else "not-observed")
+                self.assertEqual(receipt["cases"]["minute-one"], log_control.not_run("1m"))
+                self.assertNotIn("private", json.dumps(receipt))
+                self.scenario([error])
+                receipt = log_control.run()
+                self.assertEqual(receipt["cases"]["integer-two"]["status"], "start-failed")
+                self.assertEqual(receipt["cases"]["integer-two"]["inputReason"], "not-observed")
+
+    def test_first_rejection_survives_reap_failure_and_later_records(self):
+        prefix = b'Filtering the log data using "'
+        banner = prefix + log_control.PREDICATE.encode() + b'"\n'
+        for output, reason in ((prefix + b'\xff"\n{}\n', "header-envelope-invalid"),
+                               (banner + banner + b'{}\n', "duplicate-header"),
+                               (b'{}\n' + banner, "unexpected-record")):
+            with self.subTest(reason=reason):
+                clock, launches, processes, reads = self.scenario([
+                    {"duration": 1000, "stdout": [output], "stderr": [], "reap": False}])
+                with mock.patch.object(self.Selector, "close", side_effect=OSError("private cleanup")), \
+                     mock.patch.object(self.Pipe, "close", side_effect=UnicodeError("private cleanup")):
+                    receipt = log_control.run()
+                row = receipt["cases"]["integer-two"]
+                self.assertEqual(row["status"], "reap-timeout")
+                self.assertEqual(row["inputReason"], reason)
+                self.assertFalse(row["reaped"])
+                self.assertEqual(len(launches), 1)
+                self.assertEqual(len(reads), 1)
+                self.assertLessEqual(sum(value for value in processes[0].calls if type(value) is float), 0.3)
+
+    def test_normal_cleanup_failure_never_claims_none(self):
+        for owner in (self.Selector, self.Pipe):
+            with self.subTest(owner=owner.__name__):
+                clock, launches, processes, reads = self.scenario([{}])
+                with mock.patch.object(owner, "close", side_effect=OSError("private cleanup")):
+                    receipt = log_control.run()
+                row = receipt["cases"]["integer-two"]
+                self.assertEqual(row["status"], "source-error")
+                self.assertEqual(row["inputReason"], "not-observed")
+                self.assertTrue(row["stdoutEOF"])
+                self.assertTrue(row["stderrEOF"])
+                self.assertTrue(row["reaped"])
+                self.assertEqual(len(launches), 1)
 
     def test_nonzero_at_target_or_after_startup_prevents_second_launch(self):
         for startup, duration in ((13, 0), (0, 12)):
@@ -2663,6 +2750,7 @@ class LogTimeoutControlTests(IsolatedTest):
                 row = receipt["cases"]["integer-two"]
                 self.assertEqual(row["processAtTarget"], "exit-nonzero")
                 self.assertEqual(row["status"], "source-error")
+                self.assertEqual(row["inputReason"], "not-observed")
                 self.assertTrue(row["reaped"])
                 self.assertFalse(row["stopRequested"])
                 self.assertEqual(receipt["cases"]["minute-one"], log_control.not_run("1m"))
@@ -2674,6 +2762,7 @@ class LogTimeoutControlTests(IsolatedTest):
         receipt = log_control.run()
         row = receipt["cases"]["integer-two"]
         self.assertEqual(row["status"], "forced-timeout")
+        self.assertEqual(row["inputReason"], "not-observed")
         self.assertEqual(row["processAtTarget"], "running")
         self.assertFalse(row["stdoutEOF"])
         self.assertFalse(row["stderrEOF"])
@@ -2690,6 +2779,7 @@ class LogTimeoutControlTests(IsolatedTest):
             {"duration": 1000, "stdout": [], "stderr": [], "reap": False}])
         receipt = log_control.run()
         self.assertEqual(receipt["cases"]["integer-two"]["status"], "reap-timeout")
+        self.assertEqual(receipt["cases"]["integer-two"]["inputReason"], "not-observed")
         self.assertFalse(receipt["cases"]["integer-two"]["reaped"])
         self.assertEqual(len(launches), 1)
 
@@ -2725,8 +2815,21 @@ class LogTimeoutControlTests(IsolatedTest):
             {"duration": 1000, "stdout": [b"partial"], "stderr": []}])
         receipt = log_control.run()
         self.assertEqual(receipt["cases"]["integer-two"]["status"], "invalid-output")
+        self.assertEqual(receipt["cases"]["integer-two"]["inputReason"], "partial-target")
         self.assertFalse(receipt["cases"]["integer-two"]["framingComplete"])
         self.assertEqual(receipt["cases"]["minute-one"]["status"], "not-run")
+        self.assertEqual(len(launches), 1)
+
+    def test_nonzero_at_target_takes_priority_over_pending_frame(self):
+        clock, launches, processes, reads = self.scenario([
+            {"duration": 12, "status": 1, "stdout": [b"partial"], "stderr": []}])
+        receipt = log_control.run()
+        row = receipt["cases"]["integer-two"]
+        self.assertEqual(row["processAtTarget"], "exit-nonzero")
+        self.assertEqual(row["status"], "source-error")
+        self.assertEqual(row["inputReason"], "not-observed")
+        self.assertFalse(row["framingComplete"])
+        self.assertTrue(row["reaped"])
         self.assertEqual(len(launches), 1)
 
     def test_startup_counts_toward_target_and_batch_overrun_is_not_hidden(self):
@@ -2759,16 +2862,19 @@ class LogTimeoutControlTests(IsolatedTest):
         self.scenario([{}], read_error=True)
         receipt = log_control.run()
         self.assertEqual(receipt["cases"]["integer-two"]["status"], "source-error")
+        self.assertEqual(receipt["cases"]["integer-two"]["inputReason"], "not-observed")
         self.assertEqual(receipt["cases"]["minute-one"]["status"], "not-run")
 
     def test_record_and_batch_caps_fail_closed(self):
         self.scenario([{"stdout": [b" " * (16384 + 1)]}])
         receipt = log_control.run()
         self.assertEqual(receipt["cases"]["integer-two"]["status"], "output-limit")
+        self.assertEqual(receipt["cases"]["integer-two"]["inputReason"], "not-observed")
         self.scenario([{"stdout": [b"\n" * log_control.MAXIMUM]}, {"stdout": [b"\n"]}])
         receipt = log_control.run()
         self.assertEqual(receipt["cases"]["integer-two"]["status"], "normal-exit")
         self.assertEqual(receipt["cases"]["minute-one"]["status"], "output-limit")
+        self.assertEqual(receipt["cases"]["minute-one"]["inputReason"], "not-observed")
 
     def test_elapsed_band_edges(self):
         for duration, band in ((None, "unknown"), (-1, "unknown"), (0, "under-5s"),
@@ -2838,12 +2944,38 @@ class LogTimeoutControlTests(IsolatedTest):
                      lambda r: r["cases"]["integer-two"].update(timeoutArgument="1m"),
                      lambda r: r["cases"]["integer-two"].update(stdoutEOF=False),
                      lambda r: r["cases"]["integer-two"].update(raw="private"),
+                     lambda r: r["cases"]["integer-two"].pop("inputReason"),
+                     lambda r: r["cases"]["integer-two"].update(inputReason=None),
+                     lambda r: r["cases"]["integer-two"].update(inputReason=True),
+                     lambda r: r["cases"]["integer-two"].update(inputReason="private raw header"),
+                     lambda r: r["cases"]["integer-two"].update(inputReason="none"),
+                     lambda r: r["cases"]["integer-two"].update(inputReason="parser-exception"),
+                     lambda r: r["cases"]["integer-two"].update(status="start-failed", inputReason="parser-exception"),
+                     lambda r: r["cases"]["integer-two"].update(status="invalid-output"),
                      lambda r: r["cases"]["integer-two"].update(status="normal-exit")]
         for mutate in mutations:
             receipt = self.receipt()
             mutate(receipt)
             with self.assertRaises((acquire.Failure, ValueError)):
                 log_control.validate_receipt(receipt)
+
+    def test_normal_schema_requires_none_and_never_accepts_it_for_failures(self):
+        receipt = self.receipt()
+        row = receipt["cases"]["integer-two"]
+        row.update(status="normal-exit", stdoutEOF=True, stderrEOF=True, framingComplete=True,
+                   reaped=True, stopRequested=False, elapsedBand="under-5s", inputReason="none")
+        self.assertIs(log_control.validate_receipt(receipt), receipt)
+        for reason in log_control.INPUT_REASONS - {"none"}:
+            with self.subTest(reason=reason):
+                row["inputReason"] = reason
+                with self.assertRaises(acquire.Failure):
+                    log_control.validate_receipt(receipt)
+        row["inputReason"] = "none"
+        for status in log_control.STATUSES - {"normal-exit"}:
+            with self.subTest(status=status):
+                row["status"] = status
+                with self.assertRaises(acquire.Failure):
+                    log_control.validate_receipt(receipt)
 
     def test_exclusive_private_write_and_file_symlink_collisions_preserve(self):
         root = self.root / ".build/topology/arm64"

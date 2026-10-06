@@ -418,6 +418,37 @@
     "localEvidence": [".build/topology/arm64/log-timeout-control-2427cb88-491c-4665-b04e-b621422fce2d.json", ".build/topology/arm64/log-timeout-control-preservation-2427cb88-491c-4665-b04e-b621422fce2d.json"],
     "scope": "Approved local control driver/tests/evidence only. Runtime driver dirty snapshot is bound by actual script hash, not falsely to the baseline commit. Failed control does not change prior39cases38 inconclusive+1 blocked or OS clock/effective TCC/attribution. Story/product/clean-machine/Gatekeeper/distribution remain blocked; no remote authorization"
   },
+  "approvedControlInputReasonRetest": {
+    "date": "2026-10-06",
+    "scopeApproval": "98bf5ccb038a05881aca41ac573271abd9cb6908",
+    "implementationApproval": "98bf5ccb038a05881aca41ac573271abd9cb6908",
+    "approvalRecord": "https://github.com/jinzer0/PaperLens/issues/2#issuecomment-6017715402",
+    "sourceCommitAtRuntime": "98bf5ccb038a05881aca41ac573271abd9cb6908",
+    "sourceDirtyAtRuntime": true,
+    "scriptSHA256AtRuntime": "84a45f43fdafc2e1d25e24b03ecbe4e8271d4b74d42099c9d8f12dc30502a254",
+    "implementation": "Required control-local inputReason field with closed envelope/grammar/shape/duplicate/unexpected/partial/parser rejection enums. First rejection remains frozen through reap failure; none only after final normal cleanup. Header acceptance uses unchanged bounded predicate_shape and exact envelope/shape; no aliases/fallback/parser widening",
+    "unchanged": "Verifier/diagnose_eof/app/native/locks/approval metadata/Spec, fixed contradictory filter and2/1m argv,12/75s targets/batch100s/reserve1s/300ms cumulative cleanup wait, actual EOF/status/framing/limits and second-launch policy",
+    "regressions": {
+      "pythonTopology": {"command": "python3.13 -I -B -m unittest discover -s Tests/Topology -p 'test_*.py'", "tests": 277, "failures": 0, "driver": "3.13.16"},
+      "coverage": ["required closed reason/type/status joins and no historical fallback", "envelope/strict UTF-8/bounded grammar/shape mismatch", "accepted-header duplicate versus unexpected record", "partial EOF/target and nonzero priority", "generic Failure/UnicodeError versus other source exceptions", "first rejection survives reap failure; final-cleanup normal alone gets none", "unchanged budget/limits/launch/collision behavior"],
+      "independentStaticReview": "CLEAR, acceptance and status/deadline invariants retained; reviewers ran no gates/live activity",
+      "whitespace": "git diff --check pass; no project Python formatter configured",
+      "warningsRetained": "Mocked asyncio two-second slow-task diagnostic retained, no suppression"
+    },
+    "controlReceipt": {
+      "controlID": "b55f8172-be8b-461d-9ff2-b840ede1509e",
+      "sourceCommit": "98bf5ccb038a05881aca41ac573271abd9cb6908", "OSBuild": "25G241", "budgetWithinLimit": true,
+      "cases": {
+        "integer-two": {"timeoutArgument": "2", "status": "invalid-output", "processAtTarget": "not-observed", "stdoutEOF": false, "stderrEOF": false, "framingComplete": false, "stopRequested": false, "reaped": true, "elapsedBand": "unknown", "inputReason": "unexpected-record"},
+        "minute-one": {"timeoutArgument": "1m", "status": "not-run", "processAtTarget": "not-observed", "stdoutEOF": null, "stderrEOF": null, "framingComplete": null, "stopRequested": null, "reaped": null, "elapsedBand": "unknown", "inputReason": "not-observed"}
+      }
+    },
+    "diagnosis": "This new control directly rejected a nonblank newline-delimited stdout record without the exact Filtering header prefix: unexpected-record. It was not classified as header-envelope/grammar/shape failure, duplicate header or partial-frame rejection. Record kind/content and whether it was a utility diagnostic or event are unknown; no raw input was retained. This does not retroactively identify the earlier2427cb88 rejection",
+    "interpretation": "One new approved batch attempted; first case invalid-output, second not-run, no retry or acceptance relaxation. Reaped without requested stop is not proof of normal exit/framing/EOF. Timeout scale and internal timer start remain unproven; prior source-alive target observation and Story blocked verdict unchanged",
+    "preservation": {"historicalReports": 10, "allSameInodeBytesAndMode": true, "historicalReportsMovedDeletedOrAdopted": false, "historicalControlReceiptsUnchanged": true, "previousGeneratedOutputsReplaced": false, "permissionsTCCFDAACLChanged": false, "rawMetadataPersisted": false},
+    "localEvidence": [".build/topology/arm64/log-timeout-control-b55f8172-be8b-461d-9ff2-b840ede1509e.json", ".build/topology/arm64/log-timeout-control-preservation-b55f8172-be8b-461d-9ff2-b840ede1509e.json"],
+    "scope": "Approved diagnostic-only source/tests/evidence. Dirty runtime driver is bound to its actual hash, not falsely attributed to the baseline commit. No app/GUI/SDK/Intel/Rosetta/build/sign/package rerun, raw storage, offset/target/reserve change or extra trial. No Story/product/OS clock/effective TCC/negative attribution/clean-machine/Gatekeeper/distribution PASS or remote authorization"
+  },
   "notPerformed": ["actual sandbox negative-access attribution", "physical Intel execution", "notarization", "stapling including validation", "Gatekeeper assessment", "remote CI", "artifact upload", "public distribution"],
   "fixture": {"profile": "current-user", "dedicatedAccountConfigured": false, "dedicatedProfileActive": false, "permissionsChanged": false, "syntheticControlsObserved": true},
   "actualTwoCPU": false,

@@ -25,6 +25,9 @@ STATUSES = {"not-run", "normal-exit", "forced-timeout", "start-failed", "source-
             "invalid-output", "output-limit", "reap-timeout"}
 STATES = {"not-observed", "running", "exit-zero", "exit-nonzero", "unknown"}
 BANDS = {"under-5s", "5-to-under-12s", "12-to-under-75s", "75s-or-more", "unknown"}
+INPUT_REASONS = {"not-observed", "none", "header-envelope-invalid", "header-grammar-invalid",
+                 "header-shape-mismatch", "duplicate-header", "unexpected-record", "partial-eof",
+                 "partial-target", "parser-exception"}
 MAXIMUM = 1024**2
 RECORD_MAXIMUM = 16384
 
@@ -43,7 +46,7 @@ def elapsed_band(duration):
 
 def not_run(argument):
     return {"timeoutArgument": argument, "status": "not-run", "processAtTarget": "not-observed",
-            **{key: None for key in FLAGS}, "elapsedBand": "unknown"}
+            **{key: None for key in FLAGS}, "elapsedBand": "unknown", "inputReason": "not-observed"}
 
 
 def validate_receipt(value):
@@ -63,7 +66,13 @@ def validate_receipt(value):
                        and type(row["status"]) is str and row["status"] in STATUSES
                        and type(row["processAtTarget"]) is str and row["processAtTarget"] in STATES
                        and type(row["elapsedBand"]) is str and row["elapsedBand"] in BANDS
+                       and type(row["inputReason"]) is str and row["inputReason"] in INPUT_REASONS
                        and all(row[key] is None or type(row[key]) is bool for key in FLAGS), "control_receipt_invalid")
+        verify.require((row["inputReason"] == "none") == (row["status"] == "normal-exit")
+                       and (row["status"] not in {"not-run", "start-failed"}
+                            or row["inputReason"] == "not-observed")
+                       and (row["status"] != "invalid-output"
+                            or row["inputReason"] not in {"not-observed", "none"}), "control_receipt_invalid")
         if row["status"] == "not-run":
             verify.require(row == not_run(argument), "control_receipt_invalid")
         if row["status"] == "normal-exit":
@@ -150,6 +159,28 @@ def _stop(process, row, start, deadline):
         row["status"] = "reap-timeout"
 
 
+def _record_reason(record, banner, expected):
+    """Classify only the existing owned header envelope and bounded grammar."""
+    prefix = b'Filtering the log data using "'
+    if not record.startswith(prefix):
+        return "unexpected-record"
+    if banner:
+        return "duplicate-header"
+    if not record.endswith(b'"'):
+        return "header-envelope-invalid"
+    try:
+        reported = record[len(prefix):-1].decode("utf-8", errors="strict")
+    except UnicodeError:
+        return "header-envelope-invalid"
+    try:
+        shape = verify.predicate_shape(reported)
+    except verify.Failure:
+        return "header-grammar-invalid"
+    if shape != expected:
+        return "header-shape-mismatch"
+    return None
+
+
 def _case(argument, cap, deadline, raw_count):
     row = not_run(argument)
     start = time.monotonic()  # Inclusive of Popen/startup, not utility timer time.
@@ -180,6 +211,7 @@ def _case(argument, cap, deadline, raw_count):
                     row["status"] = "source-error"
                 elif pending:
                     row["status"] = "invalid-output"
+                    row["inputReason"] = "partial-target"
                 else:
                     row["status"] = "forced-timeout"
                 break
@@ -208,6 +240,7 @@ def _case(argument, cap, deadline, raw_count):
                     selector.unregister(key.fileobj)
                     if key.data == "stdoutEOF" and pending:
                         failure = "invalid-output"
+                        row["inputReason"] = "partial-eof"
                         break
                     continue
                 if key.data == "stderrEOF":
@@ -222,8 +255,10 @@ def _case(argument, cap, deadline, raw_count):
                         break
                     pending[:] = rest
                     if record.strip():
-                        if banner or not verify.owned_filter_header(bytes(record), expected):
+                        reason = _record_reason(bytes(record), banner, expected)
+                        if reason is not None:
                             failure = "invalid-output"
+                            row["inputReason"] = reason
                             break
                         banner = True
                 if failure is not None:
@@ -248,6 +283,8 @@ def _case(argument, cap, deadline, raw_count):
             row["status"] = failure
     except (verify.Failure, UnicodeError):
         row["status"] = "invalid-output" if process is not None else "start-failed"
+        if process is not None and row["inputReason"] == "not-observed":
+            row["inputReason"] = "parser-exception"
     except Exception:
         row["status"] = "source-error" if process is not None else "start-failed"
         if time.monotonic() >= target and process is not None:
@@ -269,6 +306,8 @@ def _case(argument, cap, deadline, raw_count):
                     except Exception:
                         if row["status"] == "normal-exit":
                             row["status"] = "source-error"
+        if row["status"] == "normal-exit":
+            row["inputReason"] = "none"
     return row, raw_count
 
 
