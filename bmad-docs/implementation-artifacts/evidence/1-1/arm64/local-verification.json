@@ -499,6 +499,30 @@
     "limitations": "No actual objectMarkers result observed; historical json-object purpose remains unknown. Public manual show NDJSON trailer description is not a stream guarantee. Marker presence does not establish authenticity, utility/event identity, EOF, filter correctness, timer start/scale, coverage, denial attribution or Story/product PASS. Previous single live batch allowances remain exhausted",
     "notRepeated": "No live logging, reports/fixtures access, GUI/app/SDK, Intel/Rosetta, build/sign/package or remote/distribution operation"
   },
+  "approvedObjectMarkerControlBatch": {
+    "date": "2026-10-08",
+    "approvalRecord": "https://github.com/jinzer0/PaperLens/issues/2#issuecomment-6048757483",
+    "executionSpecCommit": "cbf3e685bc4332709571a9a6b1a54928f6ba7115",
+    "implementationCheckpoint": "ed6a8cec744474aa790faa49a2b44b62ed1a35d4",
+    "sourceDirtyAtRuntime": true,
+    "scriptSHA256AtRuntime": "8b860bd1acf374055358ae5df662940f17806e0e0f70387a7e0e03f8a066981a",
+    "controlReceipt": {
+      "controlID": "006d4a6e-59c7-4008-864c-09694bc15c34",
+      "sourceCommit": "cbf3e685bc4332709571a9a6b1a54928f6ba7115",
+      "OSBuild": "25G241",
+      "budgetWithinLimit": true,
+      "cases": {
+        "integer-two": {"timeoutArgument": "2", "status": "invalid-output", "inputReason": "unexpected-record", "recordKind": "json-object", "objectMarkers": "finished-only", "processAtTarget": "not-observed", "stdoutEOF": false, "stderrEOF": false, "framingComplete": false, "stopRequested": false, "reaped": true, "elapsedBand": "unknown"},
+        "minute-one": {"timeoutArgument": "1m", "status": "not-run", "inputReason": "not-observed", "recordKind": "not-observed", "objectMarkers": "not-observed", "processAtTarget": "not-observed", "stdoutEOF": null, "stderrEOF": null, "framingComplete": null, "stopRequested": null, "reaped": null, "elapsedBand": "unknown"}
+      }
+    },
+    "preservation": {"historicalReports": 10, "allSameInodeBytesMode": true, "historicalReportsMovedDeletedOrAdopted": false, "permissionsTCCFDAACLChanged": false, "rawMetadataPersisted": false},
+    "diagnosis": "This fresh rejected JSON object has a top-level finished marker and no top-level eventType marker. Marker values and other fields are unknown. This is compatible with a documented show NDJSON trailing-record marker but does not prove stream trailer identity, authenticity or event absence; historical records are not reclassified",
+    "interpretation": "One newly authorized fixed batch attempted. First invalid-output/unexpected-record/json-object/finished-only; second not-run, no retry or acceptance relaxation. Reaped without requested stop is not observed natural EOF. No timeout-scale, timer-start, scope or sandbox-attribution conclusion",
+    "localEvidence": [".build/topology/arm64/log-timeout-control-006d4a6e-59c7-4008-864c-09694bc15c34.json", ".build/topology/arm64/log-timeout-control-preservation-006d4a6e-59c7-4008-864c-09694bc15c34.json"],
+    "notRepeated": "No GUI/signed app/SDK/Intel/Rosetta/build/sign/package, additional logging trial, filter/parser/timeout change, remote or distribution operation",
+    "scope": "Explicit whole-Story execution instruction supplied one new fixed batch allowance, now consumed. Remaining Story/product blockers and all historical signed-app evidence stay unchanged; control diagnostics do not complete Story1.1"
+  },
   "notPerformed": ["actual sandbox negative-access attribution", "physical Intel execution", "notarization", "stapling including validation", "Gatekeeper assessment", "remote CI", "artifact upload", "public distribution"],
   "fixture": {"profile": "current-user", "dedicatedAccountConfigured": false, "dedicatedProfileActive": false, "permissionsChanged": false, "syntheticControlsObserved": true},
   "actualTwoCPU": false,
