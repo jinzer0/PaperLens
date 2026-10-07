@@ -520,6 +520,14 @@ Manifest 필드는 `schemaRevision, sourceCommit, artifactHash, fixtureMapHash, 
 - **검증:** 기존 union tests와 synthetic membership 4조합, null/false/임의 marker values, nested-only 표식, escaped key, duplicate/ambiguous keys, invalid/nonobject/depth/resource, first-rejection freeze, closed enum/type/required/kind joins 및 raw absence를 검증한다. Parent만 tests/whitespace gate를 실행하고 bounded independent static review를 받는다. Runtime classifier 변경은 synthetic 증거에 한정되며 새 실제 record는 관측하지 않는다.
 - **실행 제한:** 이전 single batch 허용은 소진됐다. 이번에는 log stream/show/query, GUI/app/SDK, build/sign/package, Intel/Rosetta, 추가 trial을 실행하지 않는다. 새 live batch는 별도 명시적 human 허용이 있어야 한다. Story/product blocked는 유지한다.
 
+### Story 전체 실행 지시에 따른 새 marker control batch
+
+- 사용자의 명시적 지시 **“story 1 전체 한번에 실행하라고”**를 현재 Story1.1/Issue#2의 로컬 실행 지시로 기록한다. 직전 제시한 새 단일 marker control batch 실행 허용을 포함한다. 각 in-scope 명세/구현 checkpoint의 재승인은 요구하지 않되, 명시된 개인정보·안전·CPU·원격 경계는 유지한다.
+- 구현 checkpoint `ed6a8cec744474aa790faa49a2b44b62ed1a35d4`의 objectMarkers 진단과 기존 parent preservation driver를 사용해 고정 planned2/1m batch를 최대1회 실행한다. 이전 batch를 재사용하거나 실패 뒤 retry하지 않는다. 기존 fixed predicate/argv/case12&75초/batch100초/reserve1초/owned cleanup300ms 누적 cap/second gating은 변경하지 않는다.
+- 승인된 pinned Python/native arm64만 사용한다. 새 canonical UUIDv4/O_EXCL safe receipt 및 preservation receipt만 생성한다. 기존10 named reports의 inode/bytes/mode를 RAM에서만 전후 비교한다. 과거 control JSON와 evidence를 마이그레이션하지 않으며 다른 namespace·symlink·outputs를 adopt/변경/삭제하지 않는다.
+- 실제 입력 key/value/log/path/PID/timestamp/duration/hash는 RAM 외에 저장하지 않고 기존 closed safe enum/boolean/source metadata/driver hash만 남긴다. Report preservation 실패나 어떤 진단 실패 뒤에도 추가 trial 없이 결과·한계를 기록한다.
+- 이 허용은 위 새 fixed batch1회에 적용되며 app/GUI/SDK/build/sign/Intel/Rosetta/로그 탐색·parser 완화/timeout 변경/원격/공증/배포를 자동으로 허용하지 않는다. Story 전체 지시는 증거 없는 PASS 선언이나 기존 안전 제한의 해제를 뜻하지 않는다.
+
 ### 승인된 toolchain 설치와 실제 실패 기록
 
 - 사용자 선택: **“6.3.3 추가 설치·환경 검증 승인”**. 공식 문서의 `installer -target CurrentUserHomeDirectory -pkg …` 방식으로 사용자 Toolchains에 추가 설치했다. 전역 Xcode 선택과 shell 설정은 바꾸지 않았다.
