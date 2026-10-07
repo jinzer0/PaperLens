@@ -1,0 +1,105 @@
+# STATUS DEFINITIONS:
+# ==================
+# Epic Status:
+#   - backlog: Epic not yet started
+#   - in-progress: Epic actively being worked on
+#   - done: All stories in epic completed
+
+# Story Status:
+#   - backlog: Story only exists in epic file
+#   - ready-for-dev: Story file created, ready for development
+#   - in-progress: Developer actively working on implementation
+#   - review: Implementation complete, ready for review
+#   - done: Story completed
+
+# Retrospective Status:
+#   - optional: Can be completed but not required
+#   - done: Retrospective has been completed
+
+# Action Item Status:
+#   - open: Committed during a retrospective, not yet addressed
+#   - in-progress: Actively being worked on
+#   - done: Completed
+
+# WORKFLOW NOTES:
+# ===============
+# - Epic transitions to 'in-progress' automatically when its first story starts (via build's sprint sync)
+# - Stories can be worked in parallel if team capacity allows
+# - Developer typically creates the next story after the previous one is 'done' to incorporate learnings
+# - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
+# - Retrospective appends its action items to action_items; the status view surfaces open ones
+generated: 10-05-2026 10:30
+last_updated: 10-05-2026 10:30
+project: PaperLens
+project_key: NOKEY
+tracking_system: file-system
+story_location: bmad-docs/implementation-artifacts
+development_status:
+  epic-1: in-progress
+  # Issue #2: implementation exists; external isolation evidence remains blocked, not done.
+  1-1-두-cpu에서-격리된-앱-실행-구조-입증: in-progress
+  1-2-provider-agent-작업-종료-재시작-정리-검증: backlog
+  1-3-앱-교체-paper-삭제-시-agent-정리-검증: backlog
+  1-4-p-2-의존성-잠금과-실행-os-매트릭스-확정: backlog
+  1-5-패키징된-db-fts5-매트릭스-검증: backlog
+  1-6-패키징된-agent-정리를-os-cpu-매트릭스에서-검증: backlog
+  1-7-공통-요청-허용-범위와-자원-한도-확정: backlog
+  1-8-pdf가-실제로-응답하는-시점의-측정-계약-확정: backlog
+  1-9-main-app과-provider-agent의-공통-통신-계약-확정: backlog
+  1-10-openai-api-key를-실제-요청으로-연결하기: backlog
+  1-11-공식-codex-sdk의-chatgpt-로그인-연결: backlog
+  1-12-chatgpt-device-code-연결-제공: backlog
+  1-13-job-종류별-실패-재실행-retry-계약-확정: backlog
+  1-14-연결-후-library에서-로컬-pdf-추가-삭제: backlog
+  1-15-추가한-pdf를-reader에서-읽고-이어-읽기: backlog
+  1-16-pdf에-highlight-note-남기고-다시-확인하기: backlog
+  1-17-library-폴더와-중복-확인-후-가져오기: backlog
+  1-18-세-url-경로로-pdf-가져오기: backlog
+  1-19-공통-문장-좌표와-anchor-변환-계약-입증: backlog
+  1-20-pdf-파싱과-검색용-revision을-안전하게-공개하기: backlog
+  1-21-파싱-실패를-이해하고-다시-시도하기: backlog
+  1-22-paper-metadata와-reader-목차-확인하기: backlog
+  1-23-근거-기반-한-줄-요약으로-paper-식별하기: backlog
+  1-24-library-카드-목록-정렬과-기록-재방문: backlog
+  1-25-태그-읽기-상태-favorite와-검색-필터: backlog
+  1-26-settings에서-provider를-재연결하고-상태-확인하기: backlog
+  epic-1-retrospective: optional
+
+  epic-2: backlog
+  2-1-번역-대상-언어를-설정하고-유지하기: backlog
+  2-2-페이지별-번역을-생성하고-pdf와-함께-읽기: backlog
+  2-3-원문과-번역-문장을-양방향-대조하기: backlog
+  2-4-번역-실패-페이지를-재시도하고-명시적으로-재생성하기: backlog
+  2-5-paper-전체에서-일관된-질문-근거를-검색하기: backlog
+  2-6-첫-질문에-근거-있는-답변을-받고-원문으로-이동하기: backlog
+  2-7-여러-chat-session을-만들고-이어-대화하기: backlog
+  2-8-chat-session-이름을-바꾸고-삭제하기: backlog
+  2-9-번역-chat을-포함한-reader-복구-삭제-흐름-통합-검증: backlog
+  epic-2-retrospective: optional
+
+  epic-3: backlog
+  3-1-paper-추가-후-기본-brief를-생성하고-독립-화면에서-읽기: backlog
+  3-2-pdf-맥락을-유지하며-brief-drawer-열기: backlog
+  3-3-독립-사용자-template을-편집하고-저장하기: backlog
+  3-4-template을-선택하고-snapshot으로-brief-생성-재생성하기: backlog
+  3-5-brief와-연구-기록을-library에서-다시-확인하기: backlog
+  3-6-모든-paper-소유-데이터를-삭제하고-template-보존하기: backlog
+  3-7-전체-연구-흐름의-job-파싱-재실행-복구-완결하기: backlog
+  epic-3-retrospective: optional
+
+  epic-4: backlog
+  4-1-독립적인-system-light-dark-명암-정책-선택하기: backlog
+  4-2-세-테마를-선택하고-앱-전체에-유지하기: backlog
+  4-3-테마-명암-전환-중-읽기-맥락과-작업-보존하기: backlog
+  4-4-여섯-테마-조합의-가독성-접근성-복구-검증: backlog
+  epic-4-retrospective: optional
+
+  epic-5: backlog
+  5-1-안전한-로컬-diagnostics-정책-확정-검증: backlog
+  5-2-앱-교체와-db-호환-손상-경계-확정-검증: backlog
+  5-3-두-cpu의-self-contained-서명-배포-후보-만들기: backlog
+  5-4-설치-provider-연결-라이선스-안내-완결하기: backlog
+  5-5-최종-산출물에서-전체-연구-흐름-검증하기: backlog
+  5-6-pdf-readiness-측정과-초과-사례-판정하기: backlog
+  5-7-전체-증거로-v1-출시-준비-상태-판정하기: backlog
+  epic-5-retrospective: optional
