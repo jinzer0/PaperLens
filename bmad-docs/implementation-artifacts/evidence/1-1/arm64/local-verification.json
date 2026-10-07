@@ -481,6 +481,24 @@
     "localEvidence": [".build/topology/arm64/log-timeout-control-12b0077e-6e10-4c73-836a-c802f47db85f.json", ".build/topology/arm64/log-timeout-control-preservation-12b0077e-6e10-4c73-836a-c802f47db85f.json"],
     "scope": "Approved diagnostic-only driver/tests/evidence. Dirty runtime driver bound to actual script hash rather than falsely to baseline commit. Existing39cases38 inconclusive+1 blocked, OS clock/effective TCC/attribution/Story/product/clean-machine/Gatekeeper/distribution remain blocked/unverified. No app/GUI/SDK/Intel/Rosetta/build/sign/package rerun, offset/target/reserve change, extra trial or remote authorization"
   },
+  "wholeStoryObjectMarkerSyntheticVerification": {
+    "date": "2026-10-08",
+    "approvalRecord": "https://github.com/jinzer0/PaperLens/issues/2#issuecomment-6048591354",
+    "specCommit": "63da6cb17e241b1a6432b51299ad017b91bfb388",
+    "verificationScope": "Synthetic regression only; no new log stream/query, app trial or live record observation",
+    "driverSHA256": "8b860bd1acf374055358ae5df662940f17806e0e0f70387a7e0e03f8a066981a",
+    "implementation": "Single bounded parse returns recordKind and required closed objectMarkers. Top-level finished/eventType membership only; duplicate keys at any depth make object markers unknown. No values/types/counts/raw hashes projected; JSON rejection unchanged",
+    "regressions": {
+      "pythonTopology": {"command": "python3.13 -I -B -m unittest discover -s Tests/Topology -p 'test_*.py'", "tests": 287, "failures": 0, "driver": "3.13.16"},
+      "coverage": ["all marker membership combinations and arbitrary marker values", "nested-only/escaped/duplicate keys and ambiguous objects", "single parse and no raw serialization", "depth/numeric/resource/projection exceptions", "required closed enum/kind joins and first-rejection cleanup freeze", "prior acceptance, deadlines, EOF and second-case policy regressions"],
+      "independentStaticReview": "CLEAR; single parse, privacy, duplicate handling, closed schema and unchanged rejection/execution invariants. Reviewer ran no gates or live activity",
+      "warningsRetained": "Mocked asyncio two-second slow-task diagnostic retained; no suppression",
+      "whitespace": "git diff --check pass"
+    },
+    "staticInvariants": "Existing constants and header/cleanup/deadline/run/save helpers unchanged; historical Spec including frozen region unchanged apart from new section",
+    "limitations": "No actual objectMarkers result observed; historical json-object purpose remains unknown. Public manual show NDJSON trailer description is not a stream guarantee. Marker presence does not establish authenticity, utility/event identity, EOF, filter correctness, timer start/scale, coverage, denial attribution or Story/product PASS. Previous single live batch allowances remain exhausted",
+    "notRepeated": "No live logging, reports/fixtures access, GUI/app/SDK, Intel/Rosetta, build/sign/package or remote/distribution operation"
+  },
   "notPerformed": ["actual sandbox negative-access attribution", "physical Intel execution", "notarization", "stapling including validation", "Gatekeeper assessment", "remote CI", "artifact upload", "public distribution"],
   "fixture": {"profile": "current-user", "dedicatedAccountConfigured": false, "dedicatedProfileActive": false, "permissionsChanged": false, "syntheticControlsObserved": true},
   "actualTwoCPU": false,

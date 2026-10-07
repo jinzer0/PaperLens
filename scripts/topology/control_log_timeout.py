@@ -29,6 +29,7 @@ INPUT_REASONS = {"not-observed", "none", "header-envelope-invalid", "header-gram
                  "header-shape-mismatch", "duplicate-header", "unexpected-record", "partial-eof",
                  "partial-target", "parser-exception"}
 RECORD_KINDS = {"not-observed", "json-object", "json-other", "text", "invalid-utf8", "unknown"}
+OBJECT_MARKERS = {"not-observed", "finished-only", "event-type-only", "both", "neither", "unknown"}
 MAXIMUM = 1024**2
 RECORD_MAXIMUM = 16384
 
@@ -48,7 +49,7 @@ def elapsed_band(duration):
 def not_run(argument):
     return {"timeoutArgument": argument, "status": "not-run", "processAtTarget": "not-observed",
             **{key: None for key in FLAGS}, "elapsedBand": "unknown", "inputReason": "not-observed",
-            "recordKind": "not-observed"}
+            "recordKind": "not-observed", "objectMarkers": "not-observed"}
 
 
 def validate_receipt(value):
@@ -70,8 +71,11 @@ def validate_receipt(value):
                        and type(row["elapsedBand"]) is str and row["elapsedBand"] in BANDS
                        and type(row["inputReason"]) is str and row["inputReason"] in INPUT_REASONS
                        and type(row["recordKind"]) is str and row["recordKind"] in RECORD_KINDS
+                       and type(row["objectMarkers"]) is str and row["objectMarkers"] in OBJECT_MARKERS
                        and all(row[key] is None or type(row[key]) is bool for key in FLAGS), "control_receipt_invalid")
         verify.require((row["inputReason"] == "unexpected-record") == (row["recordKind"] != "not-observed"),
+                       "control_receipt_invalid")
+        verify.require((row["recordKind"] == "json-object") == (row["objectMarkers"] != "not-observed"),
                        "control_receipt_invalid")
         verify.require((row["inputReason"] == "none") == (row["status"] == "normal-exit")
                        and (row["status"] not in {"not-run", "start-failed"}
@@ -190,15 +194,24 @@ def _reject_json_constant(value):
     raise json.JSONDecodeError("Non-RFC constant", "", 0)
 
 
-def _record_kind(record):
-    """Syntax-only sidecar for the first bounded rejected record; retain no data."""
+def _object_markers(value):
+    """Project only top-level membership, never marker values or authenticity."""
+    finished = "finished" in value
+    event_type = "eventType" in value
+    if finished:
+        return "both" if event_type else "finished-only"
+    return "event-type-only" if event_type else "neither"
+
+
+def _record_diagnostic(record):
+    """Single bounded parse of the first rejected RAM record; retain only enums."""
     try:
         if len(record) > RECORD_MAXIMUM:
-            return "unknown"
+            return "unknown", "not-observed"
         try:
             text = record.decode("utf-8", errors="strict")
         except UnicodeDecodeError:
-            return "invalid-utf8"
+            return "invalid-utf8", "not-observed"
         depth = 0
         quoted = False
         escaped = False
@@ -215,17 +228,35 @@ def _record_kind(record):
             elif character in "[{":
                 depth += 1
                 if depth > 64:
-                    return "unknown"
+                    return "unknown", "not-observed"
             elif character in "]}":
                 depth = max(0, depth - 1)
+        duplicate = False
+
+        def object_pairs(pairs):
+            nonlocal duplicate
+            if len(pairs) > RECORD_MAXIMUM:
+                raise MemoryError()
+            keys = {}
+            for key, _ in pairs:
+                if key in keys:
+                    duplicate = True
+                keys[key] = None
+            return keys
+
         try:
             value = json.loads(text, parse_int=lambda value: None, parse_float=lambda value: None,
-                               parse_constant=_reject_json_constant)
+                               parse_constant=_reject_json_constant, object_pairs_hook=object_pairs)
         except json.JSONDecodeError:
-            return "text"
-        return "json-object" if type(value) is dict else "json-other"
+            return "text", "not-observed"
+        if type(value) is not dict:
+            return "json-other", "not-observed"
     except Exception:
-        return "unknown"
+        return "unknown", "not-observed"
+    try:
+        return "json-object", "unknown" if duplicate else _object_markers(value)
+    except Exception:
+        return "json-object", "unknown"
 
 
 def _case(argument, cap, deadline, raw_count):
@@ -307,7 +338,7 @@ def _case(argument, cap, deadline, raw_count):
                             failure = "invalid-output"
                             row["inputReason"] = reason
                             if reason == "unexpected-record":
-                                row["recordKind"] = _record_kind(record)
+                                row["recordKind"], row["objectMarkers"] = _record_diagnostic(record)
                             break
                         banner = True
                 if failure is not None:

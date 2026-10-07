@@ -2635,6 +2635,7 @@ class LogTimeoutControlTests(IsolatedTest):
             self.assertEqual(receipt["cases"][name]["status"], "normal-exit")
             self.assertEqual(receipt["cases"][name]["inputReason"], "none")
             self.assertEqual(receipt["cases"][name]["recordKind"], "not-observed")
+            self.assertEqual(receipt["cases"][name]["objectMarkers"], "not-observed")
             self.assertEqual(processes[0].calls, [])
         self.assertEqual(receipt["cases"]["integer-two"]["elapsedBand"], "under-5s")
         self.assertEqual(receipt["cases"]["minute-one"]["elapsedBand"], "12-to-under-75s")
@@ -2658,6 +2659,8 @@ class LogTimeoutControlTests(IsolatedTest):
                 self.assertEqual(receipt["cases"]["integer-two"]["inputReason"], reason)
                 self.assertEqual(receipt["cases"]["integer-two"]["recordKind"],
                                  "json-object" if reason == "unexpected-record" else "not-observed")
+                self.assertEqual(receipt["cases"]["integer-two"]["objectMarkers"],
+                                 "neither" if reason == "unexpected-record" else "not-observed")
                 self.assertEqual(receipt["cases"]["minute-one"], log_control.not_run("1m"))
                 self.assertNotIn("private", json.dumps(receipt))
 
@@ -2721,6 +2724,8 @@ class LogTimeoutControlTests(IsolatedTest):
                 self.assertEqual(row["status"], "invalid-output")
                 self.assertEqual(row["inputReason"], "unexpected-record")
                 self.assertEqual(row["recordKind"], kind)
+                markers = ("unknown" if record == b'{"private-key":1,"private-key":2}' else "neither")
+                self.assertEqual(row["objectMarkers"], markers if kind == "json-object" else "not-observed")
                 self.assertFalse(row["framingComplete"])
                 self.assertFalse(row["stdoutEOF"])
                 self.assertEqual(row["stderrEOF"], len(record) + 1 > 8192)
@@ -2728,17 +2733,87 @@ class LogTimeoutControlTests(IsolatedTest):
                 self.assertEqual(len(launches), 1)
                 self.assertNotIn("private", json.dumps(receipt))
 
+    def test_object_marker_membership_is_single_parse_rejected_and_private(self):
+        cases = [(b'{}', "neither"),
+                 (b'{"finished":null}', "finished-only"),
+                 (b'{"eventType":false}', "event-type-only"),
+                 (b'{"finished":false,"eventType":null}', "both"),
+                 (b'{"finished":"private-value","eventType":{"private-key":[1,true]}}', "both"),
+                 (b'{"finished":[],"eventType":-1.5e9}', "both"),
+                 (b'{"private-key":{"finished":true,"eventType":true}}', "neither"),
+                 (b'{"private-key":[{"finished":true},{"eventType":true}]}', "neither"),
+                 (b'{"unfinished":true,"EventType":true}', "neither"),
+                 (b'{"finis\\u0068ed":null,"event\\u0054ype":false}', "both"),
+                 (b'{"finished":0,"finished":1}', "unknown"),
+                 (b'{"eventType":0,"event\\u0054ype":1}', "unknown"),
+                 (b'{"private-key":0,"private-key":1}', "unknown"),
+                 (b'{"finished":{"private-key":0,"private-key":1}}', "unknown"),
+                 (b'{"eventType":[{"private-key":0,"private-key":1}]}', "unknown"),
+                 (b'{"private-key":{"finished":0,"finis\\u0068ed":1}}', "unknown"),
+                 (b'{"finished":{},"eventType":{}}', "both")]
+        for record, markers in cases:
+            with self.subTest(record=record, markers=markers):
+                clock, launches, processes, reads = self.scenario([{"stdout": [record + b'\n']}])
+                with mock.patch.object(log_control.json, "loads", wraps=json.loads) as parser, \
+                     mock.patch.object(log_control.json, "dumps", side_effect=AssertionError("raw serialization")):
+                    receipt = log_control.run()
+                parser.assert_called_once()
+                row = receipt["cases"]["integer-two"]
+                self.assertEqual((row["recordKind"], row["objectMarkers"]), ("json-object", markers))
+                self.assertEqual((row["status"], row["inputReason"]), ("invalid-output", "unexpected-record"))
+                self.assertFalse(row["stdoutEOF"])
+                self.assertFalse(row["framingComplete"])
+                self.assertEqual(len(launches), 1)
+                self.assertEqual(len(reads), 1)
+                self.assertEqual(receipt["cases"]["minute-one"], log_control.not_run("1m"))
+                serialized = json.dumps(receipt)
+                for private in ("private-key", "private-value", "unfinished", "EventType"):
+                    self.assertNotIn(private, serialized)
+
+    def test_nonobject_duplicates_and_incomplete_objects_do_not_project_markers(self):
+        cases = [(b'[{"finished":0,"finished":1}]', ("json-other", "not-observed")),
+                 (b'{"finished":true} {}', ("text", "not-observed")),
+                 (b'{"finished":true,"finished":false} trailing', ("text", "not-observed")),
+                 (b'{"finished":Infinity}', ("text", "not-observed")),
+                 (b'{"finished":', ("text", "not-observed")),
+                 (b' ' * (log_control.RECORD_MAXIMUM - 2) + b'{}', ("json-object", "neither")),
+                 (b' ' * (log_control.RECORD_MAXIMUM - 1) + b'{}', ("unknown", "not-observed"))]
+        for record, expected in cases:
+            with self.subTest(expected=expected, size=len(record)):
+                self.assertEqual(log_control._record_diagnostic(record), expected)
+
+    def test_projection_exception_after_confirmed_object_preserves_object_kind(self):
+        for error in (MemoryError("private resource"), RecursionError("private recursion"),
+                      RuntimeError("private projection"), UnicodeError("private projection")):
+            with self.subTest(error=type(error).__name__):
+                self.scenario([{"stdout": [b'{"finished":false}\n']}])
+                with mock.patch.object(log_control, "_object_markers", side_effect=error) as projection, \
+                     mock.patch.object(log_control.json, "loads", wraps=json.loads) as parser:
+                    receipt = log_control.run()
+                parser.assert_called_once()
+                projection.assert_called_once()
+                row = receipt["cases"]["integer-two"]
+                self.assertEqual((row["recordKind"], row["objectMarkers"]), ("json-object", "unknown"))
+                self.assertEqual((row["status"], row["inputReason"]), ("invalid-output", "unexpected-record"))
+                self.assertNotIn("private", json.dumps(receipt))
+
     def test_depth_cap_precedes_stdlib_parse_and_numbers_use_nonconverting_hooks(self):
         with mock.patch.object(log_control.json, "loads", wraps=json.loads) as parser:
-            self.assertEqual(log_control._record_kind(b'[' * 65 + b'null' + b']' * 65), "unknown")
+            self.assertEqual(log_control._record_diagnostic(b'[' * 65 + b'null' + b']' * 65),
+                             ("unknown", "not-observed"))
             parser.assert_not_called()
-            self.assertEqual(log_control._record_kind(b'[' * 64 + b'null' + b']' * 64), "json-other")
+            self.assertEqual(log_control._record_diagnostic(b'[' * 64 + b'null' + b']' * 64),
+                             ("json-other", "not-observed"))
             parser.assert_called_once()
             hooks = parser.call_args.kwargs
             self.assertIsNone(hooks["parse_int"]("9" * 5000))
             self.assertIsNone(hooks["parse_float"]("1e" + "9" * 5000))
             with self.assertRaises(json.JSONDecodeError):
                 hooks["parse_constant"]("NaN")
+            self.assertEqual(hooks["object_pairs_hook"]([("private-key", "private-value")]),
+                             {"private-key": None})
+            with self.assertRaises(MemoryError):
+                hooks["object_pairs_hook"]([("private-key", None)] * (log_control.RECORD_MAXIMUM + 1))
 
     def test_classifier_is_only_used_for_existing_complete_unexpected_records(self):
         banner = b'Filtering the log data using "' + log_control.PREDICATE.encode() + b'"\n'
@@ -2749,10 +2824,11 @@ class LogTimeoutControlTests(IsolatedTest):
         for plan in plans:
             with self.subTest(plan=plan):
                 self.scenario([plan, {}])
-                with mock.patch.object(log_control, "_record_kind", side_effect=AssertionError("not eligible")) as classifier:
+                with mock.patch.object(log_control, "_record_diagnostic", side_effect=AssertionError("not eligible")) as classifier:
                     receipt = log_control.run()
                 classifier.assert_not_called()
                 self.assertTrue(all(row["recordKind"] == "not-observed" for row in receipt["cases"].values()))
+                self.assertTrue(all(row["objectMarkers"] == "not-observed" for row in receipt["cases"].values()))
 
     def test_classifier_resource_and_unexpected_exceptions_are_unknown_not_source_errors(self):
         for error in (MemoryError("private resource"), RecursionError("private recursion"),
@@ -2765,13 +2841,14 @@ class LogTimeoutControlTests(IsolatedTest):
                 self.assertEqual(row["status"], "invalid-output")
                 self.assertEqual(row["inputReason"], "unexpected-record")
                 self.assertEqual(row["recordKind"], "unknown")
+                self.assertEqual(row["objectMarkers"], "not-observed")
                 self.assertEqual(len(launches), 1)
                 self.assertEqual(len(reads), 1)
                 self.assertNotIn("private", json.dumps(receipt))
         class FailingDecode(bytes):
             def decode(self, *args, **kwargs):
                 raise MemoryError("private decode")
-        self.assertEqual(log_control._record_kind(FailingDecode(b'{}')), "unknown")
+        self.assertEqual(log_control._record_diagnostic(FailingDecode(b'{}')), ("unknown", "not-observed"))
 
     def test_generic_parser_exceptions_only_classify_existing_invalid_output(self):
         for error in (verify.Failure("private parser detail"), UnicodeError("private parser detail"),
@@ -2785,6 +2862,7 @@ class LogTimeoutControlTests(IsolatedTest):
                 self.assertEqual(row["status"], "invalid-output" if parser else "source-error")
                 self.assertEqual(row["inputReason"], "parser-exception" if parser else "not-observed")
                 self.assertEqual(row["recordKind"], "not-observed")
+                self.assertEqual(row["objectMarkers"], "not-observed")
                 self.assertEqual(receipt["cases"]["minute-one"], log_control.not_run("1m"))
                 self.assertNotIn("private", json.dumps(receipt))
                 self.scenario([error])
@@ -2808,26 +2886,36 @@ class LogTimeoutControlTests(IsolatedTest):
                 self.assertEqual(row["status"], "reap-timeout")
                 self.assertEqual(row["inputReason"], reason)
                 self.assertEqual(row["recordKind"], "json-object" if reason == "unexpected-record" else "not-observed")
+                self.assertEqual(row["objectMarkers"], "neither" if reason == "unexpected-record" else "not-observed")
                 self.assertFalse(row["reaped"])
                 self.assertEqual(len(launches), 1)
                 self.assertEqual(len(reads), 1)
                 self.assertLessEqual(sum(value for value in processes[0].calls if type(value) is float), 0.3)
 
-    def test_first_unexpected_kind_is_frozen_through_reap_and_later_records(self):
-        for record, kind in ((b'{}', "json-object"), (b'null', "json-other"),
-                             (b'private text', "text"), (b'\xff', "invalid-utf8"),
-                             (b'[' * 65, "unknown")):
+    def test_first_unexpected_diagnostic_is_frozen_through_reap_and_later_records(self):
+        for record, kind, markers in ((b'{}', "json-object", "neither"),
+                                     (b'{"finished":false}', "json-object", "finished-only"),
+                                     (b'{"eventType":null}', "json-object", "event-type-only"),
+                                     (b'{"finished":0,"eventType":[]}', "json-object", "both"),
+                                     (b'{"finished":0,"finished":1}', "json-object", "unknown"),
+                                     (b'null', "json-other", "not-observed"),
+                                     (b'private text', "text", "not-observed"),
+                                     (b'\xff', "invalid-utf8", "not-observed"),
+                                     (b'[' * 65, "unknown", "not-observed")):
             with self.subTest(kind=kind):
                 clock, launches, processes, reads = self.scenario([
                     {"duration": 1000, "stdout": [record + b'\n{}\n', b'private later\n'],
                      "stderr": [], "reap": False}])
-                with mock.patch.object(log_control, "_record_kind", wraps=log_control._record_kind) as classifier:
+                with mock.patch.object(log_control, "_record_diagnostic", wraps=log_control._record_diagnostic) as classifier, \
+                     mock.patch.object(self.Selector, "close", side_effect=OSError("private cleanup")), \
+                     mock.patch.object(self.Pipe, "close", side_effect=UnicodeError("private cleanup")):
                     receipt = log_control.run()
                 classifier.assert_called_once_with(bytearray(record))
                 row = receipt["cases"]["integer-two"]
                 self.assertEqual(row["status"], "reap-timeout")
                 self.assertEqual(row["inputReason"], "unexpected-record")
                 self.assertEqual(row["recordKind"], kind)
+                self.assertEqual(row["objectMarkers"], markers)
                 self.assertEqual(len(reads), 1)
                 self.assertEqual(len(launches), 1)
                 self.assertNotIn("private", json.dumps(receipt))
@@ -3058,6 +3146,11 @@ class LogTimeoutControlTests(IsolatedTest):
                      lambda r: r["cases"]["integer-two"].update(recordKind=True),
                      lambda r: r["cases"]["integer-two"].update(recordKind="private raw record"),
                      lambda r: r["cases"]["integer-two"].update(recordKind="json-object"),
+                     lambda r: r["cases"]["integer-two"].pop("objectMarkers"),
+                     lambda r: r["cases"]["integer-two"].update(objectMarkers=None),
+                     lambda r: r["cases"]["integer-two"].update(objectMarkers=True),
+                     lambda r: r["cases"]["integer-two"].update(objectMarkers="private raw marker"),
+                     lambda r: r["cases"]["integer-two"].update(objectMarkers="neither"),
                      lambda r: r["cases"]["integer-two"].update(inputReason="none"),
                      lambda r: r["cases"]["integer-two"].update(inputReason="parser-exception"),
                      lambda r: r["cases"]["integer-two"].update(status="start-failed", inputReason="parser-exception"),
@@ -3069,24 +3162,46 @@ class LogTimeoutControlTests(IsolatedTest):
             with self.assertRaises((acquire.Failure, ValueError)):
                 log_control.validate_receipt(receipt)
 
-    def test_record_kind_required_closed_enum_and_reason_join(self):
+    def test_record_kind_and_object_markers_closed_enums_and_reason_joins(self):
         for reason in log_control.INPUT_REASONS:
             for kind in log_control.RECORD_KINDS:
-                with self.subTest(reason=reason, kind=kind):
-                    receipt = self.receipt()
-                    row = receipt["cases"]["integer-two"]
-                    row.update(status="source-error", inputReason=reason, recordKind=kind)
-                    valid = reason != "none" and ((reason == "unexpected-record") == (kind != "not-observed"))
-                    if valid:
-                        self.assertIs(log_control.validate_receipt(receipt), receipt)
-                    else:
-                        with self.assertRaises(acquire.Failure):
-                            log_control.validate_receipt(receipt)
+                for markers in ("not-observed", "finished-only", "event-type-only", "both", "neither", "unknown"):
+                    with self.subTest(reason=reason, kind=kind, markers=markers):
+                        receipt = self.receipt()
+                        row = receipt["cases"]["integer-two"]
+                        row.update(status="source-error", inputReason=reason, recordKind=kind,
+                                   objectMarkers=markers)
+                        valid = reason != "none" and (
+                            (reason == "unexpected-record") == (kind != "not-observed")) and (
+                            (kind == "json-object") == (markers != "not-observed"))
+                        if valid:
+                            self.assertIs(log_control.validate_receipt(receipt), receipt)
+                        else:
+                            with self.assertRaises(acquire.Failure):
+                                log_control.validate_receipt(receipt)
         for status in ("invalid-output", "reap-timeout"):
             for kind in log_control.RECORD_KINDS - {"not-observed"}:
                 receipt = self.receipt()
-                receipt["cases"]["integer-two"].update(status=status, inputReason="unexpected-record", recordKind=kind)
+                receipt["cases"]["integer-two"].update(status=status, inputReason="unexpected-record", recordKind=kind,
+                                                       objectMarkers="unknown" if kind == "json-object" else "not-observed")
                 self.assertIs(log_control.validate_receipt(receipt), receipt)
+
+    def test_object_marker_schema_rejects_wrong_types_even_for_confirmed_object(self):
+        for markers in (None, True, 0, [], {}, "finished", "private-value", "not-observed"):
+            with self.subTest(markers=markers):
+                receipt = self.receipt()
+                receipt["cases"]["integer-two"].update(status="invalid-output", inputReason="unexpected-record",
+                                                       recordKind="json-object", objectMarkers=markers)
+                with self.assertRaises(acquire.Failure):
+                    log_control.validate_receipt(receipt)
+
+        receipt = self.receipt()
+        row = receipt["cases"]["integer-two"]
+        row.update(status="invalid-output", inputReason="unexpected-record", recordKind="json-object",
+                   objectMarkers="neither")
+        del row["objectMarkers"]
+        with self.assertRaises(acquire.Failure):
+            log_control.validate_receipt(receipt)
 
     def test_normal_schema_requires_none_and_never_accepts_it_for_failures(self):
         receipt = self.receipt()
