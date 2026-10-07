@@ -150,6 +150,28 @@ In-scope follow-up specs must still be written and committed before implementati
 but do not require another Scope or Implementation approval. Evidence and unresolved
 limitations must remain truthful; approval is not proof of a passing Story.
 
+### Explicit Story-Range Execution
+
+An explicit human instruction to plan, implement, and verify an identified range
+of Stories applies Whole-Story Approval to every existing Story in that range.
+Do not narrow the instruction to the currently open Story or repeatedly request
+approval at each in-scope planning, implementation, or local verification step.
+Record the exact instruction and Story range on a governing Epic Issue, then
+link each Story Issue to that record. Preserve one Spec/Issue/branch work unit
+per Story; commit each Spec before implementation and retain independent review.
+
+Execute the dependency-ready Stories rather than stopping the entire range on
+an environment-only verification blocker in one Story. Track actual local,
+synthetic, packaged and external verification separately. A missing Story
+definition is a requirements gap, not permission to invent acceptance criteria.
+
+The execution instruction includes ordinary bounded local build/test/scenario
+verification described in each committed Spec. It does not permit blind retries
+of exhausted historical experiments, unsafe data/credential access, permission
+changes, architecture or product-scope changes, remote operations or distribution.
+User-assisted login, paid real requests and unavailable hardware evidence remain
+explicitly blocked until their necessary inputs/permissions exist.
+
 ### Merge Approval
 
 Format:

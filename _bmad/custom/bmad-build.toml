@@ -22,5 +22,6 @@ For every non-trivial implementation:
 10. Offer to push the task branch and create or update the Pull Request; perform those remote operations only after explicit human instruction.
 11. Do not merge until explicit human merge approval references the current PR HEAD SHA.
 12. After merge approval, you may execute the merge, close the Issue, clean up the branch, and update project status.
+13. An explicit human Story-range plan/implement/verify instruction applies to every existing Story in that range under Explicit Story-Range Execution. Do not reduce it to the active Story or repeatedly request in-scope approvals. Link each Story work unit to the Epic approval record, commit its Spec, execute bounded local verification and independent review, and continue dependency-ready Stories despite external verification blockers elsewhere. Never invent a missing Story or claim unperformed external checks passed.
 """
 ]

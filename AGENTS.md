@@ -32,3 +32,11 @@ PaperLens는 macOS용 오픈소스 AI 논문 워크스페이스다. 제품 요�
 - 사람이 특정 Story 전체를 명시적으로 승인하면 기존 acceptance criteria 안의 로컬 조사·명세 갱신·구현·검증·증거 커밋은 Story 단위로 승인된다. 각 후속 Spec은 구현 전에 commit하되 매 SHA별 재승인은 요구하지 않는다.
 - Story ID, Issue, baseline Spec 및 현재 commit, 실제 human 지시와 유지되는 제한을 Issue에 기록한다. 승인을 에이전트가 만들어내거나 다른 Story로 확대하지 않는다.
 - architecture/acceptance criteria 변경, privacy/safety 완화, 소진된 단일 실행 허용의 갱신, push/PR/배포/merge는 이 승인에 포함되지 않는다.
+
+## Story 범위 전체 실행 지시
+
+- 사용자의 **Story 1.1~1.27 전체 계획·구현·검증을 워크플로대로 진행** 지시는 해당 전체 범위에 적용한다. 열린 Story1.1의 진단만으로 축소하거나 각 단계마다 재승인을 요구하지 않는다.
+- `docs/ai-governance.md`의 Explicit Story-Range Execution을 따른다. Epic Issue의 human 지시 기록과 각 Story의 Spec/Issue/task branch를 연결하고, 명세 commit → 구현 → 부모 검증 → 독립 리뷰 → 로컬 증거 commit을 수행한다.
+- 한 Story의 외부 환경 검증 차단은 독립적인 다음 Story의 구현을 막지 않는다. 실제 존재하는 Story 정의를 기준으로 진행하고 없는 번호의 요구사항은 만들어내지 않는다.
+- Story1.1 prototype의 제품 로그인/PDF/Library 구현 non-goal은 그 Story에만 적용한다. 다른 승인된 Story의 제품 구현은 해당 제품/아키텍처 계약을 따르되 실제 사용자 문서·인증정보·기존 CODEX_HOME 접근과 무승인 유료 요청은 하지 않는다.
+- 승인된 로컬 검증은 각 committed Spec의 bounded 절차대로 실행한다. 과거 소진된 trial의 blind retry, 개인정보/권한/안전 제한 완화, push/PR/원격/배포/merge는 자동 허용하지 않는다.
