@@ -449,6 +449,38 @@
     "localEvidence": [".build/topology/arm64/log-timeout-control-b55f8172-be8b-461d-9ff2-b840ede1509e.json", ".build/topology/arm64/log-timeout-control-preservation-b55f8172-be8b-461d-9ff2-b840ede1509e.json"],
     "scope": "Approved diagnostic-only source/tests/evidence. Dirty runtime driver is bound to its actual hash, not falsely attributed to the baseline commit. No app/GUI/SDK/Intel/Rosetta/build/sign/package rerun, raw storage, offset/target/reserve change or extra trial. No Story/product/OS clock/effective TCC/negative attribution/clean-machine/Gatekeeper/distribution PASS or remote authorization"
   },
+  "approvedControlRecordKindRetest": {
+    "date": "2026-10-07",
+    "scopeApproval": "fd0e1bf61c70266009885a08ac085cc6da237b83",
+    "implementationApproval": "fd0e1bf61c70266009885a08ac085cc6da237b83",
+    "approvalRecord": "https://github.com/jinzer0/PaperLens/issues/2#issuecomment-6030498513",
+    "sourceCommitAtRuntime": "fd0e1bf61c70266009885a08ac085cc6da237b83",
+    "sourceDirtyAtRuntime": true,
+    "scriptSHA256AtRuntime": "f2a8bf48f17070ddd190a8747de0b18cf819c853210d05cd6d5ae80dd162472a",
+    "implementation": "Required recordKind sidecar only for the first unexpected-record. Strict UTF-8/full stdlib RFC JSON syntax, non-converting numeric hooks, NaN/Infinity rejection, syntax-only duplicate keys,16KiB/string-escape-aware depth64 cap and resource-unknown. Kind frozen through reap failure; other inputReason rows not-observed. No event-field inspection or raw-content persistence",
+    "unchanged": "Verifier/diagnose_eof/app/native/locks/approval metadata/Spec, header acceptance/inputReason/status/EOF/framing/limits, fixed filter/2&1m argv/12&75s targets/batch100s/reserve1s/300ms cumulative cleanup/two-launch policy",
+    "regressions": {
+      "pythonTopology": {"command": "python3.13 -I -B -m unittest discover -s Tests/Topology -p 'test_*.py'", "tests": 283, "failures": 0, "driver": "3.13.16"},
+      "coverage": ["required closed kind/reason join and no historical fallback", "object/other scalar/null/huge numbers/duplicate keys/NaN/Infinity", "trailing/malformed JSON, UTF-8 and quoted escapes", "depth64/65 preflight/resource exceptions and unknown", "first kind frozen through reap failure; noneligible branches untouched", "actual independent two-pipe EOF ordering and unchanged rejection/launch/caps/collision"],
+      "initialTestFailure": "New16KiB case incorrectly assumed stderr EOF could not precede completed stdout rejection. Mock drains stderr between stdout chunks. Corrected test asserts stdout EOF remains false and exact stderr read-zero ordering; no source behavior change or warning suppression",
+      "independentStaticReview": "CLEAR, bounded syntax-only sidecar and unchanged acceptance/status/budgets; reviewers ran no gates/live activity",
+      "whitespace": "git diff --check pass; no project Python formatter configured",
+      "warningsRetained": "Mocked asyncio two-second slow-task diagnostic retained"
+    },
+    "controlReceipt": {
+      "controlID": "12b0077e-6e10-4c73-836a-c802f47db85f",
+      "sourceCommit": "fd0e1bf61c70266009885a08ac085cc6da237b83", "OSBuild": "25G241", "budgetWithinLimit": true,
+      "cases": {
+        "integer-two": {"timeoutArgument": "2", "status": "invalid-output", "processAtTarget": "not-observed", "stdoutEOF": false, "stderrEOF": false, "framingComplete": false, "stopRequested": false, "reaped": true, "elapsedBand": "unknown", "inputReason": "unexpected-record", "recordKind": "json-object"},
+        "minute-one": {"timeoutArgument": "1m", "status": "not-run", "processAtTarget": "not-observed", "stdoutEOF": null, "stderrEOF": null, "framingComplete": null, "stopRequested": null, "reaped": null, "elapsedBand": "unknown", "inputReason": "not-observed", "recordKind": "not-observed"}
+      }
+    },
+    "diagnosis": "This new control directly rejected an unexpected stdout record whose entire strict UTF-8/RFC JSON syntax was an object. Object purpose, fields/content, whether utility metadata/diagnostic or event, authenticity and filter correctness remain unknown. No keys/values/raw hashes or source record retained; earlier controls are not retroactively classified",
+    "interpretation": "One approved fresh batch attempted, first invalid-output/unexpected-record/json-object, second not-run and no retry/parser relaxation. Syntax class is not normal completion, denial evidence, coverage or timer-scale/start proof. Reaped without requested stop does not prove natural EOF",
+    "preservation": {"historicalReports": 10, "allSameInodeBytesAndMode": true, "historicalReportsMovedDeletedOrAdopted": false, "historicalControlReceiptsRewritten": false, "previousGeneratedOutputsReplaced": false, "permissionsTCCFDAACLChanged": false, "rawMetadataPersisted": false},
+    "localEvidence": [".build/topology/arm64/log-timeout-control-12b0077e-6e10-4c73-836a-c802f47db85f.json", ".build/topology/arm64/log-timeout-control-preservation-12b0077e-6e10-4c73-836a-c802f47db85f.json"],
+    "scope": "Approved diagnostic-only driver/tests/evidence. Dirty runtime driver bound to actual script hash rather than falsely to baseline commit. Existing39cases38 inconclusive+1 blocked, OS clock/effective TCC/attribution/Story/product/clean-machine/Gatekeeper/distribution remain blocked/unverified. No app/GUI/SDK/Intel/Rosetta/build/sign/package rerun, offset/target/reserve change, extra trial or remote authorization"
+  },
   "notPerformed": ["actual sandbox negative-access attribution", "physical Intel execution", "notarization", "stapling including validation", "Gatekeeper assessment", "remote CI", "artifact upload", "public distribution"],
   "fixture": {"profile": "current-user", "dedicatedAccountConfigured": false, "dedicatedProfileActive": false, "permissionsChanged": false, "syntheticControlsObserved": true},
   "actualTwoCPU": false,

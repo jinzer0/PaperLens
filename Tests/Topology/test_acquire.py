@@ -2634,6 +2634,7 @@ class LogTimeoutControlTests(IsolatedTest):
             self.assertEqual(kwargs["env"], acquire.clean_env())
             self.assertEqual(receipt["cases"][name]["status"], "normal-exit")
             self.assertEqual(receipt["cases"][name]["inputReason"], "none")
+            self.assertEqual(receipt["cases"][name]["recordKind"], "not-observed")
             self.assertEqual(processes[0].calls, [])
         self.assertEqual(receipt["cases"]["integer-two"]["elapsedBand"], "under-5s")
         self.assertEqual(receipt["cases"]["minute-one"]["elapsedBand"], "12-to-under-75s")
@@ -2655,6 +2656,8 @@ class LogTimeoutControlTests(IsolatedTest):
                 receipt = log_control.run()
                 self.assertEqual(receipt["cases"]["integer-two"]["status"], status)
                 self.assertEqual(receipt["cases"]["integer-two"]["inputReason"], reason)
+                self.assertEqual(receipt["cases"]["integer-two"]["recordKind"],
+                                 "json-object" if reason == "unexpected-record" else "not-observed")
                 self.assertEqual(receipt["cases"]["minute-one"], log_control.not_run("1m"))
                 self.assertNotIn("private", json.dumps(receipt))
 
@@ -2689,6 +2692,87 @@ class LogTimeoutControlTests(IsolatedTest):
                 self.assertEqual(len(launches), 1)
                 self.assertNotIn("private", json.dumps(receipt))
 
+    def test_unexpected_record_syntax_kinds_remain_rejected_and_private(self):
+        cases = [(b'{"private-key":"private-value"}', "json-object"),
+                 (b'{"private-key":1,"private-key":2}', "json-object"),
+                 (b'[]', "json-other"), (b'"private-value"', "json-other"),
+                 (b'true', "json-other"), (b'false', "json-other"), (b'null', "json-other"),
+                 (b'-12.5e+3', "json-other"), (b'  {}\t\r', "json-object"),
+                 (b'9' * 5000, "json-other"), (b'1e' + b'9' * 5000, "json-other"),
+                 (b'0.' + b'9' * 5000, "json-other"),
+                 (b'9' * log_control.RECORD_MAXIMUM, "json-other"),
+                 (b'NaN', "text"), (b'Infinity', "text"), (b'-Infinity', "text"),
+                 (b'{"private-key":NaN}', "text"), (b'{} null', "text"),
+                 (b'{} private trailing', "text"), (b'{"private-key":', "text"),
+                 (b'01', "text"), (b'private utility text', "text"),
+                 (b'\xef\xbb\xbf{}', "text"), (b'\xff', "invalid-utf8"),
+                 (b'{"private-key":"\xc0\xaf"}', "invalid-utf8"),
+                 (b'[' * 64 + b'null' + b']' * 64, "json-other"),
+                 (b'[' * 65 + b'null' + b']' * 65, "unknown"),
+                 (b'{"private-key":' * 64 + b'null' + b'}' * 64, "json-object"),
+                 (b'{"private-key":' * 65 + b'null' + b'}' * 65, "unknown"),
+                 (b'[' * 64 + json.dumps('[{' * 100 + '"\\' + ']}' * 100).encode() + b']' * 64, "json-other"),
+                 (json.dumps({"private-key": '[{' * 100 + '"\\' + ']}' * 100}).encode(), "json-object")]
+        for record, kind in cases:
+            with self.subTest(kind=kind, size=len(record)):
+                clock, launches, processes, reads = self.scenario([{"stdout": [record + b'\n']}])
+                receipt = log_control.run()
+                row = receipt["cases"]["integer-two"]
+                self.assertEqual(row["status"], "invalid-output")
+                self.assertEqual(row["inputReason"], "unexpected-record")
+                self.assertEqual(row["recordKind"], kind)
+                self.assertFalse(row["framingComplete"])
+                self.assertFalse(row["stdoutEOF"])
+                self.assertEqual(row["stderrEOF"], len(record) + 1 > 8192)
+                self.assertEqual(receipt["cases"]["minute-one"], log_control.not_run("1m"))
+                self.assertEqual(len(launches), 1)
+                self.assertNotIn("private", json.dumps(receipt))
+
+    def test_depth_cap_precedes_stdlib_parse_and_numbers_use_nonconverting_hooks(self):
+        with mock.patch.object(log_control.json, "loads", wraps=json.loads) as parser:
+            self.assertEqual(log_control._record_kind(b'[' * 65 + b'null' + b']' * 65), "unknown")
+            parser.assert_not_called()
+            self.assertEqual(log_control._record_kind(b'[' * 64 + b'null' + b']' * 64), "json-other")
+            parser.assert_called_once()
+            hooks = parser.call_args.kwargs
+            self.assertIsNone(hooks["parse_int"]("9" * 5000))
+            self.assertIsNone(hooks["parse_float"]("1e" + "9" * 5000))
+            with self.assertRaises(json.JSONDecodeError):
+                hooks["parse_constant"]("NaN")
+
+    def test_classifier_is_only_used_for_existing_complete_unexpected_records(self):
+        banner = b'Filtering the log data using "' + log_control.PREDICATE.encode() + b'"\n'
+        plans = [{"stdout": [b'\n \t\n' + banner]},
+                 {"stdout": [banner + banner]}, {"stdout": [b'{"private-key":']},
+                 {"stdout": [b'{' * (log_control.RECORD_MAXIMUM + 1) + b'\n']},
+                 {"stderr": [b'{}\n']}, {"status": 1}, OSError("private startup")]
+        for plan in plans:
+            with self.subTest(plan=plan):
+                self.scenario([plan, {}])
+                with mock.patch.object(log_control, "_record_kind", side_effect=AssertionError("not eligible")) as classifier:
+                    receipt = log_control.run()
+                classifier.assert_not_called()
+                self.assertTrue(all(row["recordKind"] == "not-observed" for row in receipt["cases"].values()))
+
+    def test_classifier_resource_and_unexpected_exceptions_are_unknown_not_source_errors(self):
+        for error in (MemoryError("private resource"), RecursionError("private recursion"),
+                      RuntimeError("private implementation"), ValueError("private unexpected")):
+            with self.subTest(error=type(error).__name__):
+                clock, launches, processes, reads = self.scenario([{"stdout": [b'{}\n']}])
+                with mock.patch.object(log_control.json, "loads", side_effect=error):
+                    receipt = log_control.run()
+                row = receipt["cases"]["integer-two"]
+                self.assertEqual(row["status"], "invalid-output")
+                self.assertEqual(row["inputReason"], "unexpected-record")
+                self.assertEqual(row["recordKind"], "unknown")
+                self.assertEqual(len(launches), 1)
+                self.assertEqual(len(reads), 1)
+                self.assertNotIn("private", json.dumps(receipt))
+        class FailingDecode(bytes):
+            def decode(self, *args, **kwargs):
+                raise MemoryError("private decode")
+        self.assertEqual(log_control._record_kind(FailingDecode(b'{}')), "unknown")
+
     def test_generic_parser_exceptions_only_classify_existing_invalid_output(self):
         for error in (verify.Failure("private parser detail"), UnicodeError("private parser detail"),
                       OSError("private source detail"), RuntimeError("private source detail")):
@@ -2700,6 +2784,7 @@ class LogTimeoutControlTests(IsolatedTest):
                 parser = isinstance(error, (verify.Failure, UnicodeError))
                 self.assertEqual(row["status"], "invalid-output" if parser else "source-error")
                 self.assertEqual(row["inputReason"], "parser-exception" if parser else "not-observed")
+                self.assertEqual(row["recordKind"], "not-observed")
                 self.assertEqual(receipt["cases"]["minute-one"], log_control.not_run("1m"))
                 self.assertNotIn("private", json.dumps(receipt))
                 self.scenario([error])
@@ -2722,10 +2807,30 @@ class LogTimeoutControlTests(IsolatedTest):
                 row = receipt["cases"]["integer-two"]
                 self.assertEqual(row["status"], "reap-timeout")
                 self.assertEqual(row["inputReason"], reason)
+                self.assertEqual(row["recordKind"], "json-object" if reason == "unexpected-record" else "not-observed")
                 self.assertFalse(row["reaped"])
                 self.assertEqual(len(launches), 1)
                 self.assertEqual(len(reads), 1)
                 self.assertLessEqual(sum(value for value in processes[0].calls if type(value) is float), 0.3)
+
+    def test_first_unexpected_kind_is_frozen_through_reap_and_later_records(self):
+        for record, kind in ((b'{}', "json-object"), (b'null', "json-other"),
+                             (b'private text', "text"), (b'\xff', "invalid-utf8"),
+                             (b'[' * 65, "unknown")):
+            with self.subTest(kind=kind):
+                clock, launches, processes, reads = self.scenario([
+                    {"duration": 1000, "stdout": [record + b'\n{}\n', b'private later\n'],
+                     "stderr": [], "reap": False}])
+                with mock.patch.object(log_control, "_record_kind", wraps=log_control._record_kind) as classifier:
+                    receipt = log_control.run()
+                classifier.assert_called_once_with(bytearray(record))
+                row = receipt["cases"]["integer-two"]
+                self.assertEqual(row["status"], "reap-timeout")
+                self.assertEqual(row["inputReason"], "unexpected-record")
+                self.assertEqual(row["recordKind"], kind)
+                self.assertEqual(len(reads), 1)
+                self.assertEqual(len(launches), 1)
+                self.assertNotIn("private", json.dumps(receipt))
 
     def test_normal_cleanup_failure_never_claims_none(self):
         for owner in (self.Selector, self.Pipe):
@@ -2948,6 +3053,11 @@ class LogTimeoutControlTests(IsolatedTest):
                      lambda r: r["cases"]["integer-two"].update(inputReason=None),
                      lambda r: r["cases"]["integer-two"].update(inputReason=True),
                      lambda r: r["cases"]["integer-two"].update(inputReason="private raw header"),
+                     lambda r: r["cases"]["integer-two"].pop("recordKind"),
+                     lambda r: r["cases"]["integer-two"].update(recordKind=None),
+                     lambda r: r["cases"]["integer-two"].update(recordKind=True),
+                     lambda r: r["cases"]["integer-two"].update(recordKind="private raw record"),
+                     lambda r: r["cases"]["integer-two"].update(recordKind="json-object"),
                      lambda r: r["cases"]["integer-two"].update(inputReason="none"),
                      lambda r: r["cases"]["integer-two"].update(inputReason="parser-exception"),
                      lambda r: r["cases"]["integer-two"].update(status="start-failed", inputReason="parser-exception"),
@@ -2958,6 +3068,25 @@ class LogTimeoutControlTests(IsolatedTest):
             mutate(receipt)
             with self.assertRaises((acquire.Failure, ValueError)):
                 log_control.validate_receipt(receipt)
+
+    def test_record_kind_required_closed_enum_and_reason_join(self):
+        for reason in log_control.INPUT_REASONS:
+            for kind in log_control.RECORD_KINDS:
+                with self.subTest(reason=reason, kind=kind):
+                    receipt = self.receipt()
+                    row = receipt["cases"]["integer-two"]
+                    row.update(status="source-error", inputReason=reason, recordKind=kind)
+                    valid = reason != "none" and ((reason == "unexpected-record") == (kind != "not-observed"))
+                    if valid:
+                        self.assertIs(log_control.validate_receipt(receipt), receipt)
+                    else:
+                        with self.assertRaises(acquire.Failure):
+                            log_control.validate_receipt(receipt)
+        for status in ("invalid-output", "reap-timeout"):
+            for kind in log_control.RECORD_KINDS - {"not-observed"}:
+                receipt = self.receipt()
+                receipt["cases"]["integer-two"].update(status=status, inputReason="unexpected-record", recordKind=kind)
+                self.assertIs(log_control.validate_receipt(receipt), receipt)
 
     def test_normal_schema_requires_none_and_never_accepts_it_for_failures(self):
         receipt = self.receipt()

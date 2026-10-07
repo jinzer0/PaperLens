@@ -28,6 +28,7 @@ BANDS = {"under-5s", "5-to-under-12s", "12-to-under-75s", "75s-or-more", "unknow
 INPUT_REASONS = {"not-observed", "none", "header-envelope-invalid", "header-grammar-invalid",
                  "header-shape-mismatch", "duplicate-header", "unexpected-record", "partial-eof",
                  "partial-target", "parser-exception"}
+RECORD_KINDS = {"not-observed", "json-object", "json-other", "text", "invalid-utf8", "unknown"}
 MAXIMUM = 1024**2
 RECORD_MAXIMUM = 16384
 
@@ -46,7 +47,8 @@ def elapsed_band(duration):
 
 def not_run(argument):
     return {"timeoutArgument": argument, "status": "not-run", "processAtTarget": "not-observed",
-            **{key: None for key in FLAGS}, "elapsedBand": "unknown", "inputReason": "not-observed"}
+            **{key: None for key in FLAGS}, "elapsedBand": "unknown", "inputReason": "not-observed",
+            "recordKind": "not-observed"}
 
 
 def validate_receipt(value):
@@ -67,7 +69,10 @@ def validate_receipt(value):
                        and type(row["processAtTarget"]) is str and row["processAtTarget"] in STATES
                        and type(row["elapsedBand"]) is str and row["elapsedBand"] in BANDS
                        and type(row["inputReason"]) is str and row["inputReason"] in INPUT_REASONS
+                       and type(row["recordKind"]) is str and row["recordKind"] in RECORD_KINDS
                        and all(row[key] is None or type(row[key]) is bool for key in FLAGS), "control_receipt_invalid")
+        verify.require((row["inputReason"] == "unexpected-record") == (row["recordKind"] != "not-observed"),
+                       "control_receipt_invalid")
         verify.require((row["inputReason"] == "none") == (row["status"] == "normal-exit")
                        and (row["status"] not in {"not-run", "start-failed"}
                             or row["inputReason"] == "not-observed")
@@ -181,6 +186,48 @@ def _record_reason(record, banner, expected):
     return None
 
 
+def _reject_json_constant(value):
+    raise json.JSONDecodeError("Non-RFC constant", "", 0)
+
+
+def _record_kind(record):
+    """Syntax-only sidecar for the first bounded rejected record; retain no data."""
+    try:
+        if len(record) > RECORD_MAXIMUM:
+            return "unknown"
+        try:
+            text = record.decode("utf-8", errors="strict")
+        except UnicodeDecodeError:
+            return "invalid-utf8"
+        depth = 0
+        quoted = False
+        escaped = False
+        for character in text:
+            if quoted:
+                if escaped:
+                    escaped = False
+                elif character == "\\":
+                    escaped = True
+                elif character == '"':
+                    quoted = False
+            elif character == '"':
+                quoted = True
+            elif character in "[{":
+                depth += 1
+                if depth > 64:
+                    return "unknown"
+            elif character in "]}":
+                depth = max(0, depth - 1)
+        try:
+            value = json.loads(text, parse_int=lambda value: None, parse_float=lambda value: None,
+                               parse_constant=_reject_json_constant)
+        except json.JSONDecodeError:
+            return "text"
+        return "json-object" if type(value) is dict else "json-other"
+    except Exception:
+        return "unknown"
+
+
 def _case(argument, cap, deadline, raw_count):
     row = not_run(argument)
     start = time.monotonic()  # Inclusive of Popen/startup, not utility timer time.
@@ -259,6 +306,8 @@ def _case(argument, cap, deadline, raw_count):
                         if reason is not None:
                             failure = "invalid-output"
                             row["inputReason"] = reason
+                            if reason == "unexpected-record":
+                                row["recordKind"] = _record_kind(record)
                             break
                         banner = True
                 if failure is not None:
