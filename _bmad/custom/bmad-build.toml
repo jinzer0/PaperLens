@@ -1,0 +1,26 @@
+[workflow]
+
+persistent_facts = [
+  "file:{project-root}/docs/ai-governance.md",
+]
+
+activation_steps_append = [
+  """
+Apply the repository's AI governance rules throughout this Build.
+
+For every non-trivial implementation:
+
+1. Identify the governing GitHub Issue before implementation.
+2. Treat the Issue, approved BMAD artifacts, and repository state as the durable context.
+3. You may investigate and write the Build Spec before implementation approval.
+4. At the normal BMAD implementation checkpoint, do not begin implementation until explicit human approval is received. An explicit Whole-Story Approval under docs/ai-governance.md covers in-scope local follow-up work without approval of every Spec SHA.
+5. Commit the Build Spec before implementation. For per-Spec approval, request approval referencing that immutable SHA. For Whole-Story Approval, record the Story, Issue, baseline Spec and commit, human instruction, and retained restrictions instead of requesting repeated SHA approvals.
+6. After explicit per-Spec approval, record APPROVED: IMPLEMENTATION @ <commit-sha> on the governing Issue. Record Whole-Story Approval using the provenance required by docs/ai-governance.md.
+7. Never create or infer this approval yourself.
+8. If scope exceeds the approved Story, acceptance criteria or architecture materially change, safety/privacy boundaries relax, or an exhausted single-run allowance needs renewal, stop, update the relevant artifact, commit it, and request separate approval. In-scope Whole-Story follow-ups require committed Spec updates, not repeated approval.
+9. After implementation and verification, follow the built-in workflow to create a local commit and present the result.
+10. Offer to push the task branch and create or update the Pull Request; perform those remote operations only after explicit human instruction.
+11. Do not merge until explicit human merge approval references the current PR HEAD SHA.
+12. After merge approval, you may execute the merge, close the Issue, clean up the branch, and update project status.
+"""
+]
