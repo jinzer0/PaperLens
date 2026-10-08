@@ -31,7 +31,13 @@ Protocol-only stdout; admitted safe stderr/crash projection only. Codes/tokens/U
 
 ## Unresolved prerequisites and exact conditional scope
 
-Actual P1/P2/P3 remain missing; local purge103/GRDB17/pure13+31+18 are not SDK/Main/physical proof. Story1.9 final wire authority and Story1.11 official-SDK/private-slot implementation remain absent. Public signatures/effects for start/completion/refusal/wait/poll/expiry/cancel/bounded shutdown/reap, auth paths and authenticated generation are UNKNOWN.
+Actual P1/P2/P3 remain missing; local purge103/GRDB17/pure13+31+18 are not SDK/Main/physical proof. Story1.9 final wire authority and Story1.11 official-SDK/private-slot implementation remain absent.
+
+Parent static follow-up in controlled installed SDK source/metadata declares0.160.0 and observes public account_login_start/cancel and routed login notifications/wait. Generated `chatgptDeviceCode` params use that type; response has loginId/userCode/verificationUrl, with NO expiry/interval/byte bounds. Completion has success and optional loginId/error; cancel response is status canceled/notFound, NOT closure/absence. These are SDK source shapes, never invented outer RPC fields, authenticated instruction validation or actual login proof.
+
+SDK login/global/pending queues are unbounded and login wait has no timeout argument. start inherits then overlays environment; defaults accept command/file-change approvals. close can wait2s plus two0.5s joins and kill without follow-up wait: not admitted cumulative300ms owned cleanup/reaping proof. Public bounded wait/expiry/refusal semantics, auth paths, authenticated generation, actual resource controls and cancellation/shutdown effects remain UNKNOWN. Do not bypass with private API, change prototype budgets or fabricate expiry from host time. Source inspection performed no SDK import/init/auth/network.
+
+Independent reviewer47 CLEAR/COMMENT on five-file static source consistency only; metadata/version not independently reviewed. Shared source identity/parent metadata evidence belongs to Issue13 evidence/1-11/sdk-source-inspection.json, not authenticated device-code evidence or a gate pass. Timeouts are source arguments, not measured/fixed waits or total-duration bounds.
 
 Pin units/clock basis/expiry comparison/cumulative wait and cleanup after public evidence. Host wall clock is not authenticated expiry proof;120000ms generation ceiling cannot enlarge10000ms probe/current RPC. Final CAS/storage/leases belong to their owners. No guessed SDK fields/paths/endpoints/constants.
 
