@@ -15,7 +15,7 @@ import json
 import re
 from uuid import UUID
 
-SPEC_COMMIT = "d7c43ba67dc470d557007c8e738fa5d43bdbdad6"
+SPEC_COMMIT = "7b489572bdee826e4a14101ca0961e10d705e570"
 GRDB_COMMIT = "b83108d10f42680d78f23fe4d4d80fc88dab3212"
 SCHEMA = "packaged-db-fts5-evidence-v1"
 POINTS = ("minimum/arm64", "minimum/x86_64", "current/arm64", "current/x86_64")
@@ -336,8 +336,11 @@ def validate_matrix(records: tuple[bytes, ...], expected: tuple[OwnerExpectedBin
         require(all(type(r) is bytes for r in records) and sum(map(len, records)) <= 65536)
         require(all(type(e) is OwnerExpectedBindings for e in expected))
         require(tuple(e.point for e in expected) == POINTS)
-        for name in ("attempt", "lineage", "artifact", "receipt"):
+        for name in ("attempt", "lineage", "receipt"):
             require(len({getattr(e, name) for e in expected}) == 4)
+        require(expected[0].artifact == expected[2].artifact)
+        require(expected[1].artifact == expected[3].artifact)
+        require(expected[0].artifact != expected[1].artifact)
         for name in ("run", "owner", "codeCommit", "code", "lock", "spec", "grdbSource", "acquisition", "package"):
             require(len({getattr(e, name) for e in expected}) == 1)
         results = [validate_cell(r, e, s) for r, e, s in zip(records, expected, supplied)]

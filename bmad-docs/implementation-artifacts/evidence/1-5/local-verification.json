@@ -1,14 +1,14 @@
 {
   "story": "1.5",
   "issue": 8,
-  "specCommit": "d7c43ba67dc470d557007c8e738fa5d43bdbdad6",
+  "specCommit": "7b489572bdee826e4a14101ca0961e10d705e570",
   "scope": "offline-packaged-database-phase-assertion-conformance",
   "verification": {
     "runtime": "approved-python-3.13.16-arm64",
-    "focusedDBContractTests": {"passed": 19, "failed": 0},
+    "focusedDBContractTests": {"passed": 20, "failed": 0},
     "dependencyConsumerTests": {"passed": 21, "failed": 0},
     "sharedRequestRegressionTests": {"passed": 34, "failed": 0},
-    "topologyUnionTests": {"passed": 355, "failed": 0},
+    "topologyUnionTests": {"passed": 356, "failed": 0},
     "observedWarnings": ["asyncio-slow-task-diagnostics"]
   },
   "independentStaticReview": {
@@ -17,6 +17,14 @@
     "scope": "offline-projection-and-consumer-delta",
     "resolved": ["inspection-export-byte-maximum-relationship", "shared-closed-compile-fact-export-policy"],
     "notPerformed": ["independent-test-execution", "independent-runtime-proof", "independent-source-build-verification"]
+  },
+  "artifactPairingReview": {
+    "reviewer": "26-DBArtifactPairingReview",
+    "verdict": "clear",
+    "recommendation": "comment-nonblocking-test-gap",
+    "policy": "two-cpu-artifacts-four-independent-executions",
+    "parentResolvedTestGap": "isolated-current-arm64-and-current-x86-artifact-substitutions",
+    "notPerformed": ["independent-test-execution", "execution-authentication"]
   },
   "implemented": [
     "immutable-independent-owner-bindings",
