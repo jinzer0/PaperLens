@@ -21,6 +21,9 @@ CASES = [
     ("topology.identity", {"runID": ID}, {"bridgePID": 1, "pythonPID": 2147483647}),
     ("topology.probe", {"runID": ID, "caseID": "ownZoneReadWrite"}, PROBE),
     ("topology.cleanup", {"runID": ID}, {"absent": True}),
+    ("topology.attemptPrepare", {"runID": ID, "paperID": ID, "generation": 1, "correlationID": ID}, {"prepared": True}),
+    ("topology.attemptTerminal", {"runID": ID, "paperID": ID, "generation": 1, "correlationID": ID, "outcome": "success"}, {"absent": True}),
+    ("topology.attemptRecover", {"runID": ID}, {"absent": True}),
     ("topology.wait", {"durationMs": 1}, {"elapsed": True}),
     ("cancel", {"targetID": ID}, {"accepted": False}),
 ]
@@ -46,6 +49,7 @@ class ProviderRPCTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, code)
 
     def test_every_method_round_trip_and_closed_fields(self):
+        self.assertEqual({case[0] for case in CASES}, set(rpc.CONTRACT['methods']))
         for method, params, result in CASES:
             with self.subTest(method=method):
                 value = request(method, params)
@@ -64,6 +68,30 @@ class ProviderRPCTests(unittest.TestCase):
                 for key in result:
                     missing = {name: item for name, item in result.items() if name != key}
                     self.rejects(lambda: rpc.validate_terminal({**terminal, "result": missing}, method))
+
+    def test_attempt_identity_bounds_and_closed_outcomes(self):
+        identity = {"runID": ID, "paperID": ID, "generation": 1, "correlationID": ID}
+        for method in ("topology.attemptPrepare", "topology.attemptTerminal"):
+            params = {**identity, **({"outcome": "success"} if method.endswith("Terminal") else {})}
+            for generation in (1, 2147483647):
+                rpc.validate_request(request(method, {**params, "generation": generation}))
+            for generation in (0, -1, 2147483648, True, False, 1.0, "1", None):
+                self.rejects(lambda: rpc.validate_request(request(method, {**params, "generation": generation})), "invalidParams")
+            for key in ("runID", "paperID", "correlationID"):
+                for invalid in (ID.upper(), "../fixture", "01234567-89ab-1cde-8123-456789abcdef", 1, None):
+                    self.rejects(lambda: rpc.validate_request(request(method, {**params, key: invalid})), "invalidParams")
+        for outcome in ("success", "failure", "cancelled"):
+            rpc.validate_request(request("topology.attemptTerminal", {**identity, "outcome": outcome}))
+        for outcome in ("providerSuccess", "timeout", "SUCCESS", 1, None, True):
+            self.rejects(lambda: rpc.validate_request(request("topology.attemptTerminal", {**identity, "outcome": outcome})), "invalidParams")
+        self.rejects(lambda: rpc.validate_request(request("topology.attemptRecover", {"runID": "invalid"})), "invalidParams")
+        for method, key in (("topology.attemptPrepare", "prepared"), ("topology.attemptTerminal", "absent"), ("topology.attemptRecover", "absent")):
+            for value in (True, False):
+                rpc.validate_terminal({"kind": "result", "id": ID, "result": {key: value}}, method)
+            for value in (1, 0, "true", None):
+                self.rejects(lambda: rpc.validate_terminal({"kind": "result", "id": ID, "result": {key: value}}, method))
+            self.rejects(lambda: rpc.validate_terminal({"kind": "event", "id": ID, "result": {key: True}}, method))
+            rpc.validate_terminal({"kind": "error", "id": ID, "code": "unavailable"}, method)
 
     def test_unknown_method_and_invalid_params_are_not_framing_failures(self):
         unknown = request("arbitrary.execute", {"command": "not-executed"})

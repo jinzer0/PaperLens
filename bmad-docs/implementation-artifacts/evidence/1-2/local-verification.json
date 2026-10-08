@@ -1,0 +1,67 @@
+{
+  "story": "1.2",
+  "issue": "https://github.com/jinzer0/PaperLens/issues/4",
+  "parentEpic": "https://github.com/jinzer0/PaperLens/issues/3",
+  "approvalRecord": "https://github.com/jinzer0/PaperLens/issues/3#issuecomment-6049004229",
+  "date": "2026-10-08",
+  "specCommit": "551dab925d7b3fc12bd3a282a90a3045c0315323",
+  "verificationSourceDirty": true,
+  "status": "synthetic-substrate-verified; canonical-story-blocked",
+  "scope": "Actual bounded temporary-filesystem marker/ownership cleanup via Agent topology RPC; outcome labels are synthetic fixtures, not SDK request success",
+  "sourceSHA256": {
+    "ProviderAgent/agent.py": "ce9b8a0d888ca0a30c8e4704e2047f69baa3cc78cc27d0fa1a036d6b6048c220",
+    "Contracts/ProviderRPC/contract.json": "859c62f3cf61915f290aa20cee08d112831729edcd973bfc637b70d8aa9f1739",
+    "Tests/Topology/test_agent.py": "9ecaa7cb23d8d398559cca304fa9ca9e8b05acec1a7ccaff476db7cb612a2df3",
+    "Tests/Topology/test_provider_rpc.py": "3a92ba3fd1dcccb4e4382ddd90edea77d983cac0e9cc7944a1c94b81a7570d03",
+    "Tests/Topology/ProviderRPCTests.swift": "8d6e03a535c6fdbda9a19ec9614089e1f0c37f8610273944a64bbfcecd03d5c8"
+  },
+  "automated": {
+    "pythonRuntime": ".build/topology/arm64/runtime.pre-bounded-roll/python/bin/python3.13",
+    "pythonVersion": "3.13.16",
+    "pythonCommand": "python3.13 -I -B -m unittest discover -s Tests/Topology -p 'test_*.py'",
+    "pythonTests": 315,
+    "pythonFailures": 0,
+    "nativeCommand": "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcrun swift test --scratch-path <new-exclusive-UUID-namespace>",
+    "nativeToolchain": "Xcode27.0/27A266a; Swift6.4; arm64 native host target",
+    "nativeTests": 15,
+    "nativeFailures": 0,
+    "nativeCoverage": "Existing exhaustive method fixtures extended to all three additive methods; generation, UUID, outcome and boolean distinctions exercised through shared JSON contract",
+    "formatter": "xcrun swift-format format --in-place Tests/Topology/ProviderRPCTests.swift",
+    "whitespace": "git diff --check pass",
+    "warningsRetained": "Mocked asyncio exact/beyond-deadline slow-task diagnostics (1s/2s) retained; no suppression"
+  },
+  "coverage": [
+    "all success/failure/cancelled synthetic terminal signals and named-run fresh-instance recovery",
+    "real filesystem exclusive ownership, no-follow/nonblocking descriptors, UID/mode/type/link checks",
+    "functional root/run/attempt receipt self-inode binding, identical-byte replacement refusal and preservation",
+    "caps, wrong identity, malformed/duplicate receipts, foreign/symlink/hardlink/extra entries",
+    "partial creation and interruption after marker/directory unlink; immutable receipt removed last",
+    "independent-descriptor real kernel flock contention, typed busy and no filesystem mutation",
+    "exact/beyond-deadline busy arbitration preserves timeout priority and single terminal"
+  ],
+  "independentReview": {
+    "spec": "Initial blocking receipt-replacement protection omission repaired with self-FD identity binding",
+    "implementation": "Initial late-AttemptBusy deadline-fence regression repaired; static delta re-review CLEAR",
+    "childGatesExecuted": false
+  },
+  "limits": {
+    "attemptsPerRun": 32,
+    "entriesPerNamedDirectory": 64,
+    "receiptBytes": 4096,
+    "correlationRAMCap": 256,
+    "streamSupportAdded": false,
+    "existingHandshakeOrLimitsChanged": false
+  },
+  "notPerformed": [
+    "actual packaged official SDK Provider request success/failure/cancellation",
+    "actual SDK session/log/temp cleanup or worker-drain integration",
+    "automatic full Agent startup recovery",
+    "signed app/GUI/package/signing run",
+    "Intel/Rosetta or physical dual-CPU/OS matrix execution",
+    "sandbox denial attribution/TCC/OS clock proof",
+    "historical control retry or reports/fixtures/CODEX_HOME access",
+    "remote CI/push/PR/notary/stapler/spctl/upload/distribution"
+  ],
+  "remainingAcceptance": "Canonical Story1.2 requires actual packaged SDK lifecycle and startup integration plus its packaged/isolation prerequisites. These remain unverified; local filesystem/codec tests do not establish P1/P2/P3 or Story completion",
+  "acceptedLimit": "Cooperative locks and inode receipts do not cryptographically prevent same-UID receipt forgery or eliminate hostile atomic replacement races; pre-provenance residue is preserved and remains unavailable"
+}

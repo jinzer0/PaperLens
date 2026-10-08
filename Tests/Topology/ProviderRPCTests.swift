@@ -79,6 +79,17 @@ final class ProviderRPCTests: XCTestCase {
       ),
       ("topology.cleanup", ["runID": id], ["absent": true]),
       ("topology.wait", ["durationMs": 1], ["elapsed": true]),
+      (
+        "topology.attemptPrepare",
+        ["runID": id, "paperID": id, "generation": 1, "correlationID": id],
+        ["prepared": true]
+      ),
+      (
+        "topology.attemptTerminal",
+        ["runID": id, "paperID": id, "generation": 1, "correlationID": id, "outcome": "success"],
+        ["absent": true]
+      ),
+      ("topology.attemptRecover", ["runID": id], ["absent": true]),
       ("cancel", ["targetID": id], ["accepted": false]),
     ]
   }
@@ -147,6 +158,48 @@ final class ProviderRPCTests: XCTestCase {
     malformed = request("missing")
     malformed["params"] = [] as [Any]
     rejects { try ProviderRPC.validateRequest(malformed) }
+  }
+
+  func testAttemptIdentityGenerationAndOutcomeBoundaries() throws {
+    let methods = ["topology.attemptPrepare", "topology.attemptTerminal"]
+    for method in methods {
+      var params: [String: Any] = [
+        "runID": id, "paperID": id, "generation": 1, "correlationID": id,
+      ]
+      if method == "topology.attemptTerminal" { params["outcome"] = "success" }
+      for generation in [1, 2_147_483_647] {
+        params["generation"] = generation
+        try ProviderRPC.validateRequest(
+          ProviderRPC.decode(ProviderRPC.encode(request(method, params: params))))
+      }
+      for generation in [0, -1, 2_147_483_648, true, false, 1.0, "1", NSNull()] as [Any] {
+        params["generation"] = generation
+        rejects(.invalidParams) { try ProviderRPC.validateRequest(request(method, params: params)) }
+      }
+      params["generation"] = 1
+      for key in ["runID", "paperID", "correlationID"] {
+        for invalid in [id.uppercased(), "invalid", 1, NSNull()] as [Any] {
+          var changed = params
+          changed[key] = invalid
+          rejects(.invalidParams) {
+            try ProviderRPC.validateRequest(request(method, params: changed))
+          }
+        }
+      }
+    }
+    var params: [String: Any] = [
+      "runID": id, "paperID": id, "generation": 1, "correlationID": id,
+    ]
+    for outcome in ["success", "failure", "cancelled"] {
+      params["outcome"] = outcome
+      try ProviderRPC.validateRequest(request("topology.attemptTerminal", params: params))
+    }
+    for outcome in ["finished", true, 1, NSNull()] as [Any] {
+      params["outcome"] = outcome
+      rejects(.invalidParams) {
+        try ProviderRPC.validateRequest(request("topology.attemptTerminal", params: params))
+      }
+    }
   }
 
   func testEnvelopeUUIDAndTimeoutValidation() throws {
@@ -236,6 +289,8 @@ final class ProviderRPCTests: XCTestCase {
     }
     for (method, key) in [
       ("topology.prepare", "prepared"), ("topology.cleanup", "absent"),
+      ("topology.attemptPrepare", "prepared"), ("topology.attemptTerminal", "absent"),
+      ("topology.attemptRecover", "absent"),
       ("topology.wait", "elapsed"), ("cancel", "accepted"),
     ] {
       for value in [0, 1] {

@@ -1,9 +1,11 @@
-"""Story 1.1 only: bounded ProviderRPC and a real, unauthenticated SDK probe."""
+"""Topology SDK probe and Agent-owned synthetic attempt-cleanup fixtures."""
 from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
 import errno
+from contextlib import contextmanager, ExitStack
+import fcntl
 import importlib
 import json
 import os
@@ -90,6 +92,338 @@ def safe_uuid(value: str) -> str:
     if parsed.version != 4 or str(parsed) != value:
         raise ValueError('invalidID')
     return value
+
+
+class AttemptBusy(Exception):
+    pass
+
+
+class AttemptFixtures:
+    """Private synthetic crash-recovery substrate; not an SDK outcome ledger."""
+    namespace = 'PaperLensAttemptFixturesV1'
+    marker = b'PaperLens synthetic attempt fixture\n'
+    lock = threading.Lock()
+
+    def __init__(self) -> None:
+        self.used: set[str] = set()
+
+    @staticmethod
+    def identity(fd: int) -> list[int]:
+        info = os.fstat(fd)
+        return [info.st_dev, info.st_ino]
+
+    @staticmethod
+    def check(fd: int, directory: bool) -> None:
+        info = os.fstat(fd)
+        # Directory link counts vary by filesystem and child count; zero is unlinked.
+        # Regular files must have exactly one link, including all ownership receipts.
+        if (info.st_uid != os.getuid()
+                or stat.S_IMODE(info.st_mode) != (0o700 if directory else 0o600)
+                or not (stat.S_ISDIR(info.st_mode) if directory else stat.S_ISREG(info.st_mode))
+                or (info.st_nlink < 1 if directory else info.st_nlink != 1)):
+            raise PermissionError('unsafeFixture')
+
+    @classmethod
+    def open_dir(cls, parent: int, name: str) -> int:
+        fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                     dir_fd=parent)
+        try:
+            cls.check(fd, True)
+            return fd
+        except BaseException:
+            os.close(fd)
+            raise
+
+    @staticmethod
+    def entries(fd: int) -> set[str]:
+        names = set()
+        with os.scandir(fd) as entries:
+            for entry in entries:
+                if len(names) == 64:
+                    raise PermissionError('fixtureBound')
+                names.add(entry.name)
+        return names
+
+    @staticmethod
+    def pairs(pairs: list) -> dict:
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError('duplicateReceipt')
+            result[key] = value
+        return result
+
+    @classmethod
+    def receipt(cls, parent: int, name: str, expected: dict | None = None) -> dict:
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
+        try:
+            cls.check(fd, False)
+            if os.fstat(fd).st_size > 4096:
+                raise PermissionError('receiptBound')
+            data = bytearray()
+            while len(data) <= 4096:
+                part = os.read(fd, 4097 - len(data))
+                if not part:
+                    break
+                data.extend(part)
+            if len(data) > 4096:
+                raise PermissionError('receiptBound')
+            value = json.loads(data.decode('utf-8'), object_pairs_hook=cls.pairs)
+            if (not isinstance(value, dict) or not cls.inode(value.get('self'))
+                    or value['self'] != cls.identity(fd)):
+                raise PermissionError('receiptIdentity')
+            if expected is not None and json.dumps(value, sort_keys=True) != json.dumps(
+                    {**expected, 'self': cls.identity(fd)}, sort_keys=True):
+                raise PermissionError('receiptMismatch')
+            return value
+        finally:
+            os.close(fd)
+
+    @classmethod
+    def write_receipt(cls, parent: int, name: str, value: dict) -> None:
+        fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_NONBLOCK,
+                     0o600, dir_fd=parent)
+        try:
+            cls.check(fd, False)
+            data = json.dumps({**value, 'self': cls.identity(fd)}, separators=(',', ':')).encode()
+            offset = 0
+            while offset < len(data):
+                count = os.write(fd, data[offset:])
+                if count <= 0:
+                    raise OSError('receiptWrite')
+                offset += count
+            os.fsync(fd)
+            os.fsync(parent)
+        finally:
+            os.close(fd)
+
+    @contextmanager
+    def root(self, create: bool):
+        if not self.lock.acquire(blocking=False):
+            raise AttemptBusy()
+        try:
+            _, container = fixture_profile()
+            with ExitStack() as stack:
+                fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                stack.callback(os.close, fd)
+                # System ancestors are not private fixture directories, but must be real dirs.
+                for component in container.parts[1:]:
+                    fd = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW |
+                                 os.O_NONBLOCK, dir_fd=fd)
+                    stack.callback(os.close, fd)
+                if os.fstat(fd).st_uid != os.getuid():
+                    raise PermissionError('unsafeContainer')
+                for component in ('Library', 'Application Support'):
+                    if create:
+                        try:
+                            os.mkdir(component, 0o700, dir_fd=fd)
+                        except FileExistsError:
+                            pass
+                    try:
+                        fd = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW |
+                                     os.O_NONBLOCK, dir_fd=fd)
+                    except FileNotFoundError:
+                        if create:
+                            raise
+                        yield None
+                        return
+                    stack.callback(os.close, fd)
+                    if os.fstat(fd).st_uid != os.getuid():
+                        raise PermissionError('unsafeParent')
+                created = False
+                if create:
+                    try:
+                        os.mkdir(self.namespace, 0o700, dir_fd=fd)
+                        created = True
+                    except FileExistsError:
+                        pass
+                try:
+                    root = self.open_dir(fd, self.namespace)
+                except FileNotFoundError:
+                    if create:
+                        raise
+                    yield None
+                    return
+                stack.callback(os.close, root)
+                expected = {'version': 1, 'kind': 'root', 'directory': self.identity(root)}
+                if created:
+                    self.write_receipt(root, '.owner.json', expected)
+                owner_receipt = self.receipt(root, '.owner.json', expected)
+                owner = os.open('.owner.json', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                                dir_fd=root)
+                stack.callback(os.close, owner)
+                self.check(owner, False)
+                if self.identity(owner) != owner_receipt['self']:
+                    raise PermissionError('receiptIdentity')
+                try:
+                    fcntl.flock(owner, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    raise AttemptBusy() from None
+                self.receipt(root, '.owner.json', expected)
+                yield root
+        finally:
+            self.lock.release()
+
+    @staticmethod
+    def params(run: str, paper: str, generation: int, correlation: str) -> dict:
+        for value in (run, paper, correlation):
+            safe_uuid(value)
+        bounds = CONTRACT['definitions']['generation']
+        if type(generation) is not int or not bounds['minimum'] <= generation <= bounds['maximum']:
+            raise ValueError('generation')
+        return {'runID': run, 'paperID': paper, 'generation': generation,
+                'correlationID': correlation}
+
+    @classmethod
+    def inode(cls, value: object) -> bool:
+        return (type(value) is list and len(value) == 2
+                and all(type(item) is int and item >= 0 for item in value))
+
+    def inspect_run(self, root: int, run: str, stack: ExitStack):
+        name = run + '.owner.json'
+        try:
+            receipt = self.receipt(root, name)
+        except FileNotFoundError:
+            try:
+                os.stat(run, dir_fd=root, follow_symlinks=False)
+            except FileNotFoundError:
+                return None, []
+            raise PermissionError('unownedRun')
+        if (set(receipt) != {'version', 'kind', 'runID', 'directory', 'self'}
+                or type(receipt['version']) is not int or receipt['version'] != 1
+                or receipt['kind'] != 'run' or receipt['runID'] != run
+                or not self.inode(receipt['directory'])):
+            raise PermissionError('runReceipt')
+        try:
+            fd = self.open_dir(root, run)
+        except FileNotFoundError:
+            return None, []
+        stack.callback(os.close, fd)
+        if self.identity(fd) != receipt['directory']:
+            raise PermissionError('runIdentity')
+        names = self.entries(fd)
+        correlations = set()
+        for entry in names:
+            correlation = entry[:-11] if entry.endswith('.owner.json') else entry
+            safe_uuid(correlation)
+            correlations.add(correlation)
+        if len(correlations) > 32:
+            raise PermissionError('attemptBound')
+        attempts = []
+        for correlation in sorted(correlations):
+            value = self.receipt(fd, correlation + '.owner.json')
+            if set(value) != {'version', 'kind', 'runID', 'paperID', 'generation',
+                              'correlationID', 'directory', 'marker', 'self'}:
+                raise PermissionError('attemptReceipt')
+            self.params(value['runID'], value['paperID'], value['generation'], value['correlationID'])
+            if (type(value['version']) is not int or value['version'] != 1
+                    or value['kind'] != 'attempt' or value['runID'] != run
+                    or value['correlationID'] != correlation
+                    or not self.inode(value['directory']) or not self.inode(value['marker'])):
+                raise PermissionError('attemptReceipt')
+            try:
+                child = self.open_dir(fd, correlation)
+            except FileNotFoundError:
+                child = None
+            if child is not None:
+                stack.callback(os.close, child)
+                if self.identity(child) != value['directory']:
+                    raise PermissionError('attemptIdentity')
+                entries = self.entries(child)
+                if entries - {'marker.bin'}:
+                    raise PermissionError('extraEntry')
+                if 'marker.bin' in entries:
+                    marker = os.open('marker.bin', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                                     dir_fd=child)
+                    stack.callback(os.close, marker)
+                    self.check(marker, False)
+                    if self.identity(marker) != value['marker']:
+                        raise PermissionError('markerIdentity')
+            attempts.append((correlation, value, child))
+        return fd, attempts
+
+    def prepare(self, runID: str, paperID: str, generation: int, correlationID: str) -> dict:
+        identity = self.params(runID, paperID, generation, correlationID)
+        with self.root(True) as root, ExitStack() as stack:
+            if correlationID in self.used or len(self.used) >= 256:
+                raise PermissionError('correlationBound')
+            run, attempts = self.inspect_run(root, runID, stack)
+            if run is None:
+                # An existing receipt, even for an absent run, cannot be overwritten.
+                try:
+                    os.stat(runID + '.owner.json', dir_fd=root, follow_symlinks=False)
+                except FileNotFoundError:
+                    pass
+                else:
+                    raise PermissionError('existingRun')
+                os.mkdir(runID, 0o700, dir_fd=root)
+                run = self.open_dir(root, runID)
+                stack.callback(os.close, run)
+                self.write_receipt(root, runID + '.owner.json', {
+                    'version': 1, 'kind': 'run', 'runID': runID, 'directory': self.identity(run)})
+            if len(attempts) >= 32 or any(item[0] == correlationID for item in attempts):
+                raise PermissionError('existingAttempt')
+            self.used.add(correlationID)
+            os.mkdir(correlationID, 0o700, dir_fd=run)
+            child = self.open_dir(run, correlationID)
+            stack.callback(os.close, child)
+            marker = os.open('marker.bin', os.O_WRONLY | os.O_CREAT | os.O_EXCL |
+                             os.O_NOFOLLOW | os.O_NONBLOCK, 0o600, dir_fd=child)
+            stack.callback(os.close, marker)
+            self.check(marker, False)
+            self.write_receipt(run, correlationID + '.owner.json', {
+                'version': 1, 'kind': 'attempt', **identity,
+                'directory': self.identity(child), 'marker': self.identity(marker)})
+            os.fsync(child)
+            offset = 0
+            while offset < len(self.marker):
+                count = os.write(marker, self.marker[offset:])
+                if count <= 0:
+                    raise OSError('markerWrite')
+                offset += count
+            os.fsync(marker)
+            return {'prepared': True}
+
+    def cleanup(self, runID: str, identity: dict | None = None) -> dict:
+        safe_uuid(runID)
+        with self.root(False) as root, ExitStack() as stack:
+            if root is None:
+                return {'absent': True}
+            run, attempts = self.inspect_run(root, runID, stack)
+            selected = attempts
+            if identity is not None:
+                selected = [item for item in attempts if item[0] == identity['correlationID']]
+                if selected and any(selected[0][1][key] != value for key, value in identity.items()):
+                    raise PermissionError('identityMismatch')
+            for correlation, _, child in selected:
+                if child is not None:
+                    if 'marker.bin' in self.entries(child):
+                        os.unlink('marker.bin', dir_fd=child)
+                        os.fsync(child)
+                    os.rmdir(correlation, dir_fd=run)
+                    os.fsync(run)
+                os.unlink(correlation + '.owner.json', dir_fd=run)
+                os.fsync(run)
+            if run is not None and not self.entries(run):
+                os.rmdir(runID, dir_fd=root)
+                os.fsync(root)
+                run = None
+            if run is None:
+                try:
+                    os.unlink(runID + '.owner.json', dir_fd=root)
+                    os.fsync(root)
+                except FileNotFoundError:
+                    pass
+            return {'absent': True}
+
+    def terminal(self, runID: str, paperID: str, generation: int,
+                 correlationID: str, outcome: str) -> dict:
+        if type(outcome) is not str or outcome not in CONTRACT['definitions']['attemptOutcome']['enum']:
+            raise ValueError('outcome')
+        return self.cleanup(runID, self.params(runID, paperID, generation, correlationID))
+
+    def recover(self, runID: str) -> dict:
+        return self.cleanup(runID)
 
 
 class Fixtures:
@@ -499,6 +833,7 @@ class Server:
     def __init__(self, runtime: RuntimeProbe | None = None, fixtures: Fixtures | None = None) -> None:
         self.runtime = runtime or RuntimeProbe()
         self.fixtures = fixtures or Fixtures()
+        self.attempts = AttemptFixtures()
         self.seen: set[str] = set()
         self.pending: dict[str, Pending] = {}
         self.runtime_workers: dict[str, asyncio.Task] = {}
@@ -647,6 +982,12 @@ class Server:
                 result = {'bridgePID': os.getppid(), 'pythonPID': os.getpid()}
             elif method == 'topology.cleanup':
                 result = self.fixtures.cleanup(params['runID'])
+            elif method == 'topology.attemptPrepare':
+                result = self.attempts.prepare(**params)
+            elif method == 'topology.attemptTerminal':
+                result = self.attempts.terminal(**params)
+            elif method == 'topology.attemptRecover':
+                result = self.attempts.recover(**params)
             else:
                 result = self.fixtures.probe(params['runID'], params['caseID'])
             if asyncio.get_running_loop().time() >= deadline:
@@ -655,6 +996,11 @@ class Server:
                 self.finish(identifier, result=result)
         except asyncio.CancelledError:
             self.terminate(identifier, 'cancelled')
+        except AttemptBusy:
+            if asyncio.get_running_loop().time() >= deadline:
+                self.terminate(identifier, 'timeout')
+            else:
+                self.finish(identifier, code='busy')
         except Exception:
             if asyncio.get_running_loop().time() >= deadline:
                 self.terminate(identifier, 'timeout')

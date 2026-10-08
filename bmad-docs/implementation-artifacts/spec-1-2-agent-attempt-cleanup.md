@@ -23,6 +23,7 @@ Epic의 명시적 일괄 SCOPE+IMPLEMENTATION 승인으로 구현한다. 이 Spe
 - `Contracts/ProviderRPC/contract.json`: 유일 wire schema에 세 method와 generation/outcome definitions를 추가한다. 기존 topology major/minor/capability를 유지하는 additive 시험 method이며 제품 RPC Story1.9로 전용하지 않는다.
 - `Tests/Topology/test_agent.py`: 실제 temporary filesystem과 Server RPC를 이용한 lifecycle/재시작/충돌/오류 tests.
 - `Tests/Topology/test_provider_rpc.py`: closed schema와 bounds/extra key/enum/kind/error tests. Native validator는 같은 contract resource를 읽으므로 별도 policy 복제 없이 부모 native suite도 실행한다.
+- `Tests/Topology/ProviderRPCTests.swift`: 새 세 method의 실제 native encode/decode/request/terminal 검증과 generation/UUID/outcome/boolean 경계 사례를 기존 exhaustive fixtures에 추가한다. 기존14 tests만 통과했다고 새 method coverage를 주장하지 않는다.
 - `Package.swift`/native protocol/앱 UI/runtime/package source는 이 slice에서 바꾸지 않는다. 패키징/실제 SDK lifecycle integration은 unresolved acceptance evidence로 남긴다.
 
 ## Closed topology wire
@@ -40,6 +41,7 @@ Epic의 명시적 일괄 SCOPE+IMPLEMENTATION 승인으로 구현한다. 이 Spe
 - Root/run/attempt directory mode700, leaf/functional ownership receipt mode600, current UID, regular file/dir, no symlink. 모든 부모는 component-by-component O_DIRECTORY/O_NOFOLLOW traversal; root/run/attempt descriptor-relative operations를 사용한다. 외부 target/recursive shutil.rmtree는 금지.
 - 모든 regular-file open에는 O_NONBLOCK도 적용하고 type/UID/mode/link-count를 열린 descriptor에서 확인한다. 디렉터리 열거는 bounded iterator로 수행하며 unbounded listdir 결과를 먼저 materialize하지 않는다.
 - 한 run은 최대32 attempts. 한 root의 startup 검사는 하지 않고 `attemptRecover(runID)`의 **named run만** 검증한다. 모든 디렉터리 열거/receipt read는 bound(최대64 entries, receipt≤4096 bytes)로 제한한다. Store의 used-correlation set은 최대256으로 bounded; full이면 새 attempt를 거절하고 자동 eviction/reuse하지 않는다. Store 내 mutating calls는 nonblocking owned lock으로 serialize하며 busy 상태에 기다리지 않는다.
+- Process-local thread lock만으로 여러 Agent process를 serialize했다고 주장하지 않는다. 검증한 root ownership receipt FD를 context 종료까지 보유하고 kernel flock의 LOCK_EX|LOCK_NB로 cooperating processes를 serialize한다. Contention은 busy이며 filesystem state를 변경하지 않는다.
 - run은 생성한 Agent의 ownership receipt에 정확 run identity와 owned directory inode identity를 남긴다. attempt는 고정 correlation child와 immutable receipt에 runID/paperID/generation/correlationID 및 소유 directory/marker inode identity만 기록한다. 이는 새 시험 namespace의 **functional crash-recovery ownership metadata**이며 diagnostics/evidence로 복사하지 않는다. Paper-linked metadata는 cleanup 후 제거한다. UID/path/PID/time/내용/log/secret/hash를 safe evidence에 남기지 않는다.
 - root/run/attempt ownership receipt 모두 **자신의 exclusive-creation FD에서 얻은 device/inode identity**도 자기 body에 기록한다. Recovery는 no-follow로 연 receipt FD와 그 self-identity를 비교한 뒤에만 사용한다. 동일 bytes를 다른 inode로 복사한 replacement는 foreign/unavailable이며 삭제하지 않는다. Same-UID의 의도적 receipt forgery 자체를 cryptographic authentication으로 막았다고 주장하지 않는다.
 - Marker는 고정 synthetic bytes만 쓴다. directory와 empty marker의 ownership을 먼저 확보하고 exclusive receipt를 완전히 작성/fsync한 다음 marker bytes를 쓴다. receipt가 없는 pre-provenance crash residue는 삭제하지 않고 unavailable로 남긴다. Failure rollback도 이미 확보한 inode ownership만 정리한다.

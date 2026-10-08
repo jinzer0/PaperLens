@@ -38,7 +38,8 @@ development_status:
   epic-1: in-progress
   # Issue #2: implementation exists; external isolation evidence remains blocked, not done.
   1-1-두-cpu에서-격리된-앱-실행-구조-입증: in-progress
-  1-2-provider-agent-작업-종료-재시작-정리-검증: backlog
+  # Issue #4: synthetic cleanup substrate verified; packaged SDK/startup acceptance remains blocked.
+  1-2-provider-agent-작업-종료-재시작-정리-검증: in-progress
   1-3-앱-교체-paper-삭제-시-agent-정리-검증: backlog
   1-4-p-2-의존성-잠금과-실행-os-매트릭스-확정: backlog
   1-5-패키징된-db-fts5-매트릭스-검증: backlog
