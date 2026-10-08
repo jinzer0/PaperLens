@@ -2,7 +2,7 @@
   "story": "1.3",
   "issue": 6,
   "specCommit": "9c90218262dfe0b1b019f03085e8ad3d83562b26",
-  "scope": "post-flock-owner-and-current-namespace-binding-precursor",
+  "scope": "registered-synthetic-session-producer-drain-and-paper-purge-with-historical-precursors",
   "verification": {
     "runtime": "approved-python-3.13.16-arm64",
     "topologyRegressionTests": {"passed": 318, "failed": 0},
@@ -34,9 +34,49 @@
     "named-namespace-identity-compared-to-retained-root",
     "real-flock-owner-namespace-and-ancestor-replacement-preservation-regressions"
   ],
+  "syntheticPurgeRuntime": {
+    "scope": "actual-registered-synthetic-prepare-writers-only-not-sdk",
+    "sourceCommittedAtRuntime": false,
+    "sourceCodeSHA256": {
+      "ProviderAgent/agent.py": "bc894ba62f9091e3d8a4c23198dbb7337266c7af87a3f94915ca13f8fad1ebb6",
+      "Tests/Topology/test_agent.py": "d6454adda44e8ad98d600560d5782bdd1c10dde12ab228e3d29ee7e88e64ae32"
+    },
+    "focusedTests": {"passed": 103, "failed": 0},
+    "topologyUnionTests": {"passed": 347, "failed": 0},
+    "whitespace": "pass",
+    "observedWarnings": ["asyncio-slow-task-diagnostics"],
+    "unraisableClosureErrorsObserved": false,
+    "staticReviewer": "35-35-PurgeLifecycleSafetyReview",
+    "staticVerdict": "clear",
+    "staticRecommendation": "approve-registered-synthetic-scope-only",
+    "independentExecutionPerformed": false,
+    "actualSyntheticDrainAcknowledgmentVerified": true,
+    "actualSDKEventsAuthenticated": false,
+    "implementedAndExercised": [
+      "retained-verified-root-owner-flock-and-explicit-exitstack-lifetime",
+      "joined-store-borrowing-and-independent-session-exclusion",
+      "real-prepare-registration-before-scheduling-and-access",
+      "request-wrapper-cancellation-not-underlying-writer-closure",
+      "observed-writer-local-fd-closure-before-purge-acknowledgment",
+      "atomic-revocation-terminal-arbitration-and-fence-capacity-reservation",
+      "entire-run-generation-ownership-validation-before-first-unlink",
+      "descendant-name-inode-census-before-every-destructive-step",
+      "fresh-recovery-reservation-versus-current-purge-fence-arbitration",
+      "fresh-envelope-revalidation-not-cached-purge-acknowledgment",
+      "cumulative-deadline-state-gate-waits-and-held-fsync-close-response",
+      "closure-uncertainty-retains-lease-and-refuses-fresh-recovery",
+      "inode-bound-close-callbacks-preserve-recycled-foreign-descriptors"
+    ],
+    "resolvedStaticFindings": ["F1-descendant-replacement", "F2-filesystem-under-state", "F3-capacity-error-mapping", "F4-zero-deadline", "F5-recovery-purge-fence-race"],
+    "historicalGates": [
+      {"focusedPassed": 95, "unionPassed": 339, "laterReview": "F1-through-F4-block"},
+      {"focusedRun": 101, "errors": 4, "result": "failed-uncertainty-teardown-and-descriptor-reuse", "unionRun": false},
+      {"focusedPassed": 102, "unionPassed": 346, "laterReview": "F5-block-resolved-in-current-source"}
+    ],
+    "limitations": ["registered-cooperating-synthetic-writers-only", "no-unknown-sdk-writer-exclusion", "no-hostile-same-uid-between-syscall-immunity", "no-post-lease-permanent-deletion-ledger"]
+  },
   "notProven": [
-    "retained-session-coordinator", "producer-registration-and-drain",
-    "paper-purge-runtime-and-acknowledgment", "permanent-pathname-stability",
+    "sdk-producer-registration-and-authenticated-drain", "permanent-pathname-stability",
     "arbitrary-same-uid-forgery-resistance", "actual-sdk-lifecycle",
     "signed-two-cpu-topology", "p1", "product-deletion-completion"
   ],
