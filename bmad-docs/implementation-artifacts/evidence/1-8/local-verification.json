@@ -1,0 +1,45 @@
+{
+  "story": "1.8",
+  "issue": 10,
+  "specCommit": "99b5409ab97dff059001191d4cf5ad82fff96e5b",
+  "scope": "pure-readiness-state-and-fail-closed-offscreen-probe-checkpoint",
+  "implementationCheckpoint": "incomplete-renderer-blocked",
+  "sourceCommittedAtRuntime": false,
+  "verification": {
+    "nativeTarget": "arm64-apple-macosx15.0",
+    "pureRequestRPCArtifact": "37996ee6-2bb8-42c4-b8d1-3347956c4183",
+    "pureReadinessTests": {"passed": 13, "failed": 0},
+    "requestRegressionTests": {"passed": 31, "failed": 0},
+    "rpcRegressionTests": {"passed": 15, "failed": 0},
+    "warnings": 0,
+    "actualRendererTestExcludedFromPureScope": true,
+    "actualRenderer": {
+      "artifact": "ea270b54-0010-437b-a552-b9656d026e0e",
+      "status": "failed",
+      "failureCode": "blankCapture",
+      "publicSetupCorrectionsVerifiedAsSuccessful": false,
+      "positiveXCTestSuiteSummaryObserved": false,
+      "zeroTestSwiftTestingSummaryIsNotXCTestProof": true,
+      "rendererFailureAcceptedAsPass": false
+    }
+  },
+  "independentStaticReview": {
+    "reviewer": "28-28-ReadinessSafetyReview",
+    "sourceSafetyVerdict": "clear",
+    "recommendation": "comment",
+    "severityFindings": 0,
+    "rendererDisposition": "block",
+    "notPerformed": ["independent-execution", "artifact-authentication", "renderer-certification"]
+  },
+  "proofBoundaries": {
+    "rasterVerified": false,
+    "visibleCompletionVerified": false,
+    "fourSourceTransportMatrixVerified": false,
+    "cpuOSRendererMatrixVerified": false,
+    "frameworkAllocationAndTimingCertified": false
+  },
+  "storyComplete": false,
+  "p6Passed": false,
+  "downstreamPromotion": "blocked",
+  "releasePromotion": "not-promoted"
+}

@@ -7,8 +7,19 @@ let package = Package(
   products: [
     .library(name: "ProviderRPC", targets: ["ProviderRPC"]),
     .library(name: "ProviderRequest", targets: ["ProviderRequest"]),
+    .library(name: "PDFReadiness", targets: ["PDFReadiness"]),
   ],
   targets: [
+    .target(
+      name: "PDFReadiness",
+      dependencies: ["ProviderRequest"],
+      path: "Contracts/PDFReadiness"
+    ),
+    .testTarget(
+      name: "PDFReadinessTests",
+      dependencies: ["PDFReadiness", "ProviderRequest"],
+      path: "Tests/PDFReadiness"
+    ),
     .target(
       name: "ProviderRequest",
       path: "Contracts/ProviderRequest",
