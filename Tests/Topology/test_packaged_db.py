@@ -16,7 +16,7 @@ import validate_dependency_lock as dependency_lock
 def fixture(point="current/arm64", run=None, owner=None):
     blobs = {name: ("synthetic approved " + name).encode() for name in db.BYTE_FIELDS}
     blobs["lock"] = (SCRIPTS / "dependencies.json").read_bytes()
-    blobs["artifact"] += point.encode()
+    blobs["artifact"] += point.split("/")[1].encode()
     projection = db.SQLiteProjection(db.digest(b"approved image"), "3.50.4",
                                      db.digest(b"approved SQLite source"), ("ENABLE_FTS5",))
     expected = db.OwnerExpectedBindings(
@@ -355,6 +355,7 @@ class PackagedDBTests(unittest.TestCase):
         records = tuple(db.json_bytes(f[0]) for f in fixtures)
         expected = tuple(f[1] for f in fixtures)
         supplied = tuple(f[2] for f in fixtures)
+        self.assertEqual(len({e.artifact for e in expected}), 2)
         self.check_result(db.validate_matrix(records, expected, supplied), True)
         padded = tuple(r + b" " * (16384 - len(r)) for r in records)
         self.assertEqual(sum(map(len, padded)), 65536)
@@ -368,6 +369,31 @@ class PackagedDBTests(unittest.TestCase):
             changed = (expected[0], replace(expected[1], **{name: getattr(expected[0], name)}), *expected[2:])
             self.check_result(db.validate_matrix(records, changed, supplied))
         self.check_result(db.validate_matrix(list(records), expected, supplied))
+
+    def test_artifact_pairing_rejects_rebound_four_artifacts_and_cross_cpu_alias(self):
+        for variant in ("four-artifacts", "cross-cpu-alias", "current/arm64", "current/x86_64"):
+            with self.subTest(variant=variant):
+                run, owner = str(uuid4()), str(uuid4())
+                fixtures = []
+                for point in db.POINTS:
+                    record, expected, supplied = fixture(point, run, owner)
+                    artifact = supplied.artifact
+                    if variant == "four-artifacts" or variant == point:
+                        artifact = ("approved " + point).encode()
+                    elif variant == "cross-cpu-alias":
+                        artifact = b"same artifact"
+                    expected = replace(expected, artifact=db.digest(artifact))
+                    bindings = db.expected_bindings(expected)
+                    del bindings["receipt"]
+                    receipt = db.json_bytes({"bindings": bindings})
+                    expected = replace(expected, receipt=db.digest(receipt))
+                    supplied = replace(supplied, artifact=artifact, receipt=receipt)
+                    record["bindings"] = db.expected_bindings(expected)
+                    self.check_result(db.validate_cell(db.json_bytes(record), expected, supplied), True)
+                    fixtures.append((db.json_bytes(record), expected, supplied))
+                self.check_result(db.validate_matrix(
+                    tuple(f[0] for f in fixtures), tuple(f[1] for f in fixtures),
+                    tuple(f[2] for f in fixtures)))
 
     def test_no_input_or_exception_echo(self):
         for value in (None, 4, "PRIVATE/path", b'{"PRIVATE_key":"PRIVATE/path"}'):
