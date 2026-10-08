@@ -31,6 +31,24 @@
     "rendererDisposition": "block",
     "notPerformed": ["independent-execution", "artifact-authentication", "renderer-certification"]
   },
+  "integratedContractVerification": {
+    "artifact": "246c0e36-39f7-444a-8c5a-a397de451e96",
+    "pureReadinessTests": {"passed": 13, "failed": 0},
+    "requestRegressionTests": {"passed": 31, "failed": 0},
+    "rpcRegressionTests": {"passed": 18, "failed": 0},
+    "topologyPythonTests": {"passed": 404, "failed": 0},
+    "requestPythonTests": {"passed": 34, "failed": 0},
+    "nativeWarnings": 0,
+    "rendererExplicitlyExcluded": true,
+    "rendererFailureRerun": false,
+    "repeatedSuiteSummariesAreNotIndependentExecutions": true,
+    "packageChange": "exclude-independent-db-and-python-matrix-tests-from-rpc-target",
+    "nativeGRDBTargetOrDependencyAdded": false,
+    "packageChangeCommittedAtRuntime": false,
+    "p1Passed": false,
+    "p2Passed": false,
+    "p6Passed": false
+  },
   "proofBoundaries": {
     "rasterVerified": false,
     "visibleCompletionVerified": false,

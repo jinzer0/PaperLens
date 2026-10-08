@@ -49,6 +49,7 @@ let package = Package(
         "FixtureGroupOwner.swift", "FixtureGroupOwner-Info.plist",
         "FixtureGroupOwner.entitlements", "fixture-map.json", "test_acquire.py", "test_agent.py",
         "test_package.py", "test_provider_rpc.py", "test_dependency_lock.py", "test_packaged_db.py",
+        "test_agent_matrix.py", "PackagedDBProbeTests.swift",
         "ReportPublicationTests.swift", "ActorIdentityProbe.swift",
         "PDFiumRollTests.cpp", "test_pdfium_roll.py",
       ],
