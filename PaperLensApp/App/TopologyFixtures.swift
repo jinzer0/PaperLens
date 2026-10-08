@@ -3,6 +3,93 @@ import CryptoKit
 import Darwin
 import Foundation
 
+// Independent CODE-artifact identities, supplied by setup before SQLite opens.
+// Unlike canary fixtures, these descriptors never authorize automatic deletion.
+struct TopologyDBOwnerContext: @unchecked Sendable {
+  let worktreePath: String
+  let worktree: Int32
+  let topology: Int32
+  let namespace: Int32
+  let worktreeIdentity: stat
+  let topologyIdentity: stat
+  let namespaceIdentity: stat
+  let databaseIdentity: stat
+  let uid: uid_t
+  let ownerID: String
+  let runID: String
+  let attemptID: String
+  var entry: String { "local-grdb-probe-" + runID }
+  var databasePath: String { worktreePath + "/.build/topology/" + entry + "/db.sqlite" }
+
+  func validateDirectory() -> Bool {
+    guard uid == getuid(), uid == geteuid(), TopologyFixtures.validRunID(runID),
+      TopologyFixtures.validRunID(ownerID), TopologyFixtures.validRunID(attemptID),
+      worktreePath.hasPrefix("/"),
+      URL(fileURLWithPath: worktreePath).standardizedFileURL.path == worktreePath
+    else { return false }
+    func same(_ fd: Int32, _ expected: stat, privateMode: Bool) -> Bool {
+      var current = stat()
+      guard fstat(fd, &current) == 0, current.st_dev == expected.st_dev,
+        current.st_ino == expected.st_ino, current.st_uid == uid,
+        expected.st_uid == uid, current.st_mode & S_IFMT == S_IFDIR
+      else { return false }
+      return !privateMode || TopologyFixtures.privateDirectory(fd, info: &current)
+    }
+    guard same(worktree, worktreeIdentity, privateMode: false),
+      same(topology, topologyIdentity, privateMode: false),
+      same(namespace, namespaceIdentity, privateMode: true),
+      TopologyFixtures.matches(directory: topology, name: entry, info: namespaceIdentity),
+      let root = TopologyFixtures.directory(URL(fileURLWithPath: worktreePath), create: false)
+    else { return false }
+    defer { close(root) }
+    guard same(root, worktreeIdentity, privateMode: false),
+      let parent = TopologyFixtures.directory(
+        URL(fileURLWithPath: worktreePath + "/.build/topology"), create: false)
+    else { return false }
+    defer { close(parent) }
+    return same(parent, topologyIdentity, privateMode: false)
+      && TopologyFixtures.matches(directory: parent, name: entry, info: namespaceIdentity)
+  }
+
+  func validate() -> Bool {
+    validateDirectory() && validateFile("db.sqlite", identity: databaseIdentity)
+      && validateDirectory()
+  }
+
+  func validateFile(_ name: String, identity: stat) -> Bool {
+    var current = stat()
+    return identity.st_uid == uid
+      && TopologyFixtures.privateNamedFile(
+        directory: namespace, name: name,
+        path: worktreePath + "/.build/topology/" + entry + "/" + name, info: &current)
+      && current.st_dev == identity.st_dev && current.st_ino == identity.st_ino
+      && TopologyFixtures.matches(directory: namespace, name: name, info: identity)
+  }
+
+  func entries() -> Set<String>? {
+    let fd = openat(namespace, ".", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+    guard fd >= 0 else { return nil }
+    guard let directory = fdopendir(fd) else {
+      close(fd)
+      return nil
+    }
+    defer { closedir(directory) }
+    var result = Set<String>()
+    errno = 0
+    while let entry = readdir(directory) {
+      let name = withUnsafePointer(to: &entry.pointee.d_name) {
+        $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXNAMLEN) + 1) {
+          String(cString: $0)
+        }
+      }
+      if name != "." && name != ".." { result.insert(name) }
+      if result.count > 4 { return nil }
+      errno = 0
+    }
+    return errno == 0 ? result : nil
+  }
+}
+
 @objc protocol PDFTopologyService {
   func identify(_ runID: String, withReply reply: @escaping (Data) -> Void)
   func inspect(_ runID: String, pdf: FileHandle, withReply reply: @escaping (Data) -> Void)
@@ -176,6 +263,10 @@ enum TopologyFixtures {
     guard let acl = acl_get_fd_np(descriptor, ACL_TYPE_EXTENDED) else {
       return errno == ENOENT
     }
+    return emptyACLValue(acl)
+  }
+
+  private static func emptyACLValue(_ acl: acl_t) -> Bool {
     defer { acl_free(UnsafeMutableRawPointer(acl)) }
     var entry: acl_entry_t?
     errno = 0
@@ -190,9 +281,27 @@ enum TopologyFixtures {
   }
 
   static func privateFile(_ descriptor: Int32, info: inout stat) -> Bool {
-    fstat(descriptor, &info) == 0 && info.st_uid == getuid()
-      && info.st_mode & S_IFMT == S_IFREG && info.st_mode & 0o7777 == 0o600
-      && info.st_nlink == 1 && emptyACL(descriptor)
+    fstat(descriptor, &info) == 0 && privateFileIdentity(info) && emptyACL(descriptor)
+  }
+
+  private static func privateFileIdentity(_ info: stat) -> Bool {
+    info.st_uid == getuid() && info.st_mode & S_IFMT == S_IFREG
+      && info.st_mode & 0o7777 == 0o600 && info.st_nlink == 1
+  }
+
+  // Do not open/close an auxiliary DB or SHM descriptor while SQLite is live:
+  // closing another descriptor can release process-owned POSIX file locks.
+  // ACL lookup is the public no-follow named metadata API. The caller must
+  // validate its retained namespace/path before and after these checks.
+  static func privateNamedFile(
+    directory: Int32, name: String, path: String,
+    info: inout stat
+  ) -> Bool {
+    guard fstatat(directory, name, &info, AT_SYMLINK_NOFOLLOW) == 0,
+      privateFileIdentity(info)
+    else { return false }
+    guard let acl = acl_get_link_np(path, ACL_TYPE_EXTENDED) else { return errno == ENOENT }
+    return emptyACLValue(acl)
   }
 
   static func matches(directory: Int32, name: String, info: stat) -> Bool {

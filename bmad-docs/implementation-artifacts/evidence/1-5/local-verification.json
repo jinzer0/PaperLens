@@ -1,8 +1,9 @@
 {
   "story": "1.5",
   "issue": 8,
-  "specCommit": "7b489572bdee826e4a14101ca0961e10d705e570",
-  "scope": "offline-packaged-database-phase-assertion-conformance",
+  "specCommit": "3f4ad188763495077dfbed9e031889c29cefb177",
+  "offlineConformanceSpecCommit": "7b489572bdee826e4a14101ca0961e10d705e570",
+  "scope": "real-local-grdb-probe-and-offline-phase-conformance-not-packaged-proof",
   "verification": {
     "runtime": "approved-python-3.13.16-arm64",
     "focusedDBContractTests": {"passed": 20, "failed": 0},
@@ -37,13 +38,64 @@
     "safe-diagnostics-and-unconditional-nonpromotion"
   ],
   "sourceAndCompilationEvidence": "source-inspection.json",
+  "localNativeProbe": {
+    "mode": "local_grdb_probe",
+    "ownerBoundary": "exclusive-code-artifact-not-main-container",
+    "sourceCommittedAtRuntime": false,
+    "grdbCommit": "b83108d10f42680d78f23fe4d4d80fc88dab3212",
+    "grdbTree": "ff52b3c22f4fc259de0adb63560b968cc4f0722a",
+    "materializedTrackedSourceClean": true,
+    "nativeTarget": "arm64-apple-macosx15.0",
+    "actualMinimumOSExecution": false,
+    "artifact": "ffec547d-5e1e-47a8-be84-d77d20dc13f6",
+    "manifestCodeSHA256": "8a8ecc302b648f320660251be52e511399063e9136da76eb9528a89c2aa69892",
+    "sourceCodeSHA256": {
+      "PackagedDBProbe.swift": "4ed56f9ba79425c0749ca98ff24241858136916fa03e03d75f0d4cf1818e1a92",
+      "TopologyFixtures.swift": "ca293511773bff34585adf5afc995155d9e2bfea1d0c9a73cfe726836aee16a2",
+      "PackagedDBProbeTests.swift": "2f5118cd1c1d82894ea0867fd8887ff560bc30eda2b15e73e985ecdc8e621732"
+    },
+    "executedBundleCodeSHA256": "8a7db723b068e3b189a5703a74430fb9407481a5264cb23572d897e393957d9d",
+    "copiesByteIdentical": true,
+    "compile": "pass",
+    "compileWarnings": 4,
+    "nativeTests": {"passed": 17, "failed": 0, "executions": 1},
+    "watchdogExceeded": false,
+    "ownedLoaderReaped": true,
+    "whitespace": "pass",
+    "observedBehavior": [
+      "actual-on-disk-single-grdb-queue",
+      "two-ordered-transactional-migrations-and-committed-version-registry",
+      "actual-fts5-fixed-corpus-query-delete",
+      "same-inode-successful-reopen-without-repopulation",
+      "actual-sql-primary-key-fault-rollback-and-unchanged-failing-reopen",
+      "queued-operation-and-dirty-journal-serialized-namespace-validation",
+      "migration-publication-remains-admitted-before-replacement",
+      "interrupt-not-drain-and-observed-close-before-owned-cleanup",
+      "owned-namespace-file-identity-mode-acl-link-and-sidecar-refusal"
+    ],
+    "staticReviewer": "36-36-NativeDBSafetyReview",
+    "staticVerdict": "clear",
+    "staticRecommendation": "approve-local-probe-only",
+    "resolved": ["queued-sql-sidecar-validation-race", "old-queue-readiness-publication-race"],
+    "independentExecutionPerformed": false,
+    "sqliteOrigin": "unverified",
+    "mainContainerProof": false,
+    "authenticatedPackagedCellCount": 0,
+    "executionUnverified": ["throwing-close-failure", "inaccessible-constructor-failure", "foreign-owned-filesystem-object"],
+    "limitations": ["pathname-open-not-descriptor-relative", "no-hostile-same-uid-syscall-race-immunity"],
+    "historicalTrials": [
+      {"artifact": "72384274-e722-4146-8515-d6e2599f1813", "compile": "failed", "cause": "shadowed-optional-queue-binding", "nativeTestsRun": false},
+      {"artifact": "de52e6ec-08ba-4724-bf9e-1eb63c41c6a5", "compile": "failed", "cause": "public-membership-api-not-imported-by-swift-darwin", "nativeTestsRun": false},
+      {"artifact": "d1c625cc-be3d-4e54-bcc6-50b0df94a1c9", "nativeTests": {"passed": 15, "failed": 0}, "laterStaticFindings": "two-ordinary-operation-lifetime-races-resolved-in-final-source"}
+    ]
+  },
   "notProven": [
-    "actual-on-disk-GRDB-behavior", "main-app-GRDB-integration",
-    "runtime-migrations-rollback-and-reopen", "runtime-FTS5",
+    "main-app-GRDB-integration", "separate-packaged-app-relaunch",
     "loaded-system-SQLite-provenance", "exact-minimum-OS-build",
     "native-Intel", "signed-packaged-four-cell-execution", "p1", "p2"
   ],
   "runtimeVerified": false,
+  "runtimeVerifiedScope": "authenticated-packaged-four-cell-only",
   "storyComplete": false,
   "p2Passed": false,
   "promotion": "not_promoted"
