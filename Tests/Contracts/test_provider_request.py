@@ -910,5 +910,62 @@ class ContractTests(unittest.TestCase):
             self.rejected(lambda: provider_request.load_contract(provider_request.canonical_bytes(modified)), "contractDefinition")
 
 
+    def test_fixed_v1_authority_rejects_schema_rule_and_resource_rewrites(self):
+        original = plain(provider_request.CONTRACT)
+        changes = [
+            (("definitions", "item", "fields", "rank"), None),
+            (("definitions", "turns", "rules"), None),
+            (("definitions", "turns", "rules"), []),
+            (("definitions", "turns", "rules"), ["snapshotIdentity"]),
+            (("definitions", "sentence", "rules"), ["historyPairs"]),
+            (("resources", "import", "metrics", "bodyBytes", "mode"), "gauge"),
+            (("resources", "import", "metrics", "bodyBytes", "unit"), "count"),
+            (("resources", "import", "metrics", "bodyBytes", "limit"), "readBufferBytes"),
+            (("resources", "import", "metrics", "bodyBytes"), None),
+            (("resources", "import", "metrics", "extra"), original["resources"]["import"]["metrics"]["bodyBytes"]),
+            (("pools", "parser", "limit"), "importConcurrency"),
+            (("limits", "parserConcurrency"), 2),
+        ]
+        for path, value in changes:
+            modified = copy.deepcopy(original)
+            node = modified
+            for key in path[:-1]:
+                node = node[key]
+            if value is None:
+                del node[path[-1]]
+            else:
+                node[path[-1]] = value
+            self.rejected(lambda: provider_request.load_contract(provider_request.canonical_bytes(modified)), "contractDefinition")
+        modified = copy.deepcopy(original)
+        modified["limits"]["objectKeys"] = modified["limits"].pop("objectKeys")
+        self.rejected(lambda: provider_request.load_contract(provider_request.canonical_bytes(modified)), "contractDefinition")
+        reordered = dict(reversed(list(original.items())))
+        formatted = json.dumps(reordered, ensure_ascii=False, indent=2).encode("utf-8")
+        self.assertEqual(provider_request.load_contract(formatted), provider_request.CONTRACT)
+        content = "K é é"
+        req = request("paperChat", quotes=(content,))
+        parsed = provider_request.parse_request(provider_request.encode_request(req))
+        self.assertEqual(parsed.input["evidence"]["items"][0]["quote"].encode("utf-8"), content.encode("utf-8"))
+
+    def test_validated_source_kind_cannot_downgrade_redirect_or_http(self):
+        current = provider_request.validate_import_url("https://arxiv.org/pdf/2401.12345", "arxivPDF")
+        foreign = "https://example.org/paper.pdf"
+        for override in ("httpsPDF", "arxivAbstract", "", "PRIVATE"):
+            self.rejected(lambda: provider_request.resolve_redirect_url(current, foreign, override), "importRejected")
+            budget = provider_request.ResourceBudget("import")
+            self.rejected(lambda: provider_request.validate_http_response(current, 302, [("Location", foreign)], b"", budget, override), "importRejected")
+            self.rejected(lambda: provider_request.validate_http_response(current, 200, [("Content-Type", "application/pdf")], b"%PDF-", budget, override), "importRejected")
+            self.assertEqual(budget.values["headerCount"], 0)
+            self.assertEqual(budget.values["redirects"], 0)
+        for override in (None, "arxivPDF"):
+            self.rejected(lambda: provider_request.resolve_redirect_url(current, foreign, override), "importRejected")
+            approved = provider_request.resolve_redirect_url(current, "/pdf/2401.12345v2", override)
+            self.assertEqual(approved.sourceKind, "arxivPDF")
+            budget = provider_request.ResourceBudget("import")
+            response = provider_request.validate_http_response(current, 302, [("Location", "/pdf/2401.12345v2")], b"", budget, override)
+            self.assertEqual(response.url, approved)
+        self.assertEqual(provider_request.resolve_arxiv_abstract_url("https://arxiv.org/abs/2401.12345").sourceKind, "arxivPDF")
+
+
 if __name__ == "__main__":
     unittest.main()

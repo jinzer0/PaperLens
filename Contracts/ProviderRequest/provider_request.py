@@ -281,14 +281,31 @@ _LIMIT_NAMES = frozenset(("innerBytes", "bodyBytes", "frameBytes", "depth", "out
 
 def load_contract(raw=None):
     """Load the sole authority, rejecting unknown keywords, refs, modes and rules."""
-    if raw is None:
-        try:
-            raw = Path(__file__).with_name("contract.json").read_bytes()
-        except OSError:
-            _fail("contractDefinition", "request")
     # These are loader safeguards, not request/resource policy overrides.
     try:
+        shipped_raw = Path(__file__).with_name("contract.json").read_bytes()
+        if raw is None:
+            raw = shipped_raw
         document = _decode(raw, 1048576, 32, 256, 1000)
+        shipped = _decode(shipped_raw, 1048576, 32, 256, 1000)
+        def closed_keys(value):
+            if isinstance(value, dict):
+                for key, child in value.items():
+                    if not key.isascii():
+                        _fail()
+                    closed_keys(child)
+            elif isinstance(value, list):
+                for child in value:
+                    closed_keys(child)
+        closed_keys(document)
+        closed_keys(shipped)
+        # Bootstrap without CONTRACT/POLICIES or recursive loader calls. Fixed
+        # v1 admits formatting differences, never alternate policy documents.
+        def identity(value):
+            return json.dumps(value, sort_keys=True, ensure_ascii=False,
+                              separators=(",", ":"), allow_nan=False).encode("utf-8")
+        if identity(document) != identity(shipped):
+            _fail()
         root_keys = {"schemaVersion", "limits", "definitions", "operations", "policies",
                      "rules", "resources", "pools", "conformance"}
         if type(document) is not dict or set(document) != root_keys or type(document["schemaVersion"]) is not int or document["schemaVersion"] != 1:
@@ -394,7 +411,7 @@ def load_contract(raw=None):
                 if type(vector) is not dict or not required <= set(vector) or not set(vector) <= allowed:
                     _fail()
         return _freeze(document, "contract")
-    except (ContractError, KeyError, TypeError, ValueError, re.error, RecursionError):
+    except (ContractError, KeyError, TypeError, ValueError, OSError, re.error, RecursionError):
         _fail("contractDefinition", "request")
 
 
@@ -433,7 +450,7 @@ def _schema(value, schema, field="request", code="invalidShape"):
         return _schema(value, CONTRACT["definitions"][schema["ref"]], field, code)
     kind = schema["type"]
     if kind == "object":
-        if not isinstance(value, Mapping) or set(value) != set(schema["fields"]):
+        if not isinstance(value, Mapping) or any(type(key) is not str or not key.isascii() for key in value) or set(value) != set(schema["fields"]):
             _fail(code, field)
         for key, child in schema["fields"].items():
             _schema(value[key], child, field, code)
@@ -1119,7 +1136,12 @@ def resolve_arxiv_abstract_url(url):
 
 
 def resolve_redirect_url(current, location, sourceKind=None):
-    kind = (current.sourceKind if isinstance(current, ValidatedURL) else "httpsPDF") if sourceKind is None else sourceKind
+    if isinstance(current, ValidatedURL):
+        if sourceKind is not None and sourceKind != current.sourceKind:
+            _fail("importRejected", "import")
+        kind = current.sourceKind
+    else:
+        kind = "httpsPDF" if sourceKind is None else sourceKind
     base = current.value if isinstance(current, ValidatedURL) else current
     validate_import_url(base, kind)
     if type(location) is not str or len(location) > LIMITS["urlBytes"]:
@@ -1154,7 +1176,12 @@ def validate_http_response(current, status, headers, prefix, budget, sourceKind=
     prefix is bounded byte-zero metadata, not an additional body read. No
     Content-Length-based admission or counter reset is performed here.
     """
-    kind = (current.sourceKind if isinstance(current, ValidatedURL) else "httpsPDF") if sourceKind is None else sourceKind
+    if isinstance(current, ValidatedURL):
+        if sourceKind is not None and sourceKind != current.sourceKind:
+            _fail("importRejected", "import")
+        kind = current.sourceKind
+    else:
+        kind = "httpsPDF" if sourceKind is None else sourceKind
     value = current.value if isinstance(current, ValidatedURL) else current
     url = validate_import_url(value, kind)
     if not isinstance(budget, ResourceBudget) or budget.kind != "import" or type(status) is not int or not isinstance(headers, (tuple, list)) or type(prefix) is not bytes or len(prefix) > LIMITS["readBufferBytes"]:
