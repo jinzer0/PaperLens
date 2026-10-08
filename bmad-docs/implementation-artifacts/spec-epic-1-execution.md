@@ -84,5 +84,31 @@ Canonical Story 정의는 `bmad-docs/planning-artifacts/epics.md`의 Epic1이다
 - Story1.8: Issue#10 own-branch Spec99b5409 precedes reviewed checkpointcef0fb9. Pure state13 + request31/RPC15 PASS(artifact37996ee6-2bb8-42c4-b8d1-3347956c4183), zero warnings; independent source review28 CLEAR/COMMENT with renderer BLOCK. Actual public offscreen PDFKit trialea270b54-0010-437b-a552-b9656d026e0e remains FAILED with blankCapture after public layout/display setup corrections; no raster proof or full-suite PASS. Raster and visible-interactive completion remain separate; visible witness/source×CPU×OS/P6/Story completion unproven.
 - Reviewed local 1.3/1.5/1.6 substrate integration: topology404 + shared request34 PASS. This is integration regression evidence, not new SDK/native packaged matrix execution, Story completion or release approval.
 - Readiness branch integration: native pure13/request31/RPC18 PASS with zero warnings (artifact246c0e36-39f7-444a-8c5a-a397de451e96). Only the previously failed renderer test was excluded; no renderer rerun or raster/visible/P6 proof. Package.swift explicitly excludes independent DB Swift and Agent Python tests from the RPC target; no GRDB root target/dependency, project or CI wiring added.
-- 나머지 canonical Stories: Issue/branch 존재, 구현·검증 완료 아님. 각 dependency-ready work unit으로 진행하며 mandatory architecture gates를 synthetic precursor로 대체하지 않는다.
+- Exactly26 canonical Stories 모두 own Issue/branch/committed Spec을 감사했다. 1.9–1.26 gated planning checkpoints를 로컬 통합했으며 planning은 실제 gate나 ready-for-dev/Story completion이 아니다. 각 dependency-ready work unit을 진행하며 mandatory architecture gates를 synthetic precursor로 대체하지 않는다.
+- Story1.13: Issue#15, initialSpec119a28a / completion amendmentf14f15f BEFORE purepolicyf4bc76b; helper-ownership amendmentdb3702b BEFORE composition387c578. Native25pure +4actual registered producer/purge +6negative lifecycle =35 PASS/0warnings (bc9763fd), static59 pure CLEAR and63 corrected-delta registered-synthetic CLEAR. Fresh scoped cleanup/removal invocation IDs, immutable target/debt, observed writer-FD closure, lower-fence recovery no-unlink, all-exit helper/pipe reap, complete4096-byte/2s controls and single earliest300ms teardown proved only CODE/synthetic. Initial20PASS/review48BLOCK, compile-label failure,29PASS/review61BLOCK and35/16failed cross-clock trial preserved. Public CLOCK_UPTIME_RAW/Python mach_absolute_time test clock pairing is not signed P1 clock proof. Actual Main publisher/durable Job allocation/SQLite/SDK/P1/P2/P3/P6 remain unproved; Story not done.
 - Story1.27: requirements gap. 이 공백은 나머지 정의된 Story의 계획/검증용 선행 작업을 막지 않는다.
+
+## Own-branch gated planning checkpoints
+
+| Story / Issue | Spec/source checkpoint | Current scope |
+| --- | --- | --- |
+| 1.9 / #11 | b1ef1d8 | Product RPC unknown capabilities; actualP1/P2/P3 before implementation |
+| 1.10 / #12 | d250331 | Native staged key/probe/last-good CAS; actual secret/storage/transport owners unknown |
+| 1.11 / #13 | 685374f | Official browser auth shapes/static SDK inspection; no auth/runtime admission |
+| 1.12 / #14 | c2ba962 | Device-code shapes; expiry/wait/resource/cleanup capability gaps preserved |
+| 1.13 / #15 | 119a28a/f14f15f/db3702b → f4bc76b/387c578 | Accepted pure and registered-synthetic precursor, not durable product |
+| 1.14 / #16 | f267ee9 | Real onboarding/local immutable import/delete owners and gates missing |
+| 1.15 / #17 | 578c7ec | Native functional Reader/last-read; actual P6 separately gates timing |
+| 1.16 / #18 | 4449322 | Original selection/Highlight/Note/durable return and delete guards |
+| 1.17 / #19 | 773f1a6 | Durable folder/confirmation/independent duplicate physical copies |
+| 1.18 / #20 | 2608fbc | Shared HTTPS/arXiv routes/redirect resources/Library stay; timing actualP6 only |
+| 1.19 / #21 | 7597ef4 | Actual PDFium↔PDFKit calibration/shared tolerance remains unknown before split |
+| 1.20 / #22 | 4174c65 | No-network typed parser/inactive revision/atomic FTS publication/pinned refs |
+| 1.21 / #23 | bf73dd5 | Retained PDF/floating failure/latest reason/explicit Retry/no attempt history |
+| 1.22 / #24 | a2155a8 | Truthful metadata/confirmed Contents/last-read/no Outline recovery |
+| 1.23 / #25 | bdfd1d5 | Bounded summary claims need EvidenceAnchor or insufficiency, not provenance alone |
+| 1.24 / #26 | 7bcd382 | Actual card/list/sorts/records/native DeleteAlert/same-saga retry |
+| 1.25 / #27 | 68e370f | Durable tags/status/Favorite/current query projection/distinct Library states |
+| 1.26 / #28 | 77672e3 | Actual authenticated reconnect/last-good CAS/leases/no covert replay |
+
+Future paths/APIs/schema/geometry tolerance unknown인 곳은 same-Spec ownership amendment 후 exact≤5-file source/test phases만 허용한다. Native semantic/Korean/accessibility/focus/resize/current-data lifecycle 조건을 각 UI Story에서 검증하며 마지막 polish로 미루지 않는다. Public SDK generated login shapes는 expiry/interval/bounded queues/environment/approval/shutdown/auth-zone/actual generation capability를 입증하지 않는다. 인증·필수 packaged CPU/OS·실제 sandbox/P6 검증 없이 제품을 scaffold/mock/fallback으로 대체하지 않는다.
