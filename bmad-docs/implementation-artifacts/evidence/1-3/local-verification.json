@@ -15,6 +15,19 @@
     "scope": "post-flock-binding-only",
     "notPerformed": ["independent-test-execution", "commit-identity-authentication"]
   },
+  "paperPurgeWireConformance": {
+    "scope": "supplied-frames-and-true-only-results-not-runtime-drain",
+    "pythonRPCTests": {"passed": 18, "failed": 0},
+    "nativeRPCTests": {"passed": 18, "failed": 0},
+    "topologyUnionTests": {"passed": 321, "failed": 0},
+    "nativeWarnings": 0,
+    "nativeArtifact": "781cf33b-7bfb-49f1-a611-1de9df84786c",
+    "staticReviewer": "31-31-PurgeWireSafetyReview",
+    "staticVerdict": "clear",
+    "actualPurgeRuntimeImplemented": false,
+    "actualDrainAcknowledgmentVerified": false,
+    "independentExecutionPerformed": false
+  },
   "implemented": [
     "reopened-owner-receipt-self-compared-to-actually-locked-inode",
     "current-absolute-ancestry-reopened-with-no-follow-directory-descriptors",
@@ -23,7 +36,7 @@
   ],
   "notProven": [
     "retained-session-coordinator", "producer-registration-and-drain",
-    "paper-purge-rpc-and-acknowledgment", "permanent-pathname-stability",
+    "paper-purge-runtime-and-acknowledgment", "permanent-pathname-stability",
     "arbitrary-same-uid-forgery-resistance", "actual-sdk-lifecycle",
     "signed-two-cpu-topology", "p1", "product-deletion-completion"
   ],

@@ -112,6 +112,10 @@
       "params": {"type": "object", "fields": {"runID": {"ref": "uuid"}}},
       "result": {"type": "object", "fields": {"absent": {"type": "boolean"}}}
     },
+    "topology.paperPurge": {
+      "params": {"type": "object", "fields": {"runID": {"ref": "uuid"}, "paperID": {"ref": "uuid"}, "generation": {"ref": "generation"}, "correlationID": {"ref": "uuid"}}},
+      "result": {"type": "object", "fields": {"absent": {"type": "boolean", "const": true}, "drained": {"type": "boolean", "const": true}}}
+    },
     "cancel": {
       "params": {"type": "object", "fields": {"targetID": {"ref": "uuid"}}},
       "result": {"type": "object", "fields": {"accepted": {"type": "boolean"}}}
