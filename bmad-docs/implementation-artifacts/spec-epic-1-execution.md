@@ -76,9 +76,10 @@ Canonical Story 정의는 `bmad-docs/planning-artifacts/epics.md`의 Epic1이다
 - Story1.1: 구현/진단 evidence 존재, 전체 AC와 P1 blocked; 과거 소진된 batch 재실행 없음.
 - Exactly26 canonical Story Issues와 별도 local task branches가 존재한다. Issue 생성은 Story 완료가 아니다.
 - Story1.2: Issue#4, Spec551dab9 / concrete synthetic cleanup68b8f41. Python315 + native15 tests, independent static CLEAR. 실제 packaged SDK/dualCPU lifecycle 및 P1/P2/P3 완료 아님.
-- Story1.3: Issue#6 own-branch Spec e74ce79. Retained lease/registered-producer drain과 named replacement precursor 설계; 구현·scenario 검증 전이며 permanent deletion/SDK writer control 주장 없음.
-- Story1.4: Issue#7 own-branch Spec243a0ec. Candidate lock/closed offline validator/four-cell matrix scope, 아직 구현 전. MinimumOSbuild 및 실제 packaged matrix 미입증.
-- Story1.7: Issue#5, Specaf2d9d1 / pure Python SliceA762b385. Current focused32 + topology315 tests PASS, independent delta static CLEAR; nested issuance replacement와 mutable plan forgery 수정. Native SliceB 구현 중, actual Provider certification/authentication/import/parser enforcement 및 Story 완료 미입증.
+- Story1.3: Issue#6 own-branch amended Spec9c90218 / post-flock owner·current namespace binding precursor82f558c. Owned task worktree topology318 PASS, independent static CLEAR. Retained session coordinator·registered producer drain·paperPurge RPC와 실제 SDK/P1 증거는 아직 미구현/미입증이며 permanent deletion 주장 없음.
+- Story1.4: Issue#7 Spec243a0ec / candidate source2da39b9. Closed offline validator와 nonpromoting four-cell matrix 구현. Story1.5 consumer integrationeff8349에서 single16-fact export policy와 actual source digest 갱신, focused21 + topology355 PASS/static CLEAR. MinimumOSbuild 및 실제 packaged matrix 미입증.
+- Story1.5: Issue#8 Specd7c43ba / offline phase validator·evidenceeff8349. DB19 + consumer21 + topology355 PASS, independent static CLEAR. Pinned GRDB source materialization와 arm64 library compilation PASS(경고4개)는 source-only 증거이며 실제 DB/FTS/migration/reopen·loaded image·main-app integration·packaged P2 증거 아님.
+- Story1.7: Issue#5, Specaf2d9d1 / Python SliceA762b385 / native 및 fixed-authority security boundary7a06389. Python34 + native31/RPC15 + concurrent offline topology355 PASS, independent static CLEAR. Fixed-v1 definition/resource rewrites·Unicode closed-key aliases·typed source-kind downgrade 수정. Actual Provider certification/authentication/import/parser enforcement·측정된 allocation/runtime 한도 및 Story 완료 미입증.
 - Story1.8: Issue#10, PDF readiness Spec 초안 보존. Raster와 visible-interactive completion 분리; 아직 own-branch Spec commit/구현/실제 source×CPU×OS proof 전.
 - 나머지 canonical Stories: Issue/branch 존재, 구현·검증 완료 아님. 각 dependency-ready work unit으로 진행하며 mandatory architecture gates를 synthetic precursor로 대체하지 않는다.
 - Story1.27: requirements gap. 이 공백은 나머지 정의된 Story의 계획/검증용 선행 작업을 막지 않는다.

@@ -40,13 +40,14 @@ development_status:
   1-1-두-cpu에서-격리된-앱-실행-구조-입증: in-progress
   # Issue #4: synthetic cleanup substrate verified; packaged SDK/startup acceptance remains blocked.
   1-2-provider-agent-작업-종료-재시작-정리-검증: in-progress
-  # Issue #6: committed scoped-producer Spec; implementation and packaged acceptance pending.
+  # Issue #6: verified post-flock binding precursor; coordinator/drain and packaged acceptance pending.
   1-3-앱-교체-paper-삭제-시-agent-정리-검증: in-progress
-  # Issue #7: committed candidate-lock Spec; actual four-cell matrix unproven.
+  # Issue #7: verified offline candidate and closed export policy; actual four-cell matrix unproven.
   1-4-p-2-의존성-잠금과-실행-os-매트릭스-확정: in-progress
-  1-5-패키징된-db-fts5-매트릭스-검증: backlog
+  # Issue #8: verified offline phase contract and local library compilation, not actual DB/P2 proof.
+  1-5-패키징된-db-fts5-매트릭스-검증: in-progress
   1-6-패키징된-agent-정리를-os-cpu-매트릭스에서-검증: backlog
-  # Issue #5: verified Python SliceA; native SliceB in progress, no actual Provider/P1/P2 claim.
+  # Issue #5: Python/native contracts and security boundaries verified; no actual Provider/P1/P2 claim.
   1-7-공통-요청-허용-범위와-자원-한도-확정: in-progress
   1-8-pdf가-실제로-응답하는-시점의-측정-계약-확정: backlog
   1-9-main-app과-provider-agent의-공통-통신-계약-확정: backlog
