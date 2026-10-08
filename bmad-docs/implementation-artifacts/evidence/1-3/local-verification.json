@@ -1,0 +1,33 @@
+{
+  "story": "1.3",
+  "issue": 6,
+  "specCommit": "9c90218262dfe0b1b019f03085e8ad3d83562b26",
+  "scope": "post-flock-owner-and-current-namespace-binding-precursor",
+  "verification": {
+    "runtime": "approved-python-3.13.16-arm64",
+    "topologyRegressionTests": {"passed": 318, "failed": 0},
+    "whitespace": "pass",
+    "observedWarnings": ["asyncio-slow-task-diagnostics"]
+  },
+  "independentStaticReview": {
+    "reviewer": "23-RootLeaseBindingReview",
+    "verdict": "clear",
+    "scope": "post-flock-binding-only",
+    "notPerformed": ["independent-test-execution", "commit-identity-authentication"]
+  },
+  "implemented": [
+    "reopened-owner-receipt-self-compared-to-actually-locked-inode",
+    "current-absolute-ancestry-reopened-with-no-follow-directory-descriptors",
+    "named-namespace-identity-compared-to-retained-root",
+    "real-flock-owner-namespace-and-ancestor-replacement-preservation-regressions"
+  ],
+  "notProven": [
+    "retained-session-coordinator", "producer-registration-and-drain",
+    "paper-purge-rpc-and-acknowledgment", "permanent-pathname-stability",
+    "arbitrary-same-uid-forgery-resistance", "actual-sdk-lifecycle",
+    "signed-two-cpu-topology", "p1", "product-deletion-completion"
+  ],
+  "storyComplete": false,
+  "p1Passed": false,
+  "p2Passed": false
+}

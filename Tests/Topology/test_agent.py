@@ -75,6 +75,87 @@ class AttemptFixtureTests(unittest.TestCase):
         if marker is not None:
             self.assertEqual(self.snapshot(self.paths()[2]), marker)
 
+    def test_post_flock_owner_replacement_never_authorizes_cleanup(self):
+        self.prepare()
+        marker = self.paths()[2]
+        before = self.snapshot(marker)
+        original = agent.fcntl.flock
+        replaced = False
+
+        def replace_owner(fd, operation):
+            nonlocal replaced
+            original(fd, operation)
+            if replaced:
+                return
+            replaced = True
+            (self.root / '.owner.json').rename(Path(self.temporary.name) / 'old-owner')
+            root = self.store.open_dir(fd_parent, self.store.namespace)
+            try:
+                self.store.write_receipt(root, '.owner.json', {
+                    'version': 1, 'kind': 'root', 'directory': self.store.identity(root)})
+            finally:
+                os.close(root)
+
+        fd_parent = os.open(self.root.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            with patch.object(agent.fcntl, 'flock', side_effect=replace_owner):
+                with self.assertRaises(PermissionError):
+                    self.store.recover(self.identity['runID'])
+        finally:
+            os.close(fd_parent)
+        self.assertTrue(replaced)
+        self.assertEqual(self.snapshot(marker), before)
+
+    def test_post_flock_namespace_replacement_never_cleans_detached_root(self):
+        self.prepare()
+        detached = self.root.parent / (self.store.namespace + '-detached')
+        relative_marker = self.paths()[2].relative_to(self.root)
+        before = self.snapshot(self.paths()[2])
+        original = agent.fcntl.flock
+        replaced = False
+
+        def replace_namespace(fd, operation):
+            nonlocal replaced
+            original(fd, operation)
+            if replaced:
+                return
+            replaced = True
+            self.root.rename(detached)
+            self.root.mkdir(mode=0o700)
+
+        with patch.object(agent.fcntl, 'flock', side_effect=replace_namespace):
+            with self.assertRaises(PermissionError):
+                self.store.recover(self.identity['runID'])
+        self.assertTrue(replaced)
+        self.assertEqual(self.snapshot(detached / relative_marker), before)
+        self.assertEqual(list(self.root.iterdir()), [])
+
+    def test_post_flock_parent_replacement_never_cleans_detached_namespace(self):
+        self.prepare()
+        parent = self.root.parent
+        detached = parent.parent / 'detached-support'
+        relative_marker = self.paths()[2].relative_to(parent)
+        before = self.snapshot(self.paths()[2])
+        original = agent.fcntl.flock
+        replaced = False
+
+        def replace_parent(fd, operation):
+            nonlocal replaced
+            original(fd, operation)
+            if replaced:
+                return
+            replaced = True
+            parent.rename(detached)
+            parent.mkdir(mode=0o700)
+            self.root.mkdir(mode=0o700)
+
+        with patch.object(agent.fcntl, 'flock', side_effect=replace_parent):
+            with self.assertRaises(PermissionError):
+                self.store.recover(self.identity['runID'])
+        self.assertTrue(replaced)
+        self.assertEqual(self.snapshot(detached / relative_marker), before)
+        self.assertEqual(list(self.root.iterdir()), [])
+
     def test_all_synthetic_outcomes_remove_paper_metadata_and_are_idempotent(self):
         for outcome in ('success', 'failure', 'cancelled'):
             with self.subTest(outcome=outcome):

@@ -259,7 +259,19 @@ class AttemptFixtures:
                     fcntl.flock(owner, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 except BlockingIOError:
                     raise AttemptBusy() from None
-                self.receipt(root, '.owner.json', expected)
+                locked_receipt = self.receipt(root, '.owner.json', expected)
+                if locked_receipt['self'] != self.identity(owner):
+                    raise PermissionError('receiptIdentity')
+                current = os.open('/', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                stack.callback(os.close, current)
+                for component in (*container.parts[1:], 'Library', 'Application Support'):
+                    current = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW |
+                                      os.O_NONBLOCK, dir_fd=current)
+                    stack.callback(os.close, current)
+                named_root = self.open_dir(current, self.namespace)
+                stack.callback(os.close, named_root)
+                if self.identity(named_root) != self.identity(root):
+                    raise PermissionError('rootIdentity')
                 yield root
         finally:
             self.lock.release()
