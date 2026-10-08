@@ -46,10 +46,10 @@ development_status:
   1-4-p-2-의존성-잠금과-실행-os-매트릭스-확정: in-progress
   # Issue #8: verified offline phase contract and local library compilation, not actual DB/P2 proof.
   1-5-패키징된-db-fts5-매트릭스-검증: in-progress
-  1-6-패키징된-agent-정리를-os-cpu-매트릭스에서-검증: backlog
+  1-6-패키징된-agent-정리를-os-cpu-매트릭스에서-검증: in-progress
   # Issue #5: Python/native contracts and security boundaries verified; no actual Provider/P1/P2 claim.
   1-7-공통-요청-허용-범위와-자원-한도-확정: in-progress
-  1-8-pdf가-실제로-응답하는-시점의-측정-계약-확정: backlog
+  1-8-pdf가-실제로-응답하는-시점의-측정-계약-확정: in-progress
   1-9-main-app과-provider-agent의-공통-통신-계약-확정: backlog
   1-10-openai-api-key를-실제-요청으로-연결하기: backlog
   1-11-공식-codex-sdk의-chatgpt-로그인-연결: backlog
