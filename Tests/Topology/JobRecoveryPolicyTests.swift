@@ -1,5 +1,730 @@
+import Darwin
+import Foundation
 import JobRecoveryPolicy
 import XCTest
+
+// CODE/synthetic only. The bridge executes the existing fixture's registered writer and purge;
+// it supplies no policy, authenticated result, Main publisher, SQLite, SDK or container proof.
+final class JobRecoveryRegisteredSyntheticTests: XCTestCase {
+  private typealias P = JobRecoveryPolicy
+  private enum BridgeFailure: String, Error {
+    case environment, launch, control, observation, cleanup
+  }
+
+  private final class Bridge {
+    let process = Process()
+    let input = Pipe()
+    let output = Pipe()
+    let errors = Pipe()
+    let exited = DispatchSemaphore(value: 0)
+    var finished = false
+    var launched = false
+    var reaped = false
+    var cleanupFailed = false
+    var ownedHandles: [FileHandle] = []
+    var cleanupEnd: DispatchTime?
+    var cleanupClockEnd: Double?
+
+    private static func clock() -> Double {
+      var value = timespec()
+      clock_gettime(CLOCK_UPTIME_RAW, &value)
+      return Double(value.tv_sec) + Double(value.tv_nsec) / 1_000_000_000
+    }
+
+    init(_ phase: String) throws {
+      ownedHandles = [
+        input.fileHandleForWriting, input.fileHandleForReading,
+        output.fileHandleForReading, output.fileHandleForWriting,
+        errors.fileHandleForReading, errors.fileHandleForWriting,
+      ]
+      let environment = ProcessInfo.processInfo.environment
+      guard let python = environment["PAPERLENS_RECOVERY_PYTHON"], python.hasPrefix("/"),
+        let root = environment["PAPERLENS_RECOVERY_ROOT"], root.hasPrefix("/")
+      else {
+        closePipes()
+        finished = ownedHandles.isEmpty
+        throw BridgeFailure.environment
+      }
+      process.executableURL = URL(fileURLWithPath: python)
+      process.arguments = ["-I", "-B", "-c", Self.helper, root, phase]
+      process.environment = ["PATH": "/usr/bin:/bin", "PYTHONDONTWRITEBYTECODE": "1"]
+      process.standardInput = input
+      process.standardOutput = output
+      process.standardError = errors
+      let exited = self.exited
+      process.terminationHandler = { _ in exited.signal() }
+      do {
+        try process.run()
+        launched = true
+      } catch {
+        closePipes()
+        finished = ownedHandles.isEmpty
+        throw BridgeFailure.launch
+      }
+      for handle in [
+        input.fileHandleForReading, output.fileHandleForWriting,
+        errors.fileHandleForWriting,
+      ] { closeHandle(handle) }
+    }
+
+    func send(_ command: String) throws {
+      do { try input.fileHandleForWriting.write(contentsOf: Data((command + "\n").utf8)) } catch {
+        throw BridgeFailure.control
+      }
+    }
+
+    func sendIncomplete(_ data: Data) throws {
+      try input.fileHandleForWriting.write(contentsOf: data)
+      closeHandle(input.fileHandleForWriting)  // EOF deterministically terminates partial input.
+    }
+
+    func beginCleanup() {
+      guard cleanupEnd == nil else { return }
+      let end = Self.clock() + 0.3
+      cleanupClockEnd = end
+      cleanupEnd = DispatchTime(uptimeNanoseconds: UInt64(end * 1_000_000_000))
+      try? send("QUIT " + String(end))
+    }
+
+    func receive() throws -> [String: Any] {
+      // Synchronous poll/read owns no detached reader. A ready pipe is read one byte at a
+      // time by its sole reader; the complete frame, including newline, has one deadline.
+      let end = min(Self.clock() + 2, cleanupClockEnd ?? Double.infinity)
+      var data = Data()
+      while true {
+        let remaining = end - Self.clock()
+        guard remaining > 0 else { throw BridgeFailure.control }
+        var descriptor = pollfd(
+          fd: output.fileHandleForReading.fileDescriptor,
+          events: Int16(POLLIN), revents: 0)
+        let status = poll(&descriptor, 1, Int32(remaining * 1000))
+        if status < 0 && errno == EINTR { continue }
+        guard status > 0 else { throw BridgeFailure.control }
+        var byte: UInt8 = 0
+        guard Darwin.read(descriptor.fd, &byte, 1) == 1 else { throw BridgeFailure.control }
+        if byte == 10 { break }
+        guard data.count < 4096 else { throw BridgeFailure.control }
+        data.append(byte)
+      }
+      guard let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+      else { throw BridgeFailure.control }
+      if value["code"] as? String == "OWNERSHIP",
+        let end = value["cleanupEnd"] as? Double, end.isFinite
+      {
+        // Early helper failures start cleanup themselves. Adopt that same RAM-only
+        // deadline rather than giving their already-started teardown another 300ms.
+        let authoritative = min(cleanupClockEnd ?? end, end)
+        guard authoritative > 0, authoritative <= Self.clock() + 0.3 else {
+          throw BridgeFailure.control
+        }
+        cleanupClockEnd = authoritative
+        cleanupEnd = DispatchTime(uptimeNanoseconds: UInt64(authoritative * 1_000_000_000))
+      }
+      guard value["code"] as? String != "FAIL" else { throw BridgeFailure.observation }
+      return value
+    }
+
+    func expect(_ code: String) throws {
+      guard try receive()["code"] as? String == code else { throw BridgeFailure.observation }
+    }
+
+    // One cumulative 300ms close/reap budget, never waitUntilExit or a relaxed watchdog.
+    func close() throws {
+      guard !finished else {
+        if cleanupFailed { throw BridgeFailure.cleanup }
+        return
+      }
+      guard launched else {
+        closePipes()
+        finished = ownedHandles.isEmpty
+        return
+      }
+      beginCleanup()
+      guard let end = cleanupEnd else { throw BridgeFailure.cleanup }
+      if DispatchTime.now() >= end {
+        reaped = exited.wait(timeout: .now()) == .success
+        closePipes()
+        finished = reaped && ownedHandles.isEmpty
+        cleanupFailed = true
+        throw BridgeFailure.cleanup
+      }
+      if exited.wait(timeout: min(end, .now() + .milliseconds(150))) != .success {
+        if process.isRunning { process.terminate() }
+        if exited.wait(timeout: min(end, .now() + .milliseconds(70))) != .success {
+          if process.isRunning { _ = Darwin.kill(process.processIdentifier, SIGKILL) }
+          guard exited.wait(timeout: end) == .success else {
+            closePipes()
+            cleanupFailed = true
+            throw BridgeFailure.cleanup
+          }
+        }
+      }
+      reaped = true  // Foundation terminationHandler observes the owned child's reaped exit.
+      closePipes()
+      finished = ownedHandles.isEmpty
+      cleanupFailed = cleanupFailed || process.terminationStatus != 0
+      if cleanupFailed { throw BridgeFailure.cleanup }
+    }
+
+    private func closePipes() {
+      for handle in ownedHandles { closeHandle(handle) }
+    }
+
+    private func closeHandle(_ handle: FileHandle) {
+      do {
+        try handle.close()
+        ownedHandles.removeAll { $0 === handle }
+      } catch { cleanupFailed = true }
+    }
+
+    deinit {
+      if !finished { try? close() }
+    }
+
+    private static let helper = #"""
+      import sys
+      def main():
+          import os, json, math, select, signal, threading, time, uuid
+          from pathlib import Path
+          from unittest.mock import patch
+          sys.path.insert(0, str(Path(sys.argv[1]) / 'Tests/Topology'))
+          import test_agent as tests
+          agent = tests.agent
+          phase = sys.argv[2]
+          cleanup_end = None
+          cleaning = False
+          def emit(code, **values):
+              print(json.dumps(dict(code=code, **values), separators=(',', ':')), flush=True)
+          def command(expected):
+              nonlocal cleanup_end
+              end = time.monotonic() + 2
+              data = bytearray()
+              while True:
+                  left = end - time.monotonic()
+                  if left <= 0 or not select.select([0], [], [], left)[0]:
+                      raise RuntimeError('control')
+                  byte = os.read(0, 1)
+                  if not byte:
+                      raise RuntimeError('control')
+                  if byte == b'\n':
+                      break
+                  if len(data) >= 4096:
+                      raise RuntimeError('control')
+                  data.extend(byte)
+              parts = data.decode('ascii').split(' ')
+              if parts[0] == 'QUIT' and len(parts) == 2:
+                  supplied = float(parts[1])
+                  now = time.monotonic()
+                  cleanup_end = min(supplied, now + 0.3) if math.isfinite(supplied) else now
+                  if not math.isfinite(supplied) or not now <= supplied <= now + 0.3:
+                      raise RuntimeError('control')
+                  if expected != 'QUIT':
+                      raise RuntimeError('control')
+                  return None
+              if parts[0] != expected or len(parts) > 2 or not all(parts):
+                  raise RuntimeError('control')
+              if expected in ('LOWER_PURGE', 'FAILED_PURGE', 'PURGE', 'REMOVE'):
+                  if len(parts) != 2:
+                      raise RuntimeError('control')
+                  return agent.safe_uuid(parts[1])
+              if len(parts) != 1 or expected == 'QUIT':
+                  raise RuntimeError('control')
+              return None
+          def terminate(signum, frame):
+              if cleaning:
+                  cleanup_errors.append('terminationDuringCleanup')
+                  return
+              raise RuntimeError('control')
+          signal.signal(signal.SIGTERM, terminate)
+          fixture = tests.AttemptFixtureTests()
+          release, reached = threading.Event(), threading.Event()
+          worker = None
+          outcome = []
+          stores = []
+          callbacks = []
+          cleanup_errors = []
+          retained_marker = None
+          def register(callback, *args, **kwargs):
+              # Capture each inherited acquisition immediately; replace only the inherited
+              # unbounded store lambda, never call doCleanups and restart its default budget.
+              if getattr(callback, '__name__', '') == '<lambda>' and hasattr(fixture, 'store'):
+                  owned = fixture.store
+                  stores.append(owned)
+                  callbacks.append(('store', owned, (), {}))
+                  if phase == 'setupFailure':
+                      raise RuntimeError('setup')
+              else:
+                  kind = 'namespace' if getattr(callback, '__self__', None) is getattr(fixture, 'temporary', None) else 'callback'
+                  if getattr(callback, '__self__', None) is getattr(fixture, 'profile', None):
+                      kind = 'profile'
+                  callbacks.append((kind, callback, args, kwargs))
+          fixture.addCleanup = register
+          deadline = time.monotonic() + 2
+          try:
+              fixture.setUp()
+              if phase == 'callbackFailure':
+                  def fail_cleanup():
+                      raise RuntimeError('callback')
+                  register(fail_cleanup)
+              identity = dict(fixture.identity, generation=3 if phase == 'higher' else 1)
+              emit('IDENTITY', **identity)
+              command('ADMITTED')
+              store = fixture.store
+              deadline = time.monotonic() + 2
+              def remaining():
+                  return max(0, deadline - time.monotonic())
+              if phase == 'higher':
+                  if store.prepare(**identity) != {'prepared': True}:
+                      raise RuntimeError('prepare')
+                  producer = store.session.producers[identity['correlationID']]
+                  if not producer.closed.is_set() or store.session.failed_closure:
+                      raise RuntimeError('closure')
+                  marker = fixture.paths(identity)[2]
+                  before = fixture.snapshot(marker)
+                  store.close()
+                  callbacks[:] = [entry for entry in callbacks if not (entry[0] == 'store' and entry[1] is store)]
+                  stores.remove(store)
+                  fresh = agent.AttemptFixtures()
+                  stores.append(fresh)
+                  original = fresh.remove_attempts
+                  def held(*args, **kwargs):
+                      reached.set()
+                      # Recovery has already registered the real persisted higher generation.
+                      if not release.wait(min(0.3, remaining())):
+                          raise TimeoutError('barrier')
+                      return original(*args, **kwargs)
+                  def recover():
+                      try:
+                          outcome.append(fresh.recover(identity['runID']))
+                      except Exception:
+                          outcome.append(None)
+                  with patch.object(fresh, 'remove_attempts', side_effect=held):
+                      worker = threading.Thread(target=recover)
+                      worker.start()
+                      if not reached.wait(remaining()):
+                          raise RuntimeError('barrier')
+                      known = fresh.session.records.get(identity['correlationID'])
+                      if known != ('attempt', identity):
+                          raise RuntimeError('registration')
+                      emit('RECOVERED_REGISTERED_CLOSED')
+                      operation = command('LOWER_PURGE')
+                      lower = dict(identity, generation=1, correlationID=operation)
+                      with patch.object(agent.os, 'unlink', wraps=os.unlink) as unlink:
+                          try:
+                              fresh.paper_purge(**lower)
+                          except agent.AttemptInvalid:
+                              pass
+                          else:
+                              raise RuntimeError('staleSuccess')
+                          if unlink.call_count or fixture.snapshot(marker) != before:
+                              raise RuntimeError('preservation')
+                      emit('LOWER_REJECTED_PRESERVED')
+                      command('RESUME')
+                      release.set()
+                      worker.join(remaining())
+                      if worker.is_alive() or outcome != [{'absent': True}]:
+                          raise RuntimeError('worker')
+                  emit('RECOVERY_FINISHED')
+              else:
+                  producer = store.session.register(identity, deadline=deadline)
+                  original = store.checkpoint
+                  opened, closed = set(), set()
+                  real_open, real_close = agent.os.open, agent.os.close
+                  def track_open(*args, **kwargs):
+                      fd = real_open(*args, **kwargs)
+                      opened.add(fd)
+                      closed.discard(fd)
+                      return fd
+                  def track_close(fd):
+                      real_close(fd)
+                      closed.add(fd)
+                  def held(current, current_producer):
+                      original(current, current_producer)
+                      if current == 'beforeWrite':
+                          # The root lease remains session-owned, not writer-owned. Start the
+                          # descriptor census after lease acquisition, at actual writer access.
+                          opened.clear()
+                          closed.clear()
+                      if current == (phase if phase in ('beforeWrite', 'afterMarker', 'beforeTerminal') else 'beforeTerminal'):
+                          reached.set()
+                          if not release.wait(remaining()):
+                              raise TimeoutError('barrier')
+                  def prepare():
+                      try:
+                          outcome.append(store.prepare(**identity, producer=producer))
+                      except agent.AttemptCancelled:
+                          outcome.append('cancelled')
+                      except Exception:
+                          outcome.append('failed')
+                  with patch.object(store, 'checkpoint', side_effect=held), \
+                          patch.object(agent.os, 'open', side_effect=track_open), \
+                          patch.object(agent.os, 'close', side_effect=track_close):
+                      worker = threading.Thread(target=prepare)
+                      worker.start()
+                      if not reached.wait(remaining()) or producer.closed.is_set():
+                          raise RuntimeError('barrier')
+                      if phase == 'afterMarker' and fixture.paths(identity)[2].read_bytes() != store.marker:
+                          raise RuntimeError('marker')
+                      emit('OPEN_BARRIER')
+                      if phase in ('earlyReceive', 'expiredJoin', 'callbackFailure'):
+                          retained_marker = (fixture.paths(identity)[2], fixture.snapshot(fixture.paths(identity)[2]))
+                          if phase == 'expiredJoin':
+                              worker.join(0)
+                              if not worker.is_alive():
+                                  raise RuntimeError('missingOwnedWorker')
+                              cleanup_errors.append('expiredJoin')
+                          if phase == 'earlyReceive':
+                              os.write(1, b'{bad}\n')
+                          command('QUIT')
+                          if phase != 'callbackFailure':
+                              raise RuntimeError('ownedWorkerFailure')
+                          return
+                      command('BLOCKED_PURGE')
+                      purge = dict(identity, correlationID=str(uuid.uuid4()))
+                      try:
+                          store.paper_purge(**purge)
+                      except TimeoutError:
+                          pass
+                      else:
+                          raise RuntimeError('prematureAbsence')
+                      if producer.closed.is_set() or not producer.stop.is_set():
+                          raise RuntimeError('prematureClosure')
+                      emit('BLOCKED_NOT_DRAINED')
+                      command('RESUME')
+                      release.set()
+                      worker.join(remaining())
+                      if (worker.is_alive() or outcome != ['cancelled'] or not producer.closed.is_set()
+                              or store.session.failed_closure or not opened.issubset(closed)):
+                          raise RuntimeError('closure')
+                  emit('FINALLY_FDS_CLOSED')
+                  operation = command('FAILED_PURGE')
+                  # Exercise the existing actual expired-budget failure, including an empty
+                  # beforeWrite scope; no fake executor success or injected filesystem result.
+                  try:
+                      store.paper_purge(**dict(identity, correlationID=operation), deadline=0.0)
+                  except TimeoutError:
+                      pass
+                  else:
+                      raise RuntimeError('failedPurgeSuccess')
+                  emit('PURGE_FAILED')
+                  operation = command('PURGE')
+                  if store.paper_purge(**dict(identity, correlationID=operation)) != {'absent': True, 'drained': True}:
+                      raise RuntimeError('absence')
+                  if any(os.path.lexists(path) for path in fixture.paths(identity)[1:]):
+                      raise RuntimeError('absence')
+                  emit('SCOPED_ABSENT_DRAINED')
+                  operation = command('REMOVE')
+                  if store.paper_purge(**dict(identity, correlationID=operation)) != {'absent': True, 'drained': True}:
+                      raise RuntimeError('absence')
+                  emit('SCOPED_ABSENT_DRAINED')
+              command('QUIT')
+          finally:
+              # One deadline for join, all stores and inherited callbacks. Failure in one
+              # eligible action never suppresses the others; uncertain namespaces stay owned.
+              cleaning = True
+              body_failed = sys.exc_info()[0] is not None
+              owned_end = cleanup_end if cleanup_end is not None else time.monotonic() + 0.3
+              end = owned_end - 0.08 # Reserve owned helper exit/reap in the same deadline.
+              release.set()
+              if worker is not None:
+                  try:
+                      worker.join(max(0, end - time.monotonic()))
+                  except BaseException:
+                      cleanup_errors.append('join')
+              worker_closed = worker is None or not worker.is_alive()
+              if not worker_closed:
+                  cleanup_errors.append('workerUnknown')
+              # Extra recovered stores precede inherited callbacks, without double closing.
+              inherited = {id(value) for kind, value, _, _ in callbacks if kind == 'store'}
+              actions = [('store', value, (), {}) for value in stores if id(value) not in inherited]
+              actions += list(reversed(callbacks))
+              stores_closed = True
+              namespaces = []
+              for kind, value, args, kwargs in actions:
+                  if kind == 'namespace':
+                      namespaces.append((value, args, kwargs))
+                      continue
+                  if kind == 'profile' and not (worker_closed and stores_closed):
+                      # Do not restore account-profile authority beneath an uncertain actor.
+                      cleanup_errors.append('profileDebt')
+                      continue
+                  try:
+                      if kind == 'store':
+                          value.close(timeout=max(0, end - time.monotonic()))
+                          if (not value.session.released or value.session.failed_closure
+                                  or value.session.root_fd is not None or value.session.owner_fd is not None):
+                              raise RuntimeError('storeUnknown')
+                      else:
+                          value(*args, **kwargs)
+                  except BaseException:
+                      cleanup_errors.append('cleanup')
+                      if kind == 'store':
+                          stores_closed = False
+              namespace_closed = False
+              if worker_closed and stores_closed and not cleanup_errors and time.monotonic() < end:
+                  for value, args, kwargs in namespaces:
+                      try:
+                          value(*args, **kwargs)
+                          namespace_closed = not os.path.lexists(fixture.temporary.name)
+                      except BaseException:
+                          cleanup_errors.append('namespace')
+              if time.monotonic() >= end:
+                  cleanup_errors.append('deadline')
+              bytes_preserved = False
+              if retained_marker is not None and not namespace_closed:
+                  try:
+                      bytes_preserved = fixture.snapshot(retained_marker[0]) == retained_marker[1]
+                  except BaseException:
+                      cleanup_errors.append('preservationUnknown')
+              emit('OWNERSHIP', workerClosed=worker_closed, storesClosed=stores_closed,
+                   namespaceClosed=namespace_closed, bytesPreserved=bytes_preserved,
+                   bodyFailed=body_failed, errors=len(cleanup_errors), cleanupEnd=owned_end)
+              if cleanup_errors:
+                  raise RuntimeError('cleanup')
+      try:
+          main()
+      except BaseException:
+          print('{"code":"FAIL"}', flush=True)
+          # No GC/TemporaryDirectory finalizer may remove an uncertain retained namespace.
+          import os
+          os._exit(1)
+      else:
+          import os
+          os._exit(0)
+      """#
+  }
+
+  private func fixture(_ bridge: Bridge) throws -> P.Snapshot {
+    let identity = try bridge.receive()
+    guard identity["code"] as? String == "IDENTITY",
+      let paper = identity["paperID"] as? String,
+      let run = identity["runID"] as? String,
+      let correlation = identity["correlationID"] as? String,
+      let generation = identity["generation"] as? Int
+    else { throw BridgeFailure.observation }
+    return try P.create(
+      job: run, role: .parsing,
+      authority: .init(
+        input: .parser(version: "synthetic-marker"), config: .inapplicable,
+        paper: .init(id: paper, generation: String(generation)), epoch: "native-process",
+        prerequisitesAvailable: true),
+      reservation: .init(
+        attempt: UUID().uuidString, fence: UUID().uuidString,
+        correlation: correlation))
+  }
+
+  @discardableResult
+  private func apply(_ event: P.Event, _ s: inout P.Snapshot) -> [P.Command] {
+    let decision = P.apply(event, to: s)
+    XCTAssertTrue(decision.rejection == nil, "native admission")
+    s = decision.snapshot
+    return decision.commands
+  }
+
+  private func reject(_ event: P.Event, _ s: P.Snapshot, _ reason: P.Rejection) {
+    let decision = P.apply(event, to: s)
+    XCTAssertTrue(decision.rejection == reason, "native rejection")
+    XCTAssertTrue(decision.snapshot == s && decision.commands.isEmpty, "atomic rejection")
+  }
+
+  private func compose(_ phase: String, terminal: P.Failure?) throws {
+    let bridge = try Bridge(phase)
+    defer { XCTAssertNoThrow(try bridge.close(), "owned cleanup") }
+    var s = try fixture(bridge)
+    let owner = s.current.lineage
+    apply(.claim(owner), &s)
+    XCTAssertTrue(
+      apply(.acquireWriter(owner, permit: "writer"), &s) == [
+        .acquirePermit(owner, "writer", .writer)
+      ], "permit before real access")
+    guard s.permits.contains(where: { $0.id == "writer" && $0.owner == owner })
+    else { throw BridgeFailure.observation }
+    try bridge.send("ADMITTED")
+    try bridge.expect("OPEN_BARRIER")
+    if let terminal { apply(.terminate(owner, terminal), &s) } else { apply(.revoke, &s) }
+    XCTAssertTrue(s.current.state != .succeeded && s.usableResult == nil, "terminal not success")
+    let rebound = P.Lineage(
+      job: owner.job,
+      reservation: .init(
+        attempt: owner.reservation.attempt, fence: owner.reservation.fence,
+        correlation: UUID().uuidString), captured: owner.captured)
+    reject(.writerClosure(rebound, permit: "writer", .closed(.unvalidated)), s, .permitOwnership)
+    reject(.acquirePublication(owner, writer: "writer", permit: "late-publication"), s, .state)
+    reject(.requestCleanup(owner, permit: "writer", operation: "premature"), s, .closureUnknown)
+    reject(.release(owner, permit: "writer"), s, .closureUnknown)
+    apply(.revoke, &s)
+    reject(.removeNamespace(operation: "premature-remove"), s, .permitsOutstanding)
+    try bridge.send("BLOCKED_PURGE")
+    try bridge.expect("BLOCKED_NOT_DRAINED")
+    XCTAssertTrue(s.permits.count == 1 && !s.namespaceRemoved, "blocked purge retains debt")
+    try bridge.send("RESUME")
+    try bridge.expect("FINALLY_FDS_CLOSED")
+    // Marker bytes are never promoted to a fabricated validated AI result.
+    apply(.writerClosure(owner, permit: "writer", .closed(.unvalidated)), &s)
+    let failed = P.Operation(id: UUID().uuidString.lowercased(), paper: owner.captured.paper)
+    apply(.requestCleanup(owner, permit: "writer", operation: failed.id), &s)
+    guard s.permits.first?.cleanupOperation == failed else { throw BridgeFailure.observation }
+    try bridge.send("FAILED_PURGE " + failed.id)
+    try bridge.expect("PURGE_FAILED")
+    apply(.cleanupFinished(owner, permit: "writer", operation: failed, succeeded: false), &s)
+    reject(.release(owner, permit: "writer"), s, .cleanupOutstanding)
+    let exact = P.Operation(id: UUID().uuidString.lowercased(), paper: owner.captured.paper)
+    XCTAssertTrue(
+      apply(.requestCleanup(owner, permit: "writer", operation: exact.id), &s) == [
+        .removeOwnedBytes(owner, "writer", exact)
+      ], "reserved scoped cleanup")
+    reject(
+      .cleanupFinished(owner, permit: "writer", operation: failed, succeeded: true), s,
+      .operationMismatch)
+    reject(
+      .cleanupFinished(
+        owner, permit: "writer",
+        operation: .init(id: exact.id, paper: .init(id: exact.paper.id, generation: "rebound")),
+        succeeded: true), s, .operationMismatch)
+    guard s.permits.first?.cleanupOperation == exact else { throw BridgeFailure.observation }
+    try bridge.send("PURGE " + exact.id)
+    try bridge.expect("SCOPED_ABSENT_DRAINED")
+    apply(.cleanupFinished(owner, permit: "writer", operation: exact, succeeded: true), &s)
+    apply(.release(owner, permit: "writer"), &s)
+    let removal = P.Operation(id: UUID().uuidString.lowercased(), paper: owner.captured.paper)
+    XCTAssertTrue(
+      apply(.removeNamespace(operation: removal.id), &s) == [.removeNamespace(removal)],
+      "reserved scoped removal")
+    reject(
+      .namespaceRemovalFinished(
+        operation: .init(id: "stale-remove", paper: removal.paper), succeeded: true),
+      s, .operationMismatch)
+    guard s.pendingRemoval == removal else { throw BridgeFailure.observation }
+    try bridge.send("REMOVE " + removal.id)
+    try bridge.expect("SCOPED_ABSENT_DRAINED")
+    apply(.namespaceRemovalFinished(operation: removal, succeeded: true), &s)
+    XCTAssertTrue(
+      s.permits.isEmpty && s.namespaceRemoved && s.usableResult == nil,
+      "registered scope only, no product publication")
+  }
+
+  func testActualRegisteredBeforeWriteCancellationRetainsDebtUntilClosedPurge() throws {
+    try compose("beforeWrite", terminal: .cancelled)
+  }
+
+  private func assertFailedOwnership(_ bridge: Bridge, preserved: Bool) throws {
+    let receipt = try bridge.receive()
+    XCTAssertEqual(receipt["code"] as? String, "OWNERSHIP")
+    XCTAssertEqual(receipt["workerClosed"] as? Bool, true)
+    XCTAssertEqual(receipt["storesClosed"] as? Bool, true)
+    XCTAssertEqual(receipt["namespaceClosed"] as? Bool, !preserved)
+    if preserved {
+      XCTAssertGreaterThan(receipt["errors"] as? Int ?? 0, 0)
+      XCTAssertEqual(receipt["bytesPreserved"] as? Bool, true)
+    }
+    XCTAssertTrue((receipt["bodyFailed"] as? Bool == true) || (receipt["errors"] as? Int ?? 0) > 0)
+    XCTAssertThrowsError(try bridge.expect("FAIL")) {
+      XCTAssertEqual($0 as? BridgeFailure, .observation)
+    }
+    XCTAssertThrowsError(try bridge.close()) {
+      XCTAssertEqual($0 as? BridgeFailure, .cleanup)
+    }
+    XCTAssertTrue(bridge.reaped && bridge.finished && !bridge.process.isRunning)
+    XCTAssertTrue(bridge.ownedHandles.isEmpty)
+    XCTAssertThrowsError(try bridge.close(), "failure is retained after ownership discharge")
+  }
+
+  func testSetupFailureAfterRegisteredAcquisitionClosesResourcesAndReapsFailure() throws {
+    let bridge = try Bridge("setupFailure")
+    defer { try? bridge.close() }
+    try assertFailedOwnership(bridge, preserved: false)
+  }
+
+  func testPartialCommandEOFClosesResourcesAndReapsFailure() throws {
+    let bridge = try Bridge("beforeWrite")
+    defer { try? bridge.close() }
+    _ = try fixture(bridge)
+    try bridge.sendIncomplete(Data("ADMIT".utf8))
+    try assertFailedOwnership(bridge, preserved: false)
+  }
+
+  func testOversizedCommandClosesResourcesAndReapsFailure() throws {
+    let bridge = try Bridge("beforeWrite")
+    defer { try? bridge.close() }
+    _ = try fixture(bridge)
+    try bridge.sendIncomplete(Data(repeating: 65, count: 4097))
+    try assertFailedOwnership(bridge, preserved: false)
+  }
+
+  private func workerFailure(_ phase: String) throws {
+    let bridge = try Bridge(phase)
+    defer { try? bridge.close() }
+    _ = try fixture(bridge)
+    try bridge.send("ADMITTED")
+    try bridge.expect("OPEN_BARRIER")
+    if phase == "earlyReceive" {
+      XCTAssertThrowsError(try bridge.receive()) { XCTAssertEqual($0 as? BridgeFailure, .control) }
+    }
+    bridge.beginCleanup()
+    try assertFailedOwnership(bridge, preserved: phase != "earlyReceive")
+  }
+
+  func testExpiredJoinRetainsErrorAndNamespaceAfterObservedWorkerClosure() throws {
+    try workerFailure("expiredJoin")
+  }
+
+  func testCleanupCallbackFailureExhaustsEligibleActionsAndPreservesNamespace() throws {
+    try workerFailure("callbackFailure")
+  }
+
+  func testEarlyMalformedReceiveWhileActualWorkerOwnedStillClosesAndReaps() throws {
+    try workerFailure("earlyReceive")
+  }
+
+  func testActualRegisteredAfterMarkerTimeoutRetainsDebtUntilClosedPurge() throws {
+    try compose("afterMarker", terminal: .timeout)
+  }
+
+  func testActualRegisteredBeforeTerminalDeletionRetainsDebtUntilClosedPurge() throws {
+    try compose("beforeTerminal", terminal: nil)
+  }
+
+  func testActualRecoveredHigherPaperGenerationRejectsLowerPurgeWithoutUnlink() throws {
+    let bridge = try Bridge("higher")
+    defer { XCTAssertNoThrow(try bridge.close(), "owned cleanup") }
+    var high = try fixture(bridge)
+    let owner = high.current.lineage
+    apply(.claim(owner), &high)
+    apply(.acquireWriter(owner, permit: "writer"), &high)
+    guard high.permits.contains(where: { $0.id == "writer" && $0.owner == owner })
+    else { throw BridgeFailure.observation }
+    try bridge.send("ADMITTED")
+    try bridge.expect("RECOVERED_REGISTERED_CLOSED")
+    apply(.writerClosure(owner, permit: "writer", .closed(.unvalidated)), &high)
+    reject(
+      .acquirePublication(owner, writer: "writer", permit: "publication"), high,
+      .stageNotValidated)
+    let a = owner.captured
+    var low = try P.create(
+      job: "lower-removal", role: .parsing,
+      authority: .init(
+        input: a.input, config: a.config,
+        paper: .init(id: a.paper.id, generation: "1"), epoch: a.epoch,
+        prerequisitesAvailable: true),
+      reservation: .init(
+        attempt: "lower-attempt", fence: "lower-fence", correlation: "lower-correlation"))
+    apply(.revoke, &low)
+    let operation = P.Operation(id: UUID().uuidString.lowercased(), paper: low.authority.paper)
+    apply(.removeNamespace(operation: operation.id), &low)
+    guard low.pendingRemoval == operation else { throw BridgeFailure.observation }
+    try bridge.send("LOWER_PURGE " + operation.id)
+    try bridge.expect("LOWER_REJECTED_PRESERVED")
+    apply(.namespaceRemovalFinished(operation: operation, succeeded: false), &low)
+    XCTAssertTrue(
+      !low.namespaceRemoved && low.removalDebt == operation.paper,
+      "lower failed purge retains debt")
+    XCTAssertTrue(
+      high.usableResult == nil && high.current.state == .running,
+      "marker is not usable publication")
+    try bridge.send("RESUME")
+    try bridge.expect("RECOVERY_FINISHED")
+  }
+}
 
 // Contract fixtures only: opaque versions and class-owner attestations are not physical drain,
 // authenticated provider output, SQLite transactions, allocator durability, or product wiring.

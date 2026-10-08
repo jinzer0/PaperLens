@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "governingIssue": 15,
-  "scope": "pure-Application-recovery-precursor-only",
+  "scope": "pure-policy-and-registered-synthetic-composition-only",
   "initialSpecCommit": "119a28aa9cc941b2bf88851228a67c0bfec88f5a",
   "completionProvenanceSpecCommit": "f14f15f3f1c1fed02657ebf0c7ecdcb23721bfa8",
   "historicalNativeContractVerification": {
@@ -73,8 +73,115 @@
     "parentFormattedAfterReview": true
   },
   "repairStatus": "verified-pure-contract-only",
+  "compositionOwnershipSpecCommit": "db3702b1df6cf845847bfc22784251f55469efd4",
+  "historicalCompositionCompileFailure": {
+    "runID": "28d9c2af-5183-4b1d-bb8b-e2242c1b76e6",
+    "code": "required-operation-argument-labels-omitted",
+    "compilePassed": false,
+    "compileErrorCount": 8,
+    "sourceErrorLines": [372, 377, 420],
+    "testsExecuted": 0,
+    "sourceSHA256": {
+      "JobRecoveryPolicy.swift": "ababf85f651be81c7dd8e76eedaaad5e85b0c1cc26249e15811901a729ee107d",
+      "JobRecoveryPolicyTests.swift": "3f7982397fb17485c84c7bd68e663fb0cf1fab3daaf776ba42c08805613ab99b"
+    }
+  },
+  "historicalCompositionVerification": {
+    "runID": "ef6b7d05-38ce-4373-9f37-221f7871541f",
+    "compilePassed": true,
+    "compileWarningCount": 0,
+    "compileErrorCount": 0,
+    "testsExecuted": 29,
+    "failures": 0,
+    "testExitCode": 0,
+    "positiveXCTestSummary": true,
+    "singleExecution": true,
+    "watchdogExceeded": false,
+    "ownedLoaderReaped": true,
+    "sourceSHA256": {
+      "JobRecoveryPolicy.swift": "ababf85f651be81c7dd8e76eedaaad5e85b0c1cc26249e15811901a729ee107d",
+      "JobRecoveryPolicyTests.swift": "5ba4276f24d691045c2317b7ac3c5291666b88af8cd3e8ec390fe248d44dc69d"
+    },
+    "acceptance": "not-accepted-after-independent-lifecycle-review"
+  },
+  "historicalCompositionReview": {
+    "reviewer": "61-61-RecoveryCompositionReview",
+    "status": "BLOCK/REQUEST-CHANGES",
+    "findingCodes": ["helper-reader-lifetime", "fixture-exceptional-cleanup", "unbounded-partial-control-frame"],
+    "unchangedPurePolicyAcceptanceReopened": false,
+    "runtimeExecutedByReviewer": false
+  },
+  "historicalClockFailure": {
+    "runID": "d92fab7d-3f6a-443b-89f7-a27275518529",
+    "code": "incompatible-native-helper-monotonic-origin",
+    "compilePassed": true,
+    "compileWarningCount": 0,
+    "testsExecuted": 35,
+    "failures": 16,
+    "testExitCode": 1,
+    "watchdogExceeded": false,
+    "ownedLoaderReaped": true,
+    "testSourceSHA256": "c8c6648e2d525f1afbb542466e50177d9e780f5de5b002205ee6a613356c0e1b",
+    "independentReview": "63-63-RecoveryBridgeFinalReview/BLOCK"
+  },
+  "publicClockHandshake": {
+    "scope": "test-helper-common-host-only-not-P1-clock-proof",
+    "pythonImplementation": "mach_absolute_time()",
+    "CLOCK_MONOTONICInPythonBracket": false,
+    "CLOCK_UPTIME_RAWInPythonBracket": true,
+    "helperReaped": true,
+    "rawSamplesExported": false
+  },
+  "clockCorrectionVerification": {
+    "runID": "45fc90c5-682e-4aae-a51e-a343c86ec88f",
+    "testsExecuted": 35,
+    "failures": 0,
+    "compileWarningCount": 0,
+    "testSourceSHA256": "d99b937412d2b75e5e8624c31444be87af8e8fd458f4419618449f077e360868",
+    "earliestDeadlineRefinementIncluded": false
+  },
+  "finalCompositionVerification": {
+    "runID": "bc9763fd-8d23-4404-9e76-46143c6fc341",
+    "sourceSHA256": {
+      "JobRecoveryPolicy.swift": "ababf85f651be81c7dd8e76eedaaad5e85b0c1cc26249e15811901a729ee107d",
+      "JobRecoveryPolicyTests.swift": "5ae66d56a83b4d2fe2015134b113383aa7e67cb66f976247b8c3bd61a9303cc6"
+    },
+    "compilePassed": true,
+    "compileWarningCount": 0,
+    "compileErrorCount": 0,
+    "testsExecuted": 35,
+    "pureTests": 25,
+    "actualRegisteredProducerCases": 4,
+    "exceptionalLifecycleCases": 6,
+    "failures": 0,
+    "testExitCode": 0,
+    "positiveXCTestSummary": true,
+    "singleExecution": true,
+    "watchdogExceeded": false,
+    "ownedLoaderReaped": true,
+    "earliestAbsoluteDeadlineIncluded": true,
+    "formatterPassed": true,
+    "whitespacePassed": true
+  },
+  "compositionReview": {
+    "reviewer": "63-63-RecoveryBridgeFinalReview",
+    "pass": "corrected-clock-and-earliest-deadline-delta",
+    "status": "CLEAR/APPROVE-registered-synthetic-only",
+    "resolvedFindingCodes": ["helper-reader-lifetime", "fixture-exceptional-cleanup", "unbounded-partial-control-frame", "incompatible-clock-origin", "deadline-adoption-extension"],
+    "unchangedPurePolicyAcceptanceReopened": false,
+    "runtimeExecutedByReviewer": false
+  },
+  "compositionRepairStatus": "verified-registered-synthetic-only",
+  "limitations": [
+    "Injected isolated CODE fixture is not OS/Main home or packaged-container proof.",
+    "Marker preparation is unvalidated and never authenticated AI output.",
+    "Expired-join regression observes an immediate failed join, not exhaustion of the final cleanup deadline.",
+    "Negative-path descriptors use real session close and native handle observations, not an OS-wide census.",
+    "Stalled filesystem syscalls and unknown closure remain failures, not guaranteed preemption or absence.",
+    "No actual Main publisher, durable product recovery, SQLite transaction, SDK event, or release proof."
+  ],
   "precursorAllProofComplete": false,
-  "actualRegisteredSyntheticCompositionVerified": false,
+  "actualRegisteredSyntheticCompositionVerified": true,
   "actualSDKEventsAuthenticated": false,
   "actualProductPersistenceVerified": false,
   "productWiringChanged": false,
