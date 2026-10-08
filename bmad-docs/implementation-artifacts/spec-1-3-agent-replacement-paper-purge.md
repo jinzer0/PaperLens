@@ -13,6 +13,8 @@ Existing AttemptFixtures.prepare/terminal/cleanup/recover and RuntimeWorker/Serv
 
 A session coordinator holds the verified root's existing .owner.json descriptor with exclusive nonblocking flock for the entire producer session. Root/receipt inode is stable while held. All synthetic store instances join before scheduling/first access; independent instances/processes need their own exclusive lease and return busy during contention. Existing inspected store writers also need this flock before mutation. This is not control over arbitrary unknown/SDK writers.
 
+Only the coordinator owns/closes/unlocks retained root/owner FDs. Joined stores borrow them without close callbacks or another flock. Reopen the namespace and owner entry after lease acquisition, before mutation and before acknowledgment; compare their inodes with retained FDs. Compare the post-flock receipt self identity with fstat of the LOCKED owner, not merely its own replacement identity. Replacement is unavailable, never adoption/relocking/chmod. A detached old-root absence check proves nothing about the current namespace. Missing namespace requires the ordinary verified fresh-root creation path before lease acquisition; unleased root(False) absence cannot acknowledge purge.
+
 Register each real synthetic prepare producer before scheduling or filesystem access. Its permit lasts through descriptor close and cancellation byte cleanup. Only observed completion removes registration: task cancellation, dictionary removal and invented drained flags are insufficient. Test-injected barriers control timing, not fake writer implementations.
 
 Revocation uses a separate state lock, never awaiting drain under the filesystem operation gate. Atomically arbitrate prepare success against revocation: a terminal selected after revocation is cancelled; a success already selected earlier is not retrospectively late. If a producer capable of touching the scope cannot be registered or excluded, or completion cannot be observed, refuse acknowledgment.
@@ -23,7 +25,9 @@ Add only topology.paperPurge to sole ProviderRPC JSON authority. Params exactly 
 
 Scope: named run/Paper, all owned attempt correlations at generations ≤ deletion fence. Any matching owned/registered generation above fence fails invalidParams before mutation. Application aggregates all relevant run scopes; one ack does not cover another run.
 
-Validate entire named run and reserve bounded state → revoke every-generation admission for that run/Paper → request cancel → observe matching registered producers close and clean up → reuse validated cleanup primitives → reopen/revalidate ownership and inspect marker/receipt absence → acknowledge.
+Under the state lock validate the registered identity/fence census and reserve bounded state → revoke every-generation admission and request producer stop WITHOUT waiting for/holding the filesystem gate → observe underlying writers and operation-local FDs become unable to write → under the operation gate validate ENTIRE named-run ownership and persisted/registered generations BEFORE FIRST unlink → validated cancellation/attempt cleanup → reopened ownership and marker/receipt absence → acknowledge. Registration survives writer quiescence until validated cleanup completes. Cancellation of the request wrapper is not underlying producer closure.
+
+Stale RAM fence rejects before stop. A higher persisted generation discovered after quiescence rejects before any unlink, retains revocation/unresolved ownership and does not claim success. Failed whole-run validation similarly forbids cancellation-cleanup unlink; no partial/unreceipted ownership repair. A stopped producer may leave unresolved bytes and a failed purge, never a fabricated drained acknowledgment. Drain waiting cannot hold the gate needed by that producer's close path.
 
 Preserve other Papers/runs. Unknown entries, symlinks, hardlinks, swapped inodes, unsafe modes and contradictory receipts fail without adoption, chmod repair or broad sweep. Missing owned entries allow retryable absence. absent&&drained proves registered cleanup and synthetic absence under retained lease. Revocation lasts while coordinator lives. No permanent non-resurrection after lease release, SDK residue absence, DB cascade, remote erasure or user deletion-complete claim. Application owns durable tombstones, cross-session fencing and dispatch exclusion; Agent gets no second durable Paper deletion ledger.
 
@@ -36,6 +40,8 @@ Fresh envelopeID, same purge identity reruns validation/drain/absence, not cache
 ## Fresh-instance recovery
 
 After old session closure, fresh Server/coordinator acquires ownership and invokes existing topology.attemptRecover(runID) for explicitly named prior runs before admitting them. Independently inspect absence; no replacement alias RPC, discovery/adoption of unnamed runs or reuse of prior attempt identities. Unknown live writer prevents recovery acknowledgment. This does not prove installed-app replacement or permanent protection against later recreation.
+
+Session close first blocks admission and requests stop, then observes ALL underlying producers and operation-local FDs close before releasing the lease. Empty pending, gathering request tasks or overwriting Server is insufficient. Failed/unknown closure retains ownership rather than releasing it to a fresh instance. Fresh named recovery requires observed prior lease release and exclusive reacquisition. Test helpers must explicitly close old sessions or explicitly join their coordinator; those are different proofs.
 
 ## Implementation and verification
 
