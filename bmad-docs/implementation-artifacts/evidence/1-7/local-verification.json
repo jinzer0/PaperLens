@@ -1,0 +1,48 @@
+{
+  "story": "1.7",
+  "issue": 5,
+  "scope": "pure-python-and-local-native-contract",
+  "specCommit": "af2d9d1590b73b311d91865b63b6dfe8ce469cd3",
+  "verification": {
+    "runtime": "approved-python-3.13.16-arm64",
+    "focusedContractTests": {"passed": 34, "failed": 0},
+    "topologyRegressionTests": {"passed": 355, "failed": 0},
+    "topologyUnionIncludesConcurrentOfflineDBDelta": true,
+    "whitespace": "pass",
+    "observedWarnings": ["asyncio-slow-task-diagnostics"]
+  },
+  "nativeVerification": {
+    "artifactID": "604f0986-853b-4abb-8c58-7b0968bd22a3",
+    "target": "arm64-apple-macosx15.0",
+    "requestTests": {"passed": 31, "failed": 0},
+    "rpcRegressionTests": {"passed": 15, "failed": 0},
+    "warningCount": 0,
+    "compilerErrorCount": 0,
+    "stateIsolation": "exclusive-uuid-cache-config-security-scratch",
+    "priorTrial": "three-assertion-failures-repaired",
+    "repairs": ["optional-common-vector-charges", "string-initial-bom-preservation", "byte-exact-unicode-value-and-record-equality"],
+    "independentStaticReview": "clear",
+    "reviewer": "22-NativeRequestSafetyReview",
+    "resolved": ["incompatible-fixed-v1-definitions", "unicode-closed-key-alias", "validated-source-kind-downgrade", "resource-mode-and-pool-binding-rewrite"],
+    "scopeOfPassingTests": "local-contract-and-fixed-authority-security-regressions"
+  },
+  "independentStaticReview": {
+    "reviewer": "12-RequestContractSafetyReview",
+    "verdict": "clear",
+    "scope": "pure-contract-delta-only",
+    "resolved": ["nested-issuance-replacement", "mutable-translation-plan-authority"],
+    "limitations": ["not-independent-test-execution", "not-arbitrary-python-reflection-immunity"]
+  },
+  "implemented": [
+    "single-json-policy-authority", "five-operation-sources-and-results",
+    "deterministic-sink-reauthorization", "complete-immutable-translation-plans",
+    "bounded-provenance-and-budget-validation", "nonblocking-process-resource-leases",
+    "pure-import-and-provider-profile-admission"
+  ],
+  "notProven": [
+    "native-swift-parity", "provider-sdk-authentication",
+    "tokenizer-or-provider-capability-certification", "actual-import-parser-enforcement",
+    "packaged-dual-cpu-os-matrix", "p1", "p2", "story-completion"
+  ],
+  "storyComplete": false
+}
