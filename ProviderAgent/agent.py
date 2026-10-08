@@ -98,14 +98,235 @@ class AttemptBusy(Exception):
     pass
 
 
+class AttemptCancelled(Exception):
+    pass
+
+
+class AttemptInvalid(ValueError):
+    pass
+
+
+@dataclass
+class AttemptProducer:
+    identity: dict
+    stop: threading.Event = field(default_factory=threading.Event)
+    closed: threading.Event = field(default_factory=threading.Event)
+    success: bool = False
+    deadline: float = field(default_factory=lambda: time.monotonic() + LIMITS['maxTimeoutMs'] / 1000)
+
+
+class AttemptSession:
+    """Lease and census for only the registered synthetic prepare function."""
+    def __init__(self):
+        self.state = threading.RLock()
+        self.gate = threading.Lock()
+        self.records: dict[str, tuple[str, dict]] = {}
+        self.used: set[str] = set()
+        self.producers: dict[str, AttemptProducer] = {}
+        self.revoked: dict[tuple[str, str], int] = {}
+        self.admitted_runs: set[str] = set()
+        self.cleaning_runs: set[str] = set()
+        self.closing = False
+        self.released = False
+        self.failed_closure = False
+        self.lease = None
+        self.root_fd = None
+        self.owner_fd = None
+
+    def reserve(self, kind, identity):
+        correlation = identity['correlationID']
+        previous = self.records.get(correlation)
+        if previous is not None:
+            if previous != (kind, identity):
+                raise AttemptInvalid('correlationIdentity')
+            return
+        if len(self.records) >= 256:
+            raise AttemptBusy()
+        self.records[correlation] = (kind, dict(identity))
+
+    @contextmanager
+    def state_until(self, deadline=None):
+        end = time.monotonic() + 0.3 if deadline is None else deadline
+        if not self.state.acquire(timeout=max(0, end - time.monotonic())):
+            raise TimeoutError('stateDeadline')
+        try:
+            if time.monotonic() >= end:
+                raise TimeoutError('stateDeadline')
+            yield
+        finally:
+            self.state.release()
+
+    def register(self, identity, deadline=None):
+        end = time.monotonic() + LIMITS['maxTimeoutMs'] / 1000 if deadline is None else deadline
+        with self.state_until(end):
+            known = self.records.get(identity['correlationID'])
+            if known is not None and known != ('attempt', identity):
+                raise AttemptInvalid('correlationIdentity')
+            if self.closing or identity['runID'] in self.cleaning_runs:
+                raise AttemptBusy()
+            if (identity['runID'], identity['paperID']) in self.revoked:
+                raise AttemptCancelled()
+            self.reserve('attempt', identity)
+            if identity['correlationID'] in self.used:
+                raise AttemptInvalid('consumedAttempt')
+            previous = self.producers.get(identity['correlationID'])
+            if previous is not None and (not previous.closed.is_set() or previous.success):
+                raise AttemptInvalid('consumedAttempt')
+            producer = AttemptProducer(dict(identity), deadline=end)
+            self.producers[identity['correlationID']] = producer
+            return producer
+
+    def select(self, producer):
+        with self.state_until(producer.deadline):
+            if self.producers.get(producer.identity['correlationID']) is not producer:
+                raise PermissionError('unregisteredProducer')
+            if self.failed_closure:
+                raise PermissionError('descriptorClosureUnknown')
+            if (producer.stop.is_set() or self.closing
+                    or (producer.identity['runID'], producer.identity['paperID']) in self.revoked):
+                raise AttemptCancelled()
+            producer.success = True
+
+    def require_producer(self, producer):
+        with self.state_until(producer.deadline):
+            if (self.producers.get(producer.identity['correlationID']) is not producer
+                    or producer.closed.is_set()):
+                raise PermissionError('unregisteredProducer')
+
+    @contextmanager
+    def cleanup_admission(self, runID, deadline):
+        with self.state_until(deadline):
+            if any(not p.closed.is_set() and p.identity['runID'] == runID
+                   for p in self.producers.values()):
+                raise AttemptBusy()
+            self.cleaning_runs.add(runID)
+        try:
+            yield
+        finally:
+            # Expired/failed cleanup keeps admission fenced until a bounded retry.
+            if time.monotonic() < deadline:
+                with self.state_until(deadline):
+                    self.cleaning_runs.discard(runID)
+
+    def validate(self, store):
+        _, container = fixture_profile()
+        with ExitStack() as stack:
+            current = os.open('/', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            stack.callback(store.close_fd, current)
+            for index, component in enumerate((*container.parts[1:], 'Library', 'Application Support')):
+                current = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW |
+                                  os.O_NONBLOCK, dir_fd=current)
+                stack.callback(store.close_fd, current)
+                if (index >= len(container.parts) - 2
+                        and os.fstat(current).st_uid != os.getuid()):
+                    raise PermissionError('unsafeParent')
+            named = store.open_dir(current, store.namespace)
+            stack.callback(store.close_fd, named)
+            store.check(self.root_fd, True)
+            store.check(self.owner_fd, False)
+            if store.identity(named) != store.identity(self.root_fd):
+                raise PermissionError('rootIdentity')
+            receipt = store.receipt(named, '.owner.json', {
+                'version': 1, 'kind': 'root', 'directory': store.identity(self.root_fd)})
+            if receipt['self'] != store.identity(self.owner_fd):
+                raise PermissionError('receiptIdentity')
+
+    def close(self, store, timeout=0.3):
+        end = time.monotonic() + min(timeout, 0.3)
+        with self.state_until(end):
+            self.closing = True
+            producers = list(self.producers.values())
+            for producer in producers:
+                producer.stop.set()
+        for producer in producers:
+            if not producer.closed.wait(max(0, end - time.monotonic())):
+                raise PermissionError('producerClosureUnknown')
+        if not self.gate.acquire(timeout=max(0, end - time.monotonic())):
+            raise PermissionError('operationClosureUnknown')
+        try:
+            if self.failed_closure:
+                raise PermissionError('descriptorClosureUnknown')
+            if self.lease is not None:
+                previous = getattr(store.local, 'session', None)
+                store.local.session = self
+                try:
+                    self.lease.__exit__(None, None, None)
+                finally:
+                    store.local.session = previous
+                self.lease = None
+                self.root_fd = None
+                self.owner_fd = None
+            self.released = True
+        finally:
+            self.gate.release()
+
+
 class AttemptFixtures:
     """Private synthetic crash-recovery substrate; not an SDK outcome ledger."""
     namespace = 'PaperLensAttemptFixturesV1'
     marker = b'PaperLens synthetic attempt fixture\n'
-    lock = threading.Lock()
+    local = threading.local()
 
-    def __init__(self) -> None:
-        self.used: set[str] = set()
+    def __init__(self, session: AttemptSession | None = None) -> None:
+        self.session = session or AttemptSession()
+        self.used = self.session.used
+
+    def close(self, timeout=0.3):
+        """Close the whole shared session, not an individual store's borrowed FDs."""
+        self.session.close(self, timeout)
+
+    def checkpoint(self, phase: str, producer: AttemptProducer):
+        """Test barriers wrap the real writer; stop is checked after every barrier."""
+        if producer.stop.is_set():
+            raise AttemptCancelled()
+
+    @classmethod
+    def close_fd(cls, fd):
+        try:
+            os.close(fd)
+        except BaseException:
+            session = getattr(cls.local, 'session', None)
+            if session is not None:
+                session.failed_closure = True
+            raise
+
+    def close_bound_fd(self, fd, identity):
+        """Deferred lease cleanup must not close a recycled descriptor number."""
+        try:
+            if self.identity(fd) != identity:
+                raise PermissionError('descriptorIdentityUnknown')
+        except BaseException:
+            self.session.failed_closure = True
+            raise
+        self.close_fd(fd)
+
+    @contextmanager
+    def root(self, create: bool, deadline: float | None = None, *, admitted=False):
+        """Even absence inspection requires the verified, retained named-root lease."""
+        session = self.session
+        end = time.monotonic() + 0.3 if deadline is None else deadline
+        if not session.gate.acquire(timeout=max(0, end - time.monotonic())):
+            raise TimeoutError('operationDeadline')
+        previous = getattr(self.local, 'session', None)
+        self.local.session = session
+        try:
+            if time.monotonic() >= end:
+                raise TimeoutError('operationDeadline')
+            if session.failed_closure:
+                raise PermissionError('descriptorClosureUnknown')
+            if session.released or (session.closing and not admitted):
+                raise AttemptBusy()
+            if session.lease is None:
+                root, owner, lease = self.lease_root()
+                session.lease = lease
+                session.root_fd = root
+                session.owner_fd = owner
+            session.validate(self)
+            yield session.root_fd
+            session.validate(self)
+        finally:
+            self.local.session = previous
+            session.gate.release()
 
     @staticmethod
     def identity(fd: int) -> list[int]:
@@ -131,17 +352,26 @@ class AttemptFixtures:
             cls.check(fd, True)
             return fd
         except BaseException:
-            os.close(fd)
+            cls.close_fd(fd)
             raise
 
-    @staticmethod
-    def entries(fd: int) -> set[str]:
+    @classmethod
+    def entries(cls, fd: int) -> set[str]:
         names = set()
-        with os.scandir(fd) as entries:
+        entries = os.scandir(fd)
+        try:
             for entry in entries:
                 if len(names) == 64:
                     raise PermissionError('fixtureBound')
                 names.add(entry.name)
+        finally:
+            try:
+                entries.close()
+            except BaseException:
+                session = getattr(cls.local, 'session', None)
+                if session is not None:
+                    session.failed_closure = True
+                raise
         return names
 
     @staticmethod
@@ -177,7 +407,7 @@ class AttemptFixtures:
                 raise PermissionError('receiptMismatch')
             return value
         finally:
-            os.close(fd)
+            cls.close_fd(fd)
 
     @classmethod
     def write_receipt(cls, parent: int, name: str, value: dict) -> None:
@@ -195,63 +425,47 @@ class AttemptFixtures:
             os.fsync(fd)
             os.fsync(parent)
         finally:
-            os.close(fd)
+            cls.close_fd(fd)
 
-    @contextmanager
-    def root(self, create: bool):
-        if not self.lock.acquire(blocking=False):
-            raise AttemptBusy()
-        try:
+    def lease_root(self):
+        # Explicit ExitStack ownership has no generator/GC-driven descriptor closure.
+        with ExitStack() as ownership:
             _, container = fixture_profile()
             with ExitStack() as stack:
                 fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK)
-                stack.callback(os.close, fd)
+                stack.callback(self.close_bound_fd, fd, self.identity(fd))
                 # System ancestors are not private fixture directories, but must be real dirs.
                 for component in container.parts[1:]:
                     fd = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW |
                                  os.O_NONBLOCK, dir_fd=fd)
-                    stack.callback(os.close, fd)
+                    stack.callback(self.close_bound_fd, fd, self.identity(fd))
                 if os.fstat(fd).st_uid != os.getuid():
                     raise PermissionError('unsafeContainer')
                 for component in ('Library', 'Application Support'):
-                    if create:
-                        try:
-                            os.mkdir(component, 0o700, dir_fd=fd)
-                        except FileExistsError:
-                            pass
                     try:
-                        fd = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW |
-                                     os.O_NONBLOCK, dir_fd=fd)
-                    except FileNotFoundError:
-                        if create:
-                            raise
-                        yield None
-                        return
-                    stack.callback(os.close, fd)
+                        os.mkdir(component, 0o700, dir_fd=fd)
+                    except FileExistsError:
+                        pass
+                    fd = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW |
+                                 os.O_NONBLOCK, dir_fd=fd)
+                    stack.callback(self.close_bound_fd, fd, self.identity(fd))
                     if os.fstat(fd).st_uid != os.getuid():
                         raise PermissionError('unsafeParent')
                 created = False
-                if create:
-                    try:
-                        os.mkdir(self.namespace, 0o700, dir_fd=fd)
-                        created = True
-                    except FileExistsError:
-                        pass
                 try:
-                    root = self.open_dir(fd, self.namespace)
-                except FileNotFoundError:
-                    if create:
-                        raise
-                    yield None
-                    return
-                stack.callback(os.close, root)
+                    os.mkdir(self.namespace, 0o700, dir_fd=fd)
+                    created = True
+                except FileExistsError:
+                    pass
+                root = self.open_dir(fd, self.namespace)
+                stack.callback(self.close_bound_fd, root, self.identity(root))
                 expected = {'version': 1, 'kind': 'root', 'directory': self.identity(root)}
                 if created:
                     self.write_receipt(root, '.owner.json', expected)
                 owner_receipt = self.receipt(root, '.owner.json', expected)
                 owner = os.open('.owner.json', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
                                 dir_fd=root)
-                stack.callback(os.close, owner)
+                ownership.callback(self.release_owner, owner, self.identity(owner))
                 self.check(owner, False)
                 if self.identity(owner) != owner_receipt['self']:
                     raise PermissionError('receiptIdentity')
@@ -259,10 +473,28 @@ class AttemptFixtures:
                     fcntl.flock(owner, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 except BlockingIOError:
                     raise AttemptBusy() from None
-                self.receipt(root, '.owner.json', expected)
-                yield root
-        finally:
-            self.lock.release()
+                locked_receipt = self.receipt(root, '.owner.json', expected)
+                if locked_receipt['self'] != self.identity(owner):
+                    raise PermissionError('receiptIdentity')
+                current = os.open('/', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                stack.callback(self.close_bound_fd, current, self.identity(current))
+                for component in (*container.parts[1:], 'Library', 'Application Support'):
+                    current = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW |
+                                      os.O_NONBLOCK, dir_fd=current)
+                    stack.callback(self.close_bound_fd, current, self.identity(current))
+                named_root = self.open_dir(current, self.namespace)
+                stack.callback(self.close_bound_fd, named_root, self.identity(named_root))
+                if self.identity(named_root) != self.identity(root):
+                    raise PermissionError('rootIdentity')
+                # Local lease descriptors close before the flock descriptor.
+                ownership.callback(stack.pop_all().close)
+                return root, owner, ownership.pop_all()
+
+    def release_owner(self, fd, identity):
+        # The flock descriptor is last, and failed local closure must retain it.
+        if self.session.failed_closure:
+            raise PermissionError('descriptorClosureUnknown')
+        self.close_bound_fd(fd, identity)
 
     @staticmethod
     def params(run: str, paper: str, generation: int, correlation: str) -> dict:
@@ -279,7 +511,7 @@ class AttemptFixtures:
         return (type(value) is list and len(value) == 2
                 and all(type(item) is int and item >= 0 for item in value))
 
-    def inspect_run(self, root: int, run: str, stack: ExitStack):
+    def inspect_run(self, root: int, run: str, stack: ExitStack, bindings=None):
         name = run + '.owner.json'
         try:
             receipt = self.receipt(root, name)
@@ -287,6 +519,9 @@ class AttemptFixtures:
             try:
                 os.stat(run, dir_fd=root, follow_symlinks=False)
             except FileNotFoundError:
+                if bindings is not None:
+                    bindings[(run,)] = None
+                    bindings[(name,)] = None
                 return None, []
             raise PermissionError('unownedRun')
         if (set(receipt) != {'version', 'kind', 'runID', 'directory', 'self'}
@@ -294,13 +529,18 @@ class AttemptFixtures:
                 or receipt['kind'] != 'run' or receipt['runID'] != run
                 or not self.inode(receipt['directory'])):
             raise PermissionError('runReceipt')
+        if bindings is not None:
+            bindings[(name,)] = (receipt['self'], False, receipt)
+            bindings[(run,)] = None
         try:
             fd = self.open_dir(root, run)
         except FileNotFoundError:
             return None, []
-        stack.callback(os.close, fd)
+        stack.callback(self.close_fd, fd)
         if self.identity(fd) != receipt['directory']:
             raise PermissionError('runIdentity')
+        if bindings is not None:
+            bindings[(run,)] = (self.identity(fd), True, None)
         names = self.entries(fd)
         correlations = set()
         for entry in names:
@@ -326,7 +566,7 @@ class AttemptFixtures:
             except FileNotFoundError:
                 child = None
             if child is not None:
-                stack.callback(os.close, child)
+                stack.callback(self.close_fd, child)
                 if self.identity(child) != value['directory']:
                     raise PermissionError('attemptIdentity')
                 entries = self.entries(child)
@@ -335,19 +575,75 @@ class AttemptFixtures:
                 if 'marker.bin' in entries:
                     marker = os.open('marker.bin', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
                                      dir_fd=child)
-                    stack.callback(os.close, marker)
+                    stack.callback(self.close_fd, marker)
                     self.check(marker, False)
                     if self.identity(marker) != value['marker']:
                         raise PermissionError('markerIdentity')
+            if bindings is not None:
+                bindings[(run, correlation + '.owner.json')] = (value['self'], False, value)
+                bindings[(run, correlation)] = (self.identity(child), True, None) if child is not None else None
+                if child is not None:
+                    bindings[(run, correlation, 'marker.bin')] = (
+                        (value['marker'], False, None) if 'marker.bin' in entries else None)
             attempts.append((correlation, value, child))
         return fd, attempts
 
-    def prepare(self, runID: str, paperID: str, generation: int, correlationID: str) -> dict:
+    def validate_census(self, attempts, deadline=None):
+        with self.session.state_until(deadline):
+            for correlation, value, _ in attempts:
+                known = self.session.records.get(correlation)
+                identity = {key: value[key] for key in (
+                    'runID', 'paperID', 'generation', 'correlationID')}
+                if known is not None and known != ('attempt', identity):
+                    raise PermissionError('registeredReceiptMismatch')
+
+    def prepare(self, runID: str, paperID: str, generation: int, correlationID: str,
+                producer: AttemptProducer | None = None) -> dict:
         identity = self.params(runID, paperID, generation, correlationID)
-        with self.root(True) as root, ExitStack() as stack:
-            if correlationID in self.used or len(self.used) >= 256:
-                raise PermissionError('correlationBound')
+        producer = producer or self.session.register(identity)
+        if producer.identity != identity:
+            raise AttemptInvalid('producerIdentity')
+        try:
+            self.session.require_producer(producer)
+            result = self.prepare_owned(identity, producer)
+            self.checkpoint('beforeTerminal', producer)
+            self.session.select(producer)
+            return result
+        except AttemptCancelled:
+            # Purge owns cleanup after revocation: never unlink ahead of its census.
+            end = time.monotonic() + 0.3
+            def budget():
+                if time.monotonic() >= end:
+                    raise TimeoutError('cleanupDeadline')
+            with self.root(False, deadline=end, admitted=True) as root, ExitStack() as stack:
+                bindings = {}
+                run, attempts = self.inspect_run(root, runID, stack, bindings)
+                self.validate_census(attempts, end)
+                with self.session.state_until(end):
+                    # Cleanup chosen before revocation drains before purge's census.
+                    cleanup_selected = (runID, paperID) not in self.session.revoked
+                if cleanup_selected:
+                    selected = [item for item in attempts if item[0] == correlationID]
+                    self.remove_attempts(root, runID, run, selected, budget, bindings)
+                    budget()
+            raise
+        finally:
+            # This is the underlying function's finally, not the asyncio wrapper's.
+            if not self.session.failed_closure:
+                producer.closed.set()
+
+    def prepare_owned(self, identity: dict, producer: AttemptProducer) -> dict:
+        self.session.require_producer(producer)
+        runID, correlationID = identity['runID'], identity['correlationID']
+        with self.root(True, deadline=producer.deadline, admitted=True) as root, ExitStack() as stack:
+            self.checkpoint('beforeWrite', producer)
+            if producer.stop.is_set():
+                raise AttemptCancelled()
+            self.session.validate(self)
             run, attempts = self.inspect_run(root, runID, stack)
+            self.validate_census(attempts, producer.deadline)
+            if run is not None and runID not in self.session.admitted_runs:
+                raise PermissionError('namedRecoveryRequired')
             if run is None:
                 # An existing receipt, even for an absent run, cannot be overwritten.
                 try:
@@ -356,74 +652,256 @@ class AttemptFixtures:
                     pass
                 else:
                     raise PermissionError('existingRun')
+                self.session.validate(self)
                 os.mkdir(runID, 0o700, dir_fd=root)
                 run = self.open_dir(root, runID)
-                stack.callback(os.close, run)
+                stack.callback(self.close_fd, run)
+                self.session.validate(self)
                 self.write_receipt(root, runID + '.owner.json', {
                     'version': 1, 'kind': 'run', 'runID': runID, 'directory': self.identity(run)})
-            if len(attempts) >= 32 or any(item[0] == correlationID for item in attempts):
+                self.session.admitted_runs.add(runID)
+            if any(item[0] == correlationID for item in attempts):
                 raise PermissionError('existingAttempt')
-            self.used.add(correlationID)
+            if len(attempts) >= 32:
+                raise AttemptBusy()
+            with self.session.state_until(producer.deadline):
+                self.used.add(correlationID)
+            self.session.validate(self)
             os.mkdir(correlationID, 0o700, dir_fd=run)
             child = self.open_dir(run, correlationID)
-            stack.callback(os.close, child)
+            stack.callback(self.close_fd, child)
+            self.session.validate(self)
             marker = os.open('marker.bin', os.O_WRONLY | os.O_CREAT | os.O_EXCL |
                              os.O_NOFOLLOW | os.O_NONBLOCK, 0o600, dir_fd=child)
-            stack.callback(os.close, marker)
+            stack.callback(self.close_fd, marker)
             self.check(marker, False)
+            self.session.validate(self)
             self.write_receipt(run, correlationID + '.owner.json', {
                 'version': 1, 'kind': 'attempt', **identity,
                 'directory': self.identity(child), 'marker': self.identity(marker)})
             os.fsync(child)
             offset = 0
             while offset < len(self.marker):
+                self.session.validate(self)
+                if producer.stop.is_set():
+                    raise AttemptCancelled()
                 count = os.write(marker, self.marker[offset:])
                 if count <= 0:
                     raise OSError('markerWrite')
                 offset += count
             os.fsync(marker)
+            self.checkpoint('afterMarker', producer)
+            if producer.stop.is_set():
+                raise AttemptCancelled()
             return {'prepared': True}
 
-    def cleanup(self, runID: str, identity: dict | None = None) -> dict:
-        safe_uuid(runID)
-        with self.root(False) as root, ExitStack() as stack:
-            if root is None:
-                return {'absent': True}
-            run, attempts = self.inspect_run(root, runID, stack)
-            selected = attempts
-            if identity is not None:
-                selected = [item for item in attempts if item[0] == identity['correlationID']]
-                if selected and any(selected[0][1][key] != value for key, value in identity.items()):
-                    raise PermissionError('identityMismatch')
-            for correlation, _, child in selected:
-                if child is not None:
-                    if 'marker.bin' in self.entries(child):
-                        os.unlink('marker.bin', dir_fd=child)
-                        os.fsync(child)
-                    os.rmdir(correlation, dir_fd=run)
-                    os.fsync(run)
-                os.unlink(correlation + '.owner.json', dir_fd=run)
-                os.fsync(run)
-            if run is not None and not self.entries(run):
-                os.rmdir(runID, dir_fd=root)
-                os.fsync(root)
-                run = None
-            if run is None:
+    def paper_purge(self, runID: str, paperID: str, generation: int, correlationID: str,
+                    stop: threading.Event | None = None, deadline: float | None = None) -> dict:
+        identity = self.params(runID, paperID, generation, correlationID)
+        session = self.session
+        scope = (runID, paperID)
+        end = min(time.monotonic() + 0.3, float('inf') if deadline is None else deadline)
+
+        def budget():
+            if stop is not None and stop.is_set():
+                raise AttemptCancelled()
+            if time.monotonic() >= end:
+                raise TimeoutError('purgeDeadline')
+
+        budget()
+        with session.state_until(end):
+            if session.closing:
+                raise AttemptBusy()
+            if generation < session.revoked.get(scope, 0):
+                raise AttemptInvalid('staleFence')
+            producers = [p for p in session.producers.values()
+                         if (p.identity['runID'], p.identity['paperID']) == scope]
+            registered = [value for kind, value in session.records.values()
+                          if kind == 'attempt' and (value['runID'], value['paperID']) == scope]
+            if any(value['generation'] > generation for value in registered):
+                raise AttemptInvalid('higherGeneration')
+            if scope not in session.revoked and len(session.revoked) >= 256:
+                raise AttemptBusy()
+            session.reserve('purge', identity)
+            budget()
+            session.revoked[scope] = generation
+            for producer in producers:
+                producer.stop.set()
+        # Never wait while holding the gate needed by the real writer's finally.
+        for producer in producers:
+            budget()
+            if not producer.closed.wait(max(0, end - time.monotonic())):
+                raise TimeoutError('producerClosureUnknown')
+        budget()
+        with self.root(False, deadline=end) as root, ExitStack() as stack:
+            budget()
+            bindings = {}
+            run, attempts = self.inspect_run(root, runID, stack, bindings)
+            selected = [item for item in attempts if item[1]['paperID'] == paperID]
+            if any(item[1]['generation'] > generation for item in selected):
+                raise AttemptInvalid('higherGeneration')
+            self.validate_census(attempts, end)
+            # ENTIRE run has been inspected before cancellation or purge unlinks.
+            with session.state_until(end):
+                # Recovery may have admitted persisted identities while we waited
+                # for the gate. Absence cannot erase that registered generation.
+                if generation < session.revoked.get(scope, 0):
+                    raise AttemptInvalid('staleFence')
+                if any(kind == 'attempt' and (value['runID'], value['paperID']) == scope
+                       and value['generation'] > generation
+                       for kind, value in session.records.values()):
+                    raise AttemptInvalid('higherGeneration')
+                if any(not producer.closed.is_set()
+                       and (producer.identity['runID'], producer.identity['paperID']) == scope
+                       for producer in session.producers.values()):
+                    raise PermissionError('producerClosureUnknown')
+            session.validate(self)
+            budget()
+            self.remove_attempts(root, runID, run, selected, budget, bindings)
+            session.validate(self)
+            with ExitStack() as reopened:
+                _, remaining = self.inspect_run(root, runID, reopened)
+                if any(item[1]['paperID'] == paperID for item in remaining):
+                    raise PermissionError('purgeIncomplete')
+            budget()
+            return {'absent': True, 'drained': True}
+
+    def validate_bindings(self, root, bindings):
+        """Reopen descendant names; retained FDs alone cannot authorize an unlink."""
+        with ExitStack() as stack:
+            directories = {(): root}
+            for path, expected in sorted(bindings.items(), key=lambda item: (len(item[0]), item[0])):
+                parent = directories.get(path[:-1])
+                if parent is None:
+                    if expected is not None:
+                        raise PermissionError('missingBindingParent')
+                    continue
                 try:
-                    os.unlink(runID + '.owner.json', dir_fd=root)
-                    os.fsync(root)
+                    info = os.stat(path[-1], dir_fd=parent, follow_symlinks=False)
                 except FileNotFoundError:
-                    pass
+                    if expected is not None:
+                        raise PermissionError('missingBinding') from None
+                    continue
+                if expected is None or [info.st_dev, info.st_ino] != expected[0]:
+                    raise PermissionError('descendantIdentity')
+                identity, directory, receipt = expected
+                if directory:
+                    fd = self.open_dir(parent, path[-1])
+                    stack.callback(self.close_fd, fd)
+                    if self.identity(fd) != identity:
+                        raise PermissionError('descendantIdentity')
+                    directories[path] = fd
+                else:
+                    fd = os.open(path[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                                 dir_fd=parent)
+                    stack.callback(self.close_fd, fd)
+                    self.check(fd, False)
+                    if self.identity(fd) != identity:
+                        raise PermissionError('descendantIdentity')
+                    if receipt is not None and self.receipt(parent, path[-1]) != receipt:
+                        raise PermissionError('descendantReceipt')
+            for path, fd in directories.items():
+                if path:
+                    expected_names = {key[-1] for key, value in bindings.items()
+                                      if key[:-1] == path and value is not None}
+                    if self.entries(fd) != expected_names:
+                        raise PermissionError('descendantEntries')
+
+    def remove_attempts(self, root, runID, run, selected, budget=None, bindings=None):
+        if bindings is None:
+            raise PermissionError('missingDeletionCensus')
+        def validate():
+            if budget is not None:
+                budget()
+            self.session.validate(self)
+            self.validate_bindings(root, bindings)
+            if budget is not None:
+                budget()
+        validate()
+        for correlation, _, child in selected:
+            validate()
+            if child is not None:
+                if 'marker.bin' in self.entries(child):
+                    os.unlink('marker.bin', dir_fd=child)
+                    bindings[(runID, correlation, 'marker.bin')] = None
+                    os.fsync(child)
+                validate()
+                os.rmdir(correlation, dir_fd=run)
+                bindings[(runID, correlation)] = None
+                os.fsync(run)
+            validate()
+            os.unlink(correlation + '.owner.json', dir_fd=run)
+            bindings[(runID, correlation + '.owner.json')] = None
+            os.fsync(run)
+        if run is not None and not self.entries(run):
+            validate()
+            os.rmdir(runID, dir_fd=root)
+            bindings[(runID,)] = None
+            os.fsync(root)
+            run = None
+        if run is None:
+            validate()
+            try:
+                os.unlink(runID + '.owner.json', dir_fd=root)
+                bindings[(runID + '.owner.json',)] = None
+                os.fsync(root)
+            except FileNotFoundError:
+                pass
+        validate()
+
+    def cleanup(self, runID: str, identity: dict | None = None, *, recovered=False,
+                deadline=None) -> dict:
+        safe_uuid(runID)
+        end = min(time.monotonic() + 0.3, float('inf') if deadline is None else deadline)
+        def budget():
+            if time.monotonic() >= end:
+                raise TimeoutError('cleanupDeadline')
+        with self.root(False, deadline=end) as root, self.session.cleanup_admission(runID, end), ExitStack() as stack:
+            bindings = {}
+            run, attempts = self.inspect_run(root, runID, stack, bindings)
+            self.validate_census(attempts, end)
+            identities = [{key: value[key] for key in (
+                'runID', 'paperID', 'generation', 'correlationID')}
+                for _, value, _ in attempts]
+            with self.session.state_until(end):
+                # Fence validation, recovered admission and cleanup selection are
+                # one arbitration. No filesystem work runs under this lock.
+                for item in identities:
+                    fence = self.session.revoked.get((runID, item['paperID']))
+                    if fence is not None and item['generation'] > fence:
+                        raise AttemptInvalid('higherGeneration')
+                    known = self.session.records.get(item['correlationID'])
+                    if known is not None and known != ('attempt', item):
+                        raise PermissionError('registeredReceiptMismatch')
+                if recovered:
+                    new = sum(item['correlationID'] not in self.session.records for item in identities)
+                    if len(self.session.records) + new > 256:
+                        raise AttemptBusy()
+                    for item in identities:
+                        self.session.reserve('attempt', item)
+                        self.session.used.add(item['correlationID'])
+                selected = attempts
+                if identity is not None:
+                    selected = [item for item in attempts if item[0] == identity['correlationID']]
+                    if selected and any(selected[0][1][key] != value for key, value in identity.items()):
+                        raise PermissionError('identityMismatch')
+            self.remove_attempts(root, runID, run, selected, budget, bindings)
+            budget()
             return {'absent': True}
 
     def terminal(self, runID: str, paperID: str, generation: int,
                  correlationID: str, outcome: str) -> dict:
         if type(outcome) is not str or outcome not in CONTRACT['definitions']['attemptOutcome']['enum']:
             raise ValueError('outcome')
-        return self.cleanup(runID, self.params(runID, paperID, generation, correlationID))
+        identity = self.params(runID, paperID, generation, correlationID)
+        end = time.monotonic() + 0.3
+        with self.session.state_until(end):
+            self.session.reserve('attempt', identity)
+            self.session.used.add(correlationID)
+        return self.cleanup(runID, identity, deadline=end)
 
     def recover(self, runID: str) -> dict:
-        return self.cleanup(runID)
+        return self.cleanup(runID, recovered=True)
 
 
 class Fixtures:
@@ -827,13 +1305,17 @@ class Pending:
     method: str
     task: asyncio.Task | None = None
     timer: asyncio.TimerHandle | None = None
+    producer: AttemptProducer | None = None
+    worker: asyncio.Task | None = None
+    stop: threading.Event = field(default_factory=threading.Event)
 
 
 class Server:
-    def __init__(self, runtime: RuntimeProbe | None = None, fixtures: Fixtures | None = None) -> None:
+    def __init__(self, runtime: RuntimeProbe | None = None, fixtures: Fixtures | None = None,
+                 session: AttemptSession | None = None) -> None:
         self.runtime = runtime or RuntimeProbe()
         self.fixtures = fixtures or Fixtures()
-        self.attempts = AttemptFixtures()
+        self.attempts = AttemptFixtures(session)
         self.seen: set[str] = set()
         self.pending: dict[str, Pending] = {}
         self.runtime_workers: dict[str, asyncio.Task] = {}
@@ -879,6 +1361,9 @@ class Server:
         finally:
             if cancel or not emitted:
                 try:
+                    record.stop.set()
+                    if record.producer is not None:
+                        record.producer.stop.set()
                     if record.method == 'topology.runtime':
                         self.runtime.cancel(identifier)
                 finally:
@@ -944,6 +1429,28 @@ class Server:
             self.error(identifier, 'busy', method)
             return
         record = Pending(method)
+        if method == 'topology.attemptPrepare':
+            try:
+                identity = self.attempts.params(params['runID'], params['paperID'],
+                                                params['generation'], params['correlationID'])
+                record.producer = self.attempts.session.register(
+                    identity, time.monotonic() + max(0, deadline - asyncio.get_running_loop().time()))
+            except TimeoutError:
+                self.error(identifier, 'timeout', method)
+                return
+            except AttemptBusy:
+                self.error(identifier, 'busy', method)
+                return
+            except AttemptCancelled:
+                self.error(identifier, 'cancelled', method)
+                return
+            except AttemptInvalid:
+                self.error(identifier, 'invalidParams', method)
+                return
+            record.worker = asyncio.create_task(asyncio.to_thread(
+                self.attempts.prepare, **params, producer=record.producer))
+            record.worker.add_done_callback(
+                lambda worker: None if worker.cancelled() else worker.exception())
         self.pending[identifier] = record
         record.timer = asyncio.get_running_loop().call_at(deadline, self.terminate, identifier, 'timeout')
         task = asyncio.create_task(self.execute(request, deadline))
@@ -958,6 +1465,7 @@ class Server:
 
     async def execute(self, request: dict, deadline: float) -> None:
         identifier, method, params = request['id'], request['method'], request['params']
+        record = self.pending.get(identifier)
         try:
             if asyncio.get_running_loop().time() >= deadline:
                 self.terminate(identifier, 'timeout')
@@ -983,11 +1491,19 @@ class Server:
             elif method == 'topology.cleanup':
                 result = self.fixtures.cleanup(params['runID'])
             elif method == 'topology.attemptPrepare':
-                result = self.attempts.prepare(**params)
+                result = await asyncio.shield(record.worker)
             elif method == 'topology.attemptTerminal':
-                result = self.attempts.terminal(**params)
+                result = await asyncio.to_thread(self.attempts.terminal, **params)
             elif method == 'topology.attemptRecover':
-                result = self.attempts.recover(**params)
+                result = await asyncio.to_thread(self.attempts.recover, **params)
+            elif method == 'topology.paperPurge':
+                worker = asyncio.create_task(asyncio.to_thread(
+                    self.attempts.paper_purge, **params, stop=record.stop,
+                    deadline=time.monotonic() + max(
+                        0, deadline - asyncio.get_running_loop().time())))
+                worker.add_done_callback(
+                    lambda finished: None if finished.cancelled() else finished.exception())
+                result = await asyncio.shield(worker)
             else:
                 result = self.fixtures.probe(params['runID'], params['caseID'])
             if asyncio.get_running_loop().time() >= deadline:
@@ -995,7 +1511,17 @@ class Server:
             else:
                 self.finish(identifier, result=result)
         except asyncio.CancelledError:
+            if record is not None:
+                record.stop.set()
+                if record.producer is not None:
+                    record.producer.stop.set()
             self.terminate(identifier, 'cancelled')
+        except (AttemptCancelled, AttemptInvalid, TimeoutError) as error:
+            code = ('timeout' if isinstance(error, TimeoutError) else
+                    'cancelled' if isinstance(error, AttemptCancelled) else 'invalidParams')
+            if asyncio.get_running_loop().time() >= deadline:
+                code = 'timeout'
+            self.terminate(identifier, code)
         except AttemptBusy:
             if asyncio.get_running_loop().time() >= deadline:
                 self.terminate(identifier, 'timeout')
@@ -1105,9 +1631,12 @@ class Server:
             for identifier in self.runtime_workers:
                 self.runtime.cancel(identifier)
             await asyncio.gather(*(p.task for _, p in remaining if p.task), return_exceptions=True)
-            writer.cancel()
-            fatal.cancel()
-            await asyncio.gather(writer, fatal, return_exceptions=True)
+            try:
+                await asyncio.to_thread(self.attempts.close)
+            finally:
+                writer.cancel()
+                fatal.cancel()
+                await asyncio.gather(writer, fatal, return_exceptions=True)
 
 
 def main() -> int:

@@ -90,6 +90,11 @@ final class ProviderRPCTests: XCTestCase {
         ["absent": true]
       ),
       ("topology.attemptRecover", ["runID": id], ["absent": true]),
+      (
+        "topology.paperPurge",
+        ["runID": id, "paperID": id, "generation": 1, "correlationID": id],
+        ["absent": true, "drained": true]
+      ),
       ("cancel", ["targetID": id], ["accepted": false]),
     ]
   }
@@ -137,6 +142,110 @@ final class ProviderRPCTests: XCTestCase {
       }
       rejects { try ProviderRPC.validateTerminal(terminal([:]), method: method) }
     }
+  }
+
+  func testPaperPurgeIdentityBoundsAndEnvelopeSeparation() throws {
+    let method = "topology.paperPurge"
+    let identity: [String: Any] = [
+      "runID": "11234567-89ab-4cde-8123-456789abcdef",
+      "paperID": "21234567-89ab-4cde-8123-456789abcdef",
+      "generation": 1, "correlationID": "31234567-89ab-4cde-8123-456789abcdef",
+    ]
+    let retryID = "41234567-89ab-4cde-8123-456789abcdef"
+    for envelopeID in [id, retryID] {
+      var original = request(method, params: identity)
+      original["id"] = envelopeID
+      let decoded = try ProviderRPC.decode(ProviderRPC.encode(original))
+      try ProviderRPC.validateRequest(decoded)
+      XCTAssertEqual(decoded["id"] as? String, envelopeID)
+      let params = try XCTUnwrap(decoded["params"] as? [String: Any])
+      XCTAssertTrue(NSDictionary(dictionary: identity).isEqual(to: params))
+      XCTAssertNotEqual(decoded["id"] as? String, params["correlationID"] as? String)
+      var response = terminal(["absent": true, "drained": true])
+      response["id"] = envelopeID
+      let decodedResponse = try ProviderRPC.decode(ProviderRPC.encode(response))
+      try ProviderRPC.validateTerminal(decodedResponse, method: method)
+      XCTAssertEqual(decodedResponse["id"] as? String, decoded["id"] as? String)
+    }
+    for generation in [1, 2_147_483_647] {
+      var params = identity
+      params["generation"] = generation
+      try ProviderRPC.validateRequest(
+        ProviderRPC.decode(ProviderRPC.encode(request(method, params: params))))
+    }
+    for generation in [0, -1, 2_147_483_648, true, false, 1.0, "1", NSNull()] as [Any] {
+      var params = identity
+      params["generation"] = generation
+      let decoded = try ProviderRPC.decode(ProviderRPC.encode(request(method, params: params)))
+      rejects(.invalidParams) { try ProviderRPC.validateRequest(decoded) }
+    }
+    for key in ["runID", "paperID", "correlationID"] {
+      for invalid in [
+        id.uppercased(), "../fixture", "01234567-89ab-1cde-8123-456789abcdef", true, false, 1,
+        NSNull(),
+      ] as [Any] {
+        var params = identity
+        params[key] = invalid
+        let decoded = try ProviderRPC.decode(ProviderRPC.encode(request(method, params: params)))
+        rejects(.invalidParams) { try ProviderRPC.validateRequest(decoded) }
+      }
+    }
+    var invalidEnvelope = request(method, params: identity)
+    invalidEnvelope["id"] = true
+    rejects { try ProviderRPC.validateRequest(invalidEnvelope) }
+    invalidEnvelope = request(method, params: identity)
+    invalidEnvelope["correlationID"] = identity["correlationID"]
+    rejects { try ProviderRPC.validateRequest(invalidEnvelope) }
+    var invalidParams = identity
+    invalidParams["id"] = id
+    rejects(.invalidParams) {
+      try ProviderRPC.validateRequest(request(method, params: invalidParams))
+    }
+  }
+
+  func testPaperPurgeResultIsTrueOnly() throws {
+    let method = "topology.paperPurge"
+    let result: [String: Any] = ["absent": true, "drained": true]
+    for key in result.keys {
+      for invalid in [false, 0, 1, NSNull(), "true"] as [Any] {
+        var invalidResult = result
+        invalidResult[key] = invalid
+        let decoded = try ProviderRPC.decode(ProviderRPC.encode(terminal(invalidResult)))
+        rejects { try ProviderRPC.validateTerminal(decoded, method: method) }
+      }
+    }
+    try ProviderRPC.validateTerminal(
+      ["kind": "error", "id": id, "code": "unavailable"], method: method)
+  }
+
+  func testPaperPurgeDuplicateMalformedAndFramingRejection() throws {
+    let params: [String: Any] = ["runID": id, "paperID": id, "generation": 1, "correlationID": id]
+    let frame = try ProviderRPC.encode(request("topology.paperPurge", params: params))
+    let body = String(decoding: frame.dropFirst(4), as: UTF8.self)
+    let response = try ProviderRPC.encode(terminal(["absent": true, "drained": true]))
+    let terminalBody = String(decoding: response.dropFirst(4), as: UTF8.self)
+    let invalidBodies = [
+      String(body.dropLast()), body + "{}",
+      body.replacingOccurrences(of: "\"id\":", with: "\"id\":\"\(id)\",\"id\":"),
+      body.replacingOccurrences(of: "\"runID\":", with: "\"runID\":\"\(id)\",\"runID\":"),
+      body.replacingOccurrences(of: "\"generation\":1", with: "\"generation\":1,\"generation\":1"),
+      terminalBody.replacingOccurrences(
+        of: "\"absent\":true", with: "\"absent\":true,\"absent\":true"),
+      terminalBody.replacingOccurrences(
+        of: "\"drained\":true", with: "\"drained\":true,\"drained\":true"),
+    ]
+    for invalid in invalidBodies { rejects { try ProviderRPC.decode(raw(invalid)) } }
+    for invalid in [Data(frame.dropLast()), frame + Data([120]), prefix(0) + frame.dropFirst(4)] {
+      rejects { try ProviderRPC.decode(invalid) }
+    }
+    var decoder = ProviderFrameDecoder()
+    XCTAssertEqual(try decoder.feed(Data(frame.prefix(3))), [])
+    XCTAssertEqual(try decoder.feed(Data(frame.dropFirst(3))), [frame])
+    try decoder.finish()
+    decoder = ProviderFrameDecoder()
+    XCTAssertEqual(try decoder.feed(Data(frame.dropLast())), [])
+    rejects { try decoder.finish() }
+    rejects { try decoder.feed(frame) }
   }
 
   func testGenericDecodeSeparatesTypedMethodFailures() throws {
