@@ -30,7 +30,7 @@ Paper request/response/EvidenceBundle/generated result/document content cannot p
 
 Correlated cleanup ACK crosses Story1.9 only after actual owner verification; its exact fields remain unresolved authority. Stale/wrong-generation/missing/failed ACK retains affected publication/deletion barriers. Main cannot substitute a broad filesystem scan; no caller-selected sweep.
 
-Protocol-only stdout and fixed safe diagnostics. No raw browser URL/query/code/token/secret/argv/environment/path/SDK exception/request/response/document projection to UI/logs. Exact validated environment only; no secret argv.
+Protocol-only stdout and fixed safe diagnostics. Only validated minimal auth instructions may reach the intentional live browser/login surface; no raw browser URL/query/code/token/secret/argv/environment/path/SDK exception/request/response/document diagnostics or unrelated UI projection. Exact validated environment only; no secret argv.
 
 ## Missing admission decisions
 
@@ -38,7 +38,13 @@ Actual P1 dual-artifact isolation/nested-runtime/content cleanup; actual P2 exac
 
 Story1.9 must finalize product handshake/auth/request/cancel/cleanup/startup/purge schemas and safe errors. Story1.10 must implement sole selector, stage/CAS/current-intent/config generation/lease ownership. This Spec invents none of their fields.
 
-Pin public SDK initiation/handoff/completion/failure/cancel, authenticated generation/output and bounded shutdown/reaping signatures/effects. Pin controlled auth/config paths, descendant mutation/log/session behavior, protected environment and actual no-durable-Paper/closure mechanism. No guessed home layout, user CODEX_HOME inspection or private implementation substitute. Reconcile browser waits and cleanup with admitted budgets, never silently widen prototype limits or add alternate transport.
+Parent static follow-up inspected controlled installed openai-codex metadata declaring0.160.0 plus its public client/generated types/router, without import/init/auth/network. Public `CodexClient.account_login_start`, `account_login_cancel`, `next_login_notification`, `wait_for_login_completed` exist. Browser params type is `chatgpt`; response has loginId/authUrl; completion has success, optional loginId/error. Those public shapes are NOT final product wire fields or runtime/capability proof. Null/wrong correlation and raw error cannot certify success.
+
+Observed admission hazards: SDK start copies os.environ then overlays config.env (not an environment replacement); default approvals accept command/file-change requests; login/global queues and pending login storage have no configured capacity; login waits block without a timeout argument. SDK close calls wait(timeout=2), then may kill without subsequent wait, and may join each reader/stderr thread with timeout0.5s. These timeouts are not fixed waits or a total-duration bound. None proves bounded cumulative300ms owned cleanup, reaping or authenticated absence. Generated types supply no closed byte/URL/expiry policy. Do not patch private SDK internals, invent a poll timer or widen budgets; prove a supported public boundary and actual resource/termination controls before admission.
+
+Authenticated generation/output, exact public bounded shutdown effects, private auth/config paths, SDK descendant/log/session behavior and no-durable-Paper mechanism remain unresolved. No guessed home layout, user CODEX_HOME inspection or private implementation substitute. Reconcile waits/cleanup with admitted budgets, no alternate transport. Static source follow-up is separate from architect40's original five-file proposal and executes no runtime.
+
+Independent reviewer47 CLEAR/COMMENT for the five-file source-fact amendment only; no product/gate approval. Parent verified metadata declaration/source identities; reviewer did not independently inspect metadata/version provenance. Durable bounded receipt: evidence/1-11/sdk-source-inspection.json.
 
 ## Conditional delivery and verification
 

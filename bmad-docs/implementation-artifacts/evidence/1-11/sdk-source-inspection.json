@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 1,
+  "scope": "public-sdk-static-source-only",
+  "governingIssue": 13,
+  "declaredDistributionVersion": "0.160.0",
+  "sourceSHA256": {
+    "client.py": "8452afbd8148ea212c94e8a6727468054b175acb0daf95002c84b66b604d05a6",
+    "_message_router.py": "8c1239bae89e3128ea797fd1ed23619bccab5614212908f3cb498f84ea67c396",
+    "generated/v2_all.py": "d91b972a188b8ca766454e877de3986dfbb072789635bb51c2f6a4693f86fd72",
+    "distributionMetadata": "4e55234f3f09867529050a6d2b23d8094d0f64511cbc397fd1b2abc376029dad"
+  },
+  "sourceFacts": {
+    "publicBrowserLoginShapeObserved": true,
+    "publicDeviceCodeShapeObserved": true,
+    "completionCorrelationOptional": true,
+    "cancelStatusIsDrainProof": false,
+    "deviceCodeExpiryPolicyExposedByInspectedResponse": false,
+    "deviceCodeBytePolicyExposedByInspectedResponse": false,
+    "environmentOverlayIsReplacement": false,
+    "defaultCommandAndFileApprovalAccepts": true,
+    "loginAndGlobalQueuesBounded": false,
+    "pendingLoginBufferBounded": false,
+    "publicLoginWaitHasTimeoutArgument": false,
+    "closeGuaranteesCumulativeOwnedCleanupBudget": false,
+    "closeWaitsAfterKill": false
+  },
+  "execution": {
+    "sdkImported": false,
+    "sdkInitialized": false,
+    "authExecuted": false,
+    "networkRequests": 0,
+    "credentialAccess": false,
+    "runtimeCapabilitiesAuthenticated": false
+  },
+  "independentReview": {
+    "status": "CLEAR/COMMENT",
+    "reviewer": "47-47-SDKAuthSourceReview",
+    "scope": "source-fact-and-planning-boundary-only",
+    "runtimeExecuted": false,
+    "metadataVersionIndependentlyReviewed": false
+  },
+  "productImplementationAdmitted": false,
+  "storyDone": false,
+  "P1Passed": false,
+  "P2Passed": false,
+  "P3Passed": false
+}
