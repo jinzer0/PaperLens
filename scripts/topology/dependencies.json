@@ -51,6 +51,7 @@
       {"object": "Mac/llvmobjdump-llvmorg-23-init-19482-g53d18800-2.tar.xz", "generation": "1785366628828288", "sha256": "ab7600041b0db44338b42c55b7ed1224edc10c96283d71e53a373820be9e62f9"}
     ]
   },
+  "grdb": {"url": "https://github.com/groue/GRDB.swift.git", "version": "7.11.1", "commit": "b83108d10f42680d78f23fe4d4d80fc88dab3212"},
   "cipdBaseURL": "https://chrome-infra-packages.appspot.com",
   "cipd": {
     "arm64": {

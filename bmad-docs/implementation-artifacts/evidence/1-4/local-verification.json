@@ -1,0 +1,39 @@
+{
+  "story": "1.4",
+  "issue": 7,
+  "scope": "offline-candidate-lock-and-matrix-conformance",
+  "specCommit": "243a0ec841a5ae2fd3ac1dae629f38a73b154106",
+  "verification": {
+    "runtime": "approved-python-3.13.16-arm64",
+    "focusedTests": {"passed": 19, "failed": 0},
+    "topologyUnionTests": {"passed": 334, "failed": 0},
+    "existingPins": "unchanged-from-68b8f41",
+    "soleAddition": "approved-grdb-git-source-identity",
+    "candidateCreation": "exclusive-real-manifest-and-source-byte-binding",
+    "observedWarnings": ["asyncio-slow-task-diagnostics"]
+  },
+  "independentStaticReview": {
+    "reviewer": "18-LockMatrixSafetyReview",
+    "verdict": "clear",
+    "scope": "five-file-offline-conformance-only",
+    "resolved": ["timestamp-bearing-sqlite-source-identity"],
+    "notPerformed": ["independent-test-execution", "independent-digest-computation"]
+  },
+  "implemented": [
+    "sole-manifest-canonical-approved-pin-identity",
+    "strict-duplicate-aware-closed-schema-validation",
+    "actual-supplied-code-artifact-receipt-byte-hash-comparison",
+    "four-unique-os-cpu-points-with-explicit-blockers",
+    "timestamp-free-sqlite-source-code-identity-projection",
+    "fixed-safe-diagnostics",
+    "conformance-never-authenticates-or-promotes-runtime-claims"
+  ],
+  "notProven": [
+    "exact-minimum-os-build", "grdb-materialization",
+    "native-intel-execution", "actual-packaged-artifacts",
+    "loaded-system-sqlite-provenance", "grdb-migrations-and-fts5-runtime",
+    "actual-sdk-five-event-purge", "p1", "p2", "final-release-lock"
+  ],
+  "promotion": "not_promoted",
+  "storyComplete": false
+}

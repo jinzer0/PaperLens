@@ -1,0 +1,75 @@
+{
+  "cells": [
+    {
+      "artifact": null,
+      "blockers": [
+        "MIN_OS_BUILD_UNPINNED",
+        "ARTIFACT_MISSING",
+        "ARTIFACT_UNVERIFIED",
+        "SQLITE_PROVENANCE_MISSING"
+      ],
+      "cpu": "arm64",
+      "evidence": null,
+      "osBuild": null,
+      "osRole": "minimum",
+      "osVersion": "15.0",
+      "sqlite": null,
+      "status": "blocked"
+    },
+    {
+      "artifact": null,
+      "blockers": [
+        "MIN_OS_BUILD_UNPINNED",
+        "NATIVE_EXEC_UNAVAILABLE",
+        "ARTIFACT_MISSING",
+        "ARTIFACT_UNVERIFIED",
+        "SQLITE_PROVENANCE_MISSING"
+      ],
+      "cpu": "x86_64",
+      "evidence": null,
+      "osBuild": null,
+      "osRole": "minimum",
+      "osVersion": "15.0",
+      "sqlite": null,
+      "status": "blocked"
+    },
+    {
+      "artifact": null,
+      "blockers": [
+        "PACKAGED_PROOF_NOT_RUN",
+        "ARTIFACT_MISSING",
+        "ARTIFACT_UNVERIFIED",
+        "SQLITE_PROVENANCE_MISSING"
+      ],
+      "cpu": "arm64",
+      "evidence": null,
+      "osBuild": "25G241",
+      "osRole": "current",
+      "osVersion": "26.7.1",
+      "sqlite": null,
+      "status": "not_run"
+    },
+    {
+      "artifact": null,
+      "blockers": [
+        "NATIVE_EXEC_UNAVAILABLE",
+        "PACKAGED_PROOF_NOT_RUN",
+        "ARTIFACT_MISSING",
+        "ARTIFACT_UNVERIFIED",
+        "SQLITE_PROVENANCE_MISSING"
+      ],
+      "cpu": "x86_64",
+      "evidence": null,
+      "osBuild": "25G241",
+      "osRole": "current",
+      "osVersion": "26.7.1",
+      "sqlite": null,
+      "status": "blocked"
+    }
+  ],
+  "lockSha256": "32be141a78f7ef2480892023d94a9a617f77bdd475bd19611500a3dab4530fb8",
+  "promotion": "not_promoted",
+  "schemaRevision": "runtime-matrix-v1",
+  "sourceSha256": "7534fcc3e2c0828cd65c5d1b1c0b66dcbd18600aea4872a2d9ef9e7503f79c6a",
+  "specCommit": "243a0ec841a5ae2fd3ac1dae629f38a73b154106"
+}
