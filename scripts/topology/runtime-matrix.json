@@ -3,14 +3,15 @@
     {
       "artifact": null,
       "blockers": [
-        "MIN_OS_BUILD_UNPINNED",
+        "NATIVE_EXEC_UNAVAILABLE",
+        "PACKAGED_PROOF_NOT_RUN",
         "ARTIFACT_MISSING",
         "ARTIFACT_UNVERIFIED",
         "SQLITE_PROVENANCE_MISSING"
       ],
       "cpu": "arm64",
       "evidence": null,
-      "osBuild": null,
+      "osBuild": "24A335",
       "osRole": "minimum",
       "osVersion": "15.0",
       "sqlite": null,
@@ -19,15 +20,15 @@
     {
       "artifact": null,
       "blockers": [
-        "MIN_OS_BUILD_UNPINNED",
         "NATIVE_EXEC_UNAVAILABLE",
+        "PACKAGED_PROOF_NOT_RUN",
         "ARTIFACT_MISSING",
         "ARTIFACT_UNVERIFIED",
         "SQLITE_PROVENANCE_MISSING"
       ],
       "cpu": "x86_64",
       "evidence": null,
-      "osBuild": null,
+      "osBuild": "24A335",
       "osRole": "minimum",
       "osVersion": "15.0",
       "sqlite": null,
@@ -70,6 +71,6 @@
   "lockSha256": "32be141a78f7ef2480892023d94a9a617f77bdd475bd19611500a3dab4530fb8",
   "promotion": "not_promoted",
   "schemaRevision": "runtime-matrix-v1",
-  "sourceSha256": "102fa2371d5bd24d39dda07d83600373be9d55b453cc4a7714ce39bdaf5bcd9e",
-  "specCommit": "243a0ec841a5ae2fd3ac1dae629f38a73b154106"
+  "sourceSha256": "b59c97ebccc0301244eea3fe0a1308f208022576733e7e1c117ddfba51c12651",
+  "specCommit": "33dcd8db20a122d13a6ce0a16b92077f278facb6"
 }

@@ -38,11 +38,42 @@
     "sourceAndLibraryBuildEvidence": "../1-5/source-inspection.json"
   },
   "notProven": [
-    "exact-minimum-os-build",
+    "native-minimum-os-execution",
     "native-intel-execution", "actual-packaged-artifacts",
     "loaded-system-sqlite-provenance", "grdb-migrations-and-fts5-runtime",
     "actual-sdk-five-event-purge", "p1", "p2", "final-release-lock"
   ],
+  "minimumTargetPinVerification": {
+    "specCommit": "33dcd8db20a122d13a6ce0a16b92077f278facb6",
+    "minimumTarget": {"osVersion": "15.0", "osBuild": "24A335"},
+    "primarySource": "https://developer.apple.com/xcode-cloud/release-notes/",
+    "sourceSection": "September 30, 2025 macOS list",
+    "sourceObservation": "macOS Sequoia 15 (24A335), separately 15.0.1 (24A348)",
+    "sourceScope": "published-release-target-identity-only",
+    "historicalMinimumTargetWasUnpinned": true,
+    "manifestBytesUnchanged": true,
+    "manifestSha256": "32be141a78f7ef2480892023d94a9a617f77bdd475bd19611500a3dab4530fb8",
+    "validatorSha256": "b59c97ebccc0301244eea3fe0a1308f208022576733e7e1c117ddfba51c12651",
+    "focusedTests": {"passed": 25, "failed": 0},
+    "topologyUnionTests": {"passed": 408, "failed": 0},
+    "requestTests": {"passed": 34, "failed": 0},
+    "skippedTests": 0,
+    "generatedMatrixMatchesFactory": true,
+    "independentStaticReview": "68/CLEAR-APPROVE-offline-candidate-only",
+    "CLIExitCode": 2,
+    "CLIConformant": true,
+    "minimumNullRejected": true,
+    "wrong24SeriesAndTypesRejectedBothCPUs": true,
+    "minimumNativeEnvironmentAvailable": false,
+    "IntelNativeEnvironmentAvailable": false,
+    "actualPackagedCellsVerified": 0,
+    "nativeOrSDKTrialsLaunched": 0,
+    "remoteOperations": 0,
+    "P1Passed": false,
+    "P2Passed": false,
+    "storyDone": false,
+    "promotion": "not_promoted"
+  },
   "promotion": "not_promoted",
   "storyComplete": false
 }

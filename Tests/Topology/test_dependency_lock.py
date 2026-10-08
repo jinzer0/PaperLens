@@ -69,19 +69,88 @@ class DependencyLockTests(unittest.TestCase):
                          list(lock_validator.POINTS))
         self.assertEqual([c["status"] for c in cells],
                          ["blocked", "blocked", "not_run", "blocked"])
-        self.assertEqual([c["osBuild"] for c in cells], [None, None, "25G241", "25G241"])
+        self.assertEqual([c["osBuild"] for c in cells],
+                         ["24A335", "24A335", "25G241", "25G241"])
+        self.assertEqual([c["osVersion"] for c in cells],
+                         ["15.0", "15.0", "26.7.1", "26.7.1"])
+        self.assertEqual(self.matrix["specCommit"],
+                         "33dcd8db20a122d13a6ce0a16b92077f278facb6")
         for cell in cells:
             self.assertIsNone(cell["artifact"])
             self.assertIsNone(cell["evidence"])
             self.assertIsNone(cell["sqlite"])
             for missing in ("ARTIFACT_MISSING", "ARTIFACT_UNVERIFIED", "SQLITE_PROVENANCE_MISSING"):
                 self.assertIn(missing, cell["blockers"])
-        self.assertIn("MIN_OS_BUILD_UNPINNED", cells[0]["blockers"])
-        self.assertIn("NATIVE_EXEC_UNAVAILABLE", cells[1]["blockers"])
-        self.assertIn("PACKAGED_PROOF_NOT_RUN", cells[2]["blockers"])
-        self.assertIn("NATIVE_EXEC_UNAVAILABLE", cells[3]["blockers"])
+            self.assertIn("PACKAGED_PROOF_NOT_RUN", cell["blockers"])
+            self.assertNotIn("MIN_OS_BUILD_UNPINNED", cell["blockers"])
+        for index in (0, 1, 3):
+            self.assertIn("NATIVE_EXEC_UNAVAILABLE", cells[index]["blockers"])
+        self.assertNotIn("NATIVE_EXEC_UNAVAILABLE", cells[2]["blockers"])
         self.assertNotIn("P1", json.dumps(output))
         self.assertNotIn("P2", json.dumps(output))
+
+    def test_minimum_target_requires_exact_build_for_both_cpus(self):
+        for index in (0, 1):
+            for build in (None, "24A348", "24B83", "24Z999", "24A335a",
+                          "24", "25G241", True, False, 24, 24.0, [], {}):
+                with self.subTest(cpu=self.matrix["cells"][index]["cpu"], build=build):
+                    matrix = copy.deepcopy(self.matrix)
+                    matrix["cells"][index]["osBuild"] = build
+                    result = self.validate(matrix)
+                    self.invalid(result, "MIN_OS_BUILD_UNPINNED" if build is None
+                                 else "IDENTITY_MISMATCH")
+                    self.assertEqual(result[1]["diagnostics"][0]["pointerOrPoint"],
+                                     lock_validator.POINTS[index])
+
+    def test_pinned_candidate_roundtrip_preserves_blocked_status_and_causes(self):
+        matrix = json.loads(lock_validator.json_bytes(self.matrix))
+        self.assertEqual(matrix, self.matrix)
+        code, output = self.validate(matrix)
+        self.assertEqual(code, 2)
+        self.assertTrue(output["conformant"])
+        self.assertEqual(output["promotion"], "not_promoted")
+        for index, cell in enumerate(matrix["cells"]):
+            point = lock_validator.POINTS[index]
+            self.assertEqual({d["code"] for d in output["diagnostics"]
+                              if d["pointerOrPoint"] == point}, set(cell["blockers"]))
+        for index in (0, 1, 3):
+            for status in ("not_run", "failed", "verified"):
+                with self.subTest(point=lock_validator.POINTS[index], status=status):
+                    changed = copy.deepcopy(matrix)
+                    changed["cells"][index]["status"] = status
+                    self.invalid(self.validate(changed))
+        for index in (0, 1):
+            changed = copy.deepcopy(matrix)
+            changed["cells"][index]["blockers"].insert(0, "MIN_OS_BUILD_UNPINNED")
+            self.invalid(self.validate(changed), "IDENTITY_MISMATCH")
+
+    def test_public_target_identity_cannot_replace_packaged_point_proof(self):
+        for index in (0, 1):
+            for blocker in self.matrix["cells"][index]["blockers"]:
+                with self.subTest(point=lock_validator.POINTS[index], blocker=blocker):
+                    matrix = copy.deepcopy(self.matrix)
+                    matrix["cells"][index]["blockers"].remove(blocker)
+                    self.invalid(self.validate(matrix), "IDENTITY_MISMATCH")
+            matrix = copy.deepcopy(self.matrix)
+            matrix["cells"][index]["status"] = "verified"
+            matrix["cells"][index]["blockers"] = []
+            self.invalid(self.validate(matrix))
+
+    def test_fresh_source_rebinding_does_not_accept_stale_spec_or_point_proofs(self):
+        source = self.source + b"new validator code\n"
+        fresh = lock_validator.candidate_matrix(self.lock_bytes, source)
+        code, output = self.validate(fresh, source=source)
+        self.assertEqual(code, 2)
+        self.assertTrue(output["conformant"])
+        self.assertEqual(output["promotion"], "not_promoted")
+        self.assertNotEqual(fresh["sourceSha256"], self.matrix["sourceSha256"])
+        stale = copy.deepcopy(fresh)
+        stale["specCommit"] = "243a0ec841a5ae2fd3ac1dae629f38a73b154106"
+        self.invalid(self.validate(stale, source=source), "IDENTITY_MISMATCH")
+        matrix, artifacts, evidence = self.complete_fixture()
+        matrix["sourceSha256"] = fresh["sourceSha256"]
+        self.invalid(self.validate(matrix, source=source, artifacts=artifacts,
+                                   evidence=evidence), "IDENTITY_MISMATCH")
 
     def test_every_inventory_leaf_identity_and_exact_type_is_pinned(self):
         # Covers metadata, toolchain, all source/patch pins, generations,

@@ -14,7 +14,8 @@ from pathlib import Path
 import re
 import sys
 
-SPEC_COMMIT = "243a0ec841a5ae2fd3ac1dae629f38a73b154106"
+SPEC_COMMIT = "33dcd8db20a122d13a6ce0a16b92077f278facb6"
+MINIMUM_OS_BUILD = "24A335"
 POINTS = ("minimum/arm64", "minimum/x86_64", "current/arm64", "current/x86_64")
 # Approved semantic identity; whitespace and object order are not pin identity.
 APPROVED_CANONICAL_SHA256 = "46ea50208ad8e8a95e2273c35c8613ee8d437b81ca6139ef0f24524475413d1e"
@@ -131,17 +132,14 @@ def candidate_matrix(lock_bytes, source_bytes):
     for point in POINTS:
         role, cpu = point.split("/")
         blockers = []
-        if role == "minimum":
-            blockers.append("MIN_OS_BUILD_UNPINNED")
-        if cpu == "x86_64":
+        if role == "minimum" or cpu == "x86_64":
             blockers.append("NATIVE_EXEC_UNAVAILABLE")
-        if role == "current":
-            blockers.append("PACKAGED_PROOF_NOT_RUN")
+        blockers.append("PACKAGED_PROOF_NOT_RUN")
         blockers.extend(("ARTIFACT_MISSING", "ARTIFACT_UNVERIFIED",
                          "SQLITE_PROVENANCE_MISSING"))
         cells.append({"cpu": cpu, "osRole": role,
                       "osVersion": "15.0" if role == "minimum" else "26.7.1",
-                      "osBuild": None if role == "minimum" else "25G241",
+                      "osBuild": MINIMUM_OS_BUILD if role == "minimum" else "25G241",
                       "status": "not_run" if point == "current/arm64" else "blocked",
                       "blockers": blockers, "artifact": None, "evidence": None,
                       "sqlite": None})
@@ -218,12 +216,9 @@ def validate_matrix(value, lock_bytes, source_bytes, artifacts=None, evidence=No
         require(cell["osVersion"] == ("15.0" if minimum else "26.7.1"),
                 "IDENTITY_MISMATCH", point)
         build = cell["osBuild"]
-        require(build is None or (type(build) is str and
-                re.fullmatch(r"[0-9]{2}[A-Z][0-9]+[a-z]?", build)),
-                "IDENTITY_MISMATCH", point)
-        require(minimum or build == "25G241", "IDENTITY_MISMATCH", point)
-        # Minimum must not be substituted with the observed current host.
-        require(not minimum or build is None or build.startswith("24"),
+        require(not minimum or build is not None, "MIN_OS_BUILD_UNPINNED", point)
+        # Public target identity is not evidence of native execution.
+        require(exact(build, MINIMUM_OS_BUILD if minimum else "25G241"),
                 "IDENTITY_MISMATCH", point)
         status = cell["status"]
         require(type(status) is str and status in ("blocked", "not_run", "failed", "verified"),
@@ -232,18 +227,14 @@ def validate_matrix(value, lock_bytes, source_bytes, artifacts=None, evidence=No
         require(type(blockers) is list and all(type(item) is str and item in CODES
                 for item in blockers), "IDENTITY_MISMATCH", point)
         require(len(blockers) == len(set(blockers)), "IDENTITY_MISMATCH", point)
-        require(build is not None or status == "blocked", "IDENTITY_MISMATCH", point)
-        require(cell["cpu"] != "x86_64" or cell["evidence"] is not None or
+        require(not (minimum or cell["cpu"] == "x86_64") or cell["evidence"] is not None or
                 status == "blocked", "IDENTITY_MISMATCH", point)
         require(cell["evidence"] is None or status == "verified",
                 "ARTIFACT_UNVERIFIED", point)
         expected = []
-        if build is None:
-            expected.append("MIN_OS_BUILD_UNPINNED")
-        if cell["cpu"] == "x86_64" and cell["evidence"] is None:
+        if (minimum or cell["cpu"] == "x86_64") and cell["evidence"] is None:
             expected.append("NATIVE_EXEC_UNAVAILABLE")
-        if status == "not_run" or (status == "blocked" and
-                                   (not minimum or build is not None)):
+        if status in ("not_run", "blocked"):
             expected.append("PACKAGED_PROOF_NOT_RUN")
         if status == "failed":
             expected.append("PACKAGED_PROOF_FAILED")
