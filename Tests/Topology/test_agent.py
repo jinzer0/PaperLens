@@ -1,5 +1,6 @@
 import asyncio
-from contextlib import ExitStack
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack, contextmanager
 import errno
 import importlib.util
 import json
@@ -8,6 +9,7 @@ from pathlib import Path
 import sys
 import tempfile
 import threading
+import time
 from types import ModuleType, SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -42,6 +44,7 @@ class AttemptFixtureTests(unittest.TestCase):
         self.profile.start()
         self.addCleanup(self.profile.stop)
         self.store = agent.AttemptFixtures()
+        self.addCleanup(lambda: self.store.close())
         self.root = self.container / 'Library/Application Support' / self.store.namespace
         self.identity = self.new_identity()
 
@@ -66,14 +69,101 @@ class AttemptFixtureTests(unittest.TestCase):
 
     def recover(self, identity=None):
         identity = identity or self.identity
-        self.assertEqual(agent.AttemptFixtures().recover(identity['runID']), {'absent': True})
+        self.assertEqual(agent.AttemptFixtures(self.store.session).recover(identity['runID']), {'absent': True})
 
     def assert_preserved(self, path, snapshot, marker=None):
         with self.assertRaises(Exception):
-            agent.AttemptFixtures().recover(self.identity['runID'])
+            agent.AttemptFixtures(self.store.session).recover(self.identity['runID'])
         self.assertEqual(self.snapshot(path), snapshot)
         if marker is not None:
             self.assertEqual(self.snapshot(self.paths()[2]), marker)
+
+    def test_post_flock_owner_replacement_never_authorizes_cleanup(self):
+        self.prepare()
+        self.store.close()
+        self.store = agent.AttemptFixtures()
+        marker = self.paths()[2]
+        before = self.snapshot(marker)
+        original = agent.fcntl.flock
+        replaced = False
+
+        def replace_owner(fd, operation):
+            nonlocal replaced
+            original(fd, operation)
+            if replaced:
+                return
+            replaced = True
+            (self.root / '.owner.json').rename(Path(self.temporary.name) / 'old-owner')
+            root = self.store.open_dir(fd_parent, self.store.namespace)
+            try:
+                self.store.write_receipt(root, '.owner.json', {
+                    'version': 1, 'kind': 'root', 'directory': self.store.identity(root)})
+            finally:
+                os.close(root)
+
+        fd_parent = os.open(self.root.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            with patch.object(agent.fcntl, 'flock', side_effect=replace_owner):
+                with self.assertRaises(PermissionError):
+                    self.store.recover(self.identity['runID'])
+        finally:
+            os.close(fd_parent)
+        self.assertTrue(replaced)
+        self.assertEqual(self.snapshot(marker), before)
+
+    def test_post_flock_namespace_replacement_never_cleans_detached_root(self):
+        self.prepare()
+        self.store.close()
+        self.store = agent.AttemptFixtures()
+        detached = self.root.parent / (self.store.namespace + '-detached')
+        relative_marker = self.paths()[2].relative_to(self.root)
+        before = self.snapshot(self.paths()[2])
+        original = agent.fcntl.flock
+        replaced = False
+
+        def replace_namespace(fd, operation):
+            nonlocal replaced
+            original(fd, operation)
+            if replaced:
+                return
+            replaced = True
+            self.root.rename(detached)
+            self.root.mkdir(mode=0o700)
+
+        with patch.object(agent.fcntl, 'flock', side_effect=replace_namespace):
+            with self.assertRaises(PermissionError):
+                self.store.recover(self.identity['runID'])
+        self.assertTrue(replaced)
+        self.assertEqual(self.snapshot(detached / relative_marker), before)
+        self.assertEqual(list(self.root.iterdir()), [])
+
+    def test_post_flock_parent_replacement_never_cleans_detached_namespace(self):
+        self.prepare()
+        self.store.close()
+        self.store = agent.AttemptFixtures()
+        parent = self.root.parent
+        detached = parent.parent / 'detached-support'
+        relative_marker = self.paths()[2].relative_to(parent)
+        before = self.snapshot(self.paths()[2])
+        original = agent.fcntl.flock
+        replaced = False
+
+        def replace_parent(fd, operation):
+            nonlocal replaced
+            original(fd, operation)
+            if replaced:
+                return
+            replaced = True
+            parent.rename(detached)
+            parent.mkdir(mode=0o700)
+            self.root.mkdir(mode=0o700)
+
+        with patch.object(agent.fcntl, 'flock', side_effect=replace_parent):
+            with self.assertRaises(PermissionError):
+                self.store.recover(self.identity['runID'])
+        self.assertTrue(replaced)
+        self.assertEqual(self.snapshot(detached / relative_marker), before)
+        self.assertEqual(list(self.root.iterdir()), [])
 
     def test_all_synthetic_outcomes_remove_paper_metadata_and_are_idempotent(self):
         for outcome in ('success', 'failure', 'cancelled'):
@@ -89,7 +179,7 @@ class AttemptFixtureTests(unittest.TestCase):
                 self.recover(identity)
         self.assertEqual(set(path.name for path in self.root.iterdir()), {'.owner.json'})
 
-    def test_fresh_instance_recovers_multiple_papers_and_generations(self):
+    def test_joined_store_recovers_multiple_papers_and_generations(self):
         identities = [self.identity, self.new_identity(self.identity['runID'], 2),
                       self.new_identity(self.identity['runID'], 2147483647)]
         for identity in identities:
@@ -125,10 +215,14 @@ class AttemptFixtureTests(unittest.TestCase):
         with self.assertRaises(Exception):
             self.store.prepare(**self.identity)
         self.recover()
-        for index in range(224):
+        for index in range(223):
             identity = self.new_identity()
             self.prepare(identity)
             self.store.terminal(**identity, outcome='cancelled')
+        self.assertEqual(len(self.store.session.records), 256)
+        # The earlier run-cap rejection reserved this identity; retry may use it at capacity.
+        self.prepare()
+        self.store.terminal(**self.identity, outcome='cancelled')
         self.assertEqual(len(self.store.used), 256)
         with self.assertRaises(Exception):
             self.store.prepare(**self.new_identity())
@@ -223,7 +317,7 @@ class AttemptFixtureTests(unittest.TestCase):
                 path.symlink_to(held)
                 before = held.stat()
                 with self.assertRaises(Exception):
-                    agent.AttemptFixtures().recover(self.identity['runID'])
+                    agent.AttemptFixtures(self.store.session).recover(self.identity['runID'])
                 self.assertTrue(path.is_symlink())
                 self.assertEqual((held.stat().st_dev, held.stat().st_ino), (before.st_dev, before.st_ino))
                 path.unlink()
@@ -237,7 +331,7 @@ class AttemptFixtureTests(unittest.TestCase):
                            (marker, 0o600), (receipt, 0o600)):
             path.chmod(0o755 if path.is_dir() else 0o644)
             with self.assertRaises(Exception):
-                agent.AttemptFixtures().recover(self.identity['runID'])
+                agent.AttemptFixtures(self.store.session).recover(self.identity['runID'])
             self.assertTrue(marker.exists())
             path.chmod(mode)
         for index, path in enumerate((run, child, marker)):
@@ -250,7 +344,7 @@ class AttemptFixtureTests(unittest.TestCase):
                 os.close(fd)
             before = path.stat()
             with self.assertRaises(Exception):
-                agent.AttemptFixtures().recover(self.identity['runID'])
+                agent.AttemptFixtures(self.store.session).recover(self.identity['runID'])
             self.assertEqual(path.stat().st_ino, before.st_ino)
             if path.is_dir():
                 path.rmdir()
@@ -319,7 +413,7 @@ class AttemptFixtureTests(unittest.TestCase):
                 self.store.prepare(**self.identity)
         self.assert_preserved(self.paths()[3], self.snapshot(self.paths()[3]), self.snapshot(self.paths()[2]))
 
-    def test_cleanup_failure_retains_receipt_then_fresh_retry_finishes(self):
+    def test_cleanup_failure_retains_receipt_then_joined_retry_finishes(self):
         self.prepare()
         run, child, marker, receipt = self.paths()
         rmdir = os.rmdir
@@ -334,17 +428,25 @@ class AttemptFixtureTests(unittest.TestCase):
         self.assertTrue(receipt.exists())
         self.recover()
 
-    def test_nonblocking_process_lock_is_shared_between_instances(self):
-        self.store.lock.acquire()
-        try:
-            with self.assertRaises(agent.AttemptBusy):
-                agent.AttemptFixtures().prepare(**self.identity)
-            self.assertFalse(self.root.exists())
-        finally:
-            self.store.lock.release()
+    def test_retained_lease_excludes_independent_session(self):
+        self.prepare()
+        fresh = agent.AttemptFixtures()
+        self.addCleanup(fresh.close)
+        before = self.snapshot(self.paths()[2])
+        with self.assertRaises(agent.AttemptBusy):
+            fresh.prepare(**self.new_identity())
+        self.assertEqual(self.snapshot(self.paths()[2]), before)
+
+    def test_unregistered_permit_cannot_enter_real_prepare(self):
+        unregistered = agent.AttemptProducer(dict(self.identity))
+        with self.assertRaises(PermissionError):
+            self.store.prepare(**self.identity, producer=unregistered)
+        self.assertFalse(self.root.exists())
+        self.assertFalse(self.store.session.records)
 
     def test_independent_owner_descriptor_flock_blocks_without_mutation(self):
         self.prepare()
+        self.store.close()
         run, child, marker, receipt = self.paths()
         owner = self.root / '.owner.json'
         tracked = (owner, self.root / (self.identity['runID'] + '.owner.json'),
@@ -357,6 +459,7 @@ class AttemptFixtureTests(unittest.TestCase):
         try:
             agent.fcntl.flock(fd, agent.fcntl.LOCK_EX | agent.fcntl.LOCK_NB)
             fresh = agent.AttemptFixtures()
+            self.addCleanup(fresh.close)
             for operation in (
                     lambda: fresh.prepare(**second),
                     lambda: fresh.terminal(**self.identity, outcome='success'),
@@ -369,6 +472,7 @@ class AttemptFixtureTests(unittest.TestCase):
                     self.assertEqual(set(entry.name for entry in path.iterdir()), before)
             self.assertNotIn(second['correlationID'], fresh.used)
             agent.fcntl.flock(fd, agent.fcntl.LOCK_UN)
+            self.assertEqual(fresh.recover(self.identity['runID']), {'absent': True})
             self.assertEqual(fresh.prepare(**second), {'prepared': True})
             self.assertEqual(self.paths(second)[2].read_bytes(), self.store.marker)
             self.assertEqual(fresh.recover(self.identity['runID']), {'absent': True})
@@ -386,7 +490,7 @@ class AttemptFixtureTests(unittest.TestCase):
         run_receipt = self.root / (self.identity['runID'] + '.owner.json')
         before = self.snapshot(run_receipt)
         with self.assertRaises(Exception):
-            agent.AttemptFixtures().prepare(**self.new_identity(self.identity['runID']))
+            agent.AttemptFixtures(self.store.session).prepare(**self.new_identity(self.identity['runID']))
         self.assertFalse(run.exists())
         self.assertEqual(self.snapshot(run_receipt), before)
         self.recover()
@@ -448,7 +552,7 @@ class AttemptFixtureTests(unittest.TestCase):
             return info
         with patch.object(agent.os, 'fstat', side_effect=foreign_uid):
             with self.assertRaises(PermissionError):
-                agent.AttemptFixtures().recover(self.identity['runID'])
+                agent.AttemptFixtures(self.store.session).recover(self.identity['runID'])
         self.assertEqual(self.snapshot(self.paths()[2]), marker_before)
         self.assertEqual(self.snapshot(self.paths()[3]), receipt_before)
         self.recover()
@@ -469,6 +573,525 @@ class AttemptFixtureTests(unittest.TestCase):
         self.assertEqual(child.stat().st_ino, before)
         self.assertEqual(list(child.iterdir()), [])
 
+    def purge_identity(self, generation=None):
+        return {**self.identity, 'generation': generation or self.identity['generation'],
+                'correlationID': str(uuid.uuid4())}
+
+    def test_purge_two_generations_joined_stores_and_independent_reopened_absence(self):
+        joined = agent.AttemptFixtures(self.store.session)
+        second = {**self.identity, 'generation': 2, 'correlationID': str(uuid.uuid4())}
+        other_paper = self.new_identity(self.identity['runID'])
+        other_run = self.new_identity()
+        self.prepare()
+        joined.prepare(**second)
+        self.prepare(other_paper)
+        self.prepare(other_run)
+        preserved = {self.paths(item)[2]: self.snapshot(self.paths(item)[2])
+                     for item in (other_paper, other_run)}
+        purge = self.purge_identity(2)
+        self.assertEqual(joined.paper_purge(**purge), {'absent': True, 'drained': True})
+        for item in (self.identity, second):
+            for path in self.paths(item)[1:]:
+                self.assertFalse(os.path.lexists(path))
+        for path, before in preserved.items():
+            self.assertEqual(self.snapshot(path), before)
+        with self.assertRaises(agent.AttemptCancelled):
+            joined.prepare(**{**second, 'correlationID': str(uuid.uuid4())})
+        # Same identity is revalidated rather than served from a cached receipt.
+        self.assertEqual(self.store.paper_purge(**purge), {'absent': True, 'drained': True})
+        foreign = self.paths(other_paper)[1] / 'foreign'
+        foreign.write_bytes(b'foreign bytes')
+        with self.assertRaises(PermissionError):
+            self.store.paper_purge(**purge)
+        self.assertEqual(foreign.read_bytes(), b'foreign bytes')
+
+    def test_stale_registered_fence_and_correlation_alias_reject_without_stop_or_unlink(self):
+        high = {**self.identity, 'generation': 3}
+        self.prepare(high)
+        marker = self.paths(high)[2]
+        before = self.snapshot(marker)
+        producer = self.store.session.producers[high['correlationID']]
+        for purge in (self.purge_identity(2), {**high}):
+            with self.assertRaises(agent.AttemptInvalid):
+                self.store.paper_purge(**purge)
+            self.assertFalse(producer.stop.is_set())
+            self.assertEqual(self.snapshot(marker), before)
+        purge = self.purge_identity(3)
+        self.store.paper_purge(**purge)
+        for changed in ({'generation': 2}, {'paperID': str(uuid.uuid4())},
+                        {'runID': str(uuid.uuid4())}, {'generation': 4}):
+            with self.assertRaises(agent.AttemptInvalid):
+                self.store.paper_purge(**{**purge, **changed})
+
+    def test_higher_persisted_generation_and_whole_run_foreign_ownership_zero_unlinks(self):
+        self.prepare()
+        other = self.new_identity(self.identity['runID'])
+        self.prepare(other)
+        receipt = self.paths()[3]
+        original = receipt.read_bytes()
+        value = json.loads(original)
+        receipt.write_bytes(json.dumps({**value, 'generation': 2}).encode())
+        paths = (self.paths()[2], receipt, self.paths(other)[2], self.paths(other)[3])
+        snapshots = {path: self.snapshot(path) for path in paths}
+        purge = self.purge_identity()
+        with patch.object(agent.os, 'unlink', wraps=os.unlink) as unlink:
+            with self.assertRaises(agent.AttemptInvalid):
+                self.store.paper_purge(**purge)
+            unlink.assert_not_called()
+        for path, before in snapshots.items():
+            self.assertEqual(self.snapshot(path), before)
+        self.assertIn((self.identity['runID'], self.identity['paperID']), self.store.session.revoked)
+        receipt.write_bytes(original)
+        foreign = self.paths(other)[1] / 'foreign.bin'
+        foreign.write_bytes(b'unowned')
+        before = self.snapshot(foreign)
+        with patch.object(agent.os, 'unlink', wraps=os.unlink) as unlink:
+            with self.assertRaises(PermissionError):
+                self.store.paper_purge(**purge)
+            unlink.assert_not_called()
+        self.assertEqual(self.snapshot(foreign), before)
+        foreign.unlink()
+        self.assertEqual(self.store.paper_purge(**purge), {'absent': True, 'drained': True})
+
+    def test_failed_unlink_and_fsync_retain_fence_and_same_identity_retry(self):
+        for operation in ('unlink', 'fsync'):
+            with self.subTest(operation=operation):
+                self.identity = self.new_identity()
+                self.prepare()
+                purge = self.purge_identity()
+                marker = self.paths()[2]
+                before = self.snapshot(marker)
+                with patch.object(agent.os, operation, side_effect=OSError('private failure')):
+                    with self.assertRaises(OSError):
+                        self.store.paper_purge(**purge)
+                if operation == 'unlink':
+                    self.assertEqual(self.snapshot(marker), before)
+                self.assertTrue(self.paths()[3].exists())
+                with self.assertRaises(agent.AttemptCancelled):
+                    self.store.prepare(**{**self.identity, 'correlationID': str(uuid.uuid4())})
+                self.assertEqual(self.store.paper_purge(**purge), {'absent': True, 'drained': True})
+
+    def test_caps_reserve_before_mutation_and_existing_purge_identity_retries_at_capacity(self):
+        identities = []
+        for _ in range(128):
+            item = self.new_identity()
+            self.prepare(item)
+            purge = {**item, 'correlationID': str(uuid.uuid4())}
+            self.store.paper_purge(**purge)
+            identities.append(purge)
+        self.assertEqual(len(self.store.session.records), 256)
+        entries = set(self.root.iterdir())
+        with self.assertRaises(agent.AttemptBusy):
+            self.store.paper_purge(**self.purge_identity())
+        with self.assertRaises(agent.AttemptBusy):
+            self.store.prepare(**self.new_identity())
+        self.assertEqual(set(self.root.iterdir()), entries)
+        self.assertEqual(self.store.paper_purge(**identities[0]), {'absent': True, 'drained': True})
+
+    def test_revoked_scope_capacity_is_real_and_does_not_evict(self):
+        first = None
+        for _ in range(256):
+            purge = self.new_identity()
+            first = first or purge
+            self.store.paper_purge(**purge)
+        self.assertEqual(len(self.store.session.revoked), 256)
+        before = self.snapshot(self.root / '.owner.json')
+        with self.assertRaises(agent.AttemptBusy):
+            self.store.paper_purge(**self.new_identity())
+        self.assertEqual(self.snapshot(self.root / '.owner.json'), before)
+        self.assertEqual(self.store.paper_purge(**first), {'absent': True, 'drained': True})
+
+    def test_held_session_owner_and_current_ancestry_replacement_preserve_detached_bytes(self):
+        for component in ('owner', 'root', 'parent'):
+            with self.subTest(component=component):
+                self.identity = self.new_identity()
+                self.prepare()
+                marker = self.paths()[2]
+                before = self.snapshot(marker)
+                target = {'owner': self.root / '.owner.json', 'root': self.root,
+                          'parent': self.root.parent}[component]
+                held = self.container / ('held-' + component)
+                target.rename(held)
+                if component == 'owner':
+                    fd = os.open(self.root, os.O_RDONLY | os.O_DIRECTORY)
+                    try:
+                        self.store.write_receipt(fd, '.owner.json', {
+                            'version': 1, 'kind': 'root', 'directory': self.store.identity(fd)})
+                    finally:
+                        os.close(fd)
+                else:
+                    target.mkdir(mode=0o700)
+                with patch.object(agent.os, 'unlink', wraps=os.unlink) as unlink:
+                    with self.assertRaises((PermissionError, FileNotFoundError)):
+                        self.store.paper_purge(**self.purge_identity())
+                    unlink.assert_not_called()
+                detached_marker = marker if component == 'owner' else held / marker.relative_to(target)
+                self.assertEqual(self.snapshot(detached_marker), before)
+                if component == 'owner':
+                    target.unlink()
+                else:
+                    target.rmdir()
+                held.rename(target)
+                self.recover()
+
+    def test_real_lease_release_then_named_recovery_and_later_recreation_outside_old_proof(self):
+        self.prepare()
+        purge = self.purge_identity()
+        self.store.paper_purge(**purge)
+        fresh = agent.AttemptFixtures()
+        self.addCleanup(fresh.close)
+        with self.assertRaises(agent.AttemptBusy):
+            fresh.recover(self.identity['runID'])
+        self.store.close()
+        self.assertTrue(self.store.session.released)
+        self.assertEqual(fresh.recover(self.identity['runID']), {'absent': True})
+        recreated = {**self.identity, 'correlationID': str(uuid.uuid4())}
+        self.assertEqual(fresh.prepare(**recreated), {'prepared': True})
+        self.assertEqual(self.paths(recreated)[2].read_bytes(), self.store.marker)
+        self.assertFalse(self.store.session.lease)
+
+    def test_fresh_named_recovery_requires_release_and_consumes_old_attempt_identity(self):
+        self.prepare()
+        marker = self.paths()[2]
+        before = self.snapshot(marker)
+        fresh = agent.AttemptFixtures()
+        self.addCleanup(fresh.close)
+        with self.assertRaises(agent.AttemptBusy):
+            fresh.recover(self.identity['runID'])
+        self.assertEqual(self.snapshot(marker), before)
+        self.store.close()
+        new = {**self.identity, 'correlationID': str(uuid.uuid4())}
+        with self.assertRaises(PermissionError):
+            fresh.prepare(**new)
+        self.assertEqual(self.snapshot(marker), before)
+        self.assertEqual(fresh.recover(self.identity['runID']), {'absent': True})
+        self.assertFalse(marker.exists())
+        with self.assertRaises(agent.AttemptInvalid):
+            fresh.prepare(**self.identity)
+        self.assertEqual(fresh.prepare(**new), {'prepared': True})
+
+    def test_purge_symlink_hardlink_and_mode_failures_preserve_real_inodes_and_bytes(self):
+        self.prepare()
+        marker = self.paths()[2]
+        before = self.snapshot(marker)
+        purge = self.purge_identity()
+        alias = self.container / 'hardlink-marker'
+        os.link(marker, alias)
+        with self.assertRaises(PermissionError):
+            self.store.paper_purge(**purge)
+        self.assertEqual(self.snapshot(marker), before)
+        alias.unlink()
+        marker.chmod(0o644)
+        with self.assertRaises(PermissionError):
+            self.store.paper_purge(**purge)
+        self.assertEqual(self.snapshot(marker), before)
+        marker.chmod(0o600)
+        held = self.container / 'held-marker'
+        marker.rename(held)
+        marker.symlink_to(held)
+        link_inode = marker.lstat().st_ino
+        with self.assertRaises(OSError):
+            self.store.paper_purge(**purge)
+        self.assertEqual(marker.lstat().st_ino, link_inode)
+        self.assertEqual(self.snapshot(held), before)
+        marker.unlink()
+        held.rename(marker)
+        self.assertEqual(self.store.paper_purge(**purge), {'absent': True, 'drained': True})
+
+    def test_mid_cleanup_descendant_rebinding_refuses_all_initial_unlinks(self):
+        for component in ('run', 'attempt', 'marker', 'attemptReceipt', 'runReceipt'):
+            with self.subTest(component=component):
+                self.identity = self.new_identity()
+                self.prepare()
+                run, child, marker, receipt = self.paths()
+                target = {'run': run, 'attempt': child, 'marker': marker,
+                          'attemptReceipt': receipt,
+                          'runReceipt': self.root / (self.identity['runID'] + '.owner.json')}[component]
+                held = self.container / ('detached-' + component)
+                marker_before, receipt_before = self.snapshot(marker), self.snapshot(receipt)
+                original_remove = self.store.remove_attempts
+                replacement_inode = []
+                reached, release = threading.Event(), threading.Event()
+                def swapped(*args, **kwargs):
+                    reached.set()
+                    if not release.wait(5):
+                        raise RuntimeError('real purge binding barrier timed out')
+                    return original_remove(*args, **kwargs)
+                try:
+                    with ThreadPoolExecutor(max_workers=1) as pool, \
+                            patch.object(self.store, 'remove_attempts', side_effect=swapped), \
+                            patch.object(agent.os, 'unlink', wraps=os.unlink) as unlink:
+                        work = pool.submit(self.store.paper_purge, **self.purge_identity())
+                        try:
+                            self.assertTrue(reached.wait(1))
+                            target.rename(held)
+                            if component in ('run', 'attempt'):
+                                target.mkdir(mode=0o700)
+                            else:
+                                fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                                with os.fdopen(fd, 'wb') as output:
+                                    output.write(b'foreign replacement')
+                            replacement_inode.append(target.lstat().st_ino)
+                        finally:
+                            release.set()
+                        with self.assertRaises(PermissionError):
+                            work.result(timeout=1)
+                        unlink.assert_not_called()
+                    self.assertEqual(target.lstat().st_ino, replacement_inode[0])
+                    detached_marker = (held / marker.relative_to(target)
+                                       if component in ('run', 'attempt') else
+                                       held if component == 'marker' else marker)
+                    detached_receipt = (held / receipt.relative_to(target) if component == 'run'
+                                        else held if component == 'attemptReceipt' else receipt)
+                    self.assertEqual(self.snapshot(detached_marker), marker_before)
+                    self.assertEqual(self.snapshot(detached_receipt), receipt_before)
+                    if component in ('run', 'attempt'):
+                        self.assertEqual(list(target.iterdir()), [])
+                    else:
+                        self.assertEqual(target.read_bytes(), b'foreign replacement')
+                finally:
+                    release.set()
+                    if held.exists():
+                        if target.is_dir():
+                            target.rmdir()
+                        else:
+                            target.unlink()
+                        held.rename(target)
+                self.recover()
+
+    def test_terminal_and_recover_fsync_do_not_hold_state_or_delay_close_budget(self):
+        for operation in ('terminal', 'recover'):
+            with self.subTest(operation=operation):
+                self.store.close()
+                self.store = agent.AttemptFixtures()
+                self.identity = self.new_identity()
+                self.prepare()
+                reached, release = threading.Event(), threading.Event()
+                original = os.fsync
+                def held(fd):
+                    reached.set()
+                    if not release.wait(5):
+                        raise RuntimeError('real fsync barrier timed out')
+                    return original(fd)
+                with ThreadPoolExecutor(max_workers=2) as pool, \
+                        patch.object(agent.os, 'fsync', side_effect=held):
+                    work = (pool.submit(self.store.terminal, **self.identity, outcome='cancelled')
+                            if operation == 'terminal' else pool.submit(self.store.recover, self.identity['runID']))
+                    try:
+                        self.assertTrue(reached.wait(1))
+                        started = time.monotonic()
+                        purging = pool.submit(self.store.paper_purge, **self.purge_identity())
+                        with self.assertRaises(TimeoutError):
+                            purging.result(timeout=0.6)
+                        self.assertLess(time.monotonic() - started, 0.5)
+                        self.assertIn((self.identity['runID'], self.identity['paperID']), self.store.session.revoked)
+                        started = time.monotonic()
+                        closing = pool.submit(self.store.close)
+                        with self.assertRaises(PermissionError):
+                            closing.result(timeout=0.6)
+                        self.assertLess(time.monotonic() - started, 0.5)
+                        self.assertTrue(self.store.session.closing)
+                        self.assertFalse(self.store.session.released)
+                        fresh = agent.AttemptFixtures()
+                        try:
+                            with self.assertRaises(agent.AttemptBusy):
+                                fresh.recover(self.identity['runID'])
+                        finally:
+                            fresh.close()
+                    finally:
+                        release.set()
+                    with self.assertRaises(TimeoutError):
+                        work.result(timeout=1)
+                self.store.close()
+                fresh = agent.AttemptFixtures()
+                try:
+                    self.assertEqual(fresh.recover(self.identity['runID']), {'absent': True})
+                finally:
+                    fresh.close()
+
+    def test_expired_zero_purge_deadline_preserves_bytes_and_state(self):
+        self.prepare()
+        marker_before = self.snapshot(self.paths()[2])
+        receipt_before = self.snapshot(self.paths()[3])
+        with patch.object(agent.os, 'unlink', wraps=os.unlink) as unlink:
+            with self.assertRaises(TimeoutError):
+                self.store.paper_purge(**self.purge_identity(), deadline=0.0)
+            unlink.assert_not_called()
+        self.assertEqual(self.snapshot(self.paths()[2]), marker_before)
+        self.assertEqual(self.snapshot(self.paths()[3]), receipt_before)
+        self.assertFalse(self.store.session.revoked)
+
+    def test_fresh_recovery_reservation_arbitrates_current_purge_fence_without_unlinks(self):
+        self.identity = self.new_identity(generation=2)
+        self.prepare()
+        tracked = (self.paths()[2], self.paths()[3],
+                   self.root / (self.identity['runID'] + '.owner.json'))
+        before = {path: self.snapshot(path) for path in tracked}
+        self.store.close()
+        self.assertTrue(self.store.session.released)
+        fresh = agent.AttemptFixtures()
+        joined = agent.AttemptFixtures(fresh.session)
+        reached, release, revoked = threading.Event(), threading.Event(), threading.Event()
+        original_census, original_root = fresh.validate_census, joined.root
+        def census(*args, **kwargs):
+            original_census(*args, **kwargs)
+            reached.set()
+            if not release.wait(5):
+                raise RuntimeError('real recovery reservation barrier timed out')
+        @contextmanager
+        def purge_root(*args, **kwargs):
+            # Actual purge reaches its filesystem gate only after atomic revocation.
+            revoked.set()
+            with original_root(*args, **kwargs) as root:
+                yield root
+        purge = {**self.identity, 'generation': 1, 'correlationID': str(uuid.uuid4())}
+        try:
+            with ThreadPoolExecutor(max_workers=2) as pool, \
+                    patch.object(fresh, 'validate_census', side_effect=census), \
+                    patch.object(joined, 'root', side_effect=purge_root), \
+                    patch.object(agent.os, 'unlink', wraps=os.unlink) as unlink:
+                recovery = pool.submit(fresh.recover, self.identity['runID'])
+                try:
+                    self.assertTrue(reached.wait(1))
+                    self.assertIsNotNone(fresh.session.lease)
+                    deletion = pool.submit(joined.paper_purge, **purge)
+                    self.assertTrue(revoked.wait(1))
+                    scope = (self.identity['runID'], self.identity['paperID'])
+                    self.assertEqual(fresh.session.revoked[scope], 1)
+                finally:
+                    release.set()
+                with self.assertRaises(agent.AttemptInvalid):
+                    recovery.result(timeout=1)
+                with self.assertRaises(agent.AttemptInvalid):
+                    deletion.result(timeout=1)
+                unlink.assert_not_called()
+            for path, snapshot in before.items():
+                self.assertEqual(self.snapshot(path), snapshot)
+            self.assertEqual(fresh.session.revoked[scope], 1)
+            self.assertNotIn(self.identity['correlationID'], fresh.session.records)
+            # Natural generation/identity survives; no fabricated recovered admission.
+            self.assertEqual(json.loads(self.paths()[3].read_bytes())['generation'], 2)
+            self.assertFalse(fresh.session.released)
+        finally:
+            release.set()
+            fresh.close()
+
+    def test_actual_descriptor_close_uncertainty_retains_lease_and_refuses_fresh(self):
+        for failure in ('close', 'scandir'):
+            with self.subTest(failure=failure):
+                store = agent.AttemptFixtures()
+                fresh = agent.AttemptFixtures()
+                opened, failed_iterators = set(), []
+                original_open, original_close, original_scandir = os.open, os.close, os.scandir
+                writer = [None]
+                fired = [False]
+                def open_file(name, flags, *args, **kwargs):
+                    fd = original_open(name, flags, *args, **kwargs)
+                    opened.add(fd)
+                    if name == 'marker.bin' and flags & os.O_WRONLY:
+                        writer[0] = fd
+                    return fd
+                def close_file(fd):
+                    if failure == 'close' and fd == writer[0] and not fired[0]:
+                        fired[0] = True
+                        raise OSError('injected real writer close uncertainty')
+                    original_close(fd)
+                    opened.discard(fd)
+                class UncertainIterator:
+                    def __init__(self, iterator):
+                        self.iterator = iterator
+                    def __iter__(self):
+                        return iter(self.iterator)
+                    def close(self):
+                        if not fired[0]:
+                            fired[0] = True
+                            failed_iterators.append(self.iterator)
+                            raise OSError('injected real scandir close uncertainty')
+                        self.iterator.close()
+                def scan(fd):
+                    iterator = original_scandir(fd)
+                    return UncertainIterator(iterator) if failure == 'scandir' else iterator
+                identity = self.new_identity()
+                try:
+                    with patch.object(agent.os, 'open', side_effect=open_file), \
+                            patch.object(agent.os, 'close', side_effect=close_file), \
+                            patch.object(agent.os, 'scandir', side_effect=scan):
+                        if failure == 'close':
+                            with self.assertRaises(OSError):
+                                store.prepare(**identity)
+                        else:
+                            store.prepare(**identity)
+                            with self.assertRaises(OSError):
+                                store.paper_purge(**{**identity, 'correlationID': str(uuid.uuid4())})
+                        self.assertTrue(fired[0])
+                        marker = self.paths(identity)[2]
+                        before = self.snapshot(marker)
+                        with patch.object(agent.os, 'unlink', wraps=os.unlink) as unlink:
+                            with self.assertRaises((PermissionError, TimeoutError)):
+                                store.paper_purge(**{**identity, 'correlationID': str(uuid.uuid4())})
+                            unlink.assert_not_called()
+                        self.assertEqual(self.snapshot(marker), before)
+                        with self.assertRaises(PermissionError):
+                            store.close()
+                        self.assertFalse(store.session.released)
+                        owner = store.session.owner_fd
+                        self.assertEqual(os.fstat(owner).st_nlink, 1)
+                        with self.assertRaises(agent.AttemptBusy):
+                            fresh.recover(identity['runID'])
+                        if failure == 'close':
+                            self.assertFalse(store.session.producers[identity['correlationID']].closed.is_set())
+                            self.assertEqual(os.fstat(writer[0]).st_nlink, 1)
+                finally:
+                    fresh.close()
+                    # Explicitly consume deferred callbacks while descriptors still
+                    # have their captured identities. The poisoned owner refuses close.
+                    with patch.object(agent.os, 'close', side_effect=close_file):
+                        with self.assertRaises(PermissionError):
+                            store.session.lease.close()
+                    self.assertFalse(store.session.released)
+                    # Test-only disposal of remaining known FDs; no recovery ACK.
+                    for iterator in failed_iterators:
+                        iterator.close()
+                    for fd in opened:
+                        original_close(fd)
+
+    def test_deferred_lease_callback_refuses_recycled_descriptor_number(self):
+        store = agent.AttemptFixtures()
+        store.prepare(**self.new_identity())
+        original_root = store.session.root_fd
+        original_identity = store.identity(original_root)
+        original_owner = store.session.owner_fd
+        # A real close/rebind counterexample, not a fabricated failed-closure flag.
+        os.close(original_root)
+        replacement = self.container / 'unrelated.bin'
+        replacement.write_bytes(b'unrelated bytes')
+        fd = os.open(replacement, os.O_RDONLY | os.O_NOFOLLOW)
+        try:
+            if fd != original_root:
+                os.dup2(fd, original_root)
+            before = os.fstat(original_root)
+            self.assertNotEqual([before.st_dev, before.st_ino], original_identity)
+            with self.assertRaises(PermissionError):
+                store.close()
+            self.assertFalse(store.session.released)
+            self.assertTrue(store.session.failed_closure)
+            self.assertEqual(os.fstat(original_root).st_ino, before.st_ino)
+            self.assertEqual(os.pread(original_root, 100, 0), b'unrelated bytes')
+            self.assertEqual(os.fstat(original_owner).st_nlink, 1)
+            fresh = agent.AttemptFixtures()
+            try:
+                with self.assertRaises(agent.AttemptBusy):
+                    fresh.recover(str(uuid.uuid4()))
+            finally:
+                fresh.close()
+        finally:
+            # Deferred callbacks were consumed by explicit close, which refused
+            # the recycled FD and retained the owner. Dispose only test-owned FDs.
+            os.close(original_owner)
+            os.close(original_root)
+            if fd != original_root:
+                os.close(fd)
+
 
 class AttemptRPCTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -481,6 +1104,13 @@ class AttemptRPCTests(unittest.IsolatedAsyncioTestCase):
         self.identity = AttemptFixtureTests.new_identity()
         self.server = agent.Server()
         await self.hello()
+
+    async def asyncTearDown(self):
+        tasks = [record.task for record in self.server.pending.values() if record.task]
+        for identifier in list(self.server.pending):
+            self.server.terminate(identifier, 'cancelled')
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await asyncio.to_thread(self.server.attempts.close)
 
     async def take(self):
         identifier, frame = await asyncio.wait_for(self.server.outgoing.get(), 1)
@@ -511,6 +1141,7 @@ class AttemptRPCTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(marker.exists())
         self.identity = AttemptFixtureTests.new_identity()
         await self.rpc('topology.attemptPrepare', self.identity)
+        await asyncio.to_thread(self.server.attempts.close)
         self.server = agent.Server()
         await self.hello()
         for _ in range(2):
@@ -518,16 +1149,17 @@ class AttemptRPCTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(set(path.name for path in root.iterdir()), {'.owner.json'})
 
     async def test_busy_invalid_identity_and_raw_exceptions_are_closed_typed_errors(self):
-        self.server.attempts.lock.acquire()
+        owner = agent.AttemptFixtures()
+        owner.prepare(**AttemptFixtureTests.new_identity())
         try:
             self.assertEqual((await self.rpc('topology.attemptPrepare', self.identity))['code'], 'busy')
         finally:
-            self.server.attempts.lock.release()
+            owner.close()
         for changes in ({'generation': True}, {'paperID': '../private'}, {'path': '/private'}, {'generation': 2147483648}):
             self.assertEqual((await self.rpc('topology.attemptPrepare', {**self.identity, **changes}))['code'], 'invalidParams')
         await self.rpc('topology.attemptPrepare', self.identity)
         reply = await self.rpc('topology.attemptTerminal', {**self.identity, 'generation': 2, 'outcome': 'success'})
-        self.assertEqual(reply['code'], 'unavailable')
+        self.assertEqual(reply['code'], 'invalidParams')
         with patch.object(self.server.attempts, 'recover', side_effect=OSError('/private/token marker raw SDK exception')):
             reply = await self.rpc('topology.attemptRecover', {'runID': self.identity['runID']})
         self.assertEqual(reply['code'], 'unavailable')
@@ -544,6 +1176,8 @@ class AttemptRPCTests(unittest.IsolatedAsyncioTestCase):
         receipt = run / (self.identity['correlationID'] + '.owner.json')
         tracked = (root / '.owner.json', root / (self.identity['runID'] + '.owner.json'), receipt, marker)
         snapshots = {path: AttemptFixtureTests.snapshot(path) for path in tracked}
+        await asyncio.to_thread(self.server.attempts.close)
+        self.server.attempts = agent.AttemptFixtures()
         with patch.object(agent.fcntl, 'flock', side_effect=BlockingIOError(
                 errno.EWOULDBLOCK, '/private/owner raw contention exception')):
             for method, params in (
@@ -558,6 +1192,275 @@ class AttemptRPCTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(AttemptFixtureTests.snapshot(path), before)
         self.assertEqual((await self.rpc('topology.attemptRecover', {
             'runID': self.identity['runID']}))['result'], {'absent': True})
+
+    async def test_full_run_is_busy_and_reserved_identity_retry_survives_capacity(self):
+        identities = [AttemptFixtureTests.new_identity(self.identity['runID']) for _ in range(32)]
+        for identity in identities:
+            self.assertEqual((await self.rpc('topology.attemptPrepare', identity))['result'], {'prepared': True})
+        retry = AttemptFixtureTests.new_identity(self.identity['runID'])
+        self.assertEqual((await self.rpc('topology.attemptPrepare', retry))['code'], 'busy')
+        self.assertEqual((await self.rpc('topology.attemptPrepare', identities[0]))['code'], 'invalidParams')
+        self.assertEqual((await self.rpc('topology.attemptTerminal', {
+            **identities[0], 'outcome': 'cancelled'}))['result'], {'absent': True})
+        self.assertEqual((await self.rpc('topology.attemptPrepare', retry))['result'], {'prepared': True})
+
+    async def test_purge_barriers_wait_for_real_writer_close_and_no_late_success(self):
+        for phase in ('beforeWrite', 'afterMarker', 'beforeTerminal'):
+            with self.subTest(phase=phase):
+                self.identity = AttemptFixtureTests.new_identity()
+                reached, release, marker_closed = (threading.Event() for _ in range(3))
+                marker_fd = [None]
+                original_checkpoint = self.server.attempts.checkpoint
+                original_open, original_close = os.open, os.close
+
+                def opened(name, flags, *args, **kwargs):
+                    fd = original_open(name, flags, *args, **kwargs)
+                    if name == 'marker.bin' and flags & os.O_WRONLY:
+                        marker_fd[0] = fd
+                    return fd
+
+                def closed(fd):
+                    original_close(fd)
+                    if fd == marker_fd[0]:
+                        marker_closed.set()
+
+                def checkpoint(current, producer):
+                    original_checkpoint(current, producer)
+                    if current == phase:
+                        reached.set()
+                        if not release.wait(5):
+                            raise RuntimeError('real writer barrier timed out')
+
+                with patch.object(self.server.attempts, 'checkpoint', side_effect=checkpoint), \
+                        patch.object(agent.os, 'open', side_effect=opened), \
+                        patch.object(agent.os, 'close', side_effect=closed):
+                    prepare = request('topology.attemptPrepare', self.identity, timeout=5000)
+                    self.server.accept(prepare)
+                    record = self.server.pending[prepare['id']]
+                    producer = record.producer
+                    try:
+                        self.assertTrue(await asyncio.to_thread(reached.wait, 1))
+                        purge = request('topology.paperPurge', {
+                            **self.identity, 'correlationID': str(uuid.uuid4())}, timeout=5000)
+                        self.server.accept(purge)
+                        self.assertTrue(await asyncio.to_thread(producer.stop.wait, 1))
+                        self.assertFalse(producer.closed.is_set())
+                        self.assertTrue(self.server.outgoing.empty())
+                        if phase == 'afterMarker':
+                            self.assertFalse(marker_closed.is_set())
+                            self.assertIsNotNone(marker_fd[0])
+                            self.assertEqual(os.fstat(marker_fd[0]).st_nlink, 1)
+                        release.set()
+                        replies = {value['id']: value for value in (await self.take(), await self.take())}
+                        self.assertEqual(replies[prepare['id']]['code'], 'cancelled')
+                        self.assertEqual(replies[purge['id']]['result'], {'absent': True, 'drained': True})
+                    finally:
+                        release.set()
+                        await asyncio.gather(record.worker, return_exceptions=True)
+                    self.assertTrue(producer.closed.is_set())
+                    if phase != 'beforeWrite':
+                        self.assertTrue(marker_closed.is_set())
+                    root = self.container / 'Library/Application Support' / agent.AttemptFixtures.namespace
+                    self.assertFalse((root / self.identity['runID']).exists())
+                    rejected = await self.rpc('topology.attemptPrepare', {
+                        **self.identity, 'correlationID': str(uuid.uuid4())})
+                    self.assertEqual(rejected['code'], 'cancelled')
+
+    async def test_cancelled_wrapper_is_not_drain_and_failed_close_retains_exclusion(self):
+        reached, release = threading.Event(), threading.Event()
+        checkpoint = self.server.attempts.checkpoint
+        def held(phase, producer):
+            checkpoint(phase, producer)
+            if phase == 'afterMarker':
+                reached.set()
+                if not release.wait(5):
+                    raise RuntimeError('real writer barrier timed out')
+        with patch.object(self.server.attempts, 'checkpoint', side_effect=held):
+            prepare = request('topology.attemptPrepare', self.identity, timeout=5000)
+            self.server.accept(prepare)
+            record = self.server.pending[prepare['id']]
+            try:
+                self.assertTrue(await asyncio.to_thread(reached.wait, 1))
+                root = self.container / 'Library/Application Support' / agent.AttemptFixtures.namespace
+                marker = root / self.identity['runID'] / self.identity['correlationID'] / 'marker.bin'
+                before = AttemptFixtureTests.snapshot(marker)
+                record.task.cancel()
+                await asyncio.gather(record.task, return_exceptions=True)
+                self.assertEqual((await self.take())['code'], 'cancelled')
+                self.assertFalse(record.producer.closed.is_set())
+                self.assertFalse(record.worker.done())
+                purge_identity = {**self.identity, 'correlationID': str(uuid.uuid4())}
+                self.assertEqual((await self.rpc('topology.paperPurge', purge_identity))['code'], 'timeout')
+                self.assertEqual(AttemptFixtureTests.snapshot(marker), before)
+                with self.assertRaises(PermissionError):
+                    await asyncio.to_thread(self.server.attempts.close)
+                self.assertFalse(self.server.attempts.session.released)
+                fresh = agent.AttemptFixtures()
+                try:
+                    with self.assertRaises(agent.AttemptBusy):
+                        await asyncio.to_thread(fresh.recover, self.identity['runID'])
+                finally:
+                    fresh.close()
+                self.assertEqual(AttemptFixtureTests.snapshot(marker), before)
+            finally:
+                release.set()
+                await asyncio.gather(record.worker, return_exceptions=True)
+            await asyncio.to_thread(self.server.attempts.close)
+            fresh = agent.AttemptFixtures()
+            try:
+                self.assertEqual(await asyncio.to_thread(fresh.recover, self.identity['runID']), {'absent': True})
+                self.assertFalse(marker.exists())
+            finally:
+                fresh.close()
+
+    async def test_prior_selected_success_is_not_retroactively_cancelled(self):
+        prepared = await self.rpc('topology.attemptPrepare', self.identity)
+        self.assertEqual(prepared['result'], {'prepared': True})
+        producer = self.server.attempts.session.producers[self.identity['correlationID']]
+        self.assertTrue(producer.success)
+        purge = {**self.identity, 'correlationID': str(uuid.uuid4())}
+        self.assertEqual((await self.rpc('topology.paperPurge', purge))['result'], {'absent': True, 'drained': True})
+        self.assertTrue(producer.success)
+
+    async def test_lost_purge_response_same_identity_new_envelope_revalidates(self):
+        await self.rpc('topology.attemptPrepare', self.identity)
+        purge = {**self.identity, 'correlationID': str(uuid.uuid4())}
+        lost = request('topology.paperPurge', purge)
+        self.server.accept(lost)
+        record = self.server.pending[lost['id']]
+        await asyncio.gather(record.task)
+        identifier, _ = self.server.outgoing.get_nowait()
+        self.server.delivered(identifier)
+        self.server.outgoing.task_done()
+        self.assertEqual((await self.rpc('topology.paperPurge', purge))['result'], {'absent': True, 'drained': True})
+        self.assertEqual((await self.rpc('topology.paperPurge', {
+            **purge, 'paperID': str(uuid.uuid4())}))['code'], 'invalidParams')
+        self.assertEqual((await self.rpc('topology.attemptTerminal', {
+            **purge, 'outcome': 'success'}))['code'], 'invalidParams')
+
+    async def test_purge_closed_params_reject_before_mutation(self):
+        await self.rpc('topology.attemptPrepare', self.identity)
+        root = self.container / 'Library/Application Support' / agent.AttemptFixtures.namespace
+        marker = root / self.identity['runID'] / self.identity['correlationID'] / 'marker.bin'
+        before = AttemptFixtureTests.snapshot(marker)
+        purge = {**self.identity, 'correlationID': str(uuid.uuid4())}
+        for changes in ({'generation': True}, {'generation': 0}, {'generation': 2147483648},
+                        {'runID': '../foreign'}, {'paperID': 'not-a-uuid'},
+                        {'correlationID': 'not-a-uuid'}, {'path': '/private'}):
+            reply = await self.rpc('topology.paperPurge', {**purge, **changes})
+            self.assertEqual(reply['code'], 'invalidParams')
+            self.assertEqual(AttemptFixtureTests.snapshot(marker), before)
+        self.assertFalse(self.server.attempts.session.revoked)
+
+    async def test_cancelled_real_writer_with_higher_or_foreign_run_has_zero_unlinks(self):
+        for unsafe in ('higher', 'foreign'):
+            with self.subTest(unsafe=unsafe):
+                self.identity = AttemptFixtureTests.new_identity()
+                other = AttemptFixtureTests.new_identity(self.identity['runID'])
+                await self.rpc('topology.attemptPrepare', other)
+                reached, release = threading.Event(), threading.Event()
+                original = self.server.attempts.checkpoint
+                def held(phase, producer):
+                    original(phase, producer)
+                    if phase == 'afterMarker':
+                        reached.set()
+                        if not release.wait(5):
+                            raise RuntimeError('real writer barrier timed out')
+                with patch.object(self.server.attempts, 'checkpoint', side_effect=held):
+                    prepare = request('topology.attemptPrepare', self.identity, timeout=5000)
+                    self.server.accept(prepare)
+                    record = self.server.pending[prepare['id']]
+                    try:
+                        self.assertTrue(await asyncio.to_thread(reached.wait, 1))
+                        root = self.container / 'Library/Application Support' / agent.AttemptFixtures.namespace
+                        run = root / self.identity['runID']
+                        marker = run / self.identity['correlationID'] / 'marker.bin'
+                        receipt = run / (self.identity['correlationID'] + '.owner.json')
+                        if unsafe == 'higher':
+                            value = json.loads(receipt.read_bytes())
+                            receipt.write_bytes(json.dumps({**value, 'generation': 2}).encode())
+                        else:
+                            foreign = run / other['correlationID'] / 'foreign.bin'
+                            foreign.write_bytes(b'foreign bytes')
+                        tracked = (marker, receipt, run / other['correlationID'] / 'marker.bin')
+                        snapshots = {path: AttemptFixtureTests.snapshot(path) for path in tracked}
+                        purge = request('topology.paperPurge', {
+                            **self.identity, 'correlationID': str(uuid.uuid4())}, timeout=5000)
+                        with patch.object(agent.os, 'unlink', wraps=os.unlink) as unlink:
+                            self.server.accept(purge)
+                            self.assertTrue(await asyncio.to_thread(record.producer.stop.wait, 1))
+                            record.task.cancel()
+                            await asyncio.gather(record.task, return_exceptions=True)
+                            release.set()
+                            await asyncio.gather(record.worker, return_exceptions=True)
+                            replies = {reply['id']: reply for reply in (await self.take(), await self.take())}
+                            self.assertEqual(replies[prepare['id']]['code'], 'cancelled')
+                            self.assertEqual(replies[purge['id']]['code'],
+                                             'invalidParams' if unsafe == 'higher' else 'unavailable')
+                            unlink.assert_not_called()
+                        for path, before in snapshots.items():
+                            self.assertEqual(AttemptFixtureTests.snapshot(path), before)
+                        self.assertTrue(record.producer.closed.is_set())
+                        self.assertIn((self.identity['runID'], self.identity['paperID']), self.server.attempts.session.revoked)
+                        if unsafe == 'foreign':
+                            self.assertEqual(foreign.read_bytes(), b'foreign bytes')
+                    finally:
+                        release.set()
+                        await asyncio.gather(record.worker, return_exceptions=True)
+
+    async def test_purge_deadline_and_explicit_cancel_preserve_real_bytes_and_fences(self):
+        await self.rpc('topology.attemptPrepare', self.identity)
+        root = self.container / 'Library/Application Support' / agent.AttemptFixtures.namespace
+        marker = root / self.identity['runID'] / self.identity['correlationID'] / 'marker.bin'
+        before = AttemptFixtureTests.snapshot(marker)
+        expired = request('topology.paperPurge', {
+            **self.identity, 'correlationID': str(uuid.uuid4())}, timeout=1)
+        self.server.accept(expired, received=asyncio.get_running_loop().time() - 1)
+        self.assertEqual((await self.take())['code'], 'timeout')
+        self.assertEqual(AttemptFixtureTests.snapshot(marker), before)
+        # Stop before scheduling is observed by the real purge function; it cannot ACK.
+        stop = threading.Event()
+        stop.set()
+        with self.assertRaises(agent.AttemptCancelled):
+            await asyncio.to_thread(self.server.attempts.paper_purge,
+                                    **{**self.identity, 'correlationID': str(uuid.uuid4())}, stop=stop)
+        self.assertEqual(AttemptFixtureTests.snapshot(marker), before)
+
+    async def test_rpc_cancel_purge_after_revocation_has_no_ack_and_retry_converges(self):
+        reached, release = threading.Event(), threading.Event()
+        original = self.server.attempts.checkpoint
+        def held(phase, producer):
+            original(phase, producer)
+            if phase == 'afterMarker':
+                reached.set()
+                if not release.wait(5):
+                    raise RuntimeError('real writer barrier timed out')
+        with patch.object(self.server.attempts, 'checkpoint', side_effect=held):
+            prepare = request('topology.attemptPrepare', self.identity, timeout=5000)
+            self.server.accept(prepare)
+            record = self.server.pending[prepare['id']]
+            try:
+                self.assertTrue(await asyncio.to_thread(reached.wait, 1))
+                root = self.container / 'Library/Application Support' / agent.AttemptFixtures.namespace
+                marker = root / self.identity['runID'] / self.identity['correlationID'] / 'marker.bin'
+                before = AttemptFixtureTests.snapshot(marker)
+                identity = {**self.identity, 'correlationID': str(uuid.uuid4())}
+                purge = request('topology.paperPurge', identity, timeout=5000)
+                self.server.accept(purge)
+                self.assertTrue(await asyncio.to_thread(record.producer.stop.wait, 1))
+                cancel = request('cancel', {'targetID': purge['id']})
+                self.server.accept(cancel)
+                replies = {reply['id']: reply for reply in (await self.take(), await self.take())}
+                self.assertEqual(replies[purge['id']]['code'], 'cancelled')
+                self.assertTrue(replies[cancel['id']]['result']['accepted'])
+                self.assertEqual(AttemptFixtureTests.snapshot(marker), before)
+                self.assertIn((self.identity['runID'], self.identity['paperID']), self.server.attempts.session.revoked)
+            finally:
+                release.set()
+                await asyncio.gather(record.worker, return_exceptions=True)
+            self.assertEqual((await self.take())['code'], 'cancelled')
+            self.assertEqual((await self.rpc('topology.paperPurge', identity))['result'], {'absent': True, 'drained': True})
+            self.assertFalse(marker.exists())
 
 
 class Runtime:
@@ -598,6 +1501,7 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
         for identifier in list(self.server.pending):
             self.server.terminate(identifier, 'cancelled')
         await asyncio.gather(*tasks, return_exceptions=True)
+        await asyncio.to_thread(self.server.attempts.close)
         await asyncio.sleep(0)
 
     async def take(self):
@@ -839,11 +1743,11 @@ class ServerTests(unittest.IsolatedAsyncioTestCase):
                 target = request('topology.attemptPrepare', params)
                 self.server.accept(target, received=now[0])
                 record = self.server.pending[target['id']]
-                def late_busy(**_):
+                def late_busy(*_):
                     now[0] += advance
                     raise agent.AttemptBusy()
                 with patch.object(loop, 'time', side_effect=lambda: now[0]), \
-                        patch.object(self.server.attempts, 'prepare', side_effect=late_busy):
+                        patch.object(self.server.attempts, 'prepare_owned', side_effect=late_busy):
                     await asyncio.gather(record.task, return_exceptions=True)
                 reply = await self.take()
                 self.assertEqual((reply['id'], reply['code']), (target['id'], 'timeout'))

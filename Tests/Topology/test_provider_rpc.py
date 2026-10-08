@@ -24,6 +24,7 @@ CASES = [
     ("topology.attemptPrepare", {"runID": ID, "paperID": ID, "generation": 1, "correlationID": ID}, {"prepared": True}),
     ("topology.attemptTerminal", {"runID": ID, "paperID": ID, "generation": 1, "correlationID": ID, "outcome": "success"}, {"absent": True}),
     ("topology.attemptRecover", {"runID": ID}, {"absent": True}),
+    ("topology.paperPurge", {"runID": ID, "paperID": ID, "generation": 1, "correlationID": ID}, {"absent": True, "drained": True}),
     ("topology.wait", {"durationMs": 1}, {"elapsed": True}),
     ("cancel", {"targetID": ID}, {"accepted": False}),
 ]
@@ -92,6 +93,72 @@ class ProviderRPCTests(unittest.TestCase):
                 self.rejects(lambda: rpc.validate_terminal({"kind": "result", "id": ID, "result": {key: value}}, method))
             self.rejects(lambda: rpc.validate_terminal({"kind": "event", "id": ID, "result": {key: True}}, method))
             rpc.validate_terminal({"kind": "error", "id": ID, "code": "unavailable"}, method)
+
+    def test_paper_purge_identity_bounds_and_envelope_separation(self):
+        method = "topology.paperPurge"
+        identity = {"runID": "11234567-89ab-4cde-8123-456789abcdef",
+                    "paperID": "21234567-89ab-4cde-8123-456789abcdef",
+                    "generation": 1, "correlationID": "31234567-89ab-4cde-8123-456789abcdef"}
+        retry_id = "41234567-89ab-4cde-8123-456789abcdef"
+        for envelope_id in (ID, retry_id):
+            decoded = rpc.decode_frame(rpc.encode_frame(request(method, identity, id=envelope_id)))
+            rpc.validate_request(decoded)
+            self.assertEqual(decoded["id"], envelope_id)
+            self.assertEqual(decoded["params"], identity)
+            self.assertNotEqual(decoded["id"], decoded["params"]["correlationID"])
+            terminal = {"kind": "result", "id": envelope_id, "result": {"absent": True, "drained": True}}
+            response = rpc.decode_frame(rpc.encode_frame(terminal))
+            rpc.validate_terminal(response, method)
+            self.assertEqual(response["id"], decoded["id"])
+        for generation in (1, 2147483647):
+            rpc.validate_request(rpc.decode_frame(rpc.encode_frame(request(method, {**identity, "generation": generation}))))
+        for generation in (0, -1, 2147483648, True, False, 1.0, "1", None):
+            with self.subTest(generation=generation):
+                decoded = rpc.decode_frame(rpc.encode_frame(request(method, {**identity, "generation": generation})))
+                self.rejects(lambda: rpc.validate_request(decoded), "invalidParams")
+        for key in ("runID", "paperID", "correlationID"):
+            for invalid in (ID.upper(), "../fixture", "01234567-89ab-1cde-8123-456789abcdef", True, False, 1, None):
+                with self.subTest(key=key, invalid=invalid):
+                    decoded = rpc.decode_frame(rpc.encode_frame(request(method, {**identity, key: invalid})))
+                    self.rejects(lambda: rpc.validate_request(decoded), "invalidParams")
+        self.rejects(lambda: rpc.validate_request(request(method, identity, id=True)))
+        self.rejects(lambda: rpc.validate_request(request(method, identity, correlationID=identity["correlationID"])))
+        self.rejects(lambda: rpc.validate_request(request(method, {**identity, "id": ID})), "invalidParams")
+
+    def test_paper_purge_result_is_true_only(self):
+        method = "topology.paperPurge"
+        result = {"absent": True, "drained": True}
+        for key in result:
+            for invalid in (False, 0, 1, None, "true"):
+                with self.subTest(key=key, invalid=invalid):
+                    terminal = {"kind": "result", "id": ID, "result": {**result, key: invalid}}
+                    decoded = rpc.decode_frame(rpc.encode_frame(terminal))
+                    self.rejects(lambda: rpc.validate_terminal(decoded, method))
+        rpc.validate_terminal({"kind": "error", "id": ID, "code": "unavailable"}, method)
+
+    def test_paper_purge_duplicate_malformed_and_framing_rejection(self):
+        params = {"runID": ID, "paperID": ID, "generation": 1, "correlationID": ID}
+        body = json.dumps(request("topology.paperPurge", params), separators=(",", ":"))
+        terminal_body = json.dumps({"kind": "result", "id": ID, "result": {"absent": True, "drained": True}}, separators=(",", ":"))
+        invalid_bodies = [body[:-1], body + "{}",
+                          body.replace('"id":', '"id":"' + ID + '","id":', 1),
+                          body.replace('"runID":', '"runID":"' + ID + '","runID":', 1),
+                          body.replace('"generation":1', '"generation":1,"generation":1'),
+                          terminal_body.replace('"absent":true', '"absent":true,"absent":true'),
+                          terminal_body.replace('"drained":true', '"drained":true,"drained":true')]
+        for invalid in invalid_bodies:
+            self.rejects(lambda: rpc.decode_frame(raw(invalid)))
+        frame = raw(body)
+        for invalid in (frame[:-1], frame + b"x", struct.pack(">I", 0) + frame[4:]):
+            self.rejects(lambda: rpc.decode_frame(invalid))
+        decoder = rpc.FrameDecoder()
+        self.assertEqual(decoder.feed(frame[:3]), [])
+        self.assertEqual(decoder.feed(frame[3:]), [frame])
+        decoder.finish()
+        decoder = rpc.FrameDecoder()
+        self.assertEqual(decoder.feed(frame[:-1]), [])
+        self.rejects(decoder.finish)
+        self.rejects(lambda: decoder.feed(frame))
 
     def test_unknown_method_and_invalid_params_are_not_framing_failures(self):
         unknown = request("arbitrary.execute", {"command": "not-executed"})
