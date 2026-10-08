@@ -74,6 +74,11 @@ Canonical Story 정의는 `bmad-docs/planning-artifacts/epics.md`의 Epic1이다
 
 - 전체 human SCOPE+IMPLEMENTATION 및 workflow 기록: Epic#3.
 - Story1.1: 구현/진단 evidence 존재, 전체 AC와 P1 blocked; 과거 소진된 batch 재실행 없음.
-- Story1.2: Issue#4 생성, 구현 전 Build Spec 준비 중.
-- Story1.3~1.26: canonical 정의 존재, 구현/검증 완료 아님. 각 dependency-ready work unit으로 진행.
+- Exactly26 canonical Story Issues와 별도 local task branches가 존재한다. Issue 생성은 Story 완료가 아니다.
+- Story1.2: Issue#4, Spec551dab9 / concrete synthetic cleanup68b8f41. Python315 + native15 tests, independent static CLEAR. 실제 packaged SDK/dualCPU lifecycle 및 P1/P2/P3 완료 아님.
+- Story1.3: Issue#6 own-branch Spec e74ce79. Retained lease/registered-producer drain과 named replacement precursor 설계; 구현·scenario 검증 전이며 permanent deletion/SDK writer control 주장 없음.
+- Story1.4: Issue#7 own-branch Spec243a0ec. Candidate lock/closed offline validator/four-cell matrix scope, 아직 구현 전. MinimumOSbuild 및 실제 packaged matrix 미입증.
+- Story1.7: Issue#5, Specaf2d9d1 / pure Python SliceA762b385. Current focused32 + topology315 tests PASS, independent delta static CLEAR; nested issuance replacement와 mutable plan forgery 수정. Native SliceB 구현 중, actual Provider certification/authentication/import/parser enforcement 및 Story 완료 미입증.
+- Story1.8: Issue#10, PDF readiness Spec 초안 보존. Raster와 visible-interactive completion 분리; 아직 own-branch Spec commit/구현/실제 source×CPU×OS proof 전.
+- 나머지 canonical Stories: Issue/branch 존재, 구현·검증 완료 아님. 각 dependency-ready work unit으로 진행하며 mandatory architecture gates를 synthetic precursor로 대체하지 않는다.
 - Story1.27: requirements gap. 이 공백은 나머지 정의된 Story의 계획/검증용 선행 작업을 막지 않는다.
