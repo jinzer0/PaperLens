@@ -1,0 +1,86 @@
+{
+  "schemaVersion": 1,
+  "governingIssue": 15,
+  "scope": "pure-Application-recovery-precursor-only",
+  "initialSpecCommit": "119a28aa9cc941b2bf88851228a67c0bfec88f5a",
+  "completionProvenanceSpecCommit": "f14f15f3f1c1fed02657ebf0c7ecdcb23721bfa8",
+  "historicalNativeContractVerification": {
+    "runID": "c09b03e8-3999-4eaf-8843-946b9780c253",
+    "sourceSHA256": {
+      "JobRecoveryPolicy.swift": "105a3c926330dc1d064988dd9707cba6df5df941dc6ebf0fc354c83dcf941ae7",
+      "JobRecoveryPolicyTests.swift": "9a7b1e24420886766524f4499b972e4b2546eec48d393a075eb6ff5e97908a22"
+    },
+    "compilePassed": true,
+    "compileWarningCount": null,
+    "compileWarningsNotRecoveredAfterDriverAssertion": true,
+    "testsExecuted": 20,
+    "failures": 0,
+    "testExitCode": 0,
+    "positiveXCTestSummary": true,
+    "singleExecution": true,
+    "watchdogExceeded": false,
+    "ownedLoaderReaped": true,
+    "acceptance": "not-accepted-after-independent-review"
+  },
+  "driverIncidents": [
+    {
+      "runID": "1dc6c390-2a7a-47f9-9d4c-1c68b6a8b429",
+      "code": "worktree-local-build-parent-absent",
+      "compileStarted": false,
+      "testsStarted": false
+    },
+    {
+      "runID": "c09b03e8-3999-4eaf-8843-946b9780c253",
+      "code": "new-Swift-build-system-test-product-name-differs",
+      "compilePassed": true,
+      "testsStartedBeforeCorrection": false,
+      "correction": "execute-observed-actual-test-target-bundle-without-rebuilding"
+    }
+  ],
+  "historicalIndependentReview": {
+    "reviewer": "48-48-RecoveryPolicyReview",
+    "status": "BLOCK/REQUEST-CHANGES",
+    "scope": "static-pure-policy-and-tests-only",
+    "findingCodes": ["namespace-removal-completion-scope", "cleanup-retry-invocation-provenance"],
+    "runtimeExecutedByReviewer": false
+  },
+  "finalNativeContractVerification": {
+    "runID": "ab02e1ea-64de-45bf-94e7-e99b0bc7ffea",
+    "sourceSHA256": {
+      "JobRecoveryPolicy.swift": "ababf85f651be81c7dd8e76eedaaad5e85b0c1cc26249e15811901a729ee107d",
+      "JobRecoveryPolicyTests.swift": "fbbf9abc739a61c48a7c80144b9aceff6a08495c1e8981213682acc73a4b1891"
+    },
+    "compilePassed": true,
+    "compileWarningCount": 0,
+    "compileErrorCount": 0,
+    "binaryArchitectureObserved": "arm64",
+    "testsExecuted": 25,
+    "failures": 0,
+    "testExitCode": 0,
+    "positiveXCTestSummary": true,
+    "singleExecution": true,
+    "watchdogExceeded": false,
+    "ownedLoaderReaped": true,
+    "formatterPassed": true,
+    "whitespacePassed": true
+  },
+  "independentReview": {
+    "reviewer": "59-59-RecoveryRepairReview",
+    "status": "CLEAR/APPROVE-local-contract-only",
+    "scope": "static-pure-policy-and-tests-only",
+    "priorFindingsResolved": ["namespace-removal-completion-scope", "cleanup-retry-invocation-provenance"],
+    "runtimeExecutedByReviewer": false,
+    "parentFormattedAfterReview": true
+  },
+  "repairStatus": "verified-pure-contract-only",
+  "precursorAllProofComplete": false,
+  "actualRegisteredSyntheticCompositionVerified": false,
+  "actualSDKEventsAuthenticated": false,
+  "actualProductPersistenceVerified": false,
+  "productWiringChanged": false,
+  "storyDone": false,
+  "P1Passed": false,
+  "P2Passed": false,
+  "P3Passed": false,
+  "P6Passed": false
+}
