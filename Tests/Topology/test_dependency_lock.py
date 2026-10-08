@@ -266,6 +266,43 @@ class DependencyLockTests(unittest.TestCase):
             self.invalid(result, "IDENTITY_MISMATCH")
             self.assertNotIn(source_id, json.dumps(result))
 
+    def test_compile_fact_policy_in_rehashed_bound_receipts(self):
+        cases = ((list(lock_validator.COMPILE_FACTS), True),
+                 (list(lock_validator.COMPILE_FACTS) + ["PRIVATE_FACT"], False),
+                 (["ENABLE_FTS5", "PRIVATE_DOCUMENT_SENTINEL"], False),
+                 (["ENABLE_FTS5", "UNKNOWN_OPTION"], False),
+                 (["ENABLE_FTS5"] * 17, False),
+                 (["ENABLE_FTS5", "ENABLE_FTS5"], False),
+                 (["THREADSAFE=1"], False), ([], False),
+                 (["ENABLE_FTS5", 1], False), ("ENABLE_FTS5", False))
+        for options, accepted in cases:
+            with self.subTest(options=options):
+                matrix, artifacts, evidence = self.complete_fixture()
+                cell = matrix["cells"][2]
+                point = "current/arm64"
+                cell["sqlite"]["compileOptions"] = options
+                receipt = json.loads(evidence[point])
+                receipt["sqlite"] = cell["sqlite"]
+                evidence[point] = lock_validator.json_bytes(receipt)
+                cell["evidence"]["sha256"] = lock_validator.digest(evidence[point])
+                result = self.validate(matrix, artifacts=artifacts, evidence=evidence)
+                if accepted:
+                    self.assertEqual(result[0], 2)
+                    self.assertTrue(result[1]["conformant"])
+                    self.assertEqual(result[1]["promotion"], "not_promoted")
+                else:
+                    self.invalid(result, "IDENTITY_MISMATCH")
+                    self.assertNotIn("PRIVATE_DOCUMENT_SENTINEL", json.dumps(result))
+
+    def test_compile_fact_consumer_requires_exact_list_type(self):
+        matrix, _, _ = self.complete_fixture()
+        sqlite = matrix["cells"][2]["sqlite"]
+        for options in (("ENABLE_FTS5",), {"ENABLE_FTS5"}, None):
+            changed = copy.deepcopy(sqlite)
+            changed["compileOptions"] = options
+            with self.assertRaises(lock_validator.Invalid):
+                lock_validator.sqlite_proof(changed, "25G241", "current/arm64")
+
     def test_artifact_and_evidence_bytes_are_required_and_actually_hashed(self):
         matrix, artifacts, evidence = self.complete_fixture()
         self.invalid(self.validate(matrix))

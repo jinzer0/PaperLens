@@ -154,6 +154,11 @@ SQLITE_KEYS = ("origin", "osBuild", "imageIdentity", "sqliteVersion", "sqliteSou
                "compileOptions", "grdbOpen", "orderedMigration", "fts5Create",
                "fts5Query", "fts5Delete", "point")
 EVENTS = ("sdkSuccess", "sdkFailure", "restart", "appReplacement", "paperDelete")
+COMPILE_FACTS = ("ENABLE_FTS5", "THREADSAFE=1", "ENABLE_COLUMN_METADATA",
+                 "ENABLE_RTREE", "ENABLE_JSON1", "ENABLE_FTS3", "ENABLE_FTS4",
+                 "ENABLE_FTS3_PARENTHESIS", "ENABLE_UNLOCK_NOTIFY", "SECURE_DELETE",
+                 "DEFAULT_AUTOVACUUM", "ENABLE_DBSTAT_VTAB", "ENABLE_MATH_FUNCTIONS",
+                 "OMIT_LOAD_EXTENSION", "USE_URI", "ENABLE_SESSION")
 
 
 def sqlite_proof(value, build, point):
@@ -170,8 +175,8 @@ def sqlite_proof(value, build, point):
             re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})",
                          value["sqliteSourceId"]), "IDENTITY_MISMATCH", point)
     options = value["compileOptions"]
-    require(type(options) is list and bool(options) and all(
-        type(item) is str and re.fullmatch(r"[A-Z][A-Z0-9_]*(=[A-Z0-9_]+)?", item)
+    require(type(options) is list and 0 < len(options) <= 16 and all(
+        type(item) is str and item in COMPILE_FACTS
         for item in options), "IDENTITY_MISMATCH", point)
     require(len(options) == len(set(options)) and "ENABLE_FTS5" in options,
             "IDENTITY_MISMATCH", point)

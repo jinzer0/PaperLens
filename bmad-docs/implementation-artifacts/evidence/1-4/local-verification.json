@@ -28,8 +28,17 @@
     "fixed-safe-diagnostics",
     "conformance-never-authenticates-or-promotes-runtime-claims"
   ],
+  "story15ConsumerIntegration": {
+    "sourceSha256": "102fa2371d5bd24d39dda07d83600373be9d55b453cc4a7714ce39bdaf5bcd9e",
+    "focusedTests": {"passed": 21, "failed": 0},
+    "topologyUnionTests": {"passed": 355, "failed": 0},
+    "reviewer": "21-DBContractSafetyReview",
+    "verdict": "clear",
+    "policy": "single-closed-sixteen-compile-fact-authority",
+    "sourceAndLibraryBuildEvidence": "../1-5/source-inspection.json"
+  },
   "notProven": [
-    "exact-minimum-os-build", "grdb-materialization",
+    "exact-minimum-os-build",
     "native-intel-execution", "actual-packaged-artifacts",
     "loaded-system-sqlite-provenance", "grdb-migrations-and-fts5-runtime",
     "actual-sdk-five-event-purge", "p1", "p2", "final-release-lock"

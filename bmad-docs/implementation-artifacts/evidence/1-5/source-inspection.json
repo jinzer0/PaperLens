@@ -1,0 +1,54 @@
+{
+  "story": "1.5",
+  "issue": 8,
+  "specCommit": "d7c43ba67dc470d557007c8e738fa5d43bdbdad6",
+  "scope": "pinned-git-source-api-inspection-and-local-library-compilation",
+  "source": {
+    "artifactID": "cd1e3231-04d6-4ec2-8d51-c7bd6b3d0f7c",
+    "commit": "b83108d10f42680d78f23fe4d4d80fc88dab3212",
+    "tree": "ff52b3c22f4fc259de0adb63560b968cc4f0722a",
+    "checkoutIdentity": "verified",
+    "userGitConfiguration": "disabled",
+    "userCredentialHelpers": "disabled",
+    "sourceReceiptCreation": "exclusive"
+  },
+  "localLibraryBuild": {
+    "artifactID": "d1e7dc02-a467-4262-b4bf-52a7ccd486f0",
+    "target": "arm64-apple-macosx15.0",
+    "xcode": "27.0",
+    "xcodeBuild": "27A266a",
+    "sdk": "27.0",
+    "swift": "6.4",
+    "result": "pass",
+    "warningCount": 4,
+    "errorCount": 0,
+    "swiftPMCacheConfigSecurity": "exclusive-isolated-owned-directories",
+    "swiftPMCredentialLookup": "netrc-and-keychain-disabled"
+  },
+  "inspected": [
+    "DatabaseQueue-on-disk-path-initializer",
+    "DatabaseQueue-close-throws-and-interrupt",
+    "DatabaseMigrator-ordered-registration",
+    "per-migration-transaction-and-identifier-commit",
+    "eraseDatabaseOnSchemaChange-default-false",
+    "ResultCode-rawValue-and-primary-code",
+    "SwiftPM-GRDBSQLite-system-library",
+    "GRDBSQLite-modulemap-links-sqlite3"
+  ],
+  "constraints": [
+    "do-not-enable-destructive-schema-erasure",
+    "do-not-retain-Database-outside-closure",
+    "interrupt-does-not-prove-drain-or-successful-close",
+    "compile-time-FTS5-defines-do-not-prove-runtime-FTS5",
+    "system-library-link-does-not-prove-actually-loaded-image"
+  ],
+  "notProven": [
+    "main-app-GRDB-native-integration",
+    "actual-database-migration-rollback-reopen",
+    "runtime-FTS5", "loaded-system-SQLite-provenance",
+    "signed-packaged-four-cell-execution", "p1", "p2", "story-completion"
+  ],
+  "runtimeVerified": false,
+  "storyComplete": false,
+  "p2Passed": false
+}
