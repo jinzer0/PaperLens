@@ -25,9 +25,9 @@
   "verification": {
     "productUnion": {
       "command": "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --filter ProductTests",
-      "tests": 257,
+      "tests": 261,
       "failures": 0,
-      "output": "artifact://942",
+      "output": "artifact://945",
       "evidence": "Real GRDB transactions and owned synthetic files; mocked provider/HTTP transport and synthetic windowless PDFKit conversions. Not authenticated provider, app UI or PDFium execution."
     },
     "nativeCompilation": {
@@ -35,11 +35,11 @@
       "configuration": "Release",
       "architecture": "arm64",
       "minimumOS": "15.0",
-      "derivedData": ".build/product-native-compile-20261010-o",
+      "derivedData": ".build/product-native-compile-20261010-p",
       "codeSigningAllowed": false,
       "result": "BUILD SUCCEEDED",
-      "rawOutput": "artifact://941",
-      "output": "artifact://941",
+      "rawOutput": "artifact://946",
+      "output": "artifact://946",
       "applicationAndHelperBinariesExecuted": false,
       "warnings": "AppIntents metadata skipped, PDFium debug-map duplicate/missing-symbol warnings and an unnecessary-await Swift warning remain; no warning suppression or debug-symbol repair claimed."
     },
@@ -197,6 +197,22 @@
     "nativeSourcePhase": "Exact original Main source phase order plus only B00000000000000000000054 LibraryPDFiumInputAcquirer",
     "review": "agent://63-ActualInputResourcePinReview: final SOURCE-ONLY CLEAR / APPROVE; original HIGH resolved",
     "genuineInputAcquisitionComposed": true,
+    "geometryCalibrationComposed": false,
+    "helperExecuted": false,
+    "storyAccepted": false
+  },
+  "soleCanonicalCodecBinding": {
+    "baseVerifiedFeatureCommit": "c98764f",
+    "preImplementationSpecificationCommit": "2f20b6a",
+    "sourceDiffAgainstSpecificationSha256": "5fb7d2a2bc62190d68d07a87a01382889ade348bf79fae08bf4584ce86c548e8",
+    "sourceDiffScope": "Three exact CanonicalExtractionGeometry/ExtractionRevisionService/CanonicalExtractionGeometryTests source paths against2f20b6a; docs excluded",
+    "behavior": "Removed arbitrary native anchor encoder callback. Owning and native validators share existing version1 sorted-key EncodedAnchor codec only after their separate mandatory admission checks; owning decoder/membership and required explicit precision/page mapping unchanged.",
+    "newCasesInUnion": 4,
+    "productUnion": {"tests": 261, "failures": 0, "output": "artifact://945"},
+    "nativeOutput": "artifact://946",
+    "nativeDerivedData": ".build/product-native-compile-20261010-p",
+    "review": "agent://65-CanonicalCodecIntegrity: SOURCE-ONLY CLEAR / APPROVE",
+    "genuineCanonicalCodecComposed": true,
     "geometryCalibrationComposed": false,
     "helperExecuted": false,
     "storyAccepted": false

@@ -576,11 +576,9 @@ public struct PDFiumPageMapping: Sendable {
 public struct PDFiumGeometryBinding: Sendable {
   public let precision: PDFGeometryPrecision
   public let mapPage: @Sendable (PDFiumRawPage) throws -> PDFiumPageMapping
-  public let encodeCanonicalAnchor: @Sendable (PDFSentenceAnchor) throws -> Data
   public init(precision: PDFGeometryPrecision,
-    mapPage: @escaping @Sendable (PDFiumRawPage) throws -> PDFiumPageMapping,
-    encodeCanonicalAnchor: @escaping @Sendable (PDFSentenceAnchor) throws -> Data) {
-    self.precision = precision; self.mapPage = mapPage; self.encodeCanonicalAnchor = encodeCanonicalAnchor
+    mapPage: @escaping @Sendable (PDFiumRawPage) throws -> PDFiumPageMapping) {
+    self.precision = precision; self.mapPage = mapPage
   }
 }
 public struct PDFiumGeometryInput: ExtractionGeometryInput {
@@ -661,8 +659,7 @@ public struct PDFiumGeometryValidator: ExtractionGeometryValidating {
     // Publication and subsequent resolution remain with the existing DB/1.19 owners.
     let anchor = try PDFSentenceAnchor(identity: anchorIdentity, fullSourceQuote: expectedText,
       page: mapping.page, quads: quads)
-    let bytes = try binding.encodeCanonicalAnchor(anchor)
-    guard !bytes.isEmpty else { throw PDFGeometryError.missingGeometry }
+    let bytes = try CanonicalExtractionGeometryValidator.encodeCanonicalAnchor(anchor)
     return ExtractionGeometryEncoding(canonicalBytes: bytes, quadCount: quads.count)
   }
 }

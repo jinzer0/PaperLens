@@ -49,10 +49,15 @@ public struct CanonicalExtractionGeometryValidator: ExtractionGeometryValidating
         guard canonical.anchor.fullSourceQuote.utf8.elementsEqual(expectedText.utf8) else {
             throw CanonicalExtractionGeometryError.semanticExtentMismatch
         }
+        let bytes = try Self.encodeCanonicalAnchor(canonical.anchor)
+        return ExtractionGeometryEncoding(canonicalBytes: bytes, quadCount: canonical.anchor.quads.count)
+    }
+
+    // Codec only: callers must validate their own geometry and authority before encoding.
+    static func encodeCanonicalAnchor(_ anchor: PDFSentenceAnchor) throws -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
-        let bytes = try encoder.encode(EncodedAnchor(canonical.anchor))
-        return ExtractionGeometryEncoding(canonicalBytes: bytes, quadCount: canonical.anchor.quads.count)
+        return try encoder.encode(EncodedAnchor(anchor))
     }
 
     /// Decode is also an ownership check, not merely syntactic JSON acceptance.

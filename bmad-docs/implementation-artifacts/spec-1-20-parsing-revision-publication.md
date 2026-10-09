@@ -670,3 +670,58 @@ and typed native glyph provenance, decode the output through the existing owners
 validator, and prove invalid text/provenance/identity/mapping fails rather than becoming
 nonempty arbitrary bytes. No helper/SDK/app execution, external calibration claim,
 protected-trial renewal, new database/authority or geometry fallback is admitted.
+
+### Sole canonical codec binding — authored source handoff
+
+Authored against preimplementation Spec commit2f20b6a after input-factory featurec98764f.
+Exactly four files are changed in this slice:
+- `PaperLensApp/Application/CanonicalExtractionGeometry.swift`: internal static
+  `CanonicalExtractionGeometryValidator.encodeCanonicalAnchor(_:) throws -> Data`
+  holds the existing version1 `EncodedAnchor` JSON encoder with sorted keys.
+  Ownership-aware `validateAndEncode` calls it only after ownership and original
+  UTF-8 quote validation; the existing ownership-aware decoder is unchanged.
+- `PaperLensApp/Application/ExtractionRevisionService.swift`: public
+  `PDFiumGeometryBinding.init(precision:mapPage:)` retains required explicit
+  `PDFGeometryPrecision` and throwing Sendable `PDFiumRawPage` mapping. The arbitrary
+  `encodeCanonicalAnchor` field/initializer argument and nonempty-byte acceptance
+  are removed outright. `PDFiumGeometryValidator` invokes the shared internal codec
+  only after its unchanged native identity/raw-page/rotation/text/native-character/
+  UTF-16/matrix/quad/bounds/roundtrip checks and immutable Domain anchor construction.
+- `Tests/Product/CanonicalExtractionGeometryTests.swift`: four focused tests authored
+  using typed `PDFiumRawPage`, `PDFiumGlyph`, raw quads and actual
+  `ExtractionSentenceIdentity`, explicit synthetic precision and coordinate mapping.
+  Good encoding is decoded with an independently supplied actual owning fixture
+  anchor, compares identity/original UTF-8 quote/page/ordered quads/version and exact
+  canonical encoder bytes, and rejects empty owning membership. Negative cases cover
+  every identity component, wrong raw page, mapping page/rotation and raw rotation,
+  canonically equal but byte-different source text and reconstructed glyph text,
+  native-character and UTF-16 gaps, unsupported glyph matrix, out-of-page mapping
+  and reader roundtrip loss. Invalid surrogate length and missing nonwhitespace quad
+  are rejected by the typed glyph initializer before validator/codec admission;
+  whitespace without a quad is exercised by the valid fixture.
+- This existing Spec records the authored handoff; no new document or membership,
+  Package/native source registration, database, UI or geometry mapping implementation
+  is added.
+
+Source-only limitations: no tests, builds, gates, lint, formatter, SDK, helper/app
+execution or external retrieval were run for this authored slice. Parent owns focused
+CanonicalExtractionGeometryTests, aggregate Product/native compilation verification,
+independent review, evidence and local commit. Tests are authored, not claimed passing.
+Fixture mapping/precision is not calibrated native geometry, owning membership is not
+fabricated by codec reuse, and production geometry/activation remains blocked. No
+AD8/P1/P2/P3/StoryDone acceptance, runtime resource proof, privacy relaxation or renewed
+trial follows from source, tests or compilation.
+
+### Sole canonical codec — parent verification
+
+Four new typed-native/canonical codec cases passed within 261 Product tests, zero
+failures (artifact945). Fresh unsigned native arm64/macOS15 Release compilation
+passed in native-p (artifact946); no application/helper binary ran. Independent
+review65 returned SOURCE-ONLY CLEAR / APPROVE for the exact three-source-file delta:
+5fb7d2a2bc62190d68d07a87a01382889ade348bf79fae08bf4584ce86c548e8
+against preimplementation2f20b6a. Existing input/pin/resource reviews are reused.
+
+Canonical serialization is now genuinely composed. Native mapping/calibration and
+production activation remain incomplete; owning membership is not inferred from
+encoded bytes, synthetic mappings or successful codec roundtrips. Story/Epic/protected
+acceptance remains false. No protected trial, remote or release action occurred.

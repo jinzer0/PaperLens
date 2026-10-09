@@ -65,6 +65,157 @@ final class CanonicalExtractionGeometryTests: XCTestCase {
         }
     }
 
+    private func nativeQuad(_ quad: PDFQuad) throws -> PDFiumRawQuad {
+        try PDFiumRawQuad(topLeftX: quad.topLeft.x - 10, topLeftY: quad.topLeft.y - 20,
+                          topRightX: quad.topRight.x - 10, topRightY: quad.topRight.y - 20,
+                          bottomRightX: quad.bottomRight.x - 10, bottomRightY: quad.bottomRight.y - 20,
+                          bottomLeftX: quad.bottomLeft.x - 10, bottomLeftY: quad.bottomLeft.y - 20)
+    }
+
+    private func glyph(_ scalar: UInt32, native: Int, start: Int, length: Int,
+                       quad: PDFiumRawQuad?, matrixB: Double = 0) throws -> PDFiumGlyph {
+        try PDFiumGlyph(nativeCharacterIndex: native, unicodeScalar: scalar,
+                        utf16Start: start, utf16Length: length, generated: false,
+                        matrixA: 1, matrixB: matrixB, matrixC: 0, matrixD: 1,
+                        matrixE: 0, matrixF: 0, rawQuad: quad)
+    }
+
+    private func nativeFixture() throws -> (PDFSentenceAnchor, PDFiumGeometryInput, PDFiumPageMapping) {
+        // Explicit owned synthetic coordinates, not a PDFium calibration or production profile.
+        let owner = try anchor(quote: "A 😀")
+        let bounds = try PDFiumRawQuad(topLeftX: 0, topLeftY: 200, topRightX: 100, topRightY: 200,
+                                      bottomRightX: 100, bottomRightY: 0, bottomLeftX: 0, bottomLeftY: 0)
+        let rawPage = try PDFiumRawPage(pageIndex: 0, boundingBox: bounds, mediaBox: bounds,
+                                       cropBox: bounds, rotationQuarterTurns: 0)
+        let glyphs = try [glyph(65, native: 4, start: 8, length: 1, quad: nativeQuad(owner.quads[0])),
+                         glyph(32, native: 5, start: 9, length: 1, quad: nil),
+                         glyph(0x1F600, native: 6, start: 10, length: 2, quad: nativeQuad(owner.quads[1]))]
+        let input = PDFiumGeometryInput(identity: identity(), sourceText: owner.fullSourceQuote,
+                                       nativeStartCharacter: 4, nativeCharacterCount: 3,
+                                       rawPage: rawPage, glyphs: glyphs)
+        let mapping = try PDFiumPageMapping(
+            page: owner.page, rawToCanonical: PDFGeometryAffine(a: 1, b: 0, c: 0, d: 1, tx: 10, ty: 20),
+            canonicalToReader: PDFGeometryAffine(a: 2, b: 0, c: 0, d: -2, tx: 0, ty: 440))
+        return (owner, input, mapping)
+    }
+
+    private func nativeValidator(_ mapping: PDFiumPageMapping) throws -> PDFiumGeometryValidator {
+        try PDFiumGeometryValidator(binding: PDFiumGeometryBinding(
+            precision: PDFGeometryPrecision(maximumErrorPDFPoints: 0), mapPage: { _ in mapping }))
+    }
+
+    private func replacing(_ input: PDFiumGeometryInput, text: String? = nil, page: PDFiumRawPage? = nil,
+                           glyphs: [PDFiumGlyph]? = nil) -> PDFiumGeometryInput {
+        PDFiumGeometryInput(identity: input.identity, sourceText: text ?? input.sourceText,
+                            nativeStartCharacter: input.nativeStartCharacter,
+                            nativeCharacterCount: input.nativeCharacterCount,
+                            rawPage: page ?? input.rawPage, glyphs: glyphs ?? input.glyphs)
+    }
+
+    func testNativeGeometryUsesOwningCanonicalCodecBytesAndDecoder() throws {
+        let (owner, input, mapping) = try nativeFixture()
+        let native = try nativeValidator(mapping).validateAndEncode(input, identity: identity(),
+                                                                   expectedText: owner.fullSourceQuote)
+        let codec = try validator([owner])
+        let decoded = try codec.decodeAndValidate(native.canonicalBytes, identity: identity())
+        XCTAssertEqual(decoded.identity, owner.identity)
+        XCTAssertTrue(decoded.fullSourceQuote.utf8.elementsEqual(owner.fullSourceQuote.utf8))
+        XCTAssertEqual(decoded.page, owner.page)
+        XCTAssertEqual(decoded.quads, owner.quads)
+        XCTAssertEqual(native.quadCount, owner.quads.count)
+        XCTAssertEqual(native.canonicalBytes, try encode(owner, with: codec).canonicalBytes)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: native.canonicalBytes) as? [String: Any])
+        XCTAssertEqual(object["version"] as? Int, 1)
+        assertError(PDFGeometryError.unknownSentence) {
+            try validator([]).decodeAndValidate(native.canonicalBytes, identity: identity())
+        }
+    }
+
+    func testNativeCodecRejectsIdentityRawPageAndByteDifferentText() throws {
+        let (owner, input, mapping) = try nativeFixture()
+        let native = try nativeValidator(mapping)
+        let keys = [identity(paper: UUID(uuidString: "00000000-0000-4000-8000-000000000003")!),
+                    identity(hash: String(repeating: "b", count: 64)),
+                    identity(revision: UUID(uuidString: "00000000-0000-4000-8000-000000000004")!),
+                    identity(page: 1), identity(sentence: 8)]
+        for key in keys {
+            assertError(ExtractionError.invalidBatch) {
+                try native.validateAndEncode(input, identity: key, expectedText: owner.fullSourceQuote)
+            }
+        }
+        let wrongPage = try PDFiumRawPage(pageIndex: 1, boundingBox: input.rawPage.boundingBox,
+                                         mediaBox: nil, cropBox: nil, rotationQuarterTurns: 0)
+        assertError(ExtractionError.invalidBatch) {
+            try native.validateAndEncode(replacing(input, page: wrongPage), identity: identity(),
+                                         expectedText: owner.fullSourceQuote)
+        }
+        let composedGlyph = try glyph(0xE9, native: 4, start: 8, length: 1, quad: input.glyphs[0].rawQuad)
+        let composed = PDFiumGeometryInput(identity: identity(), sourceText: "é", nativeStartCharacter: 4,
+                                          nativeCharacterCount: 1, rawPage: input.rawPage, glyphs: [composedGlyph])
+        XCTAssertEqual("é", "é")
+        assertError(ExtractionError.invalidBatch) {
+            try native.validateAndEncode(composed, identity: identity(), expectedText: "é")
+        }
+        assertError(PDFGeometryError.malformedGeometry) {
+            try native.validateAndEncode(replacing(composed, text: "é"), identity: identity(), expectedText: "é")
+        }
+    }
+
+    func testNativeCodecRejectsGlyphGapsUTF16UnsupportedMatrixAndMissingQuad() throws {
+        let (owner, input, mapping) = try nativeFixture()
+        let native = try nativeValidator(mapping)
+        for (nativeIndex, start) in [(7, 10), (6, 11)] {
+            let changed = try glyph(0x1F600, native: nativeIndex, start: start, length: 2,
+                                    quad: input.glyphs[2].rawQuad)
+            assertError(PDFGeometryError.malformedGeometry) {
+                try native.validateAndEncode(replacing(input, glyphs: [input.glyphs[0], input.glyphs[1], changed]),
+                                             identity: identity(), expectedText: owner.fullSourceQuote)
+            }
+        }
+        let skewed = try glyph(65, native: 4, start: 8, length: 1, quad: input.glyphs[0].rawQuad, matrixB: 1)
+        assertError(PDFGeometryError.unsupportedRotation) {
+            try native.validateAndEncode(replacing(input, glyphs: [skewed, input.glyphs[1], input.glyphs[2]]),
+                                         identity: identity(), expectedText: owner.fullSourceQuote)
+        }
+        // DTO admission rejects these before a malformed glyph can reach the codec.
+        XCTAssertThrowsError(try glyph(0x1F600, native: 6, start: 10, length: 1,
+                                       quad: input.glyphs[2].rawQuad)) {
+            XCTAssertEqual(($0 as? PDFiumFailure)?.code, .unmappableText)
+        }
+        XCTAssertThrowsError(try glyph(65, native: 4, start: 8, length: 1, quad: nil)) {
+            XCTAssertEqual(($0 as? PDFiumFailure)?.code, .unmappableText)
+        }
+    }
+
+    func testNativeCodecRejectsMappingPageRotationBoundsAndRoundtripLoss() throws {
+        let (owner, input, mapping) = try nativeFixture()
+        for page in [try anchor(identity: identity(page: 1)).page, try anchor(rotation: 90).page] {
+            let wrong = PDFiumPageMapping(page: page, rawToCanonical: mapping.rawToCanonical,
+                                          canonicalToReader: mapping.canonicalToReader)
+            assertError(PDFGeometryError.identityMismatch) {
+                try nativeValidator(wrong).validateAndEncode(input, identity: identity(),
+                                                             expectedText: owner.fullSourceQuote)
+            }
+        }
+        let rotatedRaw = try PDFiumRawPage(pageIndex: 0, boundingBox: input.rawPage.boundingBox,
+                                          mediaBox: nil, cropBox: nil, rotationQuarterTurns: 1)
+        assertError(PDFGeometryError.identityMismatch) {
+            try nativeValidator(mapping).validateAndEncode(replacing(input, page: rotatedRaw),
+                                                           identity: identity(), expectedText: owner.fullSourceQuote)
+        }
+        let outside = try PDFiumPageMapping(page: owner.page,
+            rawToCanonical: PDFGeometryAffine(a: 1, b: 0, c: 0, d: 1, tx: 1000, ty: 20),
+            canonicalToReader: mapping.canonicalToReader)
+        assertError(PDFGeometryError.outsidePage) {
+            try nativeValidator(outside).validateAndEncode(input, identity: identity(), expectedText: owner.fullSourceQuote)
+        }
+        let lossy = try PDFiumPageMapping(page: owner.page, rawToCanonical: mapping.rawToCanonical,
+            canonicalToReader: PDFGeometryAffine(a: 1, b: 0, c: 0, d: 1, tx: 1e20, ty: 1e20))
+        assertError(PDFGeometryError.roundtripExceeded) {
+            try nativeValidator(lossy).validateAndEncode(input, identity: identity(), expectedText: owner.fullSourceQuote)
+        }
+    }
+
     func testCanonicalCodecPreservesFullExtentCropOriginRotationAndOrderedVertices() throws {
         for rotation in [0, 90, 180, 270] {
             let original = try anchor(rotation: rotation)
