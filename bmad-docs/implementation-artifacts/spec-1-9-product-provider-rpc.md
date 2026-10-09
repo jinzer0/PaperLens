@@ -99,3 +99,46 @@ Parent verifies shared framing/schema vectors; fragmented/coalesced/zero/oversiz
 No tests, gates, SDK/auth/network/GUI/signing or implementation ran for this Spec. Architect37 provided read-only proposal, COMMENT on planning; parent corrected the conditional slices to include both directly affected language test suites and replaced ambiguous “Story1.7 certification” wording with local contract/parity.
 
 Done requires actual prerequisite passes, exact final admitted schema, paired observable validation, SDK-backed cancellation/cleanup, obsolete-path removal and independent review. This planning commit alone satisfies none of those feature/gate claims.
+
+## Actual owned native pipe transport — bounded local admission
+
+Architect67 admits one source-only transport slice independent of the missing SDK/product
+dispatch decisions above. Implement the existing AgentRPCChannel with genuine exclusive
+Main-owned stdout-read/stdin-write FIFO FileHandles; do not start a process, SDK, helper,
+app or network peer. No product protocol/method/capability or authentication is invented.
+Fixed-v1 ProviderRPC remains the sole framing/queue/deadline authority: maximum body65536
+and frame65540 bytes. This admits transport, not product endpoint activation or Story Done.
+
+Before effects, require both fstat/F_GETFL checks: distinct descriptors and FIFO identities,
+read exactly O_RDONLY, write exactly O_WRONLY; refuse files/dirs/sockets/O_RDWR/invalid
+and paired FIFO aliases. Exclusive transfer is a caller ownership obligation: public
+inspection cannot prove absence of arbitrary external dup aliases/users/handlers/closers.
+After preflight capture ownership through setup failures. Preserve existing flags, set
+and verify O_NONBLOCK, set/verify writer F_SETNOSIGPIPE/F_GETNOSIGPIPE using public macOS
+sys/fcntl.h73/74 before any write. No global signal handler, socket or guessed fallback.
+
+One serial native execution lane, one pending read and one pending write; reject same-
+direction overlaps instead of queuing. Bound retained frame/read chunk by existing
+authority; handle short I/O/EINTR/EAGAIN through readiness, not blocking Foundation I/O
+or new guessed wait bounds. Aggregate timeouts remain with AgentConnectionLifecycle.
+
+requestClose synchronously revokes/unblocks; cancel readiness sources and recheck stale
+callbacks. Join source cancellation and syscall quiescence before checked FileHandle.close
+once per endpoint. Retain separate closed/unknown outcomes and actual handle/owner debt
+strongly on uncertainty, with no retry, destructor proof or numeric-FD closure inference.
+Peer read-zero initiates duplex shutdown; read returns nil/closure callback only after
+both physical closes succeed. Debt throws, never reports closed. Lifecycle native factory
+binds the genuine duplex outcome before I/O; only both-closed calls transportDidClose.
+Existing decoder.finish and reader/writer loop joins remain unchanged. Local endpoint
+closure proves no SDK termination/reaping/authentication/scoped-content purge.
+
+Exact worker scope: new Adapters/OwnedPipeAgentRPCChannel.swift, existing
+Application/AgentConnectionLifecycle.swift, new Tests/Product/OwnedPipeAgentRPCChannelTests.swift,
+and this Spec. Parent owns Package/native registration, permitted local-Pipe verification,
+independent review/evidence/local commit. No authority/AgentRPCConnection/SDK changes.
+Local owned-FD tests cover validation, bounded/short/backpressured I/O, overlaps, revocation,
+EOF versus duplex closure, real EPIPE survival after verified no-SIGPIPE, and unknown-close
+retention/no retry. Test-only injected close failure is not physical closure proof. If FIFO
+no-SIGPIPE setup/readback or EPIPE safety fails, refuse; do not broaden privileges.
+Existing product/renderer/live/collector trials remain unrenewed; no remote/release action
+or privacy/profile/Story acceptance follows from transport source or owned-pipe tests.
