@@ -6,23 +6,26 @@ public struct LibraryBrowserView: View {
   private let sortFacts: @Sendable () async throws -> [OrganizationSortFacts]
   private let openPaper: @MainActor (OrganizedPaper) async throws -> Void
   private let importPDF: @MainActor () -> Void
-  @State private var snapshot: OrganizationSnapshot?
+  private let refreshRevision: Int
+  @State private var query = OrganizationQueryState()
   @State private var currentFacts: [UUID: OrganizationSortFacts] = [:]
-  @State private var filter = OrganizationFilter()
-  @State private var loading = true
-  @State private var loadFailed = false
+  @Binding private var filter: OrganizationFilter
   @State private var operationFailed = false
   @State private var busy = false
-  @State private var revision = 0
   @State private var deleting: OrganizedPaper?
   @State private var editing: OrganizedPaper?
   @FocusState private var focusedPaper: UUID?
+  private var snapshot: OrganizationSnapshot? { query.snapshot }
+  private var loading: Bool { query.loading }
+  private var loadFailed: Bool { query.failed }
 
   public init(service: LibraryOrganizationService,
+    filter: Binding<OrganizationFilter>, refreshRevision: Int,
     sortFacts: @escaping @Sendable () async throws -> [OrganizationSortFacts],
     openPaper: @escaping @MainActor (OrganizedPaper) async throws -> Void,
     importPDF: @escaping @MainActor () -> Void) {
     self.service = service; self.sortFacts = sortFacts
+    _filter = filter; self.refreshRevision = refreshRevision
     self.openPaper = openPaper; self.importPDF = importPDF
   }
 
@@ -32,7 +35,7 @@ public struct LibraryBrowserView: View {
         Text("Library").font(.largeTitle)
         Spacer()
         Button("PDF 추가", action: importPDF)
-        Button("새로고침") { Task { await refresh() } }
+        Button("새로고침") { refresh() }.disabled(busy)
       }
       TextField("제목 또는 사용자 태그 검색", text: $filter.search)
         .textFieldStyle(.roundedBorder)
@@ -70,7 +73,7 @@ public struct LibraryBrowserView: View {
       if loadFailed {
         ContentUnavailableView("불러오기 실패", systemImage: "exclamationmark.triangle",
           description: Text("저장된 값을 확인할 수 없습니다. 다시 불러오세요."))
-        Button("다시 불러오기") { Task { await refresh() } }
+        Button("다시 불러오기") { refresh() }.disabled(busy)
       } else if loading {
         ProgressView("라이브러리 불러오는 중")
       } else if let snapshot {
@@ -97,8 +100,9 @@ public struct LibraryBrowserView: View {
       }
     }
     .padding()
-    .task { await refresh() }
-    .onChange(of: filter) { _, _ in Task { await refresh() } }
+    .task(id: refreshRevision) { refresh() }
+    .onDisappear { query.invalidate() }
+    .onChange(of: filter) { _, _ in refresh() }
     .alert("논문을 영구 삭제하시겠습니까?",
       isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }), presenting: deleting) { paper in
         Button("삭제", role: .destructive) { deleting = nil; perform { try await service.delete(paper, retry: false) } }
@@ -109,10 +113,17 @@ public struct LibraryBrowserView: View {
     .alert("저장 또는 작업 실패", isPresented: $operationFailed) {
       Button("확인", role: .cancel) {}
     } message: { Text("성공으로 저장되지 않았습니다. 새로 불러온 현재 상태를 확인하세요.") }
-    .sheet(item: $editing, onDismiss: { Task { await refresh() } }) { paper in
-      OrganizationEditor(paper: paper) { value in
-        try await service.save(value, for: paper)
-      }
+    .sheet(item: $editing, onDismiss: { refresh() }) { paper in
+      OrganizationEditor(paper: paper, save: { value, observed in
+        busy = true; query.invalidate()
+        do {
+          try await service.save(value, for: observed)
+          busy = false; refresh()
+        } catch {
+          busy = false; refresh()
+          throw error
+        }
+      }, revalidate: { observed in try await service.revalidate(observed) })
       .onDisappear { focusedPaper = paper.id }
     }
   }
@@ -148,26 +159,26 @@ public struct LibraryBrowserView: View {
   }
   private func perform(_ operation: @escaping @MainActor () async throws -> Void) {
     guard !busy else { return }
-    busy = true
+    busy = true; query.invalidate()
     Task {
       do { try await operation() } catch { operationFailed = true }
-      await refresh(); busy = false
+      busy = false; refresh()
     }
   }
-  private func refresh() async {
-    revision += 1
-    let request = revision, requestedFilter = filter
-    loading = true
+  private func refresh() {
+    guard !busy else { return }
+    let request = query.begin(filter: filter)
+    Task { await load(request) }
+  }
+  private func load(_ request: OrganizationQueryState.Request) async {
     do {
       let facts = try await sortFacts()
-      let value = try await service.snapshot(filter: requestedFilter, facts: facts)
-      guard request == revision else { return }
+      let value = try await service.snapshot(filter: request.filter, facts: facts)
+      guard query.accept(value, request: request, currentFilter: filter) else { return }
       let generations = Dictionary(uniqueKeysWithValues: value.papers.map { ($0.id, $0.generation) })
       currentFacts = Dictionary(uniqueKeysWithValues: facts.filter { generations[$0.paperID] == $0.generation }.map { ($0.paperID, $0) })
-      snapshot = value; loadFailed = false; loading = false
     } catch {
-      guard request == revision else { return }
-      loadFailed = true; loading = false
+      query.reject(request: request, currentFilter: filter)
     }
   }
   private func readingLabel(_ status: PaperReadingStatus) -> String {
@@ -186,30 +197,48 @@ public struct LibraryBrowserView: View {
 }
 
 @MainActor private struct OrganizationEditor: View {
-  let paper: OrganizedPaper
-  let save: @MainActor (PaperOrganization) async throws -> Void
+  let save: @MainActor (PaperOrganization, OrganizedPaper) async throws -> Void
+  let revalidate: @MainActor (OrganizedPaper) async throws -> OrganizedPaper
   @Environment(\.dismiss) private var dismiss
+  @State private var observed: OrganizedPaper
   @State private var value: PaperOrganization
   @State private var tags: String
   @State private var busy = false
   @State private var failed = false
-  init(paper: OrganizedPaper, save: @escaping @MainActor (PaperOrganization) async throws -> Void) {
-    self.paper = paper; self.save = save
+  init(paper: OrganizedPaper,
+    save: @escaping @MainActor (PaperOrganization, OrganizedPaper) async throws -> Void,
+    revalidate: @escaping @MainActor (OrganizedPaper) async throws -> OrganizedPaper) {
+    self.save = save; self.revalidate = revalidate
+    _observed = State(initialValue: paper)
     _value = State(initialValue: paper.organization)
     _tags = State(initialValue: paper.organization.tags.joined(separator: "\n"))
   }
   var body: some View {
     Form {
-      Text(paper.title).font(.headline)
+      Text(observed.title).font(.headline)
       Picker("읽기 상태", selection: $value.readingStatus) {
         Text("읽지 않음").tag(PaperReadingStatus.unread)
         Text("읽는 중").tag(PaperReadingStatus.reading)
         Text("읽음").tag(PaperReadingStatus.read)
-      }
-      Toggle("즐겨찾기", isOn: $value.favorite)
+      }.disabled(busy)
+      Toggle("즐겨찾기", isOn: $value.favorite).disabled(busy)
       Text("사용자 태그 · 한 줄에 하나 (최대 100개, 각 80자)")
-      TextEditor(text: $tags).frame(minHeight: 120).accessibilityLabel("사용자 태그")
-      if failed { Text("저장 실패 · 현재 Paper와 PDF 상태를 확인하세요.") }
+      TextEditor(text: $tags).frame(minHeight: 120).accessibilityLabel("사용자 태그").disabled(busy)
+      if failed {
+        Text("저장 실패 · 이전 값은 덮어쓰지 않았습니다. 현재 저장값을 다시 확인한 뒤 편집하세요.")
+        Button("현재 저장값 확인 후 다시 시도") {
+          busy = true
+          Task {
+            do {
+              let current = try await revalidate(observed)
+              observed = current; value = current.organization
+              tags = current.organization.tags.joined(separator: "\n")
+              failed = false
+            } catch { failed = true }
+            busy = false
+          }
+        }.disabled(busy)
+      }
       HStack {
         Button("취소", role: .cancel) { dismiss() }
         Button("저장") {
@@ -217,10 +246,10 @@ public struct LibraryBrowserView: View {
           var draft = value
           draft.tags = tags.split(separator: "\n").map(String.init)
           Task {
-            do { try await save(draft); dismiss() }
+            do { try await save(draft, observed); dismiss() }
             catch { failed = true; busy = false }
           }
-        }
+        }.disabled(failed)
       }.disabled(busy)
     }.padding().frame(minWidth: 400).interactiveDismissDisabled(busy)
   }

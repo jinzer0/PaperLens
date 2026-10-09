@@ -9,6 +9,7 @@
     "Owned immutable local PDF copy with copied-digest revalidation and transactional confirmed folder association",
     "Persistent Library list/grid, ordering, tags, favorites and reading status",
     "Actual Reader navigation/search/selection/position persistence with lifecycle-owned read leases and synchronous revoke/drain",
+    "Whole-observed-organization GRDB CAS, reverse query result arbitration and workspace-owned session filters across Reader/import refresh",
     "Real bounded HTTPS/arXiv transport, consumed confirmation, one actual Paper/ImportJob, actual closed-stage validation and same-identity publication",
     "Mounted URL confirmation/download/cancel/retry and explicit Reader-open action; persisted folder UUID or Unfiled is captured before Continue and duplicate status remains unverified before download",
     "Shared native Settings reconnection owner",
@@ -18,9 +19,9 @@
   "verification": {
     "productUnion": {
       "command": "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --filter ProductTests",
-      "tests": 129,
+      "tests": 137,
       "failures": 0,
-      "output": "artifact://617",
+      "output": "artifact://788",
       "evidence": "Real GRDB transactions and owned synthetic files; mocked provider/HTTP transport and synthetic windowless PDFKit conversions. Not authenticated provider, app UI or PDFium execution."
     },
     "nativeCompilation": {
@@ -28,11 +29,11 @@
       "configuration": "Release",
       "architecture": "arm64",
       "minimumOS": "15.0",
-      "derivedData": ".build/product-native-compile-20261010-d",
+      "derivedData": ".build/product-native-compile-20261010-e",
       "codeSigningAllowed": false,
       "result": "BUILD SUCCEEDED",
-      "rawOutput": "artifact://618",
-      "output": "artifact://619",
+      "rawOutput": "artifact://792",
+      "output": "artifact://793",
       "applicationAndHelperBinariesExecuted": false,
       "warnings": "AppIntents metadata skipped and PDFium debug-map duplicate/missing-symbol warnings remain; no warning suppression or debug-symbol repair claimed."
     },
@@ -45,7 +46,8 @@
     },
     "independentReviews": [
       {"reviewer": "34-ProductEntryPersistenceReview", "result": "CLEAR / APPROVE after busy-owner and permanent-retirement fixes", "scope": "Native credential owner lifetime and model-bound durable selector; source review only"},
-      {"reviewer": "38-ActualProductLifetimeReview", "result": "CLEAR / APPROVE", "output": "agent://38-ActualProductLifetimeReview", "scope": "Five-file Reader/deletion/URL writer shared-lifetime bundle; source review only, current workspace lifetime bindings reread"}
+      {"reviewer": "38-ActualProductLifetimeReview", "result": "CLEAR / APPROVE", "output": "agent://38-ActualProductLifetimeReview", "scope": "Five-file Reader/deletion/URL writer shared-lifetime bundle; source review only, current workspace lifetime bindings reread"},
+      {"reviewer": "42-OrganizationAggregateReview", "result": "CLEAR / APPROVE", "output": "agent://42-OrganizationAggregateReview", "scope": "Five-file expected-value CAS, editor recovery, query acceptance and parent-held filter binding; source review only, not native UI/Story acceptance"}
     ]
   },
   "previousIntegrationEvidence": {
@@ -56,6 +58,12 @@
     "nativeDerivedData": ".build/product-native-compile-20261010-c"
   },
   "annotationBindingEvidence": {
+    "verifiedSourceCommit": "45acff8",
+    "priorProductTests": 129,
+    "priorUnionOutput": "artifact://617",
+    "priorNativeRawOutput": "artifact://618",
+    "priorNativeOutput": "artifact://619",
+    "priorNativeDerivedData": ".build/product-native-compile-20261010-d",
     "regressionTests": 12,
     "coverage": "Owned real PDFKit text selection, GRDB highlight/note persistence and native reveal; immutable drafts, cancel/storage failures, revision CAS, stale identity, registry/reentrant revocation, active-read pinning, weak document lifetime and pre-clipboard rejection",
     "visibleUIAndSuccessfulClipboardVerified": false

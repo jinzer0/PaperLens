@@ -55,7 +55,41 @@ public struct OrganizationSnapshot: Sendable {
   public let papers: [OrganizedPaper]
 }
 public enum OrganizationError: Error, Equatable, Sendable {
-  case stalePaper, unavailablePDF, invalidTags, invalidSortFacts
+  case stalePaper, staleOrganization, unavailablePDF, invalidTags, invalidSortFacts
+}
+
+/// The UI invalidates synchronously before starting asynchronous queries or mutations.
+/// Only the current revision and captured conditions may publish success or failure.
+public struct OrganizationQueryState {
+  public struct Request: Equatable, Sendable {
+    fileprivate let revision: Int
+    public let filter: OrganizationFilter
+  }
+  public private(set) var snapshot: OrganizationSnapshot?
+  public private(set) var loading = true
+  public private(set) var failed = false
+  private var revision = 0
+  public init() {}
+  public mutating func invalidate() {
+    revision += 1
+    loading = true
+    failed = false
+  }
+  public mutating func begin(filter: OrganizationFilter) -> Request {
+    invalidate()
+    return Request(revision: revision, filter: filter)
+  }
+  @discardableResult
+  public mutating func accept(_ value: OrganizationSnapshot, request: Request,
+    currentFilter: OrganizationFilter) -> Bool {
+    guard request.revision == revision, request.filter == currentFilter else { return false }
+    snapshot = value; loading = false; failed = false
+    return true
+  }
+  public mutating func reject(request: Request, currentFilter: OrganizationFilter) {
+    guard request.revision == revision, request.filter == currentFilter else { return }
+    loading = false; failed = true
+  }
 }
 
 /// SQL and filesystem checks live exclusively in the Infrastructure adapter.
@@ -106,7 +140,19 @@ public actor LibraryOrganizationService {
   public func save(_ organization: PaperOrganization, for paper: OrganizedPaper) async throws {
     let database = database
     try await Task.detached {
-      try database.updatePaperOrganization(paperID: paper.id, generation: paper.generation, value: organization)
+      try database.updatePaperOrganization(paperID: paper.id, generation: paper.generation,
+        expected: paper.organization, value: organization)
+    }.value
+  }
+  /// Retry does not silently rebase the failed whole-record draft onto newer values.
+  public func revalidate(_ paper: OrganizedPaper) async throws -> OrganizedPaper {
+    let database = database
+    return try await Task.detached {
+      let snapshot = try database.organizationSnapshot(filter: .init())
+      guard let current = snapshot.papers.first(where: { $0.id == paper.id && $0.generation == paper.generation })
+      else { throw OrganizationError.stalePaper }
+      try database.admitOrganizationOpen(paperID: current.id, generation: current.generation)
+      return current
     }.value
   }
   public func admitOpen(_ paper: OrganizedPaper) async throws {

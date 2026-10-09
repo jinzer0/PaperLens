@@ -34,6 +34,7 @@ public final class ProductWorkspace: ObservableObject {
   private var scopedSource: URL?
   private var pendingConfirmation: UUID?
   @Published public var sheet: Sheet?
+  @Published public var libraryFilter = OrganizationFilter()
   @Published public private(set) var reader: OpenReader?
   @Published public private(set) var revision = 0
   @Published public private(set) var preparing = false
@@ -196,9 +197,9 @@ public struct ProductWorkspaceView: View {
           chooseLocalPDF: { workspace.pickPDF() },
           confirmLocalPDF: { workspace.acceptDroppedPDF($0) }) {
             LibraryBrowserView(service: workspace.organization,
+              filter: $workspace.libraryFilter, refreshRevision: workspace.revision,
               sortFacts: { try await workspace.sortFacts() },
               openPaper: { try await workspace.open($0) }, importPDF: { workspace.pickPDF() })
-              .id(workspace.revision)
           }
           .onChange(of: urls.state) {
             if case .ready(let paper) = urls.state { workspace.imported(paper) }

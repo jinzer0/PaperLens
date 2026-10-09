@@ -88,7 +88,8 @@ extension ProductDatabase {
     }
   }
 
-  public func updatePaperOrganization(paperID: UUID, generation: UUID, value: PaperOrganization) throws {
+  public func updatePaperOrganization(paperID: UUID, generation: UUID,
+    expected: PaperOrganization, value: PaperOrganization) throws {
     var normalized: Set<String> = []
     let labels = try value.tags.map { label -> (String, String) in
       let label = label.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -101,6 +102,21 @@ extension ProductDatabase {
     try adapterWrite { db in
       let row = try currentOrganizationPaper(db, paperID: paperID, generation: generation)
       try validateOrganizationPDF(row, verifyDigest: true)
+      let stored = try Row.fetchOne(db, sql: """
+        SELECT readingStatus, favorite FROM paperOrganization WHERE paperID = ? AND generation = ?
+        """, arguments: [paperID.uuidString, generation.uuidString])
+      let current: PaperOrganization
+      if let stored {
+        guard let status = PaperReadingStatus(rawValue: stored["readingStatus"])
+        else { throw ProductDatabaseError.invalidRecord }
+        let tags = try String.fetchAll(db, sql: """
+          SELECT label FROM paperUserTag WHERE paperID = ? ORDER BY normalized, label
+          """, arguments: [paperID.uuidString])
+        current = PaperOrganization(readingStatus: status, favorite: stored["favorite"], tags: tags)
+      } else {
+        current = PaperOrganization()
+      }
+      guard current == expected else { throw OrganizationError.staleOrganization }
       try db.execute(sql: """
         INSERT INTO paperOrganization(paperID, generation, readingStatus, favorite) VALUES (?, ?, ?, ?)
         ON CONFLICT(paperID) DO UPDATE SET generation = excluded.generation,

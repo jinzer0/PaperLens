@@ -75,6 +75,30 @@ import ProviderRequest
     return try XCTUnwrap(snapshot.papers.first(where: { $0.id == id }))
   }
 
+  func testStoredFilterProjectionSurvivesReaderReturnAndImportRefresh() async throws {
+    let f = try await fixture()
+    let selectedID = try await importSelected(f)
+    let observed = try await paper(f, id: selectedID)
+    try await f.workspace.organization.save(
+      .init(readingStatus: .reading, favorite: true, tags: ["유지"]), for: observed)
+    f.workspace.libraryFilter.favoritesOnly = true
+    f.workspace.libraryFilter.readingStatus = .reading
+    f.workspace.libraryFilter.tag = "유지"
+    let before = try await f.workspace.organization.snapshot(
+      filter: f.workspace.libraryFilter, facts: f.workspace.sortFacts())
+    XCTAssertEqual(before.papers.map(\.id), [selectedID])
+    try await f.workspace.open(try XCTUnwrap(before.papers.first))
+    let reader = try XCTUnwrap(f.workspace.reader?.session)
+    _ = try reader.open(paperID: selectedID, validateDocument: { _ in 1 }, discard: {})
+    f.workspace.returnToLibrary()
+    let unrelatedID = try await importSelected(f)
+    XCTAssertNotEqual(unrelatedID, selectedID)
+    let after = try await f.workspace.organization.snapshot(
+      filter: f.workspace.libraryFilter, facts: f.workspace.sortFacts())
+    XCTAssertEqual(after.totalCount, 2)
+    XCTAssertEqual(after.papers.map(\.id), [selectedID])
+  }
+
   func testActualWorkspaceImportDuplicateAndPersistedOrganizationBinding() async throws {
     let f = try await fixture()
     let folder = try await f.workspace.imports.createFolder(name: "Destination")
