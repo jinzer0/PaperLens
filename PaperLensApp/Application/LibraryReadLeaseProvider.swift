@@ -72,7 +72,7 @@ final class LibraryReadLeaseRegistry: @unchecked Sendable {
   private func finishClose(_ token: UUID) {
     let candidate: (Bool, FileHandle?) = lock.withLock {
       guard let entry = entries[token], entry.closeRequested, !entry.opening,
-        !entry.closing, entry.reads == 0 else { return (false, nil) }
+        !entry.closing, !entry.closureUnknown, entry.reads == 0 else { return (false, nil) }
       entries[token]!.closing = true
       return (true, entry.handle)
     }

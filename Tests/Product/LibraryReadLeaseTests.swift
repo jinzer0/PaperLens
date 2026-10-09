@@ -8,6 +8,26 @@ import XCTest
 
 private enum LeasePurgeFailure: Error { case unavailable }
 private enum SyntheticCloseFailure: Error { case refused }
+private final class SyntheticCloseEffects: @unchecked Sendable {
+  private let lock = NSLock()
+  private var attempts = 0
+  private let replacementDescriptor: Int32?
+  init(replacementDescriptor: Int32? = nil) { self.replacementDescriptor = replacementDescriptor }
+  var count: Int { lock.withLock { attempts } }
+  func refuse(_ handle: FileHandle) throws {
+    let attempt = lock.withLock { attempts += 1; return attempts }
+    if let replacementDescriptor {
+      // Atomically close the test-owned original and reuse only its owned numeric slot.
+      // No free-FD window or unrelated target is overwritten by this fixture.
+      if attempt == 1 {
+        guard dup2(replacementDescriptor, handle.fileDescriptor) == handle.fileDescriptor else {
+          throw SyntheticCloseFailure.refused
+        }
+      } else { _ = Darwin.close(handle.fileDescriptor) }
+    }
+    throw SyntheticCloseFailure.refused
+  }
+}
 private actor LeaseAgentPurge: AgentLibraryPurging {
   let root: URL
   var failing = false
@@ -134,7 +154,8 @@ private actor LeaseAgentPurge: AgentLibraryPurging {
     let lifecycle = try await LocalLibraryLifecycle.open(database: db)
     let id = try await lifecycle.importPDF(from: source)
     let snapshot = try db.readerSnapshot(paperID: id)
-    let registry = LibraryReadLeaseRegistry(closeHandle: { _ in throw SyntheticCloseFailure.refused })
+    let effects = SyntheticCloseEffects()
+    let registry = LibraryReadLeaseRegistry(closeHandle: { try effects.refuse($0) })
     let token = try registry.reserve(snapshot) {}
     let descriptor = Darwin.open(db.root.appendingPathComponent(snapshot.pdfReference).path,
       O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
@@ -147,12 +168,52 @@ private actor LeaseAgentPurge: AgentLibraryPurging {
     XCTAssertGreaterThanOrEqual(fcntl(descriptor, F_GETFD), 0)
     do { try await registry.drain(id); XCTFail("Unknown close must retain debt") }
     catch { XCTAssertEqual(error as? LocalLibraryError, .producerClosureUnknown) }
+    registry.retryClosures(id)
+    registry.close(token)
+    XCTAssertEqual(effects.count, 1, "Uncertainty prohibits retrying the physical effect")
     XCTAssertTrue(FileManager.default.fileExists(atPath: db.root.appendingPathComponent(snapshot.pdfReference).path))
     try handle.close() // Test-owned remediation does not erase registry debt.
     do { try await registry.drain(id); XCTFail("External close cannot certify registry drain") }
     catch { XCTAssertEqual(error as? LocalLibraryError, .producerClosureUnknown) }
     XCTAssertEqual(fcntl(descriptor, F_GETFD), -1)
     XCTAssertEqual(errno, EBADF)
+  }
+
+  func testUncertainCloseCannotCloseAReusedReadOnlyDescriptor() async throws {
+    let (temporary, db, source) = try fixture()
+    defer { try? FileManager.default.removeItem(at: temporary) }
+    let lifecycle = try await LocalLibraryLifecycle.open(database: db)
+    let id = try await lifecycle.importPDF(from: source)
+    let snapshot = try db.readerSnapshot(paperID: id)
+    let canary = temporary.appendingPathComponent("unrelated-owned-fixture")
+    let canaryBytes = Data("unrelated read-only descriptor must survive".utf8)
+    try canaryBytes.write(to: canary)
+    let replacement = try FileHandle(forReadingFrom: canary)
+    defer { try? replacement.close() }
+    let descriptor = Darwin.open(db.root.appendingPathComponent(snapshot.pdfReference).path,
+      O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+    guard descriptor >= 0 else { throw SyntheticCloseFailure.refused }
+    defer { _ = Darwin.close(descriptor) }
+    let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: false)
+    let effects = SyntheticCloseEffects(replacementDescriptor: replacement.fileDescriptor)
+    let registry = LibraryReadLeaseRegistry(closeHandle: { try effects.refuse($0) })
+    let token = try registry.reserve(snapshot) {}
+    try registry.install(handle, token: token)
+    try registry.beginRead(token)
+    registry.close(token)
+    XCTAssertEqual(effects.count, 0, "An active read still owns the original descriptor")
+    registry.endRead(token) // The injected uncertain close atomically reuses its numeric FD.
+    XCTAssertEqual(effects.count, 1)
+    for _ in 0..<3 { registry.retryClosures(id); registry.close(token) }
+    XCTAssertEqual(effects.count, 1)
+    XCTAssertEqual(fcntl(descriptor, F_GETFL) & O_ACCMODE, O_RDONLY)
+    XCTAssertGreaterThanOrEqual(fcntl(descriptor, F_GETFD), 0)
+    let borrowed = FileHandle(fileDescriptor: descriptor, closeOnDealloc: false)
+    XCTAssertEqual(try borrowed.readToEnd(), canaryBytes)
+    XCTAssertEqual(try Data(contentsOf: canary), canaryBytes)
+    do { try await registry.drain(id); XCTFail("Reused FD does not prove original closure") }
+    catch { XCTAssertEqual(error as? LocalLibraryError, .producerClosureUnknown) }
+    XCTAssertThrowsError(try registry.validate(token))
   }
 
   func testFailedDeletionRetryKeepsSameSagaAndNeverReopensAdmission() async throws {

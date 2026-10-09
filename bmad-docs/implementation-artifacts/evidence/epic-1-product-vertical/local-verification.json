@@ -24,9 +24,9 @@
   "verification": {
     "productUnion": {
       "command": "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --filter ProductTests",
-      "tests": 220,
+      "tests": 221,
       "failures": 0,
-      "output": "artifact://894",
+      "output": "artifact://900",
       "evidence": "Real GRDB transactions and owned synthetic files; mocked provider/HTTP transport and synthetic windowless PDFKit conversions. Not authenticated provider, app UI or PDFium execution."
     },
     "nativeCompilation": {
@@ -34,11 +34,11 @@
       "configuration": "Release",
       "architecture": "arm64",
       "minimumOS": "15.0",
-      "derivedData": ".build/product-native-compile-20261010-g",
+      "derivedData": ".build/product-native-compile-20261010-h",
       "codeSigningAllowed": false,
       "result": "BUILD SUCCEEDED",
-      "rawOutput": "artifact://891",
-      "output": "artifact://891",
+      "rawOutput": "artifact://901",
+      "output": "artifact://901",
       "applicationAndHelperBinariesExecuted": false,
       "warnings": "AppIntents metadata skipped, PDFium debug-map duplicate/missing-symbol warnings and an unnecessary-await Swift warning remain; no warning suppression or debug-symbol repair claimed."
     },
@@ -57,7 +57,8 @@
       {"reviewer": "49-SummaryDurableGroundingReview", "result": "CLEAR / APPROVE after whole frozen-context grounding", "output": "agent://49-SummaryDurableGroundingReview", "scope": "Original unchanged-prefix forged-tail HIGH resolved across reservation/publication/restoration; source review only"},
       {"reviewer": "51-ActualStartupAdmissionReview", "result": "CLEAR / APPROVE after atomic registered-summary recovery", "output": "agent://51-ActualStartupAdmissionReview", "scope": "Original summary-before-owner-admission HIGH resolved; all three registered job kinds share the existing transaction and lifecycle epoch"},
       {"reviewer": "54-ActualReaderMetadataLifetimeReview", "result": "CLEAR / APPROVE", "output": "agent://54-ActualReaderMetadataLifetimeReview", "scope": "Actual weak-PDF metadata UI mount, data-only outline, notification observation and synchronous invalidate-before-detach/read-lease release; source review only"},
-      {"reviewer": "56-PDFiumCorrectedPublicationReview", "result": "CLEAR / APPROVE: original three HIGH and one MEDIUM RESOLVED", "output": "agent://56-PDFiumCorrectedPublicationReview", "scope": "Five-file actual helper, scoped consumer, captured budget, rejected-FD debt, exact acquisition reference, sole DB publication and Retry caller; source-only, not hard RSS/runtime/Story proof"}
+      {"reviewer": "56-PDFiumCorrectedPublicationReview", "result": "CLEAR / APPROVE: original three HIGH and one MEDIUM RESOLVED", "output": "agent://56-PDFiumCorrectedPublicationReview", "scope": "Five-file actual helper, scoped consumer, captured budget, rejected-FD debt, exact acquisition reference, sole DB publication and Retry caller; source-only, not hard RSS/runtime/Story proof"},
+      {"reviewer": "57-ReaderUncertainCloseQuarantine", "result": "CLEAR / APPROVE", "output": "agent://57-ReaderUncertainCloseQuarantine", "scope": "Single physical-close uncertainty admission, actual reused test-owned readonly FD, retained Reader debt and unchanged deletion drain/saga; source-only, no whole-Story/runtime certification"}
     ]
   },
   "previousIntegrationEvidence": {
@@ -107,6 +108,21 @@
     "scopedTests": "Eight synthetic producer ownership/cancellation/deadline/reference/reply/deep secure-coding tests and actual GRDB rollback at all four one-row guard checkpoints; not native RSS or product calibration proof",
     "helperExecuted": false,
     "actualGeometryAndResourceComposition": false,
+    "storyAccepted": false
+  },
+  "readerCloseQuarantine": {
+    "baseVerifiedCommit": "e06ae42",
+    "preImplementationSpecificationCommit": "fa5f575",
+    "sourceDiffAgainstBaseSha256": "6fe7449578155d5cb498700a3258a8adfe61506f37e9866221c464313378ad60",
+    "sourceDiffScope": "git diff --cached --binary against fa5f575 for exact staged LibraryReadLeaseProvider.swift and LibraryReadLeaseTests.swift; Spec/evidence excluded",
+    "repair": "Single physical-close guard denies closureUnknown entry re-admission from repeated close, active-read unwind and deletion retry. Actual captured handle/snapshot/debt remain; known pending closes still complete after reads cease",
+    "focusedTests": {"tests": 8, "failures": 0, "output": "artifact://896"},
+    "productUnion": {"tests": 221, "failures": 0, "output": "artifact://900"},
+    "nativeOutput": "artifact://901",
+    "nativeDerivedData": ".build/product-native-compile-20261010-h",
+    "review": "agent://57-ReaderUncertainCloseQuarantine: CLEAR / APPROVE",
+    "fixtureScope": "Atomic dup2 replacement of the owned original descriptor by another owned readonly file, never an unowned target/free-slot race; no second effect, live canary FD and exact bytes, original drain debt retained",
+    "binariesExecuted": false,
     "storyAccepted": false
   },
   "grdbPreparationDriver": {

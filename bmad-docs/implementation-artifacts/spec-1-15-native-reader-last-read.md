@@ -90,3 +90,11 @@ private API, runtime gate renewal, remote operation or Story promotion is author
 Regressions cover repeated close/delete-retry/read-unwind after uncertainty and an actual
 test-owned numeric FD reused for another read-only file: no second close effect, live
 unrelated descriptor and original data preserved, original registry debt retained.
+
+Parent implemented the single `!entry.closureUnknown` admission guard; no ownership,
+deletion saga or durable schema was replaced. Eight focused read-lease tests passed
+(`artifact://896`), including atomic test-owned FD reuse and repeated-close/deletion-retry
+quarantine. The integrated Product union passed 221 tests/zero failures (`artifact://900`).
+Full unsigned Release arm64/macOS15 native compilation succeeded in fresh native-h
+(`artifact://901`). Review57 is CLEAR / APPROVE for this concrete bounded source fix.
+No helper/app execution, signing, native UI/timing/P1/P2/P3 or Story acceptance is claimed.
