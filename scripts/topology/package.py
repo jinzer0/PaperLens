@@ -6,6 +6,7 @@ import base64
 import csv
 import email.parser
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -26,6 +27,9 @@ INHERIT = "com.apple.security.inherit"
 NETWORK = "com.apple.security.network.client"
 CHILD_RIGHTS = {SANDBOX: True, INHERIT: True}
 ARCHES = ("arm64", "x86_64")
+PREPARED_ACQUISITION = "full-acquisition-arm64-ae7a27c9-e584-40ef-a164-e9631d68d11a"
+PREPARED_RUNTIME = "runtime-assets-only-b022b900-7e64-4981-9d56-370201c7954a"
+PREPARED_LOCK_HASH = "32be141a78f7ef2480892023d94a9a617f77bdd475bd19611500a3dab4530fb8"
 MAGICS = {b"\xfe\xed\xfa\xce", b"\xce\xfa\xed\xfe", b"\xfe\xed\xfa\xcf", b"\xcf\xfa\xed\xfe", b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca", b"\xca\xfe\xba\xbf", b"\xbf\xba\xfe\xca"}
 SHA256 = re.compile(r"[0-9a-f]{64}")
 SAFE_COMPONENT = re.compile(r"[A-Za-z0-9._+@ -]{1,255}")
@@ -183,23 +187,87 @@ def validate_runtime(runtime):
     return candidates[0].relative_to(runtime)
 
 
-def validate_receipts(work, root, arch):
+def load_acquire(root):
+    spec = importlib.util.spec_from_file_location("topology_acquire", root / "scripts/topology/acquire.py")
+    acquire = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(acquire)
+    return acquire
+
+
+def frozen(text):
+    opening = re.findall(r'<frozen-after-approval(?:\s[^<>]*)?>', text)
+    require(len(opening) == 1 and text.count('<frozen-after-approval') == 1 and text.count('</frozen-after-approval>') == 1,
+            "frozen_intent_missing_or_ambiguous")
+    start = text.index(opening[0])
+    end = text.index('</frozen-after-approval>') + len('</frozen-after-approval>')
+    require(start < end - len('</frozen-after-approval>'), "frozen_intent_missing_or_ambiguous")
+    return text[start:end]
+
+
+def validate_prepared_inputs(root, arch, acquisition_work, runtime_work):
+    acquire = load_acquire(root)
+    try:
+        parent = Path(acquire.git(root, "rev-parse", "--path-format=absolute", "--git-common-dir")).parent
+        topology = acquire.safe_path(parent, ".build/topology")
+        require(root != parent and root.is_relative_to(topology) and (root / ".git").is_file(), "isolated_project_required")
+        expected_acquisition = acquire.safe_path(topology, PREPARED_ACQUISITION)
+        expected_runtime = acquire.safe_path(topology, PREPARED_RUNTIME)
+        cache = acquire.safe_path(topology, "downloads")
+        require(acquisition_work == expected_acquisition and runtime_work == expected_runtime,
+                "prepared_input_namespace_mismatch")
+        require(acquisition_work.is_dir() and runtime_work.is_dir() and cache.is_dir(), "prepared_input_missing")
+        acquire.check_hash(acquire.LOCK_PATH, PREPARED_LOCK_HASH)
+        lock = acquire.load_lock()
+        require(arch == "arm64" and acquire.platform.machine() == "arm64", "native_build_host_not_proven")
+        require(acquire.run(["/usr/sbin/sysctl", "-in", "sysctl.proc_translated"]) == "0", "rosetta_or_unknown_host_forbidden")
+        acquire.toolchain(lock)
+        acquire.git(root, "merge-base", "--is-ancestor", lock["approvalCommit"], "HEAD")
+        intent_path = "bmad-docs/implementation-artifacts/spec-1-1-isolated-app-topology.md"
+        approved = acquire.git(root, "show", lock["approvalCommit"] + ":" + intent_path)
+        with acquire.safe_path(root, intent_path).open(newline="") as stream:
+            current = stream.read()
+        require(frozen(current) == frozen(approved), "frozen_intent_changed")
+        # validate_receipt walks the real graph, including pdfium_checkout. Prove
+        # the approved patch is already applied before that owner can touch it.
+        acquire.check_hash(acquire.safe_path(acquisition_work, "pdfium/src/" + acquire.PDFIUM_PATCH["target"]),
+                           acquire.PDFIUM_PATCH["afterSha256"])
+        acquire.validate_receipt(lock, acquisition_work, "arm64", arch, cache)
+    except acquire.Failure as error:
+        raise Failure(str(error)) from error
+
+
+def validate_receipts(acquisition_work, root, arch, *, runtime_work, prepared):
+    if prepared:
+        validate_prepared_inputs(root, arch, acquisition_work, runtime_work)
     lock_path = root / "scripts/topology/dependencies.json"
     lock_hash = digest(lock_path)
     lock = json.loads(lock_path.read_text())
     require(lock["team"] == TEAM and lock["python"]["version"] == "3.13.16" and lock["python"]["release"] == "20261003", "dependency_pin_mismatch")
     require({item["project"]: item["version"] for item in lock["wheels"]} == PINS, "wheel_pin_mismatch")
-    acquisition = json.loads(required_file(work, "acquisition.json").read_text())
-    runtime_receipt = json.loads(required_file(work, "runtime.json").read_text())
+    acquisition = json.loads(required_file(acquisition_work, "acquisition.json").read_text())
+    runtime_receipt = json.loads(required_file(runtime_work, "runtime.json").read_text())
     for receipt in (acquisition, runtime_receipt):
         require(receipt["arch"] == arch and receipt["lockHash"] == lock_hash, "receipt_pin_mismatch")
-    require(runtime_receipt["files"] == tree_inventory(work / "runtime"), "runtime_integrity_mismatch")
+    require(runtime_receipt["files"] == tree_inventory(runtime_work / "runtime"), "runtime_integrity_mismatch")
     expected_assets = [("python", lock["python"][arch])]
     expected_assets.extend(("wheel", item.get("any", item.get(arch))) for item in lock["wheels"])
     expected_assets.append(("source", lock["sdkSource"]))
     observed = [(item["kind"], item["filename"], item["sha256"]) for item in acquisition["assets"]]
     require(observed == [(kind, item["filename"], item["sha256"]) for kind, item in expected_assets], "acquisition_asset_mismatch")
-    return lock_hash, digest(work / "acquisition.json")
+    if prepared:
+        require(set(runtime_receipt) == {"arch", "lockHash", "files"}, "runtime_receipt_schema_mismatch")
+        materialization = json.loads(required_file(runtime_work, "runtime-assets-only.json").read_text())
+        require(materialization["schemaRevision"] == "runtime-assets-only-v1" and
+                materialization["runID"] == PREPARED_RUNTIME.removeprefix("runtime-assets-only-") and
+                materialization["arch"] == arch and materialization["manifestHash"] == lock_hash and
+                materialization["status"] == "materialized" and
+                materialization["scope"] == "unsigned_cached_runtime_materialization_only" and
+                materialization["fullAcquisitionProved"] is False and materialization["signed"] is False and
+                materialization["storyDone"] is False, "runtime_materialization_mismatch")
+        require(materialization["files"] == runtime_receipt["files"], "runtime_integrity_mismatch")
+        require(materialization["inputs"] == [{"kind": kind, "filename": item["filename"], "sha256": item["sha256"]}
+                                              for kind, item in expected_assets if kind != "source"], "runtime_asset_mismatch")
+    return lock_hash, digest(acquisition_work / "acquisition.json")
 
 
 def install_runtime(app, runtime, cli_relative, root):
@@ -396,7 +464,7 @@ def safe_manifest(manifest):
     return manifest
 
 
-def package(root, arch, products):
+def package(root, arch, products, *, prepared_acquisition=None, prepared_runtime=None):
     require(sys.platform == "darwin" and arch in ARCHES, "macos_arch_required")
     root = root.resolve()
     work = root / ".build/topology" / arch
@@ -404,13 +472,17 @@ def package(root, arch, products):
     destination = work / "PaperLens.app"
     manifest_path = work / "manifest.json"
     require(not destination.exists() and not destination.is_symlink() and not manifest_path.exists() and not manifest_path.is_symlink(), "output_already_exists")
+    require((prepared_acquisition is None) == (prepared_runtime is None), "prepared_inputs_required_together")
+    prepared = prepared_acquisition is not None
+    acquisition_work = Path(prepared_acquisition).absolute() if prepared else work
+    runtime_work = Path(prepared_runtime).absolute() if prepared else work
     source = products / "PaperLens.app"
     validate_bundles(source)
     for relative, _, _, _, _ in BUNDLES:
         for name, source_path in (("contract.json", "Contracts/ProviderRPC/contract.json"), ("fixture-map.json", "Tests/Topology/fixture-map.json")):
             require(digest(source / relative / "Contents/Resources" / name) == digest(root / source_path), "built_resource_mismatch")
-    lock_hash, acquisition_hash = validate_receipts(work, root, arch)
-    runtime = work / "runtime/python"
+    lock_hash, acquisition_hash = validate_receipts(acquisition_work, root, arch, runtime_work=runtime_work, prepared=prepared)
+    runtime = runtime_work / "runtime/python"
     cli_relative = validate_runtime(runtime)
     provenance = source_provenance(root)
     identity = signing_identity()
@@ -477,9 +549,12 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--arch", required=True, choices=ARCHES)
     parser.add_argument("--products", required=True, type=Path)
+    parser.add_argument("--prepared-acquisition", type=Path)
+    parser.add_argument("--prepared-runtime", type=Path)
     arguments = parser.parse_args(argv)
     try:
-        package(ROOT, arguments.arch, arguments.products.absolute())
+        package(ROOT, arguments.arch, arguments.products.absolute(),
+                prepared_acquisition=arguments.prepared_acquisition, prepared_runtime=arguments.prepared_runtime)
         print(json.dumps({"arch": arguments.arch, "verdict": "pass", "scope": "local_packaging_only", "notarization": "not_performed", "storyDone": False}))
         return 0
     except Failure as error:

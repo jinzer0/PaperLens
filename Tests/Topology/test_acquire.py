@@ -1268,7 +1268,7 @@ class RuntimeStageTests(IsolatedTest):
         receipt_bytes = (self.work / "runtime.json").read_bytes()
         inventory = acquire.tree_inventory(self.work / "runtime")
         with self.assertRaisesRegex(packaging.Failure, "required_file_missing"):
-            packaging.validate_receipts(self.work, SCRIPTS.parents[1], "arm64")
+            packaging.validate_receipts(self.work, SCRIPTS.parents[1], "arm64", runtime_work=self.work, prepared=False)
         self.assertFalse((self.work / "acquisition.json").exists())
         self.assertEqual((self.work / "runtime.json").read_bytes(), receipt_bytes)
         self.assertEqual(acquire.tree_inventory(self.work / "runtime"), inventory)

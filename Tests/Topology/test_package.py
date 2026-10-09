@@ -9,8 +9,9 @@ import os
 from pathlib import Path
 import plistlib
 import tempfile
+from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 MODULE_PATH = Path(__file__).resolve().parents[2] / "scripts/topology/package.py"
 SPEC = importlib.util.spec_from_file_location("topology_package", MODULE_PATH)
@@ -280,12 +281,180 @@ class PackagingTests(unittest.TestCase):
             with self.assertRaises(package.Failure):
                 package.safe_manifest(manifest)
 
+    def receipt_inputs(self):
+        lock_bytes = (MODULE_PATH.parent / "dependencies.json").read_bytes()
+        lock_path = self.file("scripts/topology/dependencies.json", lock_bytes)
+        lock = json.loads(lock_bytes)
+        acquisition = self.root / "acquisition"
+        runtime = self.root / "runtime-input"
+        assets = [("python", lock["python"]["arm64"])]
+        assets.extend(("wheel", item.get("any", item.get("arm64"))) for item in lock["wheels"])
+        assets.append(("source", lock["sdkSource"]))
+        assets = [{"kind": kind, "filename": item["filename"], "sha256": item["sha256"]} for kind, item in assets]
+        self.file("runtime-input/runtime/python/file", b"runtime")
+        receipt = {"arch": "arm64", "lockHash": package.digest(lock_path), "files": package.tree_inventory(runtime / "runtime")}
+        self.file("runtime-input/runtime.json", json.dumps(receipt).encode())
+        self.file("acquisition/acquisition.json", json.dumps({"arch": "arm64", "lockHash": receipt["lockHash"], "assets": assets}).encode())
+        materialization = {"schemaRevision": "runtime-assets-only-v1", "runID": package.PREPARED_RUNTIME.removeprefix("runtime-assets-only-"),
+                           "arch": "arm64", "manifestHash": receipt["lockHash"], "files": receipt["files"],
+                           "inputs": assets[:-1], "status": "materialized", "scope": "unsigned_cached_runtime_materialization_only",
+                           "fullAcquisitionProved": False, "signed": False, "storyDone": False}
+        self.file("runtime-input/runtime-assets-only.json", json.dumps(materialization).encode())
+        return acquisition, runtime, receipt, materialization
+
+    def test_canonical_receipts_need_no_prepared_materialization_or_owner_checks(self):
+        acquisition, runtime, receipt, _ = self.receipt_inputs()
+        (runtime / "runtime").rename(acquisition / "runtime")
+        (runtime / "runtime.json").rename(acquisition / "runtime.json")
+        with patch.object(package, "validate_prepared_inputs") as owner:
+            hashes = package.validate_receipts(acquisition, self.root, "arm64", runtime_work=acquisition, prepared=False)
+            owner.assert_not_called()
+        self.assertEqual(hashes, (receipt["lockHash"], package.digest(acquisition / "acquisition.json")))
+
+    def test_prepared_runtime_bindings_are_independent_of_full_acquisition(self):
+        acquisition, runtime, receipt, materialization = self.receipt_inputs()
+        before = package.tree_inventory(self.root)
+        with patch.object(package, "validate_prepared_inputs") as owner:
+            hashes = package.validate_receipts(acquisition, self.root, "arm64", runtime_work=runtime, prepared=True)
+            owner.assert_called_once_with(self.root, "arm64", acquisition, runtime)
+        self.assertEqual(hashes, (receipt["lockHash"], package.digest(acquisition / "acquisition.json")))
+        self.assertEqual(before, package.tree_inventory(self.root))
+        mutations = [("runtime.json", {**receipt, "arch": "x86_64"}, "receipt_pin_mismatch"),
+                     ("runtime.json", {**receipt, "lockHash": "0" * 64}, "receipt_pin_mismatch"),
+                     ("runtime.json", {**receipt, "files": []}, "runtime_integrity_mismatch"),
+                     ("runtime-assets-only.json", {**materialization, "manifestHash": "0" * 64}, "runtime_materialization_mismatch"),
+                     ("runtime-assets-only.json", {**materialization, "inputs": []}, "runtime_asset_mismatch")]
+        for name, value, reason in mutations:
+            with self.subTest(reason=reason), patch.object(package, "validate_prepared_inputs"):
+                (runtime / "runtime.json").write_text(json.dumps(receipt))
+                (runtime / "runtime-assets-only.json").write_text(json.dumps(materialization))
+                (runtime / name).write_text(json.dumps(value))
+                with self.assertRaisesRegex(package.Failure, reason):
+                    package.validate_receipts(acquisition, self.root, "arm64", runtime_work=runtime, prepared=True)
+        with patch.object(package, "validate_prepared_inputs"):
+            with self.assertRaisesRegex(package.Failure, "required_file_missing"):
+                package.validate_receipts(runtime, self.root, "arm64", runtime_work=runtime, prepared=True)
+
+    def test_prepared_owner_requires_namespaces_native_host_and_applied_target(self):
+        parent = self.root
+        topology = parent / ".build/topology"
+        root = topology / "isolated"
+        acquisition = topology / package.PREPARED_ACQUISITION
+        runtime = topology / package.PREPARED_RUNTIME
+        for directory in (root, acquisition, runtime, topology / "downloads"):
+            directory.mkdir(parents=True)
+        self.file(root.relative_to(parent) / ".git", b"gitdir: synthetic")
+        intent = '<frozen-after-approval>exact\nintent</frozen-after-approval>'
+        self.file(root.relative_to(parent) / "bmad-docs/implementation-artifacts/spec-1-1-isolated-app-topology.md", intent.encode())
+        target = self.file(acquisition.relative_to(parent) / "pdfium/src/target", b"patched")
+        lock = {"approvalCommit": "a" * 40}
+        acquire = SimpleNamespace(Failure=package.Failure, LOCK_PATH=root / "lock", PDFIUM_PATCH={"target": "target", "afterSha256": package.digest(target)},
+                                  git=Mock(side_effect=lambda _, *args: str(parent / ".git") if args[0] == "rev-parse" else intent if args[0] == "show" else ""),
+                                  safe_path=lambda base, relative: base / relative, load_lock=Mock(return_value=lock),
+                                  platform=SimpleNamespace(machine=Mock(return_value="arm64")), run=Mock(return_value="0"),
+                                  toolchain=Mock(), check_hash=Mock(), validate_receipt=Mock())
+        def check_hash(path, expected):
+            if path == target:
+                package.require(package.digest(path) == expected, "prepared_target_changed")
+        acquire.check_hash.side_effect = check_hash
+        with patch.object(package, "load_acquire", return_value=acquire):
+            package.validate_prepared_inputs(root, "arm64", acquisition, runtime)
+            acquire.validate_receipt.assert_called_once_with(lock, acquisition, "arm64", "arm64", topology / "downloads")
+            self.assertEqual(target.read_bytes(), b"patched")
+            acquire.validate_receipt.reset_mock()
+            for invalid in (runtime, topology / "other"):
+                with self.assertRaisesRegex(package.Failure, "prepared_input_namespace_mismatch"):
+                    package.validate_prepared_inputs(root, "arm64", invalid, runtime)
+            with self.assertRaisesRegex(package.Failure, "isolated_project_required"):
+                package.validate_prepared_inputs(parent, "arm64", acquisition, runtime)
+            for arch, host in (("x86_64", "arm64"), ("arm64", "x86_64")):
+                acquire.platform.machine.return_value = host
+                with self.assertRaisesRegex(package.Failure, "native_build_host_not_proven"):
+                    package.validate_prepared_inputs(root, arch, acquisition, runtime)
+            acquire.platform.machine.return_value = "arm64"
+            acquire.run.return_value = "1"
+            with self.assertRaisesRegex(package.Failure, "rosetta_or_unknown_host_forbidden"):
+                package.validate_prepared_inputs(root, "arm64", acquisition, runtime)
+            acquire.run.return_value = "0"
+            intent_path = root / "bmad-docs/implementation-artifacts/spec-1-1-isolated-app-topology.md"
+            intent_path.write_text(intent.replace("exact", "changed"))
+            with self.assertRaisesRegex(package.Failure, "frozen_intent_changed"):
+                package.validate_prepared_inputs(root, "arm64", acquisition, runtime)
+            intent_path.write_text(intent)
+            original_git = acquire.git.side_effect
+            def reject_ancestry(directory, *args):
+                if args[0] == "merge-base":
+                    raise package.Failure("approval_not_ancestor")
+                return original_git(directory, *args)
+            acquire.git.side_effect = reject_ancestry
+            with self.assertRaisesRegex(package.Failure, "approval_not_ancestor"):
+                package.validate_prepared_inputs(root, "arm64", acquisition, runtime)
+            acquire.git.side_effect = original_git
+            target.write_bytes(b"unpatched")
+            with self.assertRaisesRegex(package.Failure, "prepared_target_changed"):
+                package.validate_prepared_inputs(root, "arm64", acquisition, runtime)
+            acquire.validate_receipt.assert_not_called()
+            self.assertEqual(target.read_bytes(), b"unpatched")
+
+    def test_frozen_intent_requires_exact_unique_section(self):
+        text = '<frozen-after-approval>intent</frozen-after-approval>'
+        self.assertEqual(package.frozen("before" + text + "after"), text)
+        for invalid in ("", text + text, '</frozen-after-approval><frozen-after-approval>', text.replace('</frozen-after-approval>', '')):
+            with self.assertRaisesRegex(package.Failure, "frozen_intent_missing_or_ambiguous"):
+                package.frozen(invalid)
+
+    def test_prepared_arguments_must_be_paired_and_cli_forwards_named_inputs(self):
+        (self.root / ".build/topology/arm64").mkdir(parents=True)
+        with patch.object(package.sys, "platform", "darwin"), patch.object(package, "validate_bundles") as bundles:
+            for keywords in ({"prepared_acquisition": self.root}, {"prepared_runtime": self.root}):
+                with self.assertRaisesRegex(package.Failure, "prepared_inputs_required_together"):
+                    package.package(self.root, "arm64", self.root, **keywords)
+            bundles.assert_not_called()
+        with patch.object(package, "package") as owner, patch("builtins.print"):
+            self.assertEqual(package.main(["--arch", "arm64", "--products", str(self.root),
+                                           "--prepared-acquisition", str(self.root / "acquisition"),
+                                           "--prepared-runtime", str(self.root / "runtime")]), 0)
+            owner.assert_called_once_with(package.ROOT, "arm64", self.root,
+                                          prepared_acquisition=self.root / "acquisition", prepared_runtime=self.root / "runtime")
+
+    def test_output_file_and_dangling_symlink_collisions_fail_before_inputs(self):
+        work = self.root / ".build/topology/arm64"
+        work.mkdir(parents=True)
+        for name in ("manifest.json", "PaperLens.app"):
+            for symlink in (False, True):
+                with self.subTest(name=name, symlink=symlink):
+                    output = work / name
+                    if symlink:
+                        output.symlink_to("missing")
+                    else:
+                        output.write_bytes(b"caller-owned")
+                    with patch.object(package.sys, "platform", "darwin"), patch.object(package, "validate_bundles") as bundles:
+                        with self.assertRaisesRegex(package.Failure, "output_already_exists"):
+                            package.package(self.root, "arm64", self.root, prepared_acquisition=self.root, prepared_runtime=self.root)
+                        bundles.assert_not_called()
+                    self.assertTrue(output.is_symlink() if symlink else output.read_bytes() == b"caller-owned")
+                    output.unlink()
+
     def test_pipeline_signs_inside_out_and_inventories_source_vs_signed(self):
+        self.pipeline(False)
+
+    def test_prepared_pipeline_preserves_inputs_and_canonical_output_collisions(self):
+        self.pipeline(True)
+
+    def pipeline(self, prepared):
         app = self.app()
         runtime, _, _ = self.runtime()
         work = self.root / ".build/topology/arm64"
-        (work / "runtime").mkdir(parents=True)
-        runtime.rename(work / "runtime/python")
+        work.mkdir(parents=True)
+        acquisition_work = self.root / "borrowed-acquisition" if prepared else work
+        runtime_work = self.root / "borrowed-runtime" if prepared else work
+        (runtime_work / "runtime").mkdir(parents=True)
+        runtime.rename(runtime_work / "runtime/python")
+        acquisition_work.mkdir(exist_ok=True)
+        (acquisition_work / "acquisition.json").write_text("original receipt")
+        input_inventory = package.tree_inventory(runtime_work / "runtime")
+        product_inventory = package.tree_inventory(app)
+        keywords = {"prepared_acquisition": acquisition_work, "prepared_runtime": runtime_work} if prepared else {}
         self.file("ProviderAgent/agent.py")
         self.file("Contracts/ProviderRPC/provider_rpc.py")
         self.file("Contracts/ProviderRPC/contract.json", b"{}")
@@ -293,6 +462,9 @@ class PackagingTests(unittest.TestCase):
         self.file("Tests/Topology/fixture-map.json", b"{}")
 
         def sign(path, identity, identifier, rights, scratch):
+            self.assertTrue(path.is_relative_to(work))
+            self.assertTrue(path.relative_to(work).parts[0].startswith("package-"))
+            self.assertTrue(scratch.is_relative_to(work))
             order.append((str(path), identifier, rights))
             if path.is_file():
                 path.write_bytes(path.read_bytes() + b"signed")
@@ -300,8 +472,9 @@ class PackagingTests(unittest.TestCase):
         def inspect(path, arch, app=None):
             return "library" if path.suffix in (".so", ".dylib") or path.name == "PythonRuntime" else "executable"
 
-        with patch.object(package.sys, "platform", "darwin"), patch.object(package, "validate_receipts", return_value=("a" * 64, "b" * 64)), patch.object(package, "source_provenance", return_value={"sourceBaseCommit": "c" * 40, "sourceDirty": True, "sourceTreeHash": "d" * 64}), patch.object(package, "signing_identity", return_value="A" * 40), patch.object(package, "inspect_macho", side_effect=inspect), patch.object(package, "sign", side_effect=sign), patch.object(package, "verify_signature"):
-            manifest = package.package(self.root, "arm64", app.parent)
+        with patch.object(package.sys, "platform", "darwin"), patch.object(package, "validate_receipts", return_value=("a" * 64, "b" * 64)) as receipts, patch.object(package, "source_provenance", return_value={"sourceBaseCommit": "c" * 40, "sourceDirty": True, "sourceTreeHash": "d" * 64}), patch.object(package, "signing_identity", return_value="A" * 40), patch.object(package, "inspect_macho", side_effect=inspect), patch.object(package, "sign", side_effect=sign), patch.object(package, "verify_signature"):
+            manifest = package.package(self.root, "arm64", app.parent, **keywords)
+            receipts.assert_called_once_with(acquisition_work, self.root, "arm64", runtime_work=runtime_work, prepared=prepared)
         ids = [item[1] for item in order]
         self.assertLess(ids.index(package.IDENTITY + ".ProviderAgent.Python"), len(ids) - 3)
         framework_index = next(index for index, item in enumerate(order) if item[0].endswith("PythonRuntime.framework"))
@@ -314,9 +487,12 @@ class PackagingTests(unittest.TestCase):
         self.assertEqual(json.loads((work / "manifest.json").read_text()), manifest)
         self.assertEqual(manifest["artifactHash"], package.json_hash(package.tree_inventory(work / "PaperLens.app")))
         self.assertTrue(app.is_dir())
+        self.assertEqual(product_inventory, package.tree_inventory(app))
+        self.assertEqual(input_inventory, package.tree_inventory(runtime_work / "runtime"))
+        self.assertEqual((acquisition_work / "acquisition.json").read_text(), "original receipt")
         with patch.object(package.sys, "platform", "darwin"):
             with self.assertRaisesRegex(package.Failure, "output_already_exists"):
-                package.package(self.root, "arm64", app.parent)
+                package.package(self.root, "arm64", app.parent, **keywords)
 
 
 if __name__ == "__main__":
