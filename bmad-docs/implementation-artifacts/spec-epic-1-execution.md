@@ -16,12 +16,14 @@ Canonical Story 정의는 `bmad-docs/planning-artifacts/epics.md`의 Epic1이다
 
 ## BMAD 실행 순서
 
+현재 human 실행 지시: **Story1.1~1.26 제품 기능 완성을 우선하고 P1/P2/P3 미통과를 모든 제품 코드 구현의 중단 조건으로 사용하지 않는다. 미구현 Paper·Job·저장소 소유권은 구현할 대상이다. 공통 계약 확정 후 독립 기능을 실제 worktree/실행 agent로 병렬 구현한다. 환경 부족은 해당 검증만 보류하며, 개인정보·인증·유료 요청·배포 제한과 실제 완료 판정은 유지한다.** 실제 아키텍처 조항과 충돌하는 특정 단계는 정확한 조항과 최소 순서 변경안만 제시하며 일반적인 재조사를 하지 않는다. 라이브 인증·소진 시험·실제 OS×CPU proof를 synthetic 상태로 대체하거나 gate/Story Done을 승격하지 않는다.
+
 1. Story의 AC/선행 계약/검증 경계를 확인하고 governing Issue·task branch·Build Spec을 연결한다.
-2. Spec을 commit하고 Epic의 전체 SCOPE+IMPLEMENTATION 승인 provenance를 Story Issue에 기록한다.
+2. 기존 Spec/workunit을 재사용하고 새 human 지시·구체적인 owner/API 갱신을 연결한다. routine in-scope 후속 Spec delta는 구현 commit과 함께 보존할 수 있다. 미정인 실제 계약만 source 전에 확정한다.
 3. 명세에 정의한 최소 end-to-end 단위를 구현한다. 다른 Story의 변경은 별도 work unit으로 분리한다.
-4. 부모만 focused/union tests·formatter(프로젝트에 설정된 경우)·build/scenario 검증을 실행한다. 하위 에이전트는 bounded source/spec/static review만 수행한다.
-5. 독립 리뷰·부모 회귀 후 로컬 구현/증거 commit을 만든다. 실패/미관측/외부 차단을 숨기지 않는다.
-6. 다음 dependency-ready Story를 진행한다. 테스트 PASS와 제품/architecture gate PASS를 구분한다. 필수 pre-split gate가 미통과면 downstream 제품 구현 분기는 하지 않되, 해당 gate의 검증용 harness/계약 결정을 계속 진행한다.
+4. 독립 기능은 별도 실제 worktree의 실행 agent가 구현·회귀 테스트를 작성한다. 부모만 변경 묶음의 focused/union tests·설정된 formatter·build/scenario 검증을 실행한다. evolving shared contract 의존 작업은 그 계약 확정 뒤에 연결한다.
+5. 위험도에 맞는 묶음 리뷰와 부모 검증 후 로컬 구현/증거 commit을 만든다. 실패/미관측/외부 차단을 숨기지 않는다. 테스트·커밋 수를 사용자 기능 완성으로 계산하지 않는다.
+6. 다음 dependency-ready 실제 기능을 진행한다. 코드 구현, 통합, 실제 외부 실행, acceptance/gate 판정을 분리한다. 미통과 gate를 blanket source blocker로 재사용하지 않으며, 정확한 frozen architecture 충돌이 있는 해당 단계와 보호된 실행만 제한한다. 소유권의 부재 자체를 human-only blocker나 fake owner/store 생성 근거로 취급하지 않는다.
 
 ## 전체 Story 작업 목록
 
