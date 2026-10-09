@@ -8,6 +8,31 @@ Architect52 read ROOTepics952–984 and own SOLUTION-DESIGN,1.13 Spec, ProviderR
 
 ## Worker and atomic revision
 
+## 2026-10-09 actual adapter phase (source-order amendment)
+
+Latest explicit human instruction admits exactly this Spec, Application/ExtractionRevisionService.swift,
+Infrastructure/ProductDatabase+Extraction.swift, Features/Reader/ParsingStatusView.swift,
+and Tests/Product/ExtractionRevisionTests.swift. The earlier clauses “Helper/persistence split
+forbidden before actualP2”, “not inventedtables”, and “No actual implementation before
+prerequisites” are changed ONLY in source order: implement a minimal feature migration and
+guarded transactional adapter before physical P2 proof. No P2 PASS or StoryDone follows.
+The sole ProductDatabase owner registers registerExtractionMigrations; no queue/startup owner
+is added. Parent owns package integration, producer binding, read leases and deletion drain.
+Sentence text/page/ID use the existing ProviderRequest authority. Geometry has no guessed
+fields: a typed geometry input plus validateAndEncode contract must be bound to actual 1.19;
+absent producer or validator is an explicit failure. The returned canonical encoding and quad
+count must come from that validator; this lane supplies no successful generated batch.
+Batch sequence/completeness, immutable Paper/generation/PDF/reference/input/configuration,
+job/attempt/fence/correlation/epoch and running state are checked before publication.
+One sole-queue transaction inserts revision, full text, canonical geometry and FTS rows,
+switches visibility and marks success. Failed attempts preserve old usable revisions.
+Queries capture revision and rows in one read transaction; old revisions are retained, not
+reclaimed here. Tombstone cascade removes all extraction rows and FTS; deleting Paper is
+immediately inaccessible. Persisted status is rendered by native SwiftUI, not dispatch state.
+Local tests are written but ALL tests/builds/gates/formatters/commits/remotes are skipped by
+explicit instruction. Actual producer calibration, runtime proof and parent integration remain
+unverified, not fake PASS.
+
 Current Paper-owned immutablePDF/read-only ownedinput→no-network PDFiumXPC boundedtyped sentence/canonicalgeometrybatch. Worker NEVER writes DB/FTS/cache/accessesSecrets/arbitrarypaths/publishes. Application validates1.19 identities/relations/bounds/completedelivery, no transportterminal=extraction.
 
 ProviderRequest resources.parser/pool/limits numeric authority cumulative/gauges/elapsed/RSS, no copiedconstants or ProviderRPCasPDFiumprotocol. WorkerpublicAPI/framing/payload/completeness/tolerance UNKNOWN; pinbeforecode/noplaceholder.

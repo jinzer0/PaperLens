@@ -13,8 +13,13 @@ struct PaperLensApp: App {
   @NSApplicationDelegateAdaptor(TopologyApplicationDelegate.self) private var delegate
 
   var body: some Scene {
-    WindowGroup("PaperLens — Topology Prototype") {
-      TopologyView(model: delegate.model)
+    WindowGroup(CommandLine.arguments.contains("--topology-smoke")
+      ? "PaperLens — Topology Prototype" : "PaperLens") {
+      if CommandLine.arguments.contains("--topology-smoke") {
+        TopologyView(model: delegate.model)
+      } else {
+        ProductRootView()
+      }
     }
   }
 }

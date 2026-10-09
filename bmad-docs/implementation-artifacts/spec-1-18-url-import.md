@@ -1,5 +1,72 @@
 # Story 1.18 Build Spec — URL Import and shared Library entry
 
+## Current source phase (2026-10-09 explicit human order)
+
+The actual-owner binding phase mutates exactly this Spec,
+`Application/LocalLibraryLifecycle.swift`, `Application/LibraryURLImportWriter.swift`,
+`Application/URLImportService.swift`, and `Tests/Product/LibraryURLImportWriterTests.swift`.
+The HTTPS adapter, database, Package/project and UI are read-only in this phase;
+their wiring and union verification belong to the parent. Earlier planning-only
+admission is superseded for these local sources, not runtime proof or timing. No tests/builds/gates,
+formatters, commits, network requests, credentials, or existing document reads run.
+
+`LocalLibraryLifecycle.grantURLImportWriter(for:) async throws -> any URLImportWriter`
+requires a confirmation whose Continue was consumed exactly once by URLImportService.
+Prepared or cancelled confirmations cannot grant. The confirmation retains optional
+`destinationFolderID: UUID`; `prepare(_:destination:possibleDuplicate:destinationFolderID:)`
+defaults that identity to nil and never derives it from the display label. Retry retains
+the confirmed UUID and requires a new consumed confirmation. Reservation creates one
+actual Paper and ImportJob, with source input/current epoch and the existing recovery
+lineage, writer and publication permits; publication uses those same identities and the
+sole database's reserveImport/publish folder arguments. No call to importPDF, second
+Paper, second job, alternate store, AI prerequisites or raw URL metadata is involved.
+
+The factory creates an exclusive private namespace using mkdir, and cleanup only
+removes a namespace actually created by that capability. The real HTTPS adapter alone
+constructs ClosedHTTPSPDFStage. Publication consumes once, checks same namespace,
+non-symlink regular single-link immutable file, byte budget/count, magic and recomputed
+SHA256 before existing guarded rename/database publication. Failed publication is
+aborted under its existing permit. Short lock-protected capability state checks and
+revoke do not perform file/database effects. The service registers the exact download
+child task's cancellation before that main-actor child begins. Revocation before
+registration immediately cancels it. The concrete capability retains that exact task;
+abort waits for its result and preserves its closureUnknown report even when called
+with another reason. Deletion cancels the same producer census and
+waits until adapter file-close/session-invalidation drain and abort/publication finish,
+not Task.cancel acceptance. Unknown file closure retains permit and cleanup debt,
+blocking namespace purge on repeated same-saga deletion attempts. Missing Agent still
+prevents deletion success. Existing local copied-hash checks and Reader lease barriers
+are unchanged.
+
+Authored tests use owned temporary databases/files and injected URLProtocol only:
+unconsumed/cancelled denial, one Paper/job and unchanged lineage on publish, typed
+folder destination/removal, changed bytes/hash, foreign closed-stage rejection,
+repeated publish/abort fencing, prior revoke, real stalled transport cancellation/drain,
+unknown-closure conservative debt and repeated same-saga deletion. No stage receipt is
+fabricated. These tests are not run in this phase. Parent must include the new writer
+and test files in Package/project, bind the actual lifecycle grant closure, pass the
+selected folder UUID from Library UI, and verify the union. Physical UI/Reader, actual
+file-close fault injection and P-6 runtime evidence remain unproved by this phase.
+
+Transport uses the actual ProviderRequest route, response, resource and pool authority;
+an ephemeral URLSession serial delegate streams directly to an exclusively created
+caller-owned stage. Redirects are never automatically followed: each response is
+admitted and its target revalidated before a new task. Producer closure includes file
+close and session invalidation/drain; only then may a ClosedHTTPSPDFStage be returned.
+URLImportWriter is a required caller capability: owned stagingDirectory,
+assertCurrent, synchronous revoke, publish(closedStage), and abort(reason). The parent grants this from the sole
+LocalLibraryLifecycle after current writer admission and connects publication through
+its distinct publication permit/guarded rename/DB commit. abort must retain closure
+debt (no namespace removal) for closureUnknown and cleanup debt on failure. No capability means no file,
+request or Job effect. No alternate database or publication store is introduced.
+
+The service consumes one confirmation before asking for the capability; cancellation
+before Continue has no Job. The sheet keeps Library underneath, displays the actual
+destination and possible-duplicate warning, and exposes only explicit Reader opening
+after success and explicit fresh-confirmation Retry after failure. Physical UI,
+delete/restart races and P-6 timing remain unproved until parent integration/runtime
+evidence; authored deterministic URLProtocol and temporary-file tests are not run.
+
 ## Authority and admission
 
 Issue#20 / issue/20-story-1-18; basef14f15f3f1c1fed02657ebf0c7ecdcb23721bfa8. PRODUCT5eac3bb9424ad893eca7d63bc319b71f580838ed; ARCHITECTURE1195c92227cc628e325f5ff24d70cc93639bf7a9; Whole-Epic https://github.com/jinzer0/PaperLens/issues/3#issuecomment-6049004229. Own Spec before source; no repeated unchanged-scope SHA approval, no credential/live/paid/remote/distribution or gate permission inferred.

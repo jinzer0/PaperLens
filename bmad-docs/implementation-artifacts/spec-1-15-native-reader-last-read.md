@@ -32,6 +32,41 @@ After actual1.14/applicable persistence, name exact existing owners in bounded s
 
 ## Required observable verification
 
+## 2026-10-09 exact local implementation phase
+
+Latest explicit source-order instruction admits these five files only: this Spec,
+`PaperLensApp/Features/Reader/NativeReaderView.swift`,
+`PaperLensApp/Application/ReaderSession.swift`,
+`PaperLensApp/Infrastructure/ProductDatabase+Reader.swift`, and
+`Tests/Product/ReaderSessionTests.swift`. The seeded 1.14 ProductDatabase and
+LocalLibraryLifecycle are read-only; their ready Paper UUID, UUID generation and
+committed `papers/<UUID>/document.pdf` reference are admission authority. SHA is
+not lifecycle identity. Infrastructure uses only adapterRead/adapterWrite and
+registerReaderMigrations for the parent's existing sole migrator. Last-read lives
+in Paper columns, writes are update-only, and ownership token plus ordered sequence
+prevent a replaced Reader or delayed save from overwriting current state. A SQL
+trigger removes positions/ownership when identity/reference/status is revoked.
+
+Application exposes a main-actor read-lease provider and lease protocol. Missing
+binding blocks open. The parent implements actual shared acquisition, synchronous
+revocation notification, access validation and deletion drain; notification must
+discard PDFKit documents/search/selection before close releases the lifetime lease.
+Ready identity is revalidated after document validation and before claim/presentation,
+and each save checks ready identity plus durable session/sequence independently of
+the lease. The Reader uses original PDFKit documents, bounded page and zoom controls,
+native selection, explicit searching/matches/no-results and typed open/save/restore
+failures. Leaving saves before releasing access; failed saves remain visible.
+
+Synthetic real-DB tests cover admission, save/reopen, same-digest synthetic rows with distinct
+Paper identities, reversed sequence, replacement, revocation and invalid restoration;
+pure navigation tests cover bounds. No tests/builds/gates/formatters/renderer trials
+run in this worker. Source review is not runtime or physical proof. Parent owns
+migration registration, lifecycle lease/revoke/drain, Library/Main composition and
+focused execution. Native visible rendering, keyboard/accessibility interaction,
+physical deletion, actual identical-byte documents and runtime restart remain unexecuted evidence boundaries.
+P6 instrumentation/timing remains unimplemented and unexposed; StoryDone remains
+false until genuine parent integration/runtime evidence and separately P6 completion.
+
 Real stored multipage PDF Open/navigation both bounds/zoom/search matches/no-results/selection, unchanged bytes/fonts/content. No-text stays readable; corrupt/unreadable/missing fails. Real position save/return/restart, two independent Papers with identical bytes retain separate positions; failed save truthfully retains last committed.
 
 Barrier deletion versus load/open/restore/save in both orders, stale generation/replaced Reader/duplicate-reversed callback: no presentation or update that recreates revoked identity. Actual keyboard/accessibility naming/focus/navigation/zoom/search/selection/no-results. Raster/policy assertions alone not durable restart/visible rendering/physical deletion evidence.

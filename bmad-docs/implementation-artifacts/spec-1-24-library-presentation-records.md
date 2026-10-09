@@ -26,6 +26,39 @@ Failure stays non-openable card/row `삭제 미완료`, accessible SAME-saga Ret
 
 ## Conditional phase and required proof
 
+### Actual local source phase — 2026-10-09 human source order
+
+This phase supersedes the planning-only source prohibition, not canonical AC, privacy,
+physical-proof or Story completion requirements. Exactly five writable files: this Spec;
+`PaperLensApp/Application/LibraryOrganizationService.swift`;
+`PaperLensApp/Infrastructure/ProductDatabase+Organization.swift`;
+`PaperLensApp/Features/Library/LibraryBrowserView.swift`;
+`Tests/Product/LibraryOrganizationTests.swift`. Librarycore stays read-only. Infrastructure
+uses its sole adapterRead/adapterWrite queue and registers an organization migration for
+the parent to install in the existing migrator. No second startup/database/Folder store.
+
+Implement persisted list/grid and sort preferences and current-generation Paper status,
+Favorite and explicit user tags (shared 1.25 operations, not 1.25 completion). One durable
+query feeds both presentations, search and conjunctive filters; failure/loading/empty/no-match
+are distinct. Writes revalidate current generation, ready state, deletionID absence,
+canonical owned PDF reference, digest and non-writable regular PDF. Tombstoning removes
+organization/tag content transactionally through migration triggers; deleting rows remain
+visible but non-editable/non-openable with same-saga retry delegated to lifecycle.
+
+Comparators: name ascending POSIX-normalized case/diacritic folding; added/read/year
+descending; missing read/year last; all ties use canonical UUID ascending. Default recently
+read. Persist sort as an explicit local addition under this human order. Actual Reader and
+metadata owners supply generation-bound sort facts to Application; absent facts stay nil,
+never invented. No duplicated metadata/read position storage, inferred tags or summaries.
+Native view requires explicit Import/Open callbacks and parent-owned sort-fact provider;
+open callback remains responsible for read lease and Reader restoration. Delete captures
+identity/title, rechecks generation through Application, and uses existing lifecycle.
+
+Parent owns migration registration, composition and Reader/metadata/Folder integration.
+All test/build/gate/formatter/commit/remote/UI/document execution is skipped by explicit
+instruction. Paired regressions are source evidence only; physical/native proof remains
+unverified, product BLOCKED and StoryDone=false.
+
 UNKNOWN actual query/storage/composition/schema/preference APIs and comparator. Before edits, same-Spec amendment names≤5exact source+paired-test files from actual predecessors; only Main composition located. No guessed Library/repository/test scaffold, second cache/visibility/persistence, helper/CI/future-AI stubs.
 
 Both views same identity/order/real missing states/details/grounding; all four admitted comparators including ties/null; card/list actual restart and save failure. Real last-read/Highlight/Note, reject missing/deleting PDF and late context. Alert target/scope/Cancel unchanged; real delete failure/restart/same-saga retry, barriers prove actual drain and synchronous captured-scope cleanup. All currently present Paper data covered, unrelated Paper intact.

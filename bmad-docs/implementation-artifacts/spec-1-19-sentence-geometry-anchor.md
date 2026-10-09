@@ -4,7 +4,53 @@
 
 Issue#21 / issue/21-story-1-19, basef14f15f3f1c1fed02657ebf0c7ecdcb23721bfa8. PRODUCT5eac3bb9424ad893eca7d63bc319b71f580838ed; ARCHITECTURE1195c92227cc628e325f5ff24d70cc93639bf7a9; Whole-Epic https://github.com/jinzer0/PaperLens/issues/3#issuecomment-6049004229. Own Spec before source; no repeated unchanged-scope SHA approval, no actual gate/live/paid/credential/remote/distribution permission.
 
-Architect51 inspected exactly ROOTepics921–951, own SOLUTION-DESIGN,1.13 Spec, ProviderRequest/contract.json and PaperLensApp.swift; root-only source not copied. Planning ONLY, not implementation-ready; product BLOCKED until actual1.15/1.13 and applicableP1/P2/P3. Initial1.13 pure20PASS was independently BLOCKED48, repair not accepted at planning. Local14dd7b3/c93e873 nonproduct only. StoryDone=false, blankCapture FAIL/noP6. Main topology not Reader.
+Historical Architect51 inspected exactly ROOTepics921–951, own SOLUTION-DESIGN,1.13 Spec, ProviderRequest/contract.json and PaperLensApp.swift; root-only source not copied. That planning phase was not implementation-ready. Initial1.13 pure20PASS was independently BLOCKED48, repair not accepted at planning. Local14dd7b3/c93e873 nonproduct only. StoryDone=false, blankCapture FAIL/noP6. Main topology not Reader. The exact local phase below supersedes the historical source prohibition; actual prerequisite proofs remain required for acceptance.
+
+## Exact local implementation phase — explicit 2026-10-09 source order
+
+The current human assignment authorizes implementation in exactly this Spec,
+`PaperLensApp/Domain/PDFGeometry.swift`,
+`PaperLensApp/Adapters/PDFKitGeometryAdapter.swift`, and
+`Tests/Product/PDFGeometryTests.swift`. This replaces the planning-only source
+prohibition for this phase, not canonical acceptance criteria. No tests, builds,
+formatters, gates, commits, runtime/document trials, actual files or remotes run.
+Domain owns immutable tuple validation, full-quote/multiquad anchors, CropBox
+containment, PDFium-style crop-local top-left conversion, clockwise quarter-turn
+mapping and invertible affine algebra. Adapter owns PDFKit display conversion via
+public PDFView.convert(_:from:)/convert(_:to:), sampled page-space affine mapping,
+page-object membership and roundtrip validation. Tests own independent expected
+landmarks and rejection cases; parent owns target integration and profile binding.
+
+Canonical points retain absolute unrotated PDF page coordinates: CropBox minimum
+is the canonical lower-left; crop-local input adds that actual minimum. Rotation
+is separate clockwise metadata and is never baked into stored quads. Top-left
+rotated display formulas for crop-local (x,y) are (x,h-y), (y,x), (w-x,y),
+(h-y,w-x) at 0/90/180/270 respectively. Quads preserve TL/TR/BR/BL source order;
+nonfinite, degenerate, non-convex or outside-CropBox geometry fails.
+
+`PDFGeometryPrecision` requires an explicit finite nonnegative maximum absolute
+error in PDF points, inclusive per-axis; there is no default or guessed tolerance.
+Adapter roundtrips each input/landmark through public PDFKit conversion in PDF
+points. Mapping is captured only for one immediate main-actor call, never retained
+across zoom/page changes. Missing page, identity/revision mismatch, malformed and
+outside-page errors are distinct; same SHA in another Paper never matches.
+Encoding accepts page 0...1999 and sentence 0...199999, but resolution additionally
+requires exact membership from an owning revision, not encoding validity alone.
+SHA uses the existing lowercase 64-hex encoding and extraction revision uses the
+existing ProviderRequest lowercase v4 UUID encoding, without normalization.
+Exported APIs are `PDFPageGeometry`, `PDFPoint`, `PDFQuad`, `PDFGeometryAffine`,
+`PDFGeometryPrecision`, `PDFSentenceIdentity`, `PDFSentenceAnchor` and main-actor
+`PDFKitGeometryAdapter.pageGeometry/displayPoint/canonicalPoint/displayQuads`.
+`PDFGeometryError` enumerates malformedGeometry, outsidePage, unsupportedRotation,
+invalidPrecision, invalidIdentity, identityMismatch, staleRevision,
+unknownSentence, missingGeometry, missingPage, differentPage and roundtripExceeded.
+
+AD-8's exact clause “round-trip tolerance를 PDF component Build Spec 전에 pin한다”
+and Story 1.19's actual pre-split correspondence proof remain unsatisfied. Minimal
+order-only amendment permits independent stateless implementation now; owning
+profile selection/calibration and actual PDFium/PDFKit landmarks remain required
+before parent binds dependents or claims StoryDone. Configured precision is an
+input contract, not a calibrated product profile. Unknown geometry remains failure.
 
 ## Immutable identity and geometry
 
@@ -12,13 +58,13 @@ Identity tuple PaperUUID/PDFSHA256/extractionRevision/zero-basedPage/sentenceID 
 
 Canonical unrotated CropBox/PDF points/lower-left origin/+x right,+y up; quad TL/TR/BR/BL order, rotation separate metadata. Preserve actual CropBox offsets, no MediaBox substitution/zero-offset assumption/baked rotation/screen pixels. Application validates identity/revision; PDFium typed canonical batch, PDFKit display transform only. No adapter-owned publication/revision.
 
-Missing/empty geometry/revision mismatch/unknown page-sentence typed failure, no nearest substitute/rebinding/successful empty navigation. Exact error API UNKNOWN. ProviderRequest existing contextual identity/bounds/errors not geometry tolerance; no payload rewrite. Reuse1.13 lineage/permits/op-scoped synchronous cleanup, no FS/waits under state.
+Missing/empty geometry/revision mismatch/unknown page-sentence typed failure, no nearest substitute/rebinding/successful empty navigation. Exact local error API is enumerated above. ProviderRequest existing contextual identity/bounds/errors not geometry tolerance; no payload rewrite. Reuse1.13 lineage/permits/op-scoped synchronous cleanup, no FS/waits under state.
 
 ## Calibration and conditional phases
 
-UNKNOWN: actual conversion owners/public APIs/CropBox conventions/document-page-handle lifetime/fixture witnesses/full geometry encoding/sentence allocation/zoom domain/metric precision and tolerance. No guessed number or local inverse-only proof. Before PDF component split, an admitted unsplit actual PDFium→canonical→PDFKit slice calibrates independent PDF-space landmarks; finalize shared numeric tolerance with metric/PDF-point units/precision/inclusive boundary/error justification, then prove actual correspondence and roundtrip.
+Local conversion ownership/public APIs/CropBox convention and immediate main-actor lifetime are pinned above. UNKNOWN: actual PDFium input convention/fixture witnesses/sentence allocation/admitted zoom domain/owning metric precision and tolerance. No guessed number or local inverse-only proof. Before acceptance, an admitted unsplit actual PDFium→canonical→PDFKit slice calibrates independent PDF-space landmarks; finalize shared numeric tolerance with metric/PDF-point units/precision/inclusive boundary/error justification, then prove actual correspondence and roundtrip.
 
-Every conditional source+pairedtest phase≤5exact named paths after same-Spec ownership/API amendment. Application/PDFium/PDFKit/test responsibility slots UNKNOWN, not scaffolded Contracts/EvidenceAnchor/helper/schema/CI/ReaderUI. No actual implementation before prerequisites. No Chat/Brief Anchor UI/Translation/futureAI requirement; geometry proof independent of them.
+Every conditional source+pairedtest phase≤5exact named paths after same-Spec ownership/API amendment. The four-file phase above supplies Domain/adapter/test ownership, not Contracts/EvidenceAnchor/helper/schema/CI/ReaderUI scaffolds. Parent binds Application/PDFium after these APIs finish; no evolving consumer contract. No Chat/Brief Anchor UI/Translation/futureAI requirement; geometry proof independent of them.
 
 ## Required proof, not run
 
@@ -30,4 +76,4 @@ Final metric errors0/exactτ pass, smallest representable>τ/nonfinite/unsupport
 
 Applicable UI includes Native Canvas semantics/Korean state+action/non-color cues/actual contrast/text scaling/resize/keyboardVoiceOver label-role-state/focus return/accessible RetryCancelDelete and currentPaper failure-restart-delete races, not deferred polish. Do not create UI to claim these conditions in pure contract work.
 
-Architect51 COMMENT/planning product BLOCK; five-source read-only, no writes/tests/gates/formatter/build/GUI/SDK/auth/network/credentials/commits. Done requires actual calibrated public/lifetime/shared tolerance and physical transform evidence, parent gates/independent review. Planning certifies none.
+Historical Architect51 COMMENT/planning certified no product proof. Local implementation and authored synthetic tests are not executed proof. No tests/gates/formatter/build/GUI/SDK/auth/network/credentials/commits run in this phase. Done requires actual calibrated public/lifetime/shared tolerance and physical transform evidence, parent gates/independent review. This phase claims none.

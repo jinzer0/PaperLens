@@ -1,0 +1,70 @@
+{
+  "schemaVersion": 1,
+  "scope": "Epic 1 actual product source integration; not Story or Epic completion",
+  "baselineCommit": "51026d9",
+  "productModule": "PaperLensProduct",
+  "integratedCapabilities": [
+    "Sole GRDB Paper/ImportJob and atomic slot/model/generation selector",
+    "Private API-key slots, model-bound native probe owner, permanent retired-owner fencing and explicit Continue",
+    "Owned immutable local PDF copy with copied-digest revalidation and transactional confirmed folder association",
+    "Persistent Library list/grid, ordering, tags, favorites and reading status",
+    "Actual Reader navigation/search/selection/position persistence with lifecycle-owned read leases and synchronous revoke/drain",
+    "Real bounded HTTPS/arXiv transport, consumed confirmation, one actual Paper/ImportJob, actual closed-stage validation and same-identity publication",
+    "Mounted URL confirmation/download/cancel/retry and explicit Reader-open action; current mounted destination is Unfiled and duplicate status remains unverified before download",
+    "Shared native Settings reconnection owner",
+    "Annotation, explicit-precision geometry, revision/FTS and metadata/outline source APIs and fixture regressions"
+  ],
+  "verification": {
+    "productUnion": {
+      "command": "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --filter ProductTests",
+      "tests": 117,
+      "failures": 0,
+      "output": "artifact://606",
+      "evidence": "Real GRDB transactions and owned synthetic files; mocked provider/HTTP transport and synthetic windowless PDFKit conversions. Not authenticated provider, app UI or PDFium execution."
+    },
+    "nativeCompilation": {
+      "scheme": "PaperLensTopology",
+      "configuration": "Release",
+      "architecture": "arm64",
+      "minimumOS": "15.0",
+      "derivedData": ".build/product-native-compile-20261010-c",
+      "codeSigningAllowed": false,
+      "result": "BUILD SUCCEEDED",
+      "rawOutput": "artifact://608",
+      "output": "artifact://609",
+      "applicationAndHelperBinariesExecuted": false,
+      "warnings": "AppIntents metadata skipped and PDFium debug-map duplicate/missing-symbol warnings remain; no warning suppression or debug-symbol repair claimed."
+    },
+    "recoveryIntegration": "git diff --exit-code 412df36 -- PaperLensApp/Application/JobRecoveryPolicy.swift passed: exact previously verified Retry epoch repair",
+    "projectSyntax": "plutil -lint PaperLens.xcodeproj/project.pbxproj passed after quoting plus-sign extension filenames",
+    "publicWireDocumentation": {
+      "url": "https://developers.openai.com/api/reference/resources/chat",
+      "observed": "max_completion_tokens includes visible and reasoning tokens; store controls completion retention. Native connection probe explicitly sends store=false.",
+      "certifiedProfile": false
+    },
+    "independentReviews": [
+      {"reviewer": "34-ProductEntryPersistenceReview", "result": "CLEAR / APPROVE after busy-owner and permanent-retirement fixes", "scope": "Native credential owner lifetime and model-bound durable selector; source review only"},
+      {"reviewer": "38-ActualProductLifetimeReview", "result": "CLEAR / APPROVE", "output": "agent://38-ActualProductLifetimeReview", "scope": "Five-file Reader/deletion/URL writer shared-lifetime bundle; source review only, current workspace lifetime bindings reread"}
+    ]
+  },
+  "preservedFailures": [
+    "Initial union compilation failures (nonthrowing discard callback and Swift 6 XCTest self capture)",
+    "100-test union: two failures from exact-zero PDFKit floating assumption and invalid-descriptor closure-fault assumption",
+    "Unsupported Foundation FileHandle subclass fault injection crashed; replaced with an internal effect-boundary injection retaining a real live descriptor",
+    "117-test union: three URL publication failures from missing MIME during second signature validation; fixed against the actual closed-stage fixed-MIME contract"
+  ],
+  "limitations": [
+    "No actual product UI, live authentication, paid provider request, protected renderer/collector trial renewal, notarization, deployment, push, PR or merge",
+    "Actual Agent purge is not bound: deletion retains failure/debt rather than returning a no-op success",
+    "Annotation editor and metadata/outline/extraction producer are not mounted/bound to the admitted Reader; source/API tests are not product acceptance",
+    "Geometry caller precision is explicit; synthetic floating-arithmetic test budget is not an owning calibrated product profile or AD-8 correspondence proof",
+    "Native model profile is uncertified; genuine Codex channel and two-provider parity remain absent",
+    "OS/CPU matrix, loadedSQLite identity, P1/P2/P3 and canonical Story acceptance remain unestablished",
+    "Native compilation reuses prepared pinned local GRDB/PDFium dependencies; it does not prove fresh full-topology acquisition includes GRDB",
+    "Generated Package.resolved uses local-mirror identity src and is intentionally excluded from source delivery; local .swiftpm mirrors and build artifacts remain untouched"
+  ],
+  "canonicalStoryCompletionCount": 0,
+  "storyRange": "1.1–1.26",
+  "epicAccepted": false,
+  "protectedGatePromotion": false
+}

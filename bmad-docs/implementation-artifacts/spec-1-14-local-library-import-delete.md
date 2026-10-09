@@ -6,9 +6,9 @@ Issue#16 / `issue/16-story-1-14`, base119a28aa9cc941b2bf88851228a67c0bfec88f5a. 
 
 Architect43 read exactly ROOT epics.md:750–782, own SOLUTION-DESIGN, Story1.13 Spec, ProviderRequest/contract.json and PaperLensApp.swift; root-only canonical source not copied. Parent reconciled proposal's per-SHA approval wording with Whole-Epic authority. Trace AD-1/5/6/7/10/11, FR-001–003/005/007/030–034, UX-DR1/4–8/26/35.
 
-Planning ONLY, not implementation-ready. Product BLOCKED pending actual P1/P2/P3, real1.10–12 connections and applied/accepted1.13 policy. StoryDone=false. P6 unproved/blankCapture FAIL. Local purge14dd7b3/GRDBc93e873 are not SDK/Main/product persistence. Current Main is topology UI, not onboarding/Library.
+Newest explicit human directive authorizes actual source creation now: implementation owners are TO DEVELOP, not human prerequisites. Missing P1/P2/P3, credentials, hardware and real1.10–12 integration defer their corresponding runtime acceptance, not independent source creation. StoryDone=false; no gate pass is claimed. P6 remains unproved/blankCapture FAIL. Actual authenticated entry remains required; the parent owns Main/package/project/auth integration. This amendment precedes source edits; this worker is explicitly forbidden commits and verification runs, which are sequenced to the parent rather than fabricated.
 
-UNKNOWN: actual connection/selector/slot APIs; durable Paper/Job/saga/epoch transaction boundaries; security-scope/input API; owned storage/stage layout; physical permits/cleanup/Agent verification; actual Library composition. Bind these in same Spec before product source. Reader geometry/timing belongs to1.15/P6; no full schema/helper/CI split now.
+Bound owners: Application/LocalLibraryLifecycle.swift owns actual local import/list/delete and short JobRecoveryPolicy arbitration. Infrastructure/ProductDatabase.swift is the sole pinned GRDB persistence/visibility owner (b83108d10f42680d78f23fe4d4d80fc88dab3212; prepared parent GRDB framework), with minimal Paper/importJob/deletion and providerConfig UUID slot/Int64 CAS metadata only, no secrets or second SQLite engine. Features/Library/LibraryView.swift consumes that lifecycle with native selection and explicit confirmation. Tests/Product/LocalLibraryLifecycleTests.swift uses private synthetic files and real databases only. These four source/test files plus this Spec are the exact five mutable files. Caller-owned private root contains library.sqlite and UUID-owned paper namespaces; attempt stages and immutable final PDFs are never inferred into records. Epoch/reservation/fence/input and permits guard publication. Restart interrupts unfinished work and retains deletion/cleanup debt without replay. Typed AgentLibraryPurging is an integration dependency; absent implementation blocks deletion, not successful no-op. Reader geometry/timing belongs to1.15/P6; no generic future schema/helper/CI split.
 
 ## Required end-to-end behavior
 
@@ -24,12 +24,54 @@ Short state arbitration only reservation/decision/accounting. No FS/DB/transport
 
 ## Conditional ≤5-file phase
 
-After prerequisites/exact amendment: inspected PaperLensApp/App/PaperLensApp.swift composition; proposed PaperLensApp/Application/LocalLibraryLifecycle.swift; proposed PaperLensApp/Adapters/LocalPDFImportAdapter.swift; sole persistence/publication owner path UNKNOWN; paired actual lifecycle/integration test path UNKNOWN (proposal Tests/LocalLibraryLifecycleTests.swift not existing wiring). These are ownership slots, not permission to scaffold. Fit actual source/tests/callsites in bounded same-Spec phase before edits; no second DB/migration/visibility owner or hidden sixth file.
+The exact owners above implement the independent functional vertical now. Native API-key and Codex admission integration and actual Agent purge are sequenced by the parent after this DB contract is finalized. LibraryView cannot authenticate or bypass Main admission. No nonfunctional Open Reader action is presented. All canonical AC above remain unchanged; unavailable integration prevents acceptance/success only at its real boundary. Worker runs no tests/builds/gates/formatters/auth/network and opens no user documents; parent performs union verification with synthetic fixtures and the prepared pinned GRDB framework.
 
 ## Required proof, not observed here
+
+## Shared Reader/folder source phase (parent verification pending)
+
+The existing lifecycle now owns one synchronous read-lease registry, bound by
+`LibraryReadLeaseProvider(lifecycle:)` to that lifecycle's sole ProductDatabase.
+The provider implements the finalized MainActor ReaderLeaseProvider/ReaderReadLease
+protocols; exact ready UUID/generation/pdfReference validation and an open physical
+original handle precede usable admission. Reservation and deletion admission closure
+are serialized under short accounting-only locking, with DB/filesystem work and
+MainActor revocation callbacks outside it. Delete closes admission before durable
+revocation, synchronously discards actual Reader content through its callback, and
+awaits lease closure plus active synchronous read exit before namespace removal.
+Reentrant close cannot release a read still executing. Unknown physical closure
+retains debt; failed deletion never reopens admission and retry uses the same saga.
+Missing actual Agent purge still fails rather than manufacturing successful deletion.
+
+The same importer exposes `importPDF(from:expectedSHA256:destinationFolderID:)`,
+with nil defaults for native picker use. Confirmation compares the expected digest
+with the actual copied-byte digest after physical writer closure and before any
+publication permit. Mismatch records import failure and publishes no ready Paper.
+It explicitly passes destinationFolderID to the parent's existing
+`reserveImport(_:title:destinationFolderID:)` and
+`publish(_:stage:final:sha256:destinationFolderID:)`. The sole DB owner validates
+destination in both transactions and assigns placement after ready update in the
+publication transaction. No second importer, reader DB, auth authority, renderer,
+or successful missing-binding fallback is added. Parent composes provider/session/UI.
+
+Mutable additions are Application/LibraryReadLeaseProvider.swift and
+Tests/Product/LibraryReadLeaseTests.swift; lifecycle and this existing Spec are the
+only other worker edits. Synthetic GRDB/file regression sources are authored, not
+executed. Parent runs union-ready verification; no worker tests/builds/gates,
+formatters, commits/remotes/workflows or PDFView/app renderer execution are claimed.
+Canonical AC, StoryDone=false and privacy/profile/paid/renderer limits remain intact.
 
 Both genuine onboarding paths and explicit Continue; failed/stale probe and CAS races stay outside Library. Confirmation Cancel zero Paper/Job/files; source change/removal proves copy independence; type/magic/resource exact and one-over cases. Real scope/read/write/close/rename/DB failure cleans/releases in correct order, failure retains debt.
 
 Deterministic barriers at permit/copy/close/rename/commit versus deletion in both orders: held producers block removal; state remains available during outside-lock waits. Actual Agent failure/unknown closure cannot yield success. Crash before/after acceptance, staging, rename, DB success, deletion revoke/purge/tombstone restores correct actions, not old lineage. Duplicate/late results/restart/Retry never resurrect; referenced-missing and unreferenced-present artifacts are not usable Papers.
 
 Architect43 COMMENT/WATCH, read-only five-source proposal, no tests/build/formatter/GUI/SDK/auth/network/commits. Planning checks are not product evidence; Done needs actual dependencies/physical durable UI lifecycle, scoped parent gates and independent review.
+
+## Actual source contract (unverified worker delivery)
+
+- `ProductDatabase.open(at:)` opens the caller-owned private root; `libraryRecords()` reads actual records. `providerConfiguration()` returns `ProviderConfiguration(slotID: UUID?, generation: Int64)` (nil slot/0 initially). `compareAndSwapProviderConfiguration(expected:replacementSlotID:)` increments generation on both connect and disconnect and rejects stale/ABA or exhausted generation. Metadata contains no secrets. Main/connection owner performs actual probe and slot promotion before entering Library.
+- `LocalLibraryLifecycle.open(database:agentPurge:)` restores interrupted work before exposure. `importPDF(from:)` is explicit confirmation admission and returns a durable UUID even for recorded import failure. `list()`, `delete(paperID:)`, `retryDeletion(paperID:)` are real use cases. An already finalized tombstone is idempotent; failed deletion preserves the same deletion UUID. The lifecycle uses the actual JobRecoveryPolicy claim, writer closure, publication transfer/rename/publish/release, revocation, cleanup and namespace-removal contracts, not a parallel public policy.
+- Copy uses the bundled ProviderRequest local PDF signature and import resource budget/pool, declared native PDF type, bounded chunks and SHA256 of actual bytes; validated stage is closed and made read-only before immutable publication. A close failure retains unknown closure/debt and cannot authorize removal in the live process. Every blocking filesystem/database effect executes outside Application actor arbitration. DB guarded transaction binds all reserved lineage identities and permit IDs, then renames and publishes the durable PDF reference plus import success together; failed transaction/guard triggers synchronous owned-byte cleanup before permit release. Restart does not replay or derive records from files.
+- `AgentLibraryPurging.purgeLibraryPaper(paperID:deletionID:)` must return a matching `AgentLibraryPurgeReceipt` only after actual Agent producer closure and namespace absence. Missing implementation throws and durably remains 삭제 미완료. No default successful adapter is supplied. Main must wire the real peer; synthetic actual separate-namespace purge exists only inside tests.
+- `LibraryView(lifecycle:)` uses actual durable records, native PDF picker and confirmation/cancel, ongoing copy progress, persisted failures, Delete and Retry Deletion. It has no Open Reader or alternate connection authority. Parent owns package/Xcode/Main wiring and authenticated-entry integration.
+- Parent verification input: module `ProductLibrary` compiles the Application policy/lifecycle and Infrastructure DB sources against pinned GRDB and ProviderRequest; tests `Tests/Product/LocalLibraryLifecycleTests.swift` use `@testable import ProductLibrary`. Run `swift test --filter LocalLibraryLifecycleTests` after parent target/link/runtime wiring, with prepared framework runtime path `.build/topology/grdb-xcode-unsigned-e53f5631-f280-4d80-9b66-78c81aaa1372/products`. Also compile LibraryView in the app and exercise native cancel/confirm behind actual authenticated entry. Tests cover actual private copy independence/restart, validation exact/one-over, purge absence/failure/mismatch/drain, same-saga restart retry, interrupted/orphan/missing files, guarded late/foreign publication and real rename failure, and provider CAS restart/ABA. They have not been executed; full crash/barrier/native UI/hardware and real Agent acceptance remain unobserved. StoryDone remains false.

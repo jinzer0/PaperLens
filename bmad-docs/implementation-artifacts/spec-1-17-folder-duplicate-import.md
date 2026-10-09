@@ -1,5 +1,23 @@
 # Story 1.17 Build Spec — Folder arrangement and duplicate local import
 
+## Exact product implementation phase (latest explicit source-order instruction)
+
+This phase supersedes the historical planning-only admission below. Exactly five files:
+this Spec; `PaperLensApp/Application/FolderImportService.swift`;
+`PaperLensApp/Infrastructure/ProductDatabase+Folders.swift`;
+`PaperLensApp/Features/Library/ImportConfirmationView.swift`;
+`Tests/Product/FolderImportTests.swift`. Implement durable flat folder create/rename/delete,
+ready-Paper placement, bounded security-scoped SHA256 recognition, and native confirmation.
+Nil destination explicitly means Unfiled; deleting a folder unfiles its placements without
+touching PDF ownership. Metadata not extracted is unavailable; filename is labelled as such.
+No bookmark, Paper, Job, stage or retained handle exists before Continue. Intent is single-use.
+Continue rehashes before admission; existing importer must compare the copied digest again
+before publication and validate/assign destination in its sole publication transaction.
+Parent owns that narrow existing-owner change, migration registration and Library wiring.
+Register `registerFolderMigrations(in:)` in the existing migrator, never a second startup owner.
+Source-only implementation and regression tests are authored; all tests/gates/builds/formatters,
+commits/remotes and `.gjc` workflows are skipped by explicit instruction. No runtime PASS claimed.
+
 ## Authority and admission
 
 Issue#19 / issue/19-story-1-17, base119a28aa9cc941b2bf88851228a67c0bfec88f5a. PRODUCT5eac3bb9424ad893eca7d63bc319b71f580838ed; ARCHITECTURE1195c92227cc628e325f5ff24d70cc93639bf7a9; Whole-Epic https://github.com/jinzer0/PaperLens/issues/3#issuecomment-6049004229. Own Spec before source; no repeated unchanged-scope SHA approval, no gate/live/paid/credential/remote/distribution permission inferred.

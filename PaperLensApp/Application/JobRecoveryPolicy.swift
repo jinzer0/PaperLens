@@ -408,6 +408,8 @@ public enum JobRecoveryPolicy {
       }
       if let error = validate(new, role: snapshot.role) { return reject(error) }
       guard new.paper.id == authority.paper.id else { return reject(.paper) }
+      // Retry reserves a new execution, not a replacement for the observed process epoch.
+      guard new.epoch == authority.epoch else { return reject(.epoch) }
       guard fresh(reservation, history: history) else { return reject(.reservationUnavailable) }
       // Outstanding old cleanup must finish before a new execution can access this namespace.
       guard permits.isEmpty else { return reject(.cleanupOutstanding) }
