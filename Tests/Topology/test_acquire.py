@@ -671,6 +671,200 @@ class WheelTests(IsolatedTest):
         self.assertFalse((self.root / "outside").exists())
 
 
+class RuntimeStageTests(IsolatedTest):
+    # The primitive trusts caller-selected inputs; this is not full acquisition
+    # or the parent's exact-nine-input preflight.
+    python_bytes = b"synthetic Python binary, never executed\n"
+
+    def setUp(self):
+        super().setUp()
+        for owner, name in ((acquire, "fetch"), (acquire, "source_graph"), (acquire, "request"),
+                            (acquire, "run"), (subprocess, "run")):
+            guard = mock.patch.object(owner, name, side_effect=AssertionError(name + " forbidden"))
+            blocked = guard.start()
+            self.addCleanup(guard.stop)
+            self.addCleanup(blocked.assert_not_called)
+        self.work = self.root / "work"
+        self.work.mkdir()
+        self.cache = self.root / "cache"
+        self.cache.mkdir()
+        self.addCleanup(self.assert_no_acquisition)
+
+    def assert_no_acquisition(self):
+        self.assertEqual(list(self.root.rglob("acquisition.json")), [])
+
+    def cached_asset(self, path, kind):
+        data = path.read_bytes()
+        digest = hashlib.sha256(data).hexdigest()
+        (self.cache / digest).write_bytes(data)
+        return {"kind": kind, "filename": path.name, "sha256": digest}
+
+    def runtime_input(self, members=None, wheel=None):
+        if members is None:
+            members = [("python/bin/python3.13", "file", self.python_bytes),
+                       ("python/bin/python3", "link", "python3.13")]
+        archive = self.archive(members)
+        assets = [self.cached_asset(archive, "python")]
+        assets.append(self.cached_asset(wheel or self.wheel({
+            "sample-1.0.data/data/share/sample.txt": b"asset\n",
+            "sample-1.0.data/scripts/sample": b"#!python\nprint('sample')\n",
+        }), "wheel"))
+        return {"arch": "arm64", "assets": assets}
+
+    def stage(self, runtime_input):
+        acquire.runtime_stage({}, self.work, runtime_input, self.cache)
+        self.assertFalse((self.work / "acquisition.json").exists())
+
+    def test_extract_install_record_inventory_and_receipt_byte_hashes(self):
+        runtime_input = self.runtime_input()
+        self.stage(runtime_input)
+        runtime = self.work / "runtime"
+        python = runtime / "python"
+        site = python / "lib/python3.13/site-packages"
+        info = site / "sample-1.0.dist-info"
+        self.assertEqual((python / "bin/python3.13").read_bytes(), self.python_bytes)
+        self.assertEqual(os.readlink(python / "bin/python3"), "python3.13")
+        self.assertEqual((site / "sample/__init__.py").read_bytes(), b"VALUE = 1\n")
+        self.assertIn("Name: sample", (info / "METADATA").read_text())
+        self.assertEqual((info / "licenses/LICENSE").read_bytes(), b"synthetic license\n")
+        self.assertEqual((python / "share/sample.txt").read_bytes(), b"asset\n")
+        script = python / "bin/sample"
+        self.assertIn(b'/python3.13', script.read_bytes())
+        self.assertNotIn(b'/usr/bin/env', script.read_bytes())
+        self.assertEqual(stat.S_IMODE(script.stat().st_mode), 0o755)
+        rows = list(csv.reader(io.StringIO((info / "RECORD").read_text())))
+        self.assertEqual(len(rows), len({row[0] for row in rows}))
+        self.assertIn(["sample-1.0.dist-info/RECORD", "", ""], rows)
+        self.assertIn("../../../share/sample.txt", {row[0] for row in rows})
+        self.assertIn("../../../bin/sample", {row[0] for row in rows})
+        for name, digest, length in rows:
+            if name == "sample-1.0.dist-info/RECORD":
+                continue
+            data = (site / name).read_bytes()
+            encoded = base64.urlsafe_b64encode(hashlib.sha256(data).digest()).rstrip(b"=").decode()
+            self.assertEqual((digest, length), ("sha256=" + encoded, str(len(data))))
+        receipt_path = self.work / "runtime.json"
+        receipt_bytes = receipt_path.read_bytes()
+        receipt = json.loads(receipt_bytes)
+        self.assertEqual(receipt["arch"], "arm64")
+        self.assertEqual(receipt["lockHash"], hashlib.sha256(acquire.LOCK_PATH.read_bytes()).hexdigest())
+        self.assertEqual(receipt["files"], acquire.tree_inventory(runtime))
+        self.assertEqual({item["path"] for item in receipt["files"]}, {
+            "python/bin/python3.13", "python/bin/python3", "python/bin/sample",
+            "python/share/sample.txt", "python/lib/python3.13/site-packages/sample/__init__.py",
+            *["python/lib/python3.13/site-packages/sample-1.0.dist-info/" + name
+              for name in ("WHEEL", "METADATA", "RECORD", "licenses/LICENSE")],
+        })
+        for item in receipt["files"]:
+            path = runtime / item["path"]
+            if "link" in item:
+                self.assertEqual(item["link"], os.readlink(path))
+            else:
+                self.assertEqual(item["sha256"], hashlib.sha256(path.read_bytes()).hexdigest())
+                self.assertEqual(item["mode"], stat.S_IMODE(path.stat().st_mode))
+        self.stage(runtime_input)
+        self.assertEqual(receipt_path.read_bytes(), receipt_bytes)
+
+    def test_missing_or_invalid_python_layout_leaves_incomplete_destination(self):
+        layouts = (
+            [("python/lib/placeholder", "file", b"no binary")],
+            [("elsewhere/bin/python3.13", "file", self.python_bytes)],
+            [("python/bin/python3.13", "dir", "")],
+            [("python/bin/python3.13", "file", self.python_bytes), ("foreign", "file", b"extra")],
+        )
+        for index, members in enumerate(layouts):
+            with self.subTest(layout=index):
+                self.work = self.root / ("invalid-" + str(index))
+                self.work.mkdir()
+                runtime_input = self.runtime_input(members)
+                with self.assertRaisesRegex(acquire.Failure, "python_runtime_layout"):
+                    self.stage(runtime_input)
+                self.assertFalse((self.work / "runtime.json").exists())
+                self.assertFalse((self.work / "acquisition.json").exists())
+                inventory = acquire.tree_inventory(self.work / "runtime")
+                with self.assertRaisesRegex(acquire.Failure, "incomplete_runtime"):
+                    self.stage(runtime_input)
+                self.assertEqual(acquire.tree_inventory(self.work / "runtime"), inventory)
+                self.assertFalse((self.work / "runtime.json").exists())
+
+    def test_duplicate_wheel_install_collision_never_writes_runtime_receipt(self):
+        runtime_input = self.runtime_input()
+        runtime_input["assets"].append(dict(runtime_input["assets"][1]))
+        with self.assertRaisesRegex(acquire.Failure, "wheel_install_collision"):
+            self.stage(runtime_input)
+        self.assertFalse((self.work / "runtime.json").exists())
+        site = self.work / "runtime/python/lib/python3.13/site-packages"
+        self.assertEqual((site / "sample/__init__.py").read_bytes(), b"VALUE = 1\n")
+        self.assertTrue((site / "sample-1.0.dist-info/RECORD").is_file())
+
+    def test_tampered_wheel_record_never_writes_runtime_receipt(self):
+        wheel = self.wheel()
+        with zipfile.ZipFile(wheel) as source:
+            members = [(item, source.read(item)) for item in source.infolist()]
+        with zipfile.ZipFile(wheel, "w") as target:
+            for item, data in members:
+                target.writestr(item, b"tampered\n" if item.filename == "sample/__init__.py" else data)
+        runtime_input = self.runtime_input(wheel=wheel)
+        with self.assertRaisesRegex(acquire.Failure, "wheel_record_mismatch"):
+            self.stage(runtime_input)
+        self.assertFalse((self.work / "runtime.json").exists())
+        self.assertEqual((self.work / "runtime/python/bin/python3.13").read_bytes(), self.python_bytes)
+        self.assertFalse((self.work / "runtime/python/lib/python3.13/site-packages/sample/__init__.py").exists())
+
+    def test_occupied_destination_refusal_preserves_foreign_bytes(self):
+        runtime_input = self.runtime_input()
+        destination = self.work / "runtime"
+        destination.mkdir()
+        foreign = destination / "foreign"
+        foreign.write_bytes(b"preserve foreign bytes\n")
+        foreign.chmod(0o600)
+        inventory = acquire.tree_inventory(destination)
+        with self.assertRaisesRegex(acquire.Failure, "incomplete_runtime"):
+            self.stage(runtime_input)
+        self.assertEqual(acquire.tree_inventory(destination), inventory)
+        self.assertEqual(foreign.read_bytes(), b"preserve foreign bytes\n")
+        self.assertFalse((self.work / "runtime.json").exists())
+
+    def test_runtime_only_output_is_refused_without_full_acquisition(self):
+        self.stage(self.runtime_input())
+        receipt_bytes = (self.work / "runtime.json").read_bytes()
+        inventory = acquire.tree_inventory(self.work / "runtime")
+        with self.assertRaisesRegex(packaging.Failure, "required_file_missing"):
+            packaging.validate_receipts(self.work, SCRIPTS.parents[1], "arm64")
+        self.assertFalse((self.work / "acquisition.json").exists())
+        self.assertEqual((self.work / "runtime.json").read_bytes(), receipt_bytes)
+        self.assertEqual(acquire.tree_inventory(self.work / "runtime"), inventory)
+
+    def test_missing_cached_hash_input_fails_without_creating_bytes(self):
+        digest = hashlib.sha256(b"missing").hexdigest()
+        path = acquire.safe_path(self.cache, digest)
+        with self.assertRaises(FileNotFoundError):
+            acquire.check_hash(path, digest)
+        self.assertFalse(path.exists())
+
+    def test_changed_cached_hash_input_is_rejected_and_preserved(self):
+        asset = self.cached_asset(self.wheel(), "wheel")
+        path = acquire.safe_path(self.cache, asset["sha256"])
+        acquire.check_hash(path, asset["sha256"])
+        path.write_bytes(b"changed cached bytes")
+        with self.assertRaisesRegex(acquire.Failure, "sha256_mismatch"):
+            acquire.check_hash(path, asset["sha256"])
+        self.assertEqual(path.read_bytes(), b"changed cached bytes")
+
+    def test_symlinked_cached_hash_input_is_rejected_even_with_matching_bytes(self):
+        wheel = self.wheel()
+        data = wheel.read_bytes()
+        digest = hashlib.sha256(data).hexdigest()
+        path = self.cache / digest
+        path.symlink_to(wheel)
+        with self.assertRaisesRegex(acquire.Failure, "sha256_mismatch"):
+            acquire.check_hash(path, digest)
+        with self.assertRaisesRegex(acquire.Failure, "symlink_path"):
+            acquire.safe_path(self.cache, digest)
+        self.assertTrue(path.is_symlink())
+        self.assertEqual(wheel.read_bytes(), data)
+
+
 class EvidenceTests(IsolatedTest):
     def report(self, **changes):
         actors = [{"role": role, "actorInstanceRef": "actor-" + str(verify.uuid.uuid4()), "identityVerified": False} for role in verify.ROLES]
