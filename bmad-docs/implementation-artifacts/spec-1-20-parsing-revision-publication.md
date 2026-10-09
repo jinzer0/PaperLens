@@ -451,14 +451,16 @@ observation, fail-closed observer/cancel/limit paths, wrong-operation/no renewal
 idempotent post-disposal finish. No app/helper/SDK/renderer trial or Story promotion.
 
 Parent union919 exposed concurrent independent imports rejected as importCapacity.
-The existing sole RequestResourcePool uses a failed short NSLock.try as if its kind's
-cap were exhausted; another kind or simultaneous under-cap confirmation can cause this
-false rejection. Use normal mutual exclusion for that short counter-only arbitration,
-then decide admission solely against the unchanged actual cap. No callbacks, kernel,
-file/DB/network effects occur under that lock. Do not increase quotas or claim a hard
-wall-clock mutex bound. Existing FolderImport concurrent confirmation regression and
-Main actual pool tests must pass; preserve the original 244/one-failure output919.
-Exact shared-contract source addition: Contracts/ProviderRequest/ProviderRequest.swift.
+The initially reviewed normal-lock candidate is withdrawn: existing committed Spec1.7
+lines96–97 explicitly requires a nonblocking process pool, and paired Python acquire
+also denies immediate lock contention. Preserve both source implementations unchanged.
+The concurrency fixture must accept only this documented importCapacity admission
+denial, join already admitted work, verify denied admission created no extra Paper/Job,
+then explicitly prepare/confirm a fresh owned-fixture action. Never silently retry the
+consumed confirmation in product code or raise quotas. Preserve original failure919,
+candidate build/test924/925 and reviewed-but-withdrawn candidate provenance. Exact
+additional test scope: Tests/Product/FolderImportTests.swift. No admission/architecture
+contract change or new runtime permission is inferred.
 
 ### Actual Main resource-owner implementation handoff (unverified source)
 
