@@ -57,3 +57,34 @@ Create/move/revisit/restart persists; commit failure/invalid destination/move-de
 Delete either duplicate while survivor open/importing; survivor PDF/records/placement intact after relaunch. Copy/close/rename/DB failure and crash around accepted intent/publication never false ready. Hold actual writer/publisher barriers with revoke/Retry/restart and late completions: drain before removal, synchronous cleanup before release, no resurrection/cross-Paper deletion. Ready explicit Reader only, pending/failed/deleting cannot open; no automatic navigation/parsing dependency.
 
 Architect46 COMMENT/WATCH, exact five-source read-only proposal; no tests/gates/formatter/build/GUI/SDK/auth/network/credentials/user docs/commits. Done requires real accepted owners/durable physical tests, parent gates and independent review; planning commits certify no product/gate.
+
+## Selected-source read ownership correction
+
+At current verified integration fe7ea93, FolderImportService.hashSelectedSource defers
+import resource lease.close and security-scope stop unconditionally. If checked input
+FileHandle.close throws producerClosureUnknown, the actual descriptor is not retained
+and the importer capacity is released despite unproved physical closure. This is a
+concrete still-executable source defect, separate from missing Agent purge/SDK gates.
+Also regular/symlink URL attributes checked before Foundation opening do not pin the
+opened object's type; replacing it with a FIFO/symlink can precede a blocking/wrong open.
+
+Keep the same actual import pool/budget and temporary read-only recognition semantics.
+Use public nonblocking O_RDONLY/O_NOFOLLOW/O_CLOEXEC opening followed by actual fstat
+regular-file/type/size and pinned identity checks against observed source facts before
+reading. No arbitrary-source fallback, permission repair, new selector or second counter.
+Capture real FileHandle/resource lease/security-scope ownership before read effects.
+Checked close is attempted once; only known physical close releases its lease/scope.
+Unknown close retains actual handle/lease/scope strongly beyond thrown prepare/facade
+loss, denies further capacity, returns producerClosureUnknown and creates no confirmation,
+Paper/Job/stage. No ARC, FD-number probe, blind retry or error masking is closure evidence.
+Normal failure/cancellation with known close releases genuinely and preserves its cause.
+
+Exact worker scope: FolderImportService.swift, existing FolderImportTests.swift and this
+Spec. Production close uses actual FileHandle.close; a required internal test injection
+may throw while retaining the real descriptor, never default-success. Read-only internal
+debt inspection may expose actual retained fixture ownership for explicit test teardown;
+manual fixture cleanup/lease release must not change runtime unknown state or claim ACK.
+Tests use owned synthetic files/FIFOs/symlinks only, no user document or SDK/runtime trial.
+Parent owns focused/union/native verification, independent retention review/evidence/local
+commit. Current291 tests1001/native-w1002 remain prior baseline, not correction evidence.
+Story/privacy/P1/P2/P3/renderer/trial/remote boundaries remain unchanged and unproved.
