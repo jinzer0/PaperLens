@@ -123,3 +123,44 @@ Manual owned-fixture physical cleanup precedes lease/scope teardown but does not
 runtime unknown state or fabricate ACK. Granted user security scope and deterministic
 read/body-budget error branches remain runtime-unverified. No actual user PDFs, helper/
 SDK/app/renderer/paid/remote/trial renewal ran; Story/P1/P2/P3/hard bounds remain unproved.
+
+## Mounted captured Paper movement — actual product continuation
+
+Canonical1.17 root epics858–862/876 requires Library Paper movement with persisted placement.
+At verified2260e36 the actual folder manager creates/renames/deletes folders and import can
+choose a destination, but LibraryBrowserView has no move-existing-Paper action. The unused
+assignPaper(UUID,to:) service/DB path also lacks a captured generation/current-placement
+fence. Implement the existing criterion, not another folder store or metadata inference.
+
+Use a data-only captured placement from sole GRDB: actual Paper UUID/generation/immutable
+SHA/reference plus actual current folder UUID/name (or actual Unfiled). Capture read checks
+ready/nondeleted/current requested generation; invalid stored identity fails, not success.
+Replace public UUID-only assignPaper with captured-placement movement (remove obsolete
+entry points and update callers/tests, no alias). In one existing adapterWrite transaction,
+revalidate captured Paper generation/immutable facts/current ready/nondeleted status and
+expected placement before applying existing folder membership. Validate actual destination
+exists; stale/deleted/rebound targets and changed placement reject without effect. No new
+Job/PDF/copy/selector/migration/counter/lease. Imported-publication assignImportedPaper stays
+the existing internal ready-publication operation; its current authority is unchanged.
+Value comparison is optimistic observed-state fencing, NOT global ABA or read authority.
+
+Both card/list expose native move action for a captured current readable Paper. The sheet
+loads actual folders/current placement using shared FolderImportService, uses UUIDs not
+labels as destinations, explicit Unfiled, Cancel with zero effects and explicit Save.
+Fences/cancellation prevent old loads repopulating a replaced/dismissed sheet; Save captures
+the actual observed placement/destination before suspension, and cannot silently move a
+new current selection or replay failed Save. Failure stays explicit with current-state
+reload before a fresh Save. Committed movement may win late UI dismissal; do not undo it.
+Success refreshes the actual Library and closes; preserve opener focus. Required service
+injection uses workspace.imports, not a new instance/store. Existing detail/query fences
+must stay intact when entering movement. Physical UI/focus remains unproved by compilation.
+
+Worker EXACT5 files: FolderImportService.swift, ProductDatabase+Folders.swift,
+LibraryBrowserView.swift, FolderImportTests.swift and this Spec. Parent alone updates actual
+ProductWorkspaceView initializer and Korean folder-manager controls in ImportConfirmationView
+(labels only, no extra behavior). Worker skips every gate/build/test/lint/formatter/commit/
+remote/workflow/delegation/runtime. Parent verifies actual owned-file/GRDB move/Unfiled/reopen,
+stale Paper/generation/hash/reference/current placement/destination/delete rejection with
+no extra Paper/Job/copies, cancellation/late-load fixtures as feasible, full Product/native;
+independent changed-source review and exact local evidence commit. Protected/runtime/remote/
+calibration/auth/Story boundaries are unchanged; previous299/native-y are prior evidence.
