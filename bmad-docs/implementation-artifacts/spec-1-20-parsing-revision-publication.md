@@ -411,3 +411,9 @@ atomic cancellation after admission or interrupt SQLite/native calls. Exact boun
 change: ExtractionRevisionService.swift and ExtractionRevisionTests.swift; parent
 updates this existing Spec/evidence and runs the changed behavior/Product union.
 No budget renewal, new owner, helper execution or Story/runtime certification.
+
+Parent added the original-task cancellation guard and a cancelled-task/dispatch-census
+regression. Product union passes 230 tests/zero failures (`artifact://913`); native-j
+unsigned Release arm64/macOS15 compilation succeeds (`artifact://914`). No invocation,
+attempt or revision row is created in the already-cancelled fixture. This proportional
+behavioral check does not reopen unchanged HIGH lifecycle reviews or promote Story gates.

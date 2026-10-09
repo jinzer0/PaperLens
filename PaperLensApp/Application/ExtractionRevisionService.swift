@@ -682,6 +682,7 @@ public struct ExtractionRevisionService: Sendable {
   public func parse(_ identity: ExtractionIdentity) async throws {
     guard let producer else { throw ExtractionError.producerUnavailable }
     guard let geometryValidator else { throw ExtractionError.geometryUnavailable }
+    try Task.checkCancellation()
     try await Task.detached { try database.reserveExtraction(identity) }.value
     try await consumeReserved(identity, producer: producer, validator: geometryValidator)
   }

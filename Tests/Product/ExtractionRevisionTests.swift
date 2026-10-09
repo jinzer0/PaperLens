@@ -4,6 +4,14 @@ import XCTest
 @testable import PaperLensProduct
 
 final class ExtractionRevisionTests: XCTestCase {
+  private actor DispatchCensus: ExtractionBatchProducing {
+    private(set) var calls = 0
+    func withBatches(_ identity: ExtractionIdentity,
+      consume: @escaping @Sendable ([ExtractionBatch], ExtractionConsumptionScope) async throws -> Void) async throws {
+      calls += 1
+      throw ExtractionError.invalidBatch
+    }
+  }
   private struct UnboundGeometry: ExtractionGeometryInput {}
   private struct RejectingGeometryValidator: ExtractionGeometryValidating {
     func validateAndEncode(_ input: any ExtractionGeometryInput,
@@ -245,6 +253,29 @@ final class ExtractionRevisionTests: XCTestCase {
       XCTAssertTrue(try db.searchExtraction(paperID: paper, matching: "forbidden").isEmpty)
       XCTAssertEqual(try db.searchExtraction(paperID: paper, matching: "retained").count, 1)
     }
+  }
+
+  func testAlreadyCancelledParseCreatesNoDurableIntentOrProducerDispatch() async throws {
+    let (db, paper, generation, root) = try fixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let id = try identity(db, paper, generation)
+    let producer = DispatchCensus()
+    let service = ExtractionRevisionService(database: db, producer: producer,
+      geometryValidator: RejectingGeometryValidator())
+    let request = Task {
+      withUnsafeCurrentTask { $0?.cancel() }
+      try await service.parse(id)
+    }
+    do { try await request.value; XCTFail("Cancelled action was admitted") }
+    catch { XCTAssertTrue(error is CancellationError) }
+    let dispatches = await producer.calls
+    XCTAssertEqual(dispatches, 0)
+    for table in ["extractionInvocation", "extractionAttempt", "extractionRevision"] {
+      XCTAssertEqual(try db.adapterRead { try Int.fetchOne($0,
+        sql: "SELECT COUNT(*) FROM \(table)") }, 0)
+    }
+    XCTAssertNil(try db.extractionStatus(paperID: paper).failure)
+    XCTAssertNil(try db.extractionStatus(paperID: paper).usableRevision)
   }
 
   func testAbsentProducerRejectsBeforeReservationWithoutUsableRevision() async throws {

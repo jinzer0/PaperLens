@@ -25,9 +25,9 @@
   "verification": {
     "productUnion": {
       "command": "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --filter ProductTests",
-      "tests": 229,
+      "tests": 230,
       "failures": 0,
-      "output": "artifact://908",
+      "output": "artifact://913",
       "evidence": "Real GRDB transactions and owned synthetic files; mocked provider/HTTP transport and synthetic windowless PDFKit conversions. Not authenticated provider, app UI or PDFium execution."
     },
     "nativeCompilation": {
@@ -35,11 +35,11 @@
       "configuration": "Release",
       "architecture": "arm64",
       "minimumOS": "15.0",
-      "derivedData": ".build/product-native-compile-20261010-i",
+      "derivedData": ".build/product-native-compile-20261010-j",
       "codeSigningAllowed": false,
       "result": "BUILD SUCCEEDED",
-      "rawOutput": "artifact://912",
-      "output": "artifact://912",
+      "rawOutput": "artifact://914",
+      "output": "artifact://914",
       "applicationAndHelperBinariesExecuted": false,
       "warnings": "AppIntents metadata skipped, PDFium debug-map duplicate/missing-symbol warnings and an unnecessary-await Swift warning remain; no warning suppression or debug-symbol repair claimed."
     },
@@ -141,6 +141,17 @@
     "ownership": "Same LocalLibraryLifecycle registry; readonly no-follow actual open with durable checks, active-read-pinned F_DUPFD_CLOEXEC outside arbitration, one transfer, wrong-operation no effect, checked own-token release independent of live Reader, permanent unknown cleanup debt",
     "packageAndNativeMembershipRegistered": true,
     "actualResourceAndGeometryComposition": false,
+    "helperExecuted": false,
+    "storyAccepted": false
+  },
+  "cancelledParserAdmission": {
+    "baseVerifiedCommit": "d5ef01f",
+    "preImplementationSpecificationCommit": "ceb7c97",
+    "behavior": "Already-cancelled original caller throws before detached durable reservation; zero invocation/attempt/revision rows and zero producer dispatch. Cancellation after admission is not claimed atomic or interruptible",
+    "productUnion": {"tests": 230, "failures": 0, "output": "artifact://913"},
+    "nativeOutput": "artifact://914",
+    "nativeDerivedData": ".build/product-native-compile-20261010-j",
+    "verificationScope": "Direct regression for one-line pre-admission cancellation guard; unchanged HIGH ownership reviews not repeated",
     "helperExecuted": false,
     "storyAccepted": false
   },
