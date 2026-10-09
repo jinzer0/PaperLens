@@ -144,9 +144,39 @@ final class FolderImportTests: XCTestCase {
     let service = FolderImportService(database: db, lifecycle: lifecycle)
     let firstIntent = try await service.prepare(source: source)
     let secondIntent = try await service.prepare(source: source)
-    async let firstResult = service.continueImport(firstIntent.id, destinationFolderID: nil)
-    async let secondResult = service.continueImport(secondIntent.id, destinationFolderID: nil)
-    let (first, second) = try await (firstResult, secondResult)
+    let firstResult = Task { () -> Result<UUID, Error> in
+      do { return .success(try await service.continueImport(firstIntent.id, destinationFolderID: nil)) }
+      catch { return .failure(error) }
+    }
+    let secondResult = Task { () -> Result<UUID, Error> in
+      do { return .success(try await service.continueImport(secondIntent.id, destinationFolderID: nil)) }
+      catch { return .failure(error) }
+    }
+    let outcomes = await [firstResult.value, secondResult.value]
+    var admitted: [UUID] = []
+    var denied = 0
+    for outcome in outcomes {
+      switch outcome {
+      case .success(let id): admitted.append(id)
+      case .failure(let error):
+        guard error as? LocalLibraryError == .importCapacity else { throw error }
+        denied += 1
+      }
+    }
+    XCTAssertEqual(try db.libraryRecords().count, admitted.count)
+    XCTAssertEqual(try db.adapterRead { try Int.fetchOne($0,
+      sql: "SELECT COUNT(*) FROM importJob") }, admitted.count)
+    for intent in [firstIntent, secondIntent] {
+      do { _ = try await service.continueImport(intent.id, destinationFolderID: nil); XCTFail("Consumed intent replayed") }
+      catch { XCTAssertEqual(error as? FolderImportError, .consumedIntent) }
+    }
+    // Fresh explicit fixture confirmations after joining admitted work, not an automatic product retry.
+    for _ in 0..<denied {
+      let fresh = try await service.prepare(source: source)
+      admitted.append(try await service.continueImport(fresh.id, destinationFolderID: nil))
+    }
+    XCTAssertEqual(admitted.count, 2)
+    let first = admitted[0], second = admitted[1]
     XCTAssertNotEqual(first, second)
     XCTAssertEqual(Set(try db.libraryRecords().map(\.id)), Set([first, second]))
     XCTAssertEqual(try Data(contentsOf: pdf(db, first)), try Data(contentsOf: pdf(db, second)))

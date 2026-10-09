@@ -25,9 +25,9 @@
   "verification": {
     "productUnion": {
       "command": "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --filter ProductTests",
-      "tests": 230,
+      "tests": 246,
       "failures": 0,
-      "output": "artifact://913",
+      "output": "artifact://928",
       "evidence": "Real GRDB transactions and owned synthetic files; mocked provider/HTTP transport and synthetic windowless PDFKit conversions. Not authenticated provider, app UI or PDFium execution."
     },
     "nativeCompilation": {
@@ -35,11 +35,11 @@
       "configuration": "Release",
       "architecture": "arm64",
       "minimumOS": "15.0",
-      "derivedData": ".build/product-native-compile-20261010-j",
+      "derivedData": ".build/product-native-compile-20261010-m",
       "codeSigningAllowed": false,
       "result": "BUILD SUCCEEDED",
-      "rawOutput": "artifact://914",
-      "output": "artifact://914",
+      "rawOutput": "artifact://929",
+      "output": "artifact://929",
       "applicationAndHelperBinariesExecuted": false,
       "warnings": "AppIntents metadata skipped, PDFium debug-map duplicate/missing-symbol warnings and an unnecessary-await Swift warning remain; no warning suppression or debug-symbol repair claimed."
     },
@@ -60,7 +60,8 @@
       {"reviewer": "54-ActualReaderMetadataLifetimeReview", "result": "CLEAR / APPROVE", "output": "agent://54-ActualReaderMetadataLifetimeReview", "scope": "Actual weak-PDF metadata UI mount, data-only outline, notification observation and synchronous invalidate-before-detach/read-lease release; source review only"},
       {"reviewer": "56-PDFiumCorrectedPublicationReview", "result": "CLEAR / APPROVE: original three HIGH and one MEDIUM RESOLVED", "output": "agent://56-PDFiumCorrectedPublicationReview", "scope": "Five-file actual helper, scoped consumer, captured budget, rejected-FD debt, exact acquisition reference, sole DB publication and Retry caller; source-only, not hard RSS/runtime/Story proof"},
       {"reviewer": "57-ReaderUncertainCloseQuarantine", "result": "CLEAR / APPROVE", "output": "agent://57-ReaderUncertainCloseQuarantine", "scope": "Single physical-close uncertainty admission, actual reused test-owned readonly FD, retained Reader debt and unchanged deletion drain/saga; source-only, no whole-Story/runtime certification"},
-      {"reviewer": "59-ActualLibraryInputPinIntegrity", "result": "CLEAR / APPROVE", "output": "agent://59-ActualLibraryInputPinIntegrity", "scope": "Actual shared-registry child token, one-time readonly FD duplication, checked per-token closure, release/revoke races and retained physical debt; source-only, not parser/resource/calibration/runtime admission"}
+      {"reviewer": "59-ActualLibraryInputPinIntegrity", "result": "CLEAR / APPROVE", "output": "agent://59-ActualLibraryInputPinIntegrity", "scope": "Actual shared-registry child token, one-time readonly FD duplication, checked per-token closure, release/revoke races and retained physical debt; source-only, not parser/resource/calibration/runtime admission"},
+      {"reviewer": "61-MainParserResourceIntegrity", "result": "CLEAR / APPROVE; original HIGH operation renewal RESOLVED", "output": "agent://61-MainParserResourceIntegrity", "scope": "Actual Main pool/kernel residency/original deadline retention, consumed IDs and final fixture preserving original nonblocking contract; withdrawn normal-lock candidate approval superseded; source-only"}
     ]
   },
   "previousIntegrationEvidence": {
@@ -152,6 +153,29 @@
     "nativeOutput": "artifact://914",
     "nativeDerivedData": ".build/product-native-compile-20261010-j",
     "verificationScope": "Direct regression for one-line pre-admission cancellation guard; unchanged HIGH ownership reviews not repeated",
+    "helperExecuted": false,
+    "storyAccepted": false
+  },
+  "mainParserResourceOwner": {
+    "baseVerifiedCommit": "38a6456",
+    "preImplementationSpecificationCommit": "7ca69ed",
+    "supersedingAdmissionSpecCommit": "f74a736",
+    "sourceDiffAgainstBaseSha256": "c4ca89bfd5de6ff2d3e78850b3e6cf3500857fe90e6c653f3f00372514adf7ef",
+    "sourceDiffScope": "git diff --cached --binary againstf74a736 for exact staged Package/project/PDFiumExtractionResourceOwner/PDFiumExtractionResourceOwnerTests/FolderImportTests; docs excluded; shared contracts unchanged",
+    "actualOwnership": "Existing parser process pool/lease/budget, positive public Main MACH_TASK_BASIC_INFO residency, original monotonic deadline, sticky failures, captured-operation finish and strong unknown-cleanup retention; permanent consumed UUID prevents renewal",
+    "failedCompilerOutputs": ["artifact://915", "artifact://916"],
+    "compilerRepairs": "Explicit try for throwing task join; MainActor XCTest self captures without Sendable suppression",
+    "initialFocusedTests": {"tests": 14, "failures": 0, "output": "artifact://917"},
+    "preservedFailedUnion": {"tests": 244, "failures": 1, "output": "artifact://919", "cause": "Concurrent fixture required both nonblocking import admissions to succeed"},
+    "withdrawnCandidate": {"productUnion": "artifact://924", "nativeOutput": "artifact://925", "reason": "Normal-lock pool candidate contradicts existing Spec1.7 nonblocking contract; restored Swift/Python byte-identical to HEAD and corrected only explicit fresh-confirmation fixture"},
+    "finalProductUnion": {"tests": 246, "failures": 0, "output": "artifact://928"},
+    "ownedResourceTestsInUnion": 16,
+    "sharedContractTests": {"tests": 32, "failures": 0, "output": "artifact://930"},
+    "nativeOutput": "artifact://929",
+    "nativeDerivedData": ".build/product-native-compile-20261010-m",
+    "review": "agent://61-MainParserResourceIntegrity: final CLEAR / APPROVE",
+    "combinedMainHelperRSSOrWatchdogCertified": false,
+    "actualInputFactoryAndGeometryComposition": false,
     "helperExecuted": false,
     "storyAccepted": false
   },

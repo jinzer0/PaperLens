@@ -462,6 +462,20 @@ candidate build/test924/925 and reviewed-but-withdrawn candidate provenance. Exa
 additional test scope: Tests/Product/FolderImportTests.swift. No admission/architecture
 contract change or new runtime permission is inferred.
 
+Final Parent verification: compiler915/916 failures are retained; repaired throwing task
+join and XCTest MainActor captures, without suppressing Swift concurrency checks.
+Fourteen focused tests pass917. Review61 found an original HIGH: finish erased consumed
+operation identity, permitting recaptured original deadlines. Persistent consumed UUIDs
+now survive finish without retaining released owners/leases; successful/expired and
+barrier-controlled replay regressions deny renewal. Final review61 CLEAR / APPROVE also
+checks the explicit fresh-confirmation fixture and withdrawn normal-lock candidate.
+Final Product union passes246/zero failures928 (sixteen Main resource cases), existing
+wire contract passes32/zero930, and fresh unsigned Release arm64/macOS15 native-m
+compilation succeeds929. Actual source preserves both original Swift/Python nonblocking
+pool implementations. Earlier244/one failure919 and candidate924/925 remain historical.
+These are real Main accounting/source/owned-unit proofs, not combined RSS/watchdog,
+input-factory/geometry activation, helper execution, calibration or Story acceptance.
+
 ### Actual Main resource-owner implementation handoff (unverified source)
 
 Added `PDFiumExtractionResourceOwner` with public readonly `identity`, `operationID`,
