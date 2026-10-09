@@ -66,3 +66,42 @@ Both views same identity/order/real missing states/details/grounding; all four a
 Native Canvas semantic styling, Korean state+action and non-color cues; actual-background contrast, native text scaling/window resize. Keyboard/VoiceOver label-role-state, dialog/detail focus return and accessible Retry/Cancel/Delete. No deferred polish.
 
 Architect56 COMMENT/product BLOCK; five-source read-only, no tests/gates/formatter/build/GUI/SDK/auth/network/credentials/commits. Done needs actual owners/gates/durable physical/native proof plus parent verification/independent review; planning passes none.
+
+## Persisted abstract/topic identification — bounded actual product source
+
+Canonical Story1.24 (root epics1093–1094) requires actual missing states and abstract/topic
+information in hover/detail. Current bdffce6 LibraryBrowserView.paperContent shows title,
+year/status/Favorite/user tags but no abstract or source topic presentation. Reader metadata
+already has validated, provenance-bearing abstract/topics fields in sole GRDB. This is a
+concrete missing mounted product surface, not permission to generate metadata or summary.
+The separately investigated URL duplicate warning already matches its committed unknown
+predownload contract; it is unchanged. Source296/native-x/source75 remain prior evidence.
+
+Reuse existing OrganizationSortFacts/currentFacts/query fence. Add REQUIRED optional
+ReaderMetadataSnapshot metadata to the facts initializer, updating all actual callers;
+nil means no published stored metadata observation, not success or an invented empty
+result. Parent updates ProductDatabase+LibraryFacts.swift to return the validated snapshot
+from its existing one-read-transaction ready/nondeleted/current-generation/SHA/reference/
+visible-revision join. No additional database, selector, metadata generation, migration,
+poller, query cache or PDF access. Observation is a query-time snapshot, not continuously
+current publication/read authority. Keep sorting, organization, read leases and deletion
+owners unchanged. Corrupt payload still fails the real query; never quietly return nil.
+
+Both card/list must expose actual abstract/topic fields and a native explicit detail affordance.
+Keep source topics distinct from user tags. Unknown stays explicitly unknown; conflicting
+candidate texts remain a conflict, never a guessed winner. Detail shows actual source kind/
+sourceID for candidates and bounded Unicode-safe excerpts; do not invent confidence, convert
+PDF Subject into abstract, infer topic tags from user tags, or display Brief/summary success.
+Reusing the existing generation-filtered facts is mandatory. Capture actual selected Paper
+identity/data-only facts; invalidate stale detail on query invalidation, work, or disappearance
+and return focus to its captured opener. No async callback may reopen stale detail.
+
+Worker EXACT five files: Application/LibraryOrganizationService.swift,
+Features/Library/LibraryBrowserView.swift, Tests/Product/LibraryOrganizationTests.swift,
+Tests/Product/ProductWorkspaceTests.swift and this Spec. Parent alone changes
+Infrastructure/ProductDatabase+LibraryFacts.swift for the same-transaction fact extraction.
+Worker skips all tests/builds/lint/format/gates/commits/remotes/workflows/delegation/runtime.
+Parent verifies real owned GRDB storage/reopen/current-revision/generation/no-payload/conflict/
+corrupt-data behavior, unchanged user-tag filters and focused/union/native compilation;
+then concrete metadata/query-lifetime review, exact evidence/local commit. Existing protection,
+calibration/provider/SDK/P1/P2/P3/UI/trial/remote/Story boundaries remain unchanged and unproved.
