@@ -25,9 +25,9 @@
   "verification": {
     "productUnion": {
       "command": "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --filter ProductTests",
-      "tests": 271,
+      "tests": 276,
       "failures": 0,
-      "output": "artifact://962",
+      "output": "artifact://972",
       "evidence": "Real GRDB transactions, owned synthetic files and actual local FIFO IO/close/peer metadata/EPIPE; mocked provider/HTTP transport and synthetic windowless PDFKit conversions. Not authenticated provider, app UI, SDK producer or PDFium execution."
     },
     "nativeCompilation": {
@@ -35,11 +35,11 @@
       "configuration": "Release",
       "architecture": "arm64",
       "minimumOS": "15.0",
-      "derivedData": ".build/product-native-compile-20261010-r",
+      "derivedData": ".build/product-native-compile-20261010-s",
       "codeSigningAllowed": false,
       "result": "BUILD SUCCEEDED",
-      "rawOutput": "artifact://963",
-      "output": "artifact://963",
+      "rawOutput": "artifact://976",
+      "output": "artifact://976",
       "applicationAndHelperBinariesExecuted": false,
       "warnings": "AppIntents metadata skipped, PDFium debug-map duplicate/missing-symbol warnings and an unnecessary-await Swift warning remain; no warning suppression or debug-symbol repair claimed."
     },
@@ -252,6 +252,26 @@
     "actualSDKProducerProcessBoundOrReaped": false,
     "sdkAuthenticationOrPurgeVerified": false,
     "sandboxP1P2P3Certified": false,
+    "helperExecuted": false,
+    "storyAccepted": false
+  },
+  "realMainParsingOwnershipGraph": {
+    "baseVerifiedFeatureCommit": "15e71a0",
+    "preImplementationSpecificationCommit": "df5426c",
+    "sourceDiffAgainstSpecificationSha256": "db422fa510267c621c9fe12571cbd3993d4dee9a45d17e8b744df40143f1f311",
+    "sourceDiffScope": "Six exact Package/project/MainPDFiumParsingComposition/PDFiumExtractionResourceOwner/ExtractionRevisionService/MainPDFiumParsingCompositionTests paths againstdf5426c; docs excluded",
+    "actualComposition": "Actual lifecycle/database/epoch and original authority, sole genuine input acquirer/public Main Mach resource constructor, real producer, required explicit geometry validator/shared codec, service and Retry coordinator. Missing binding rejects before capture/job/effects. Revocation synchronously poisons original resources then requests only matching actual producer operation; acquisition flag is not drain ACK and cannot renew/release.",
+    "focusedTests": {"tests": 5, "failures": 0, "output": "artifact://968"},
+    "realPositiveMainMachResidencyAndOwnedInputPathVerified": true,
+    "productUnion": {"tests": 276, "failures": 0, "output": "artifact://972"},
+    "nativeOutput": "artifact://976",
+    "nativeDerivedData": ".build/product-native-compile-20261010-s",
+    "nativeSourcePhase": "Exact original Main source phase plus only B00000000000000000000056 MainPDFiumParsingComposition",
+    "review": "agent://71-MainParsingGraphIntegrity: SOURCE-ONLY CLEAR / APPROVE",
+    "successfulReturnedPendingCancelAndActiveHelperBranches": "Source-only reviewed, not runtime exercised; owned suspended factory unconditionally throws before input return so no XPC resume",
+    "geometryCalibrationComposed": false,
+    "productionAppParsingActivated": false,
+    "combinedRSSOrHardBoundsCertified": false,
     "helperExecuted": false,
     "storyAccepted": false
   },

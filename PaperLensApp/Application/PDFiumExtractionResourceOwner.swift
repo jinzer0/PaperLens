@@ -156,6 +156,15 @@ public final class PDFiumExtractionResourceOwner: @unchecked Sendable {
     guard !Task.isCancelled else { throw PDFiumFailure(code: .cancelled) }
   }
 
+  /// Request only: retains the original allowance until actual closure and finish.
+  public func requestCancellation(operationID: UUID) throws {
+    guard operationID == self.operationID else { throw PDFiumFailure(code: .invalidRequest) }
+    try effectLock.withLock {
+      guard !released else { throw PDFiumFailure(code: .cleanupIncomplete) }
+      if failure == nil { failure = PDFiumFailure(code: .cancelled) }
+    }
+  }
+
   /// Correct-ID callback is closure evidence supplied by PDFiumPinnedInput, not ARC.
   /// Expiry/cancellation/failure cannot release ownership; explicit finish still can.
   public func finishOperation(_ operationID: UUID) throws {

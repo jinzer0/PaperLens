@@ -268,6 +268,8 @@ public actor PDFiumExtractionProducer: ExtractionBatchProducing {
   // handler empties this table or releases the captured Main ownership.
   private var sessions: [UUID: Session] = [:]
   private var running = false
+  private var acquisitionOperationID: UUID?
+  private var acquisitionCancelRequested = false
   public init(acquireInput: @escaping @Sendable (ExtractionIdentity, UUID) async throws -> PDFiumPinnedInput) {
     self.acquireInput = acquireInput
   }
@@ -279,7 +281,20 @@ public actor PDFiumExtractionProducer: ExtractionBatchProducing {
     defer { running = false }
     try Task.checkCancellation()
     let operationID = UUID()
-    let input = try await acquireInput(identity, operationID)
+    acquisitionOperationID = operationID
+    acquisitionCancelRequested = false
+    let input: PDFiumPinnedInput
+    do {
+      input = try await acquireInput(identity, operationID)
+    } catch {
+      acquisitionOperationID = nil
+      acquisitionCancelRequested = false
+      throw error
+    }
+    let cancelledDuringAcquisition = acquisitionCancelRequested
+    acquisitionOperationID = nil
+    acquisitionCancelRequested = false
+    if cancelledDuringAcquisition { input.requestCancellation() }
     // Never substitute the requested ID for the returned captured owner's ID.
     let key = try PDFiumExtractionKey(operationID: input.operationID, paperID: input.identity.paperID,
       generation: input.identity.generation, revision: input.identity.revision, job: input.identity.job,
@@ -290,6 +305,7 @@ public actor PDFiumExtractionProducer: ExtractionBatchProducing {
     connection.setCodeSigningRequirement(TopologyIdentity.requirement(TopologyIdentity.worker))
     connection.remoteObjectInterface = PDFiumExtractionInterface.make()
     let session = Session(input: input, key: key, connection: connection)
+    session.cancelRequested = cancelledDuringAcquisition
     sessions[operationID] = session
     try await withTaskCancellationHandler {
       try await run(session, operationID: operationID, identity: identity, consume: consume)
@@ -356,6 +372,20 @@ public actor PDFiumExtractionProducer: ExtractionBatchProducing {
       } catch { throw PDFiumFailure(code: .cleanupIncomplete) }
       throw original
     }
+  }
+
+  /// Admission of a request, never an acknowledgement of drain or resource release.
+  public func requestCancellation(operationID: UUID) throws {
+    if acquisitionOperationID == operationID {
+      acquisitionCancelRequested = true
+      return
+    }
+    guard let session = sessions[operationID], session.key.operationID == operationID else {
+      throw PDFiumFailure(code: .identityMismatch)
+    }
+    session.input.requestCancellation()
+    session.cancelRequested = true
+    Task { await self.signalCancellation(operationID: operationID) }
   }
 
   private func signalCancellation(operationID: UUID) async {

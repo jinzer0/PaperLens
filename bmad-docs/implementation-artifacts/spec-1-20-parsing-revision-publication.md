@@ -761,3 +761,84 @@ no default-success callback/gauge, and no app/helper/SDK/renderer or paid reques
 Missing-binding zero-effect tests and wrong-operation/sticky cancellation, actual pin/
 resource disposal/revocation, same epoch/config and source graph wiring are local proof
 only; geometry calibration, native helper execution and Story acceptance remain false.
+
+### Real Main graph — authored five-file handoff (parent verification NOT RUN)
+
+Implementation follows the preceding committed Spec at df5426c. Exact authored files:
+
+- `PaperLensApp/Application/MainPDFiumParsingComposition.swift` (new): MainActor graph
+  requires the actual lifecycle, actual ProviderRequest authority and explicit optional
+  `geometryBinding` argument, with no default. Nil throws geometryUnavailable before
+  constructing the acquirer/producer or acquiring a lease/reserving a Job. Retains one
+  actual LibraryPDFiumInputAcquirer, PDFiumExtractionProducer, PDFiumGeometryValidator,
+  ExtractionRevisionService and ParsingRecoveryCoordinator. Uses lifecycle.readLeaseDatabase
+  (the existing lifecycle.database) and lifecycle.epoch; no replacement database or epoch.
+  Internal `acquireOwnedInput(identity:operationID:)` is exactly the path used by the real
+  producer closure, capturing a real PDFiumExtractionResourceOwner with original identity,
+  operation and authority. A MainActor weak-pointer relay is bound before graph exposure;
+  it synchronously poisons resources on actual pin revocation and asynchronously requests
+  that same producer operation. `cancellationRequestFailure` retains first request error;
+  neither callback return nor request admission claims helper drain or resource closure.
+- `PaperLensApp/Application/PDFiumExtractionResourceOwner.swift`: new public
+  `requestCancellation(operationID:) throws` rejects wrong IDs before mutation and closed
+  captures with cleanupIncomplete, and records sticky cancelled under the existing
+  effectLock only if no earlier failure exists. Does not release/reset/renew any allowance,
+  quota, deadline or consumed-operation identity. Existing explicit finish is unchanged.
+- `PaperLensApp/Application/ExtractionRevisionService.swift`: producer public
+  `requestCancellation(operationID:) throws` means request admitted, not drain acknowledged.
+  Only current awaited acquisition operation and one pending flag are tracked, set before
+  awaiting acquisition and cleared on success/failure. Foreign/stale IDs reject without
+  caching. Pending successful return is input-cancelled before any run-budget/helper begin.
+  Active session requests poison the actual input, set cancelRequested, and schedule the
+  existing signalCancellation/cancelAndDrain path with original key/deadline and retained
+  cancellationFailure. Existing running/sessions.isEmpty exclusion, task-cancellation
+  handling, known-close disposal and uncertain-cleanup debt are preserved.
+- `Tests/Product/MainPDFiumParsingCompositionTests.swift` (new): five authored owned
+  GRDB/Library/imported immutable-PDF tests use actual Main Mach observation and monotonic
+  resource construction, not synthetic/default-success gauges. Cases cover nil binding
+  with unchanged parser pool and extractionInvocation count; full original identity,
+  explicit current model and actual epoch, actual input byte count, premature finish
+  denial, disposal and consumed-operation nonrenewal; physical registry revocation with
+  retained pool/pin debt until real disposal; foreign resource operation rejection and
+  sticky cancellation; pending producer request admission/rejection and stale rejection.
+  The pending test's controlled factory acquires via graph.acquireOwnedInput, suspends
+  with a real held input, then physically disposes it and unconditionally throws before
+  returning an input. Every path either throws or stays suspended; it cannot reach
+  NSXPCConnection.resume even if an assertion fails. No fake producer or replacement
+  ownership/accounting is supplied. Explicit coordinate/precision fixture is not
+  calibration. Read-only/regular FD checks are enforced by actual pinned-input construction;
+  no new descriptor-exposure API is added for tests.
+- This Spec records the authored handoff only, not passing-test or native evidence.
+
+Worker performed source inspection only. No tests, builds, gates, lint, formatter, native
+compile, helper/SDK/app/renderer invocation, runtime/network, delegation, workflow, commit
+or remote action ran. Parent owns Package/native membership, permitted owned-FD focused
+tests, Product union/native compilation, independent composition review, evidence and
+local commit. Parent should run the five new cases and existing Library input/resource/
+producer/publication/Retry cases after membership update. The successfully returned
+pending-cancel input branch and active-session signal/drain branch remain source-only,
+runtime unverified here; testing them must not accidentally resume XPC. Direct graph
+acquisition has no producer session, so its asynchronous producer cancellation denial is
+request-failure information, not closure evidence. Existing source63 physical sender/pin/
+resource cleanup, source65 canonical codec and source61 consumed-ID protections remain
+the underlying owners. No AppWorkspace, database schema/geometry implementation, authority,
+calibration, product activation or nonblocking parser-pool change. All protected/live/
+remote/privacy/P1/P2/P3/AD8/Story/Epic gates remain false.
+
+### Real Main graph — parent verification
+
+Five new graph cases passed (artifact968), including actual positive Main Mach residency,
+real original resource constructor and owned GRDB/pin/FD acquisition/disposal. The guarded
+pending factory unconditionally throws before input return; no helper connection resumes.
+The combined Product union passed 276 tests, zero failures (artifact972). Fresh unsigned
+native Release arm64/macOS15 compiled in native-s (artifact976). Main source phase order
+is unchanged except the single new graph member56; plutil and parsed membership passed.
+Six-source-file binary delta against preimplementationdf5426c:
+db422fa510267c621c9fe12571cbd3993d4dee9a45d17e8b744df40143f1f311.
+
+Independent review71 returned SOURCE-ONLY CLEAR / APPROVE, reusing unchanged61/63/65
+ownership/codec findings. Successfully returned pending-cancel and active-helper request/
+drain branches remain runtime-unverified, source-reviewed only. Required geometry is
+explicit, not supplied or certified by this graph; production App parsing remains inactive.
+No helper/app/SDK/renderer/paid/remote action ran. Positive Main-only residency and source
+composition do not certify combined RSS, hard bounds, AD8/P1/P2/P3 or Story completion.
