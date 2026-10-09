@@ -2,6 +2,21 @@ import Foundation
 import GRDB
 
 extension ProductDatabase {
+  /// Durable identity only; file admission and lifetime remain ReaderSession's responsibility.
+  public func annotationIdentity(paperID: UUID) throws -> AnnotationPaperIdentity {
+    try adapterRead { db in
+      guard let row = try Row.fetchOne(db, sql: """
+        SELECT generation, pdfSHA256 FROM paper WHERE id = ? AND status = 'ready'
+          AND deletionID IS NULL AND pdfReference = ?
+        """, arguments: [paperID.uuidString, "papers/\(paperID.uuidString)/document.pdf"]),
+        let generation = UUID(uuidString: row["generation"] as String),
+        let hash: String = row["pdfSHA256"], hash.count == 64,
+        hash.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) })
+      else { throw AnnotationError.stalePaper }
+      return AnnotationPaperIdentity(id: paperID, generation: generation, pdfSHA256: hash)
+    }
+  }
+
   /// Register with the existing ProductDatabase migrator before opening its sole queue.
   public static func registerAnnotationMigrations(in migrator: inout DatabaseMigrator) {
     migrator.registerMigration("personalAnnotationsV1") { db in

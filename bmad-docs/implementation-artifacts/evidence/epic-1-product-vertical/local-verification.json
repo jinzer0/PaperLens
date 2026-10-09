@@ -10,16 +10,17 @@
     "Persistent Library list/grid, ordering, tags, favorites and reading status",
     "Actual Reader navigation/search/selection/position persistence with lifecycle-owned read leases and synchronous revoke/drain",
     "Real bounded HTTPS/arXiv transport, consumed confirmation, one actual Paper/ImportJob, actual closed-stage validation and same-identity publication",
-    "Mounted URL confirmation/download/cancel/retry and explicit Reader-open action; current mounted destination is Unfiled and duplicate status remains unverified before download",
+    "Mounted URL confirmation/download/cancel/retry and explicit Reader-open action; persisted folder UUID or Unfiled is captured before Continue and duplicate status remains unverified before download",
     "Shared native Settings reconnection owner",
-    "Annotation, explicit-precision geometry, revision/FTS and metadata/outline source APIs and fixture regressions"
+    "Mounted Highlight/Note inspector under the actual admitted Reader session, weak PDF context and synchronous editor revocation",
+    "Explicit-precision geometry, revision/FTS and metadata/outline source APIs and fixture regressions"
   ],
   "verification": {
     "productUnion": {
       "command": "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --filter ProductTests",
-      "tests": 117,
+      "tests": 129,
       "failures": 0,
-      "output": "artifact://606",
+      "output": "artifact://617",
       "evidence": "Real GRDB transactions and owned synthetic files; mocked provider/HTTP transport and synthetic windowless PDFKit conversions. Not authenticated provider, app UI or PDFium execution."
     },
     "nativeCompilation": {
@@ -27,11 +28,11 @@
       "configuration": "Release",
       "architecture": "arm64",
       "minimumOS": "15.0",
-      "derivedData": ".build/product-native-compile-20261010-c",
+      "derivedData": ".build/product-native-compile-20261010-d",
       "codeSigningAllowed": false,
       "result": "BUILD SUCCEEDED",
-      "rawOutput": "artifact://608",
-      "output": "artifact://609",
+      "rawOutput": "artifact://618",
+      "output": "artifact://619",
       "applicationAndHelperBinariesExecuted": false,
       "warnings": "AppIntents metadata skipped and PDFium debug-map duplicate/missing-symbol warnings remain; no warning suppression or debug-symbol repair claimed."
     },
@@ -47,6 +48,18 @@
       {"reviewer": "38-ActualProductLifetimeReview", "result": "CLEAR / APPROVE", "output": "agent://38-ActualProductLifetimeReview", "scope": "Five-file Reader/deletion/URL writer shared-lifetime bundle; source review only, current workspace lifetime bindings reread"}
     ]
   },
+  "previousIntegrationEvidence": {
+    "commit": "ab00379",
+    "productTests": 117,
+    "testOutput": "artifact://606",
+    "nativeRawOutput": "artifact://608",
+    "nativeDerivedData": ".build/product-native-compile-20261010-c"
+  },
+  "annotationBindingEvidence": {
+    "regressionTests": 12,
+    "coverage": "Owned real PDFKit text selection, GRDB highlight/note persistence and native reveal; immutable drafts, cancel/storage failures, revision CAS, stale identity, registry/reentrant revocation, active-read pinning, weak document lifetime and pre-clipboard rejection",
+    "visibleUIAndSuccessfulClipboardVerified": false
+  },
   "preservedFailures": [
     "Initial union compilation failures (nonthrowing discard callback and Swift 6 XCTest self capture)",
     "100-test union: two failures from exact-zero PDFKit floating assumption and invalid-descriptor closure-fault assumption",
@@ -56,7 +69,7 @@
   "limitations": [
     "No actual product UI, live authentication, paid provider request, protected renderer/collector trial renewal, notarization, deployment, push, PR or merge",
     "Actual Agent purge is not bound: deletion retains failure/debt rather than returning a no-op success",
-    "Annotation editor and metadata/outline/extraction producer are not mounted/bound to the admitted Reader; source/API tests are not product acceptance",
+    "Metadata/outline/extraction producer is not mounted/bound to the admitted Reader; annotation binding fixture tests and compiled controls are not visible UI/accessibility acceptance",
     "Geometry caller precision is explicit; synthetic floating-arithmetic test budget is not an owning calibrated product profile or AD-8 correspondence proof",
     "Native model profile is uncertified; genuine Codex channel and two-provider parity remain absent",
     "OS/CPU matrix, loadedSQLite identity, P1/P2/P3 and canonical Story acceptance remain unestablished",

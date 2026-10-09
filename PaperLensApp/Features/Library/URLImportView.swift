@@ -5,7 +5,7 @@ import UniformTypeIdentifiers
 /// Wrap the actual Library content; neither confirmation nor completion replaces it.
 public struct URLImportView<LibraryContent: View>: View {
   @ObservedObject private var service: URLImportService
-  private let destination: String
+  private let folderService: FolderImportService
   private let possibleDuplicate: (String) -> Bool
   private let openReader: (UUID) -> Void
   private let chooseLocalPDF: () -> Void
@@ -15,15 +15,18 @@ public struct URLImportView<LibraryContent: View>: View {
   @State private var inputSheet = false
   @StateObject private var drag = URLImportDragState()
   @State private var invalidInput = false
+  @State private var folders: [LibraryFolder] = []
+  @State private var destinationFolderID: UUID?
+  @State private var folderLoadFailed = false
 
-  public init(service: URLImportService, destination: String,
+  public init(service: URLImportService, folderService: FolderImportService,
     possibleDuplicate: @escaping (String) -> Bool,
     openReader: @escaping (UUID) -> Void,
     chooseLocalPDF: @escaping () -> Void,
     confirmLocalPDF: @escaping (URL) -> Void,
     @ViewBuilder library: () -> LibraryContent) {
     self.service = service
-    self.destination = destination
+    self.folderService = folderService
     self.possibleDuplicate = possibleDuplicate
     self.openReader = openReader
     self.chooseLocalPDF = chooseLocalPDF
@@ -41,6 +44,15 @@ public struct URLImportView<LibraryContent: View>: View {
         }
         Button("PDF 선택", action: chooseLocalPDF)
         Spacer()
+      }
+      HStack {
+        Picker("URL 저장 폴더", selection: $destinationFolderID) {
+          Text("Unfiled").tag(Optional<UUID>.none)
+          ForEach(folders) { folder in Text(folder.name).tag(Optional(folder.id)) }
+        }
+        .disabled(service.state == .confirming || service.state == .downloading)
+        Button("폴더 새로고침") { Task { await reloadFolders() } }
+        if folderLoadFailed { Text("폴더를 불러오지 못했습니다.").foregroundStyle(.red) }
       }
       library
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -94,6 +106,7 @@ public struct URLImportView<LibraryContent: View>: View {
     .alert("지원하지 않는 URL", isPresented: $invalidInput) {
       Button("확인", role: .cancel) {}
     } message: { Text("인증 정보가 없는 HTTPS PDF 또는 올바른 arXiv URL을 입력하세요.") }
+    .task { await reloadFolders() }
   }
 
   @ViewBuilder private var status: some View {
@@ -121,8 +134,23 @@ public struct URLImportView<LibraryContent: View>: View {
   }
 
   private func prepare(_ text: String) {
-    do { try service.prepare(text, destination: destination, possibleDuplicate: possibleDuplicate(text)) }
+    do {
+      let folder = folders.first { $0.id == destinationFolderID }
+      guard destinationFolderID == nil || folder != nil else { throw URLImportError.rejected }
+      try service.prepare(text, destination: folder?.name ?? "Unfiled",
+        possibleDuplicate: possibleDuplicate(text), destinationFolderID: destinationFolderID)
+    }
     catch { invalidInput = true }
+  }
+
+  private func reloadFolders() async {
+    do {
+      folders = try await folderService.folders()
+      if let id = destinationFolderID, !folders.contains(where: { $0.id == id }) {
+        destinationFolderID = nil
+      }
+      folderLoadFailed = false
+    } catch { folderLoadFailed = true }
   }
 
   private func safeMessage(_ reason: URLImportError) -> String {

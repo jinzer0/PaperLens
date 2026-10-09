@@ -1,5 +1,13 @@
 # Story 1.16 Build Spec — Native Highlight and personal Note
 
+## Actual admitted Reader binding — parent verified
+
+The existing annotation migration and CRUD remain owned by the sole ProductDatabase. The next source phase binds `NativeReaderView.swift`, `AnnotationInspector.swift`, `ProductWorkspaceView.swift`, `ProductDatabase+Annotations.swift`, and `ReaderAnnotationBindingTests.swift`. Workspace supplies the guarded current Paper/generation/SHA identity and its real AnnotationService. ReaderPresentation privately owns the PDFView/document; ReaderAnnotationContext holds only weak PDF references and pins every capture/reveal/copy/CRUD operation through the actual ReaderSession. It verifies session, document and durable identity before and after each operation. No original PDF modification, Provider dispatch, AI context or calibrated canonical geometry is added.
+
+Reader discard synchronously invalidates context and clears data-only drafts/results before detaching the document and releasing its actual lifecycle lease. Retained old contexts cannot revive; closing the inspector preserves Reader position. The native Highlight/Note inspector is mounted only after document admission. Parent executed the 129-test ProductTests union (including 12 real owned-file/GRDB/windowless-PDFKit binding regressions), with zero failures, and unsigned arm64 native full-scheme compilation succeeded in `.build/product-native-compile-20261010-d`. Evidence: `evidence/epic-1-product-vertical/local-verification.json`.
+
+This supersedes historical owner-absence/source-only wiring status below, not the acceptance criteria or protected boundaries. Visible mouse/keyboard/VoiceOver/focus behavior, successful clipboard interaction, live authentication, physical renderer/profile gates and Story completion remain unproved. StoryDone=false.
+
 ## Actual implementation phase — explicit source-order instruction
 
 This phase supersedes the earlier planning-only absence of owners; it does not claim runtime acceptance. Exact five mutable owners are this Spec, `PaperLensApp/Application/AnnotationService.swift` (immutable selection snapshot and CRUD use case), `PaperLensApp/Infrastructure/ProductDatabase+Annotations.swift` (sole-queue guarded SQL and migration registration), `PaperLensApp/Features/Reader/AnnotationInspector.swift` (native editable drawer and selection actions), and `Tests/Product/AnnotationServiceTests.swift` (real GRDB persistence regressions). No tests/builds/gates/formatters/commits/remotes run in this phase.

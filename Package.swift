@@ -69,7 +69,8 @@ let package = Package(
         "ProviderSettingsTests.swift", "ReaderSessionTests.swift", "AnnotationServiceTests.swift",
         "FolderImportTests.swift", "URLImportTests.swift", "PDFGeometryTests.swift",
         "ExtractionRevisionTests.swift", "ReaderMetadataTests.swift", "LibraryOrganizationTests.swift",
-        "LibraryReadLeaseTests.swift", "ProductWorkspaceTests.swift", "LibraryURLImportWriterTests.swift"]
+        "LibraryReadLeaseTests.swift", "ProductWorkspaceTests.swift", "LibraryURLImportWriterTests.swift",
+        "ReaderAnnotationBindingTests.swift"]
     ),
     .target(
       name: "PDFReadiness",

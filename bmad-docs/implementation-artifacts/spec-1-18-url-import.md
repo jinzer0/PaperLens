@@ -73,6 +73,12 @@ Issue#20 / issue/20-story-1-18; basef14f15f3f1c1fed02657ebf0c7ecdcb23721bfa8. PR
 
 Architect50 read exactly ROOTepics885–920, own SOLUTION-DESIGN,1.13 Spec, ProviderRequest/contract.json and PaperLensApp.swift; commonUI excerpt same canonical file supplied separately. Root-only not copied. Planning ONLY/not implementation-ready. Actual1.13/1.17/productImportP3 required; product BLOCKED/StoryDone=false. Real Library/Reader/persistence/connections absent; at planning1.13initial20PASS/review48BLOCK/repair49unaccepted. Local14dd7b3/c93e873 nonproduct, actualP1/P2/P3/P6 unproved, blankCapture FAIL. P6 actual pass before timing branch.
 
+## Mounted persisted destination binding — parent verified
+
+The actual workspace URL surface queries the existing FolderImportService and displays stored folders plus explicit Unfiled. Preparing a URL captures that selected UUID and actual label in the immutable confirmation; labels are never parsed into identities. Changing or reloading the picker does not rewrite an already prepared intent. Grant and publication still validate the same confirmed destination transactionally; removed folders reject without a second Paper/Job. Predownload duplicate status remains unknown and the UI conservatively warns of possible duplication, never inventing a hash/uniqueness result.
+
+Parent verified the 129-test union with zero failures and unsigned arm64 native compilation including these controls. Existing actual writer tests cover confirmed folder publication and removed-destination rejection. Picker/drag/paste/confirmation physical UI and timing are not thereby verified; StoryDone=false and protected gates remain unchanged.
+
 ## Routes and confirmed import
 
 Use shared sourceKinds localPDF/arxivAbstract/arxivPDF/httpsPDF and actual arXiv host/identifier/prefix/canonicalBase, preserve version; abstract resolves PDF, no webpage fallback. Drag/paste/local-file entry shares confirmation. Supported drag retains Library beneath whole-surface tint+label; unsupported zero import.

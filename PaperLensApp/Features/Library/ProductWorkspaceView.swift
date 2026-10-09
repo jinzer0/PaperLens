@@ -22,11 +22,13 @@ public final class ProductWorkspace: ObservableObject {
   public struct OpenReader: Identifiable {
     public let id: UUID
     public let session: ReaderSession
+    public let annotationIdentity: AnnotationPaperIdentity
   }
   public let organization: LibraryOrganizationService
   public let imports: FolderImportService
   public let settings: ProviderSettingsService
   public let urls: URLImportService
+  public let annotations: AnnotationService
   private let database: ProductDatabase
   private let readLeases: LibraryReadLeaseProvider
   private var scopedSource: URL?
@@ -41,6 +43,7 @@ public final class ProductWorkspace: ObservableObject {
   public init(database: ProductDatabase, lifecycle: LocalLibraryLifecycle,
     connection: NativeAPIKeyConnection) throws {
     self.database = database
+    annotations = AnnotationService(database: database)
     organization = LibraryOrganizationService(database: database, lifecycle: lifecycle)
     imports = FolderImportService(database: database, lifecycle: lifecycle)
     settings = ProviderSettingsService(connection: connection)
@@ -134,7 +137,10 @@ public final class ProductWorkspace: ObservableObject {
     try await organization.admitOpen(paper)
     // Bind the selected generation at lease acquisition too, not just at the list's check.
     let provider = SelectedPaperReadLeases(base: readLeases, paper: paper)
-    reader = OpenReader(id: paper.id, session: ReaderSession(database: database, leaseProvider: provider))
+    let identity = try database.annotationIdentity(paperID: paper.id)
+    guard identity.generation == paper.generation else { throw AnnotationError.stalePaper }
+    reader = OpenReader(id: paper.id, session: ReaderSession(database: database, leaseProvider: provider),
+      annotationIdentity: identity)
     failure = nil
   }
 
@@ -173,6 +179,7 @@ public struct ProductWorkspaceView: View {
     VStack(spacing: 0) {
       if let reader = workspace.reader {
         NativeReaderView(paperID: reader.id, session: reader.session,
+          annotationIdentity: reader.annotationIdentity, annotationService: workspace.annotations,
           onReturn: { workspace.returnToLibrary() },
           onSaveFailure: { workspace.reportSaveFailure($0) })
           .id(reader.id)
@@ -183,7 +190,7 @@ public struct ProductWorkspaceView: View {
           if workspace.preparing { ProgressView("PDF 확인 중") }
           Spacer()
         }.padding().disabled(workspace.preparing || workspace.opening)
-        URLImportView(service: urls, destination: "Unfiled · 다운로드 전 중복 여부 미확인",
+        URLImportView(service: urls, folderService: workspace.imports,
           possibleDuplicate: { _ in true },
           openReader: { workspace.openImportedURL($0) },
           chooseLocalPDF: { workspace.pickPDF() },
@@ -198,7 +205,7 @@ public struct ProductWorkspaceView: View {
           }
       }
       if let failure = workspace.failure { Text(failure).foregroundStyle(.red).textSelection(.enabled) }
-      Text("주석 편집·Codex 연결은 아직 연결되지 않았습니다. Agent 삭제 연결이 없어 삭제는 미완료 상태로 남습니다.")
+      Text("Codex 연결은 아직 연결되지 않았습니다. Agent 삭제 연결이 없어 삭제는 미완료 상태로 남습니다.")
         .font(.caption).foregroundStyle(.secondary).padding(8)
     }
     .sheet(item: $workspace.sheet, onDismiss: { workspace.dismissSheet() }) { sheet in
