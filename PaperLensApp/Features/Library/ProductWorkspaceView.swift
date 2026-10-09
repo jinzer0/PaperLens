@@ -31,7 +31,7 @@ public final class ProductWorkspace: ObservableObject {
   public let urls: URLImportService
   public let annotations: AnnotationService
   public let metadata: ReaderMetadataService
-  private let database: ProductDatabase
+  fileprivate let database: ProductDatabase
   private let readLeases: LibraryReadLeaseProvider
   private var scopedSource: URL?
   private var pendingConfirmation: UUID?
@@ -187,12 +187,18 @@ public struct ProductWorkspaceView: View {
   public var body: some View {
     VStack(spacing: 0) {
       if let reader = workspace.reader {
-        NativeReaderView(paperID: reader.id, session: reader.session,
-          annotationIdentity: reader.annotationIdentity, annotationService: workspace.annotations,
-          metadataService: workspace.metadata, metadataIdentity: reader.metadataIdentity,
-          onReturn: { workspace.returnToLibrary() },
-          onSaveFailure: { workspace.reportSaveFailure($0) })
-          .id(reader.id)
+        VStack(spacing: 0) {
+          ParsingStatusView(database: workspace.database, paperID: reader.id)
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+          Divider()
+          NativeReaderView(paperID: reader.id, session: reader.session,
+            annotationIdentity: reader.annotationIdentity, annotationService: workspace.annotations,
+            metadataService: workspace.metadata, metadataIdentity: reader.metadataIdentity,
+            onReturn: { workspace.returnToLibrary() },
+            onSaveFailure: { workspace.reportSaveFailure($0) })
+        }
+        .id([reader.id, reader.annotationIdentity.generation])
       } else {
         HStack {
           Button("폴더 관리") { workspace.sheet = .folders }

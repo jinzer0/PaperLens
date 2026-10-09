@@ -100,3 +100,22 @@ then narrow independent source review and local evidence commit. UI visibility,
 VoiceOver/focus/accessibility and runtime notification/relaunch remain unverified because
 protected product/renderer execution has not been renewed; compilation is not a visible
 witness. This does not authorize geometry defaults, automatic replay or remote effects.
+
+## Reader notice mounting — parent source verification
+
+The existing status view is now mounted beside NativeReaderView from the exact same
+workspace GRDB reference (fileprivate, not a public replacement owner). The whole
+container identity includes both Paper ID and generation, fencing both status state
+and Reader presentation while preserving all original session/service/close callbacks.
+No coordinator was fabricated: absent calibrated activation keeps Retry disabled with
+the existing explicit disconnected-service message. Polling reads actual persisted
+state; it does not create a job, lease, provider request or successful parse.
+
+Seven existing guarded recovery regressions passed (artifact953); unchanged prior full
+261-test union from fc9f804/artifact945 is reused rather than claimed rerun. Fresh native
+unsigned Release arm64/macOS15 compiled in native-q (artifact954). Independent review66
+returned SOURCE-ONLY CLEAR / APPROVE. Exact workspace-source binary delta against
+preimplementation8eaca03: 653a333fcedb3726f833545a33129a78cde99f16ef006e160f2055e61fc4b178.
+No UI/app/helper binary or protected renderer trial ran; visible layout, immediate notice,
+keyboard/VoiceOver/focus and real Retry/relaunch remain unverified. Neither compilation
+nor source review establishes Story acceptance, and durable Epic/Story status stays false.
