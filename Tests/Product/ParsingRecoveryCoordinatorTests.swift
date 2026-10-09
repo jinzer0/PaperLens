@@ -18,7 +18,8 @@ final class ParsingRecoveryCoordinatorTests: XCTestCase {
     private var releaseWaiter: CheckedContinuation<Void, Never>?
     private(set) var identities: [ExtractionIdentity] = []
 
-    func extract(_ identity: ExtractionIdentity) async throws -> [ExtractionBatch] {
+    func withBatches(_ identity: ExtractionIdentity,
+      consume: @escaping @Sendable ([ExtractionBatch], ExtractionConsumptionScope) async throws -> Void) async throws {
       identities.append(identity)
       await withCheckedContinuation { continuation in
         releaseWaiter = continuation
@@ -204,7 +205,7 @@ final class ParsingRecoveryCoordinatorTests: XCTestCase {
     XCTAssertNil(deletedContext)
     let identities = await producer.identities
     let fresh = try XCTUnwrap(identities.first)
-    XCTAssertThrowsError(try database.publishExtraction(fresh, sentences: [
+    XCTAssertThrowsError(try publishFixtureExtraction(database, fresh, sentences: [
       .init(page: 0, sentenceID: 0, text: "late", geometry: Data([1])),
     ]))
     await producer.release()

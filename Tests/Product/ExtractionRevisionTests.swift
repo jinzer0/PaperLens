@@ -70,9 +70,9 @@ final class ExtractionRevisionTests: XCTestCase {
     let (originalBatch, originalValidator) = try canonicalBatch(first, quote: quote, text: quote)
     try db.reserveExtraction(first)
     let originalRows = try ExtractionRevisionService.validate([originalBatch], identity: first,
-      validator: originalValidator)
+      validator: originalValidator, scope: fixtureExtractionScope())
     XCTAssertTrue(try XCTUnwrap(originalRows.first).text.utf8.elementsEqual(quote.utf8))
-    try db.publishExtraction(first, sentences: originalRows)
+    try publishFixtureExtraction(db, first, sentences: originalRows)
     let original = try XCTUnwrap(db.searchExtraction(paperID: paper, matching: "Original").first)
     XCTAssertTrue(original.text.utf8.elementsEqual(quote.utf8))
     let decoded = try originalValidator.decodeAndValidate(original.canonicalGeometry,
@@ -88,7 +88,7 @@ final class ExtractionRevisionTests: XCTestCase {
       try db.reserveExtraction(next)
       // Exercise the service's actual pre-publication boundary with the real GRDB owner.
       XCTAssertThrowsError(try ExtractionRevisionService.validate([batch], identity: next,
-        validator: validator)) {
+        validator: validator, scope: fixtureExtractionScope())) {
         XCTAssertEqual($0 as? CanonicalExtractionGeometryError, .semanticExtentMismatch)
       }
       XCTAssertEqual(try db.adapterRead { try Int.fetchOne($0,
@@ -121,11 +121,11 @@ final class ExtractionRevisionTests: XCTestCase {
     let first = try identity(db, paper, generation)
     try db.reserveExtraction(first)
     XCTAssertTrue(try db.searchExtraction(paperID: paper, matching: "alpha").isEmpty)
-    try db.publishExtraction(first, sentences: rows("alpha original"))
+    try publishFixtureExtraction(db, first, sentences: rows("alpha original"))
     let second = try identity(db, paper, generation)
     try db.reserveExtraction(second)
     XCTAssertEqual(try db.searchExtraction(paperID: paper, matching: "alpha").first?.revision, first.revision)
-    try db.publishExtraction(second, sentences: rows("beta replacement"))
+    try publishFixtureExtraction(db, second, sentences: rows("beta replacement"))
     XCTAssertTrue(try db.searchExtraction(paperID: paper, matching: "alpha").isEmpty)
     XCTAssertEqual(try db.searchExtraction(paperID: paper, matching: "alpha", revision: first.revision).first?.text,
       "alpha original")
@@ -146,7 +146,7 @@ final class ExtractionRevisionTests: XCTestCase {
     defer { try? FileManager.default.removeItem(at: root) }
     let first = try identity(db, paper, generation)
     try db.reserveExtraction(first)
-    try db.publishExtraction(first, sentences: rows("original"))
+    try publishFixtureExtraction(db, first, sentences: rows("original"))
     let next = try identity(db, paper, generation)
     try db.reserveExtraction(next)
     try db.adapterWrite { sql in
@@ -158,7 +158,7 @@ final class ExtractionRevisionTests: XCTestCase {
         END;
         """)
     }
-    XCTAssertThrowsError(try db.publishExtraction(next, sentences: rows("broken")))
+    XCTAssertThrowsError(try publishFixtureExtraction(db, next, sentences: rows("broken")))
     try db.failExtraction(next, failure: .storageFailure)
     XCTAssertEqual(try db.extractionStatus(paperID: paper).usableRevision, first.revision)
     XCTAssertEqual(try db.adapterRead { try Int.fetchOne($0,
@@ -183,7 +183,7 @@ final class ExtractionRevisionTests: XCTestCase {
         try sql.execute(sql: "UPDATE extractionAttempt SET \(column) = ? WHERE paperID = ?",
           arguments: [column == "configGeneration" ? "999" : UUID().uuidString, paper.uuidString])
       }
-      XCTAssertThrowsError(try db.publishExtraction(id, sentences: rows("mustnotpublish")))
+      XCTAssertThrowsError(try publishFixtureExtraction(db, id, sentences: rows("mustnotpublish")))
       try db.adapterWrite { sql in
         try sql.execute(sql: "UPDATE extractionAttempt SET \(column) = ? WHERE paperID = ?",
           arguments: [original, paper.uuidString])
@@ -197,34 +197,66 @@ final class ExtractionRevisionTests: XCTestCase {
     defer { try? FileManager.default.removeItem(at: root) }
     let first = try identity(db, paper, generation)
     try db.reserveExtraction(first)
-    try db.publishExtraction(first, sentences: rows("retained"))
+    try publishFixtureExtraction(db, first, sentences: rows("retained"))
     let pending = try identity(db, paper, generation)
     try db.reserveExtraction(pending)
     _ = try ProductJobRecovery(database: db).recoverStartup(currentEpoch: UUID())
-    XCTAssertThrowsError(try db.publishExtraction(pending, sentences: rows("late")))
+    XCTAssertThrowsError(try publishFixtureExtraction(db, pending, sentences: rows("late")))
     XCTAssertEqual(try db.extractionStatus(paperID: paper).failure, "interrupted")
     let retry = try identity(db, paper, generation)
     try db.reserveExtraction(retry)
     _ = try db.compareAndSwapProviderConfiguration(expected: retry.configuration, replacementSlotID: UUID(),
       replacementModel: "fixture-snapshot")
-    XCTAssertThrowsError(try db.publishExtraction(retry, sentences: rows("stale")))
+    XCTAssertThrowsError(try publishFixtureExtraction(db, retry, sentences: rows("stale")))
     let saga = try XCTUnwrap(db.beginDeletion(paper))
     XCTAssertTrue(try db.searchExtraction(paperID: paper, matching: "retained").isEmpty)
     try db.finalizeDeletion(paper, saga: saga)
-    XCTAssertThrowsError(try db.publishExtraction(retry, sentences: rows("resurrected")))
+    XCTAssertThrowsError(try publishFixtureExtraction(db, retry, sentences: rows("resurrected")))
     XCTAssertEqual(try db.adapterRead { try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM extractionFTS") }, 0)
     XCTAssertEqual(try db.adapterRead { try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM extractionSentence") }, 0)
     XCTAssertEqual(try db.adapterRead { try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM extractionRevision") }, 0)
   }
 
-  func testAbsentProducerPersistsExplicitFailureWithoutUsableRevision() async throws {
+  func testBudgetExhaustionRollsBackRowsIndexVisibilityAndJobState() throws {
+    let (db, paper, generation, root) = try fixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let original = try identity(db, paper, generation)
+    try db.reserveExtraction(original)
+    try publishFixtureExtraction(db, original, sentences: rows("retained"))
+    let pending = try identity(db, paper, generation)
+    try db.reserveExtraction(pending)
+    for permittedChecks in 0..<4 {
+      let budget = ExtractionFixtureBudget(maximumChecks: permittedChecks)
+      XCTAssertThrowsError(try db.publishExtraction(pending, sentences: rows("forbidden"),
+        checkBudget: { try budget.check() })) {
+        XCTAssertTrue($0 is ExtractionFixtureBudget.Failure)
+      }
+      XCTAssertEqual(try db.extractionStatus(paperID: paper).usableRevision, original.revision)
+      XCTAssertNil(try db.extractionStatus(paperID: paper).failure)
+      XCTAssertEqual(try db.adapterRead { try String.fetchOne($0,
+        sql: "SELECT state FROM extractionAttempt WHERE paperID = ?",
+        arguments: [paper.uuidString]) }, "running")
+      XCTAssertEqual(try db.adapterRead { try Int.fetchOne($0,
+        sql: "SELECT COUNT(*) FROM extractionRevision WHERE id = ?",
+        arguments: [pending.revision.uuidString]) }, 0)
+      XCTAssertEqual(try db.adapterRead { try Int.fetchOne($0,
+        sql: "SELECT COUNT(*) FROM extractionSentence WHERE revision = ?",
+        arguments: [pending.revision.uuidString]) }, 0)
+      XCTAssertTrue(try db.searchExtraction(paperID: paper, matching: "forbidden").isEmpty)
+      XCTAssertEqual(try db.searchExtraction(paperID: paper, matching: "retained").count, 1)
+    }
+  }
+
+  func testAbsentProducerRejectsBeforeReservationWithoutUsableRevision() async throws {
     let (db, paper, generation, root) = try fixture()
     defer { try? FileManager.default.removeItem(at: root) }
     let id = try identity(db, paper, generation)
     let service = ExtractionRevisionService(database: db, producer: nil, geometryValidator: nil)
     do { try await service.parse(id); XCTFail("missing producer must fail") }
     catch { XCTAssertEqual(error as? ExtractionError, .producerUnavailable) }
-    XCTAssertEqual(try db.extractionStatus(paperID: paper).failure, "producerUnavailable")
+    XCTAssertNil(try db.extractionStatus(paperID: paper).failure)
+    XCTAssertEqual(try db.adapterRead { try Int.fetchOne($0,
+      sql: "SELECT COUNT(*) FROM extractionInvocation") }, 0)
     XCTAssertNil(try db.extractionStatus(paperID: paper).usableRevision)
   }
 
@@ -239,14 +271,14 @@ final class ExtractionRevisionTests: XCTestCase {
     let incomplete = ExtractionBatch(identity: id, sequence: 0, sentences: [sentence],
       complete: false, totalSentences: nil)
     XCTAssertThrowsError(try ExtractionRevisionService.validate([incomplete], identity: id,
-      validator: validator)) { XCTAssertEqual($0 as? ExtractionError, .invalidBatch) }
+      validator: validator, scope: fixtureExtractionScope())) { XCTAssertEqual($0 as? ExtractionError, .invalidBatch) }
     let wrong = ExtractionBatch(identity: try identity(db, paper, generation), sequence: 0,
       sentences: [sentence], complete: true, totalSentences: 1)
     XCTAssertThrowsError(try ExtractionRevisionService.validate([wrong], identity: id,
-      validator: validator)) { XCTAssertEqual($0 as? ExtractionError, .invalidBatch) }
+      validator: validator, scope: fixtureExtractionScope())) { XCTAssertEqual($0 as? ExtractionError, .invalidBatch) }
     let unbound = ExtractionBatch(identity: id, sequence: 0, sentences: [sentence],
       complete: true, totalSentences: 1)
     XCTAssertThrowsError(try ExtractionRevisionService.validate([unbound], identity: id,
-      validator: validator)) { XCTAssertEqual($0 as? ExtractionError, .geometryUnavailable) }
+      validator: validator, scope: fixtureExtractionScope())) { XCTAssertEqual($0 as? ExtractionError, .geometryUnavailable) }
   }
 }

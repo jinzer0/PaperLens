@@ -58,3 +58,21 @@ interrupted extractions once before exposing commands, bind the guarded Retry co
 immediate floating notice to Reader, and include the new source in explicit build source lists.
 Storage fixtures and injected failing producers are tests of coordination, not parser proof.
 Actual producer/native Reader/relaunch evidence remains unproved; no StoryDone claim.
+
+## Parent scoped-producer caller integration (2026-10-10)
+
+The committed Story1.20 correction Spec (`fb3fa60`, original `9948634`) requires an
+original-budget consumer scope rather than returning unowned arrays. After its existing
+atomic failed-context/lineage admission, Retry calls the sole service's `consumeReserved`
+path. Canonical validation and actual GRDB publication run under that captured scope;
+both success and unwind retain pin/resource ownership through consumer disposal. The
+coordinator no longer duplicates array-returning producer, validation or failure paths.
+Cleanup failure after committed publication remains ownership debt, not a false failed Job.
+Missing producer/geometry still rejects before reservation; one supplied process epoch,
+old usable revision and current full-context arbitration remain unchanged.
+
+Parent Product union: 220 tests/zero failures (`artifact://894`); full unsigned native
+Release arm64/macOS15 build succeeded (`artifact://891`, fresh native-g). Synthetic
+failing-producer/storage tests and compilation do not establish actual Retry/native
+notification/relaunch/AD8/P1/P2/P3 or Story completion. Production owner bindings and
+protected runtime evidence remain separate from this source caller adaptation.

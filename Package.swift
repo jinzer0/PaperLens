@@ -18,10 +18,11 @@ let package = Package(
       name: "PaperLensProduct",
       dependencies: ["ProviderRequest", "ProviderRPC", .product(name: "GRDB", package: "GRDB.swift")],
       path: "PaperLensApp",
-      exclude: ["App/PaperLensApp.swift", "App/TopologyFixtures.swift", "App/PackagedDBProbe.swift",
+      exclude: ["App/PaperLensApp.swift", "App/PackagedDBProbe.swift",
         "App/PaperLens.entitlements", "App/Info.plist"],
       sources: [
         "App/ProductAppComposition.swift",
+        "App/TopologyFixtures.swift",
         "Application/JobRecoveryPolicy.swift",
         "Application/ProductJobRecovery.swift",
         "Application/AgentConnectionLifecycle.swift",
@@ -81,7 +82,8 @@ let package = Package(
         "ReaderAnnotationBindingTests.swift", "AgentRPCConnectionTests.swift",
         "ProductJobRecoveryTests.swift", "CanonicalExtractionGeometryTests.swift",
         "ParsingRecoveryCoordinatorTests.swift", "ReaderMetadataBindingTests.swift",
-        "LibrarySummaryServiceTests.swift"]
+        "LibrarySummaryServiceTests.swift", "PDFiumExtractionProducerTests.swift",
+        "ExtractionFixtureBudget.swift"]
     ),
     .target(
       name: "PDFReadiness",

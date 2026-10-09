@@ -109,9 +109,11 @@ extension ProductDatabase {
     }
   }
 
-  func publishExtraction(_ identity: ExtractionIdentity, sentences: [ValidatedExtractionSentence]) throws {
+  func publishExtraction(_ identity: ExtractionIdentity, sentences: [ValidatedExtractionSentence],
+    checkBudget: @Sendable () throws -> Void) throws {
     guard !sentences.isEmpty else { throw ExtractionError.invalidBatch }
     try adapterWrite { db in
+      try checkBudget()
       try guardExtractionAttempt(db, identity)
       try db.execute(sql: """
         INSERT INTO extractionRevision(id, paperID, generation, pdfSHA256, pdfReference)
@@ -119,11 +121,13 @@ extension ProductDatabase {
         """, arguments: [identity.revision.uuidString, identity.paperID.uuidString,
           identity.generation.uuidString, identity.pdfSHA256, identity.pdfReference])
       for sentence in sentences {
+        try checkBudget()
         try db.execute(sql: """
           INSERT INTO extractionSentence(revision, page, sentenceID, text, geometry) VALUES (?, ?, ?, ?, ?)
           """, arguments: [identity.revision.uuidString, sentence.page, sentence.sentenceID,
             sentence.text, sentence.geometry])
       }
+      try checkBudget()
       try guardExtractionAttempt(db, identity)
       try db.execute(sql: """
         INSERT INTO extractionVisible(paperID, revision) VALUES (?, ?)
@@ -131,6 +135,7 @@ extension ProductDatabase {
         """, arguments: [identity.paperID.uuidString, identity.revision.uuidString])
       try db.execute(sql: "UPDATE extractionAttempt SET state = 'succeeded', failure = NULL WHERE paperID = ?",
         arguments: [identity.paperID.uuidString])
+      try checkBudget()
     }
   }
 

@@ -88,22 +88,8 @@ public actor ParsingRecoveryCoordinator {
     }
     inFlight.insert(paperID)
     defer { inFlight.remove(paperID) }
-    do {
-      try Task.checkCancellation()
-      let batches = try await producer.extract(identity)
-      try Task.checkCancellation()
-      let sentences = try ExtractionRevisionService.validate(batches, identity: identity,
-        validator: validator)
-      try service.database.publishExtraction(identity, sentences: sentences)
-      return identity
-    } catch {
-      let failure: ExtractionError
-      if error is CancellationError { failure = .interrupted }
-      else { failure = (error as? ExtractionError) ?? .storageFailure }
-      // Persistence failure is surfaced rather than pretending a failure was recorded.
-      try service.database.failExtraction(identity, failure: failure)
-      throw error
-    }
+    try await service.consumeReserved(identity, producer: producer, validator: validator)
+    return identity
   }
 
   private static func context(in db: Database, paperID: UUID) throws -> ParsingRecoveryContext? {

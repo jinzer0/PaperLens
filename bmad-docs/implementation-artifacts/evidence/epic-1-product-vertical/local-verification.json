@@ -18,14 +18,15 @@
     "Canonical UTF-8 full-quote publication guard and whole frozen-summary context grounding, including unselected corpus tails",
     "Framed Agent RPC correlation with actual duplex-I/O quiescence barrier; unsupported product methods still deny admission",
     "Mounted data-only metadata/outline controls under actual Reader admission and published extraction identity; weak PDF ownership and synchronous revocation",
-    "Explicit-precision geometry, revision/FTS and metadata/outline source APIs and fixture regressions"
+    "Explicit-precision geometry, revision/FTS and metadata/outline source APIs and fixture regressions",
+    "Typed secure PDFium pull producer source with original-budget consumer scope and native/sender/pin/accounting milestones; compiled, not activated or calibrated"
   ],
   "verification": {
     "productUnion": {
       "command": "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --filter ProductTests",
-      "tests": 211,
+      "tests": 220,
       "failures": 0,
-      "output": "artifact://871",
+      "output": "artifact://894",
       "evidence": "Real GRDB transactions and owned synthetic files; mocked provider/HTTP transport and synthetic windowless PDFKit conversions. Not authenticated provider, app UI or PDFium execution."
     },
     "nativeCompilation": {
@@ -33,13 +34,13 @@
       "configuration": "Release",
       "architecture": "arm64",
       "minimumOS": "15.0",
-      "derivedData": ".build/product-native-compile-20261010-f",
+      "derivedData": ".build/product-native-compile-20261010-g",
       "codeSigningAllowed": false,
       "result": "BUILD SUCCEEDED",
-      "rawOutput": "artifact://872",
-      "output": "artifact://873",
+      "rawOutput": "artifact://891",
+      "output": "artifact://891",
       "applicationAndHelperBinariesExecuted": false,
-      "warnings": "AppIntents metadata skipped and PDFium debug-map duplicate/missing-symbol warnings remain; no warning suppression or debug-symbol repair claimed."
+      "warnings": "AppIntents metadata skipped, PDFium debug-map duplicate/missing-symbol warnings and an unnecessary-await Swift warning remain; no warning suppression or debug-symbol repair claimed."
     },
     "recoveryIntegration": "git diff --exit-code 412df36 -- PaperLensApp/Application/JobRecoveryPolicy.swift passed: exact previously verified Retry epoch repair",
     "projectSyntax": "plutil -lint PaperLens.xcodeproj/project.pbxproj passed after quoting plus-sign extension filenames",
@@ -55,7 +56,8 @@
       {"reviewer": "48-RPCDrainPublicationReview", "result": "CLEAR / APPROVE after actual duplex quiescence repair", "output": "agent://48-RPCDrainPublicationReview", "scope": "Original EOF/invalidation-before-I/O-quiescence HIGH resolved; no SDK producer-cleanup certification"},
       {"reviewer": "49-SummaryDurableGroundingReview", "result": "CLEAR / APPROVE after whole frozen-context grounding", "output": "agent://49-SummaryDurableGroundingReview", "scope": "Original unchanged-prefix forged-tail HIGH resolved across reservation/publication/restoration; source review only"},
       {"reviewer": "51-ActualStartupAdmissionReview", "result": "CLEAR / APPROVE after atomic registered-summary recovery", "output": "agent://51-ActualStartupAdmissionReview", "scope": "Original summary-before-owner-admission HIGH resolved; all three registered job kinds share the existing transaction and lifecycle epoch"},
-      {"reviewer": "54-ActualReaderMetadataLifetimeReview", "result": "CLEAR / APPROVE", "output": "agent://54-ActualReaderMetadataLifetimeReview", "scope": "Actual weak-PDF metadata UI mount, data-only outline, notification observation and synchronous invalidate-before-detach/read-lease release; source review only"}
+      {"reviewer": "54-ActualReaderMetadataLifetimeReview", "result": "CLEAR / APPROVE", "output": "agent://54-ActualReaderMetadataLifetimeReview", "scope": "Actual weak-PDF metadata UI mount, data-only outline, notification observation and synchronous invalidate-before-detach/read-lease release; source review only"},
+      {"reviewer": "56-PDFiumCorrectedPublicationReview", "result": "CLEAR / APPROVE: original three HIGH and one MEDIUM RESOLVED", "output": "agent://56-PDFiumCorrectedPublicationReview", "scope": "Five-file actual helper, scoped consumer, captured budget, rejected-FD debt, exact acquisition reference, sole DB publication and Retry caller; source-only, not hard RSS/runtime/Story proof"}
     ]
   },
   "previousIntegrationEvidence": {
@@ -74,6 +76,7 @@
     "nativeDerivedData": ".build/product-native-compile-20261010-e"
   },
   "parallelSessionAggregation": {
+    "verifiedSourceCommit": "5e15c4a",
     "baseVerifiedCommit": "ca3c301",
     "sourceDiffAgainstBaseSha256": "db35840ce81bb0da57bd5da942c347e60cb0bec3af535263121b714e9f62d9cb",
     "sourceDiffScope": "git diff --cached --binary against ca3c301 for exact staged non-bmad-docs source, tests, Package and Xcode project paths; evidence and Specs excluded",
@@ -81,11 +84,30 @@
     "nativeSessionsFinished": 11,
     "browserLogin": "No source authored: pinned public SDK lacks bounded closure, bounded login waits/storage and exact launch-environment replacement",
     "agentLibraryPurge": "No adapter authored: actual product namespace/producer closure, authoritative generation binding and correlated production transport remain development prerequisites; synthetic topology purge cannot substitute",
-    "pdfiumProducer": "Four source files authored in the eleventh isolated session at committed Spec 978178bf4c6a9db344cf6881c9a74e42f4aa92ae; not yet integrated, tested or covered by native-f compilation. Review53 BLOCK: consumer pin lifetime, captured budget checks, rejected received-FD debt and byte-exact acquisition reference require correction",
+    "pdfiumProducer": "Initial eleventh-session delivery at committed Spec 978178bf4c6a9db344cf6881c9a74e42f4aa92ae received Review53 BLOCK. Correction Spec 9948634 and authored source 08dd3e6 precede parent integration; corrected source/caller/DB guard and verification are recorded separately below",
     "intermediateProductUnion": {"tests": 191, "failures": 22, "output": "artifact://802"},
     "repairedIntermediateUnion": {"tests": 198, "failures": 0, "output": "artifact://830"},
-    "currentProductUnion": {"tests": 211, "failures": 0, "output": "artifact://871"},
+    "preProducerProductUnion": {"tests": 211, "failures": 0, "output": "artifact://871", "nativeOutput": "artifact://873", "nativeDerivedData": ".build/product-native-compile-20261010-f"},
     "visibleUIAcceptance": false
+  },
+  "pdfiumProducerIntegration": {
+    "baseVerifiedCommit": "5e15c4a",
+    "sourceDiffAgainstBaseSha256": "0e5ecd67ecef852aa818ef0fddc7873a326810b578c289ee00c89a979c3a2dcf",
+    "sourceDiffScope": "git diff --cached --binary against committed parent Spec fb3fa60 for exact staged non-bmad-docs source/tests/Package paths; Specs/evidence excluded",
+    "parentSpecificationCommits": ["497db66", "fb3fa60"],
+    "authoredSourceCommit": "08dd3e6",
+    "productUnion": {"tests": 220, "failures": 0, "output": "artifact://894"},
+    "intermediateProductUnion": {"tests": 219, "failures": 0, "output": "artifact://885"},
+    "preservedCompilationFailure": "artifact://883: failable secure-coder try? self.init delegation repaired by explicit throwing delegation and catch-return-nil, not error suppression",
+    "nativeOutput": "artifact://891",
+    "nativeDerivedData": ".build/product-native-compile-20261010-g",
+    "originalReview": "agent://53-ActualPDFiumProducerBoundaryReview: three HIGH and one MEDIUM",
+    "correctionReview": "agent://56-PDFiumCorrectedPublicationReview: CLEAR / APPROVE, three original HIGH and one MEDIUM RESOLVED; no new concrete HIGH in reviewed source",
+    "consumerPublication": "Original guard checks canonical units and actual sole-GRDB transaction entry, inserts, visibility and precommit; exhaustion rolls back revision/sentences/FTS/visibility/job state while retaining prior extraction. Retry shares consumeReserved",
+    "scopedTests": "Eight synthetic producer ownership/cancellation/deadline/reference/reply/deep secure-coding tests and actual GRDB rollback at all four one-row guard checkpoints; not native RSS or product calibration proof",
+    "helperExecuted": false,
+    "actualGeometryAndResourceComposition": false,
+    "storyAccepted": false
   },
   "grdbPreparationDriver": {
     "offlineTests": 22,
@@ -120,7 +142,7 @@
   "limitations": [
     "No actual product UI, live authentication, paid provider request, protected renderer/collector trial renewal, notarization, deployment, push, PR or merge",
     "Actual Agent purge is not bound: deletion retains failure/debt rather than returning a no-op success",
-    "Metadata/outline is mounted only with an actual published extraction identity; newly authored PDFium producer is not integrated or composed. Fixture tests and compiled controls are not visible UI/accessibility acceptance",
+    "Metadata/outline is mounted only with an actual published extraction identity; actual PDFium source is integrated/tested/compiled but not activated or bound to supplied calibrated geometry and production resource/read-pin composition. Fixtures and compiled controls are not visible UI/accessibility acceptance",
     "Geometry caller precision is explicit; synthetic floating-arithmetic test budget is not an owning calibrated product profile or AD-8 correspondence proof",
     "Native model profile is uncertified; genuine Codex channel and two-provider parity remain absent",
     "OS/CPU matrix, loadedSQLite identity, P1/P2/P3 and canonical Story acceptance remain unestablished",

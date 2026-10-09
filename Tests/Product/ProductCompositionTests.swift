@@ -255,7 +255,7 @@ final class ProductCompositionTests: XCTestCase {
     XCTAssertThrowsError(try composition.continueToLibrary())
     await composition.start()
     XCTAssertEqual(transport.calls, 0, "Repeated start never retries or sends")
-    XCTAssertThrowsError(try database.publishExtraction(extraction,
+    XCTAssertThrowsError(try publishFixtureExtraction(database, extraction,
       sentences: [.init(page: 0, sentenceID: 0, text: "late output", geometry: Data([1]))]))
   }
 

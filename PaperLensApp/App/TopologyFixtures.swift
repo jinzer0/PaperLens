@@ -90,9 +90,591 @@ struct TopologyDBOwnerContext: @unchecked Sendable {
   }
 }
 
-@objc protocol PDFTopologyService {
+@objc public protocol PDFTopologyService {
   func identify(_ runID: String, withReply reply: @escaping (Data) -> Void)
   func inspect(_ runID: String, pdf: FileHandle, withReply reply: @escaping (Data) -> Void)
+}
+
+@objc(PaperLensPDFiumExtractionService) public protocol PDFiumExtractionService: PDFTopologyService {
+  func beginExtraction(_ request: PDFiumExtractionRequest, pdf: FileHandle,
+    withReply reply: @escaping (PDFiumStartAck?, PDFiumFailure?) -> Void)
+  func nextExtractionBatch(_ operationID: NSUUID, sequence: Int,
+    withReply reply: @escaping (PDFiumBatch?, PDFiumEnd?, PDFiumFailure?) -> Void)
+  func cancelExtractionAndDrain(_ operationID: NSUUID,
+    withReply reply: @escaping (PDFiumEnd?, PDFiumFailure?) -> Void)
+}
+
+/// Shared reply-shape checks do not constitute same-operation drain proof.
+enum PDFiumExtractionReplies {
+  static func validateStart(_ ack: PDFiumStartAck?, failure: PDFiumFailure?) throws {
+    guard (ack != nil) != (failure != nil) else {
+      throw PDFiumFailure(code: .protocolViolation)
+    }
+  }
+  static func validatePull(_ batch: PDFiumBatch?, end: PDFiumEnd?,
+    failure: PDFiumFailure?) throws {
+    if failure != nil {
+      guard batch == nil, end == nil || end?.disposition == .failed else {
+        throw PDFiumFailure(code: .protocolViolation)
+      }
+    } else {
+      guard let batch, batch.complete == (end != nil),
+        end == nil || end?.disposition == .completed else {
+        throw PDFiumFailure(code: .protocolViolation)
+      }
+    }
+  }
+}
+
+// No keyed scalar may silently decode to zero. Objects are decoded by exact class;
+// arrays are copied to Swift value storage and contain only final immutable DTOs.
+private enum PDFiumCoding {
+  static func integer(_ c: NSCoder, _ k: String) -> Int? {
+    guard c.containsValue(forKey: k) else { return nil }
+    return c.decodeInteger(forKey: k)
+  }
+  static func int64(_ c: NSCoder, _ k: String) -> Int64? {
+    guard c.containsValue(forKey: k) else { return nil }
+    return c.decodeInt64(forKey: k)
+  }
+  static func uint64(_ c: NSCoder, _ k: String) -> UInt64? {
+    int64(c, k).map { UInt64(bitPattern: $0) }
+  }
+  static func number(_ c: NSCoder, _ k: String) -> Double? {
+    guard c.containsValue(forKey: k) else { return nil }
+    let v = c.decodeDouble(forKey: k)
+    return v.isFinite ? v : nil
+  }
+  static func bool(_ c: NSCoder, _ k: String) -> Bool? {
+    guard c.containsValue(forKey: k) else { return nil }
+    return c.decodeBool(forKey: k)
+  }
+  static func string(_ c: NSCoder, _ k: String) -> String? {
+    (c.decodeObject(of: NSString.self, forKey: k)).map { String($0) }
+  }
+  static func uuid(_ c: NSCoder, _ k: String) -> UUID? {
+    (c.decodeObject(of: NSUUID.self, forKey: k)).map { $0 as UUID }
+  }
+  static func hash(_ s: String) -> Bool {
+    s.utf8.count == 64 && s.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
+  }
+  static func uuidV4(_ value: UUID) -> Bool {
+    let bytes = value.uuid
+    return bytes.6 & 0xf0 == 0x40 && bytes.8 & 0xc0 == 0x80
+  }
+}
+
+@objc(PaperLensPDFiumExtractionKey)
+public final class PDFiumExtractionKey: NSObject, NSSecureCoding, @unchecked Sendable {
+  public static var supportsSecureCoding: Bool { true }
+  public let operationID: UUID
+  public let paperID: UUID
+  public let generation: UUID
+  public let revision: UUID
+  public let job: UUID
+  public let attempt: UUID
+  public let fence: UUID
+  public let correlation: UUID
+  public let input: UUID
+  public let epoch: UUID
+  public let pdfSHA256: String
+  public let pdfReference: String
+  public var payloadBytes: Int? {
+    let strings = pdfSHA256.utf8.count.addingReportingOverflow(pdfReference.utf8.count)
+    let total = strings.partialValue.addingReportingOverflow(10 * MemoryLayout<uuid_t>.size)
+    return strings.overflow || total.overflow ? nil : total.partialValue
+  }
+  public init(operationID: UUID, paperID: UUID, generation: UUID, revision: UUID,
+    job: UUID, attempt: UUID, fence: UUID, correlation: UUID, input: UUID, epoch: UUID,
+    pdfSHA256: String, pdfReference: String) throws {
+    guard PDFiumCoding.hash(pdfSHA256), !pdfReference.isEmpty,
+      [operationID, paperID, generation, revision, job, attempt, fence, correlation, input, epoch]
+        .allSatisfy(PDFiumCoding.uuidV4) else {
+      throw PDFiumFailure(code: .invalidRequest)
+    }
+    self.operationID = operationID; self.paperID = paperID; self.generation = generation
+    self.revision = revision; self.job = job; self.attempt = attempt; self.fence = fence
+    self.correlation = correlation; self.input = input; self.epoch = epoch
+    self.pdfSHA256 = pdfSHA256; self.pdfReference = pdfReference
+  }
+  public required convenience init?(coder c: NSCoder) {
+    guard let op = PDFiumCoding.uuid(c, "operationID"), let p = PDFiumCoding.uuid(c, "paperID"),
+      let g = PDFiumCoding.uuid(c, "generation"), let r = PDFiumCoding.uuid(c, "revision"),
+      let j = PDFiumCoding.uuid(c, "job"), let a = PDFiumCoding.uuid(c, "attempt"),
+      let f = PDFiumCoding.uuid(c, "fence"), let co = PDFiumCoding.uuid(c, "correlation"),
+      let i = PDFiumCoding.uuid(c, "input"), let e = PDFiumCoding.uuid(c, "epoch"),
+      let h = PDFiumCoding.string(c, "pdfSHA256"), let ref = PDFiumCoding.string(c, "pdfReference")
+    else { return nil }
+    do { try self.init(operationID: op, paperID: p, generation: g, revision: r, job: j,
+      attempt: a, fence: f, correlation: co, input: i, epoch: e, pdfSHA256: h, pdfReference: ref) }
+    catch { return nil }
+  }
+  public func encode(with c: NSCoder) {
+    c.encode(operationID as NSUUID, forKey: "operationID"); c.encode(paperID as NSUUID, forKey: "paperID")
+    c.encode(generation as NSUUID, forKey: "generation"); c.encode(revision as NSUUID, forKey: "revision")
+    c.encode(job as NSUUID, forKey: "job"); c.encode(attempt as NSUUID, forKey: "attempt")
+    c.encode(fence as NSUUID, forKey: "fence"); c.encode(correlation as NSUUID, forKey: "correlation")
+    c.encode(input as NSUUID, forKey: "input"); c.encode(epoch as NSUUID, forKey: "epoch")
+    c.encode(pdfSHA256 as NSString, forKey: "pdfSHA256"); c.encode(pdfReference as NSString, forKey: "pdfReference")
+  }
+  public func matches(_ other: PDFiumExtractionKey) -> Bool {
+    operationID == other.operationID && paperID == other.paperID && generation == other.generation
+      && revision == other.revision && job == other.job && attempt == other.attempt
+      && fence == other.fence && correlation == other.correlation && input == other.input
+      && epoch == other.epoch && pdfSHA256 == other.pdfSHA256
+      && pdfReference.utf8.elementsEqual(other.pdfReference.utf8)
+  }
+}
+
+public enum PDFiumFailureCode: Int, Sendable {
+  case invalidRequest, identityMismatch, busy, invalidPDF, unsupportedGeometry, unmappableText
+  case resourceExceeded, cancelled, protocolViolation, cleanupIncomplete
+}
+@objc(PaperLensPDFiumFailure)
+public final class PDFiumFailure: NSObject, NSSecureCoding, Error, @unchecked Sendable {
+  public static var supportsSecureCoding: Bool { true }
+  public let code: PDFiumFailureCode
+  public let nativeError: UInt64?
+  public let systemError: Int32?
+  public init(code: PDFiumFailureCode, nativeError: UInt64? = nil, systemError: Int32? = nil) {
+    self.code = code; self.nativeError = nativeError; self.systemError = systemError
+  }
+  public required convenience init?(coder c: NSCoder) {
+    guard let n = PDFiumCoding.integer(c, "code"), let code = PDFiumFailureCode(rawValue: n),
+      let hn = PDFiumCoding.bool(c, "hasNative"), let hs = PDFiumCoding.bool(c, "hasSystem")
+    else { return nil }
+    var native: UInt64?; var system: Int32?
+    if hn { guard let v = PDFiumCoding.uint64(c, "native") else { return nil }; native = v }
+    if hs {
+      guard let v = PDFiumCoding.integer(c, "system"), let s = Int32(exactly: v) else { return nil }
+      system = s
+    }
+    self.init(code: code, nativeError: native, systemError: system)
+  }
+  public func encode(with c: NSCoder) {
+    c.encode(code.rawValue, forKey: "code"); c.encode(nativeError != nil, forKey: "hasNative")
+    c.encode(systemError != nil, forKey: "hasSystem")
+    if let v = nativeError { c.encode(Int64(bitPattern: v), forKey: "native") }
+    if let v = systemError { c.encode(Int(v), forKey: "system") }
+  }
+}
+
+@objc(PaperLensPDFiumExtractionLimits)
+public final class PDFiumExtractionLimits: NSObject, NSSecureCoding, @unchecked Sendable {
+  public static var supportsSecureCoding: Bool { true }
+  public let maximumInputBytes: Int64
+  public let maximumPages: Int
+  public let maximumSentences: Int
+  public let maximumSentenceBytes: Int
+  public let maximumTextBytes: Int
+  public let maximumQuadsPerSentence: Int
+  public let maximumQuads: Int
+  public let maximumBatchSentences: Int
+  public let maximumBatchBytes: Int
+  public let maximumResidentBytes: UInt64
+  public init(maximumInputBytes: Int64, maximumPages: Int, maximumSentences: Int,
+    maximumSentenceBytes: Int, maximumTextBytes: Int, maximumQuadsPerSentence: Int,
+    maximumQuads: Int, maximumBatchSentences: Int, maximumBatchBytes: Int,
+    maximumResidentBytes: UInt64) throws {
+    guard maximumInputBytes > 0, maximumResidentBytes > 0,
+      [maximumPages, maximumSentences, maximumSentenceBytes, maximumTextBytes,
+       maximumQuadsPerSentence, maximumQuads, maximumBatchSentences, maximumBatchBytes]
+        .allSatisfy({ $0 > 0 }), maximumSentenceBytes <= maximumTextBytes,
+      maximumQuadsPerSentence <= maximumQuads, maximumBatchSentences <= maximumSentences
+    else { throw PDFiumFailure(code: .invalidRequest) }
+    self.maximumInputBytes = maximumInputBytes; self.maximumPages = maximumPages
+    self.maximumSentences = maximumSentences; self.maximumSentenceBytes = maximumSentenceBytes
+    self.maximumTextBytes = maximumTextBytes; self.maximumQuadsPerSentence = maximumQuadsPerSentence
+    self.maximumQuads = maximumQuads; self.maximumBatchSentences = maximumBatchSentences
+    self.maximumBatchBytes = maximumBatchBytes; self.maximumResidentBytes = maximumResidentBytes
+  }
+  public required convenience init?(coder c: NSCoder) {
+    guard let i = PDFiumCoding.int64(c, "input"), let p = PDFiumCoding.integer(c, "pages"),
+      let s = PDFiumCoding.integer(c, "sentences"), let sb = PDFiumCoding.integer(c, "sentenceBytes"),
+      let t = PDFiumCoding.integer(c, "textBytes"), let qs = PDFiumCoding.integer(c, "quadsPerSentence"),
+      let q = PDFiumCoding.integer(c, "quads"), let bs = PDFiumCoding.integer(c, "batchSentences"),
+      let bb = PDFiumCoding.integer(c, "batchBytes"), let r = PDFiumCoding.uint64(c, "resident")
+    else { return nil }
+    do { try self.init(maximumInputBytes: i, maximumPages: p, maximumSentences: s,
+      maximumSentenceBytes: sb, maximumTextBytes: t, maximumQuadsPerSentence: qs,
+      maximumQuads: q, maximumBatchSentences: bs, maximumBatchBytes: bb, maximumResidentBytes: r) }
+    catch { return nil }
+  }
+  public func encode(with c: NSCoder) {
+    c.encode(maximumInputBytes, forKey: "input"); c.encode(maximumPages, forKey: "pages")
+    c.encode(maximumSentences, forKey: "sentences"); c.encode(maximumSentenceBytes, forKey: "sentenceBytes")
+    c.encode(maximumTextBytes, forKey: "textBytes"); c.encode(maximumQuadsPerSentence, forKey: "quadsPerSentence")
+    c.encode(maximumQuads, forKey: "quads"); c.encode(maximumBatchSentences, forKey: "batchSentences")
+    c.encode(maximumBatchBytes, forKey: "batchBytes")
+    c.encode(Int64(bitPattern: maximumResidentBytes), forKey: "resident")
+  }
+}
+
+@objc(PaperLensPDFiumExtractionRequest)
+public final class PDFiumExtractionRequest: NSObject, NSSecureCoding, @unchecked Sendable {
+  public static var supportsSecureCoding: Bool { true }
+  public let key: PDFiumExtractionKey
+  public let pdfByteCount: Int64
+  public let limits: PDFiumExtractionLimits
+  public let deadlineUptimeNanoseconds: UInt64
+  public init(key: PDFiumExtractionKey, pdfByteCount: Int64, limits: PDFiumExtractionLimits,
+    deadlineUptimeNanoseconds: UInt64) throws {
+    guard pdfByteCount > 0, pdfByteCount <= limits.maximumInputBytes,
+      deadlineUptimeNanoseconds > 0, let keyBytes = key.payloadBytes,
+      keyBytes <= limits.maximumBatchBytes else { throw PDFiumFailure(code: .invalidRequest) }
+    self.key = key; self.pdfByteCount = pdfByteCount; self.limits = limits
+    self.deadlineUptimeNanoseconds = deadlineUptimeNanoseconds
+  }
+  public required convenience init?(coder c: NSCoder) {
+    guard let k = c.decodeObject(of: PDFiumExtractionKey.self, forKey: "key"),
+      let b = PDFiumCoding.int64(c, "bytes"),
+      let l = c.decodeObject(of: PDFiumExtractionLimits.self, forKey: "limits"),
+      let d = PDFiumCoding.uint64(c, "deadline") else { return nil }
+    do { try self.init(key: k, pdfByteCount: b, limits: l, deadlineUptimeNanoseconds: d) }
+    catch { return nil }
+  }
+  public func encode(with c: NSCoder) {
+    c.encode(key, forKey: "key"); c.encode(pdfByteCount, forKey: "bytes")
+    c.encode(limits, forKey: "limits"); c.encode(Int64(bitPattern: deadlineUptimeNanoseconds), forKey: "deadline")
+  }
+}
+
+@objc(PaperLensPDFiumStartAck)
+public final class PDFiumStartAck: NSObject, NSSecureCoding, @unchecked Sendable {
+  public static var supportsSecureCoding: Bool { true }
+  public let key: PDFiumExtractionKey
+  public let workerPID: Int32
+  public let observedPDFSHA256: String
+  public let observedPDFByteCount: Int64
+  public let documentPageCount: Int
+  public init(key: PDFiumExtractionKey, workerPID: Int32, observedPDFSHA256: String,
+    observedPDFByteCount: Int64, documentPageCount: Int) throws {
+    guard workerPID > 0, PDFiumCoding.hash(observedPDFSHA256), observedPDFByteCount > 0,
+      documentPageCount > 0 else { throw PDFiumFailure(code: .invalidRequest) }
+    self.key = key; self.workerPID = workerPID; self.observedPDFSHA256 = observedPDFSHA256
+    self.observedPDFByteCount = observedPDFByteCount; self.documentPageCount = documentPageCount
+  }
+  public required convenience init?(coder c: NSCoder) {
+    guard let k = c.decodeObject(of: PDFiumExtractionKey.self, forKey: "key"),
+      let p = PDFiumCoding.integer(c, "pid"), let pid = Int32(exactly: p),
+      let h = PDFiumCoding.string(c, "hash"), let b = PDFiumCoding.int64(c, "bytes"),
+      let pages = PDFiumCoding.integer(c, "pages") else { return nil }
+    do { try self.init(key: k, workerPID: pid, observedPDFSHA256: h,
+      observedPDFByteCount: b, documentPageCount: pages) }
+    catch { return nil }
+  }
+  public func encode(with c: NSCoder) {
+    c.encode(key, forKey: "key"); c.encode(Int(workerPID), forKey: "pid")
+    c.encode(observedPDFSHA256 as NSString, forKey: "hash")
+    c.encode(observedPDFByteCount, forKey: "bytes"); c.encode(documentPageCount, forKey: "pages")
+  }
+}
+
+/// Native-space observations. Presence records are explicit; absent boxes are not guessed.
+@objc(PaperLensPDFiumRawQuad)
+public final class PDFiumRawQuad: NSObject, NSSecureCoding, @unchecked Sendable {
+  public static var supportsSecureCoding: Bool { true }
+  public let topLeftX: Double; public let topLeftY: Double
+  public let topRightX: Double; public let topRightY: Double
+  public let bottomRightX: Double; public let bottomRightY: Double
+  public let bottomLeftX: Double; public let bottomLeftY: Double
+  public var coordinates: [Double] {
+    [topLeftX, topLeftY, topRightX, topRightY, bottomRightX, bottomRightY, bottomLeftX, bottomLeftY]
+  }
+  public init(topLeftX: Double, topLeftY: Double, topRightX: Double, topRightY: Double,
+    bottomRightX: Double, bottomRightY: Double, bottomLeftX: Double, bottomLeftY: Double) throws {
+    guard [topLeftX, topLeftY, topRightX, topRightY, bottomRightX, bottomRightY, bottomLeftX, bottomLeftY]
+      .allSatisfy(\.isFinite) else { throw PDFiumFailure(code: .unsupportedGeometry) }
+    let points = [(topLeftX, topLeftY), (topRightX, topRightY),
+      (bottomRightX, bottomRightY), (bottomLeftX, bottomLeftY)]
+    for index in 0..<points.count {
+      let a = points[index], b = points[(index + 1) % points.count], c = points[(index + 2) % points.count]
+      let cross = (b.0 - a.0) * (c.1 - b.1) - (b.1 - a.1) * (c.0 - b.0)
+      guard cross.isFinite, cross < 0 else { throw PDFiumFailure(code: .unsupportedGeometry) }
+    }
+    self.topLeftX = topLeftX; self.topLeftY = topLeftY; self.topRightX = topRightX; self.topRightY = topRightY
+    self.bottomRightX = bottomRightX; self.bottomRightY = bottomRightY
+    self.bottomLeftX = bottomLeftX; self.bottomLeftY = bottomLeftY
+  }
+  public required convenience init?(coder c: NSCoder) {
+    guard let a = PDFiumCoding.number(c, "x0"), let b = PDFiumCoding.number(c, "y0"),
+      let d = PDFiumCoding.number(c, "x1"), let e = PDFiumCoding.number(c, "y1"),
+      let f = PDFiumCoding.number(c, "x2"), let g = PDFiumCoding.number(c, "y2"),
+      let h = PDFiumCoding.number(c, "x3"), let i = PDFiumCoding.number(c, "y3") else { return nil }
+    do { try self.init(topLeftX: a, topLeftY: b, topRightX: d, topRightY: e,
+      bottomRightX: f, bottomRightY: g, bottomLeftX: h, bottomLeftY: i) }
+    catch { return nil }
+  }
+  public func encode(with c: NSCoder) {
+    c.encode(topLeftX, forKey: "x0"); c.encode(topLeftY, forKey: "y0")
+    c.encode(topRightX, forKey: "x1"); c.encode(topRightY, forKey: "y1")
+    c.encode(bottomRightX, forKey: "x2"); c.encode(bottomRightY, forKey: "y2")
+    c.encode(bottomLeftX, forKey: "x3"); c.encode(bottomLeftY, forKey: "y3")
+  }
+}
+
+@objc(PaperLensPDFiumRawPage)
+public final class PDFiumRawPage: NSObject, NSSecureCoding, @unchecked Sendable {
+  public static var supportsSecureCoding: Bool { true }
+  public let pageIndex: Int
+  public let boundingBox: PDFiumRawQuad
+  public let mediaBox: PDFiumRawQuad?
+  public let cropBox: PDFiumRawQuad?
+  public let rotationQuarterTurns: Int
+  /// Typed field payload, excluding Foundation/XPC implementation overhead.
+  public var payloadBytes: Int {
+    2 * MemoryLayout<Int64>.size + 2 * MemoryLayout<Bool>.size
+      + (1 + (mediaBox == nil ? 0 : 1) + (cropBox == nil ? 0 : 1)) * 8 * MemoryLayout<Double>.size
+  }
+  // Provenance is fixed by this DTO, not a sender-defined label.
+  public static let boundingBoxAPI = "FPDF_GetPageBoundingBox"
+  public static let mediaBoxAPI = "FPDFPage_GetMediaBox"
+  public static let cropBoxAPI = "FPDFPage_GetCropBox"
+  public init(pageIndex: Int, boundingBox: PDFiumRawQuad, mediaBox: PDFiumRawQuad?,
+    cropBox: PDFiumRawQuad?, rotationQuarterTurns: Int) throws {
+    guard pageIndex >= 0, (0...3).contains(rotationQuarterTurns) else {
+      throw PDFiumFailure(code: .unsupportedGeometry)
+    }
+    self.pageIndex = pageIndex; self.boundingBox = boundingBox; self.mediaBox = mediaBox
+    self.cropBox = cropBox; self.rotationQuarterTurns = rotationQuarterTurns
+  }
+  public required convenience init?(coder c: NSCoder) {
+    guard let p = PDFiumCoding.integer(c, "page"), let r = PDFiumCoding.integer(c, "rotation"),
+      let b = c.decodeObject(of: PDFiumRawQuad.self, forKey: "bounding"),
+      let hm = PDFiumCoding.bool(c, "hasMedia"), let hc = PDFiumCoding.bool(c, "hasCrop")
+    else { return nil }
+    let m = c.decodeObject(of: PDFiumRawQuad.self, forKey: "media")
+    let crop = c.decodeObject(of: PDFiumRawQuad.self, forKey: "crop")
+    guard hm == (m != nil), hc == (crop != nil) else { return nil }
+    do { try self.init(pageIndex: p, boundingBox: b, mediaBox: m, cropBox: crop, rotationQuarterTurns: r) }
+    catch { return nil }
+  }
+  public func encode(with c: NSCoder) {
+    c.encode(pageIndex, forKey: "page"); c.encode(rotationQuarterTurns, forKey: "rotation")
+    c.encode(boundingBox, forKey: "bounding"); c.encode(mediaBox != nil, forKey: "hasMedia")
+    c.encode(cropBox != nil, forKey: "hasCrop")
+    if let m = mediaBox { c.encode(m, forKey: "media") }
+    if let crop = cropBox { c.encode(crop, forKey: "crop") }
+  }
+}
+
+@objc(PaperLensPDFiumGlyph)
+public final class PDFiumGlyph: NSObject, NSSecureCoding, @unchecked Sendable {
+  public static var supportsSecureCoding: Bool { true }
+  public let nativeCharacterIndex: Int
+  public let unicodeScalar: UInt32
+  public let utf16Start: Int
+  public let utf16Length: Int
+  public let generated: Bool
+  public let matrixA: Double; public let matrixB: Double; public let matrixC: Double
+  public let matrixD: Double; public let matrixE: Double; public let matrixF: Double
+  public let rawQuad: PDFiumRawQuad?
+  public var payloadBytes: Int {
+    3 * MemoryLayout<Int64>.size + MemoryLayout<UInt32>.size + 2 * MemoryLayout<Bool>.size
+      + 6 * MemoryLayout<Double>.size + (rawQuad == nil ? 0 : 8 * MemoryLayout<Double>.size)
+  }
+  public init(nativeCharacterIndex: Int, unicodeScalar: UInt32, utf16Start: Int, utf16Length: Int,
+    generated: Bool, matrixA: Double, matrixB: Double, matrixC: Double, matrixD: Double,
+    matrixE: Double, matrixF: Double, rawQuad: PDFiumRawQuad?) throws {
+    guard let scalar = Unicode.Scalar(unicodeScalar), unicodeScalar != 0,
+      nativeCharacterIndex >= 0, utf16Start >= 0,
+      utf16Length == String(scalar).utf16.count,
+      [matrixA, matrixB, matrixC, matrixD, matrixE, matrixF].allSatisfy(\.isFinite),
+      rawQuad != nil || CharacterSet.whitespacesAndNewlines.contains(scalar) else {
+      throw PDFiumFailure(code: .unmappableText)
+    }
+    self.nativeCharacterIndex = nativeCharacterIndex; self.unicodeScalar = unicodeScalar
+    self.utf16Start = utf16Start; self.utf16Length = utf16Length; self.generated = generated
+    self.matrixA = matrixA; self.matrixB = matrixB; self.matrixC = matrixC
+    self.matrixD = matrixD; self.matrixE = matrixE; self.matrixF = matrixF; self.rawQuad = rawQuad
+  }
+  public required convenience init?(coder c: NSCoder) {
+    guard let n = PDFiumCoding.integer(c, "native"), let u = PDFiumCoding.int64(c, "unicode"),
+      let scalar = UInt32(exactly: u), let s = PDFiumCoding.integer(c, "start"),
+      let l = PDFiumCoding.integer(c, "length"), let g = PDFiumCoding.bool(c, "generated"),
+      let a = PDFiumCoding.number(c, "a"), let b = PDFiumCoding.number(c, "b"),
+      let cc = PDFiumCoding.number(c, "c"), let d = PDFiumCoding.number(c, "d"),
+      let e = PDFiumCoding.number(c, "e"), let f = PDFiumCoding.number(c, "f"),
+      let hq = PDFiumCoding.bool(c, "hasQuad") else { return nil }
+    let q = c.decodeObject(of: PDFiumRawQuad.self, forKey: "quad")
+    guard hq == (q != nil) else { return nil }
+    do { try self.init(nativeCharacterIndex: n, unicodeScalar: scalar, utf16Start: s, utf16Length: l,
+      generated: g, matrixA: a, matrixB: b, matrixC: cc, matrixD: d, matrixE: e, matrixF: f, rawQuad: q) }
+    catch { return nil }
+  }
+  public func encode(with c: NSCoder) {
+    c.encode(nativeCharacterIndex, forKey: "native"); c.encode(Int64(unicodeScalar), forKey: "unicode")
+    c.encode(utf16Start, forKey: "start"); c.encode(utf16Length, forKey: "length")
+    c.encode(generated, forKey: "generated"); c.encode(matrixA, forKey: "a"); c.encode(matrixB, forKey: "b")
+    c.encode(matrixC, forKey: "c"); c.encode(matrixD, forKey: "d"); c.encode(matrixE, forKey: "e")
+    c.encode(matrixF, forKey: "f"); c.encode(rawQuad != nil, forKey: "hasQuad")
+    if let q = rawQuad { c.encode(q, forKey: "quad") }
+  }
+}
+
+@objc(PaperLensPDFiumSentence)
+public final class PDFiumSentence: NSObject, NSSecureCoding, @unchecked Sendable {
+  public static var supportsSecureCoding: Bool { true }
+  public let paperID: UUID; public let revision: UUID; public let pdfSHA256: String
+  public let pageIndex: Int; public let sentenceID: Int; public let text: String
+  public let nativeStartCharacter: Int; public let nativeCharacterCount: Int
+  public let sourceUTF16Start: Int; public let sourceUTF16Length: Int
+  public let glyphs: [PDFiumGlyph]
+  public init(paperID: UUID, revision: UUID, pdfSHA256: String, pageIndex: Int, sentenceID: Int,
+    text: String, nativeStartCharacter: Int, nativeCharacterCount: Int,
+    sourceUTF16Start: Int, sourceUTF16Length: Int, glyphs: [PDFiumGlyph]) throws {
+    guard PDFiumCoding.hash(pdfSHA256), PDFiumCoding.uuidV4(paperID), PDFiumCoding.uuidV4(revision),
+      pageIndex >= 0, sentenceID >= 0, !text.isEmpty,
+      nativeStartCharacter >= 0, nativeCharacterCount > 0, sourceUTF16Start >= 0,
+      nativeStartCharacter <= Int.max - nativeCharacterCount,
+      sourceUTF16Length == text.utf16.count, glyphs.count == nativeCharacterCount else {
+      throw PDFiumFailure(code: .unmappableText)
+    }
+    var position = sourceUTF16Start; var reconstructed = String.UnicodeScalarView()
+    for (i, glyph) in glyphs.enumerated() {
+      guard glyph.nativeCharacterIndex == nativeStartCharacter + i,
+        glyph.utf16Start == position, let scalar = Unicode.Scalar(glyph.unicodeScalar),
+        position <= Int.max - glyph.utf16Length else { throw PDFiumFailure(code: .unmappableText) }
+      position += glyph.utf16Length; reconstructed.append(scalar)
+    }
+    guard position - sourceUTF16Start == sourceUTF16Length,
+      String(reconstructed).utf8.elementsEqual(text.utf8) else { throw PDFiumFailure(code: .unmappableText) }
+    self.paperID = paperID; self.revision = revision; self.pdfSHA256 = pdfSHA256
+    self.pageIndex = pageIndex; self.sentenceID = sentenceID; self.text = text
+    self.nativeStartCharacter = nativeStartCharacter; self.nativeCharacterCount = nativeCharacterCount
+    self.sourceUTF16Start = sourceUTF16Start; self.sourceUTF16Length = sourceUTF16Length; self.glyphs = glyphs
+  }
+  public required convenience init?(coder c: NSCoder) {
+    guard let p = PDFiumCoding.uuid(c, "paper"), let r = PDFiumCoding.uuid(c, "revision"),
+      let h = PDFiumCoding.string(c, "hash"), let pg = PDFiumCoding.integer(c, "page"),
+      let id = PDFiumCoding.integer(c, "sentence"), let t = PDFiumCoding.string(c, "text"),
+      let n = PDFiumCoding.integer(c, "nativeStart"), let nc = PDFiumCoding.integer(c, "nativeCount"),
+      let s = PDFiumCoding.integer(c, "sourceStart"), let l = PDFiumCoding.integer(c, "sourceLength"),
+      let glyphs = c.decodeObject(of: [NSArray.self, PDFiumGlyph.self, PDFiumRawQuad.self], forKey: "glyphs")
+        as? [PDFiumGlyph] else { return nil }
+    do { try self.init(paperID: p, revision: r, pdfSHA256: h, pageIndex: pg, sentenceID: id, text: t,
+      nativeStartCharacter: n, nativeCharacterCount: nc, sourceUTF16Start: s, sourceUTF16Length: l, glyphs: glyphs) }
+    catch { return nil }
+  }
+  public func encode(with c: NSCoder) {
+    c.encode(paperID as NSUUID, forKey: "paper"); c.encode(revision as NSUUID, forKey: "revision")
+    c.encode(pdfSHA256 as NSString, forKey: "hash"); c.encode(pageIndex, forKey: "page")
+    c.encode(sentenceID, forKey: "sentence"); c.encode(text as NSString, forKey: "text")
+    c.encode(nativeStartCharacter, forKey: "nativeStart"); c.encode(nativeCharacterCount, forKey: "nativeCount")
+    c.encode(sourceUTF16Start, forKey: "sourceStart"); c.encode(sourceUTF16Length, forKey: "sourceLength")
+    c.encode(glyphs as NSArray, forKey: "glyphs")
+  }
+  /// Checked exact field payload accounting. Foundation/XPC allocation and
+  /// serialization overhead are NOT certified by this logical byte count.
+  public var payloadBytes: Int? {
+    var size = 2 * MemoryLayout<uuid_t>.size + 6 * MemoryLayout<Int64>.size + pdfSHA256.utf8.count
+    let textSize = size.addingReportingOverflow(text.utf8.count)
+    guard !textSize.overflow else { return nil }
+    size = textSize.partialValue
+    for glyph in glyphs {
+      let next = size.addingReportingOverflow(glyph.payloadBytes)
+      guard !next.overflow else { return nil }
+      size = next.partialValue
+    }
+    return size
+  }
+}
+
+@objc(PaperLensPDFiumBatch)
+public final class PDFiumBatch: NSObject, NSSecureCoding, @unchecked Sendable {
+  public static var supportsSecureCoding: Bool { true }
+  public let key: PDFiumExtractionKey; public let sequence: Int
+  public let pages: [PDFiumRawPage]; public let sentences: [PDFiumSentence]
+  public let complete: Bool; public let totalSentences: Int?
+  public static func maximumEnvelopePayloadBytes(key: PDFiumExtractionKey) -> Int? {
+    guard let bytes = key.payloadBytes else { return nil }
+    let total = bytes.addingReportingOverflow(4 * MemoryLayout<Int64>.size + 2 * MemoryLayout<Bool>.size)
+    return total.overflow ? nil : total.partialValue
+  }
+  public init(key: PDFiumExtractionKey, sequence: Int, pages: [PDFiumRawPage],
+    sentences: [PDFiumSentence], complete: Bool, totalSentences: Int?) throws {
+    guard sequence >= 0, !sentences.isEmpty, complete == (totalSentences != nil),
+      totalSentences.map({ $0 >= sentences.count }) ?? true,
+      Set(pages.map(\.pageIndex)).count == pages.count else { throw PDFiumFailure(code: .protocolViolation) }
+    self.key = key; self.sequence = sequence; self.pages = pages; self.sentences = sentences
+    self.complete = complete; self.totalSentences = totalSentences
+  }
+  public required convenience init?(coder c: NSCoder) {
+    guard let k = c.decodeObject(of: PDFiumExtractionKey.self, forKey: "key"),
+      let s = PDFiumCoding.integer(c, "sequence"), let done = PDFiumCoding.bool(c, "complete"),
+      let p = c.decodeObject(of: [NSArray.self, PDFiumRawPage.self, PDFiumRawQuad.self], forKey: "pages") as? [PDFiumRawPage],
+      let sentences = c.decodeObject(of: [NSArray.self, PDFiumSentence.self, PDFiumGlyph.self, PDFiumRawQuad.self,
+        NSUUID.self, NSString.self], forKey: "sentences") as? [PDFiumSentence] else { return nil }
+    let total = done ? PDFiumCoding.integer(c, "total") : nil
+    guard done || !c.containsValue(forKey: "total") else { return nil }
+    do { try self.init(key: k, sequence: s, pages: p, sentences: sentences, complete: done, totalSentences: total) }
+    catch { return nil }
+  }
+  public func encode(with c: NSCoder) {
+    c.encode(key, forKey: "key"); c.encode(sequence, forKey: "sequence")
+    c.encode(pages as NSArray, forKey: "pages"); c.encode(sentences as NSArray, forKey: "sentences")
+    c.encode(complete, forKey: "complete"); if let t = totalSentences { c.encode(t, forKey: "total") }
+  }
+}
+
+public enum PDFiumEndDisposition: Int, Sendable { case completed, cancelled, failed }
+@objc(PaperLensPDFiumEnd)
+public final class PDFiumEnd: NSObject, NSSecureCoding, @unchecked Sendable {
+  public static var supportsSecureCoding: Bool { true }
+  public let key: PDFiumExtractionKey; public let disposition: PDFiumEndDisposition
+  public let lastSequence: Int; public let totalSentences: Int
+  public let processedPageCount: Int; public let documentPageCount: Int
+  public let observedPDFSHA256: String
+  public init(key: PDFiumExtractionKey, disposition: PDFiumEndDisposition, lastSequence: Int,
+    totalSentences: Int, processedPageCount: Int, documentPageCount: Int, observedPDFSHA256: String) throws {
+    guard lastSequence >= -1, totalSentences >= 0, processedPageCount >= 0,
+      documentPageCount >= processedPageCount, PDFiumCoding.hash(observedPDFSHA256),
+      disposition != .completed || (totalSentences > 0 && processedPageCount == documentPageCount && lastSequence >= 0)
+    else { throw PDFiumFailure(code: .protocolViolation) }
+    self.key = key; self.disposition = disposition; self.lastSequence = lastSequence
+    self.totalSentences = totalSentences; self.processedPageCount = processedPageCount
+    self.documentPageCount = documentPageCount; self.observedPDFSHA256 = observedPDFSHA256
+  }
+  public required convenience init?(coder c: NSCoder) {
+    guard let k = c.decodeObject(of: PDFiumExtractionKey.self, forKey: "key"),
+      let d = PDFiumCoding.integer(c, "disposition"), let disposition = PDFiumEndDisposition(rawValue: d),
+      let s = PDFiumCoding.integer(c, "sequence"), let t = PDFiumCoding.integer(c, "total"),
+      let p = PDFiumCoding.integer(c, "processed"), let pc = PDFiumCoding.integer(c, "pages"),
+      let h = PDFiumCoding.string(c, "hash") else { return nil }
+    do { try self.init(key: k, disposition: disposition, lastSequence: s, totalSentences: t,
+      processedPageCount: p, documentPageCount: pc, observedPDFSHA256: h) }
+    catch { return nil }
+  }
+  public func encode(with c: NSCoder) {
+    c.encode(key, forKey: "key"); c.encode(disposition.rawValue, forKey: "disposition")
+    c.encode(lastSequence, forKey: "sequence"); c.encode(totalSentences, forKey: "total")
+    c.encode(processedPageCount, forKey: "processed"); c.encode(documentPageCount, forKey: "pages")
+    c.encode(observedPDFSHA256 as NSString, forKey: "hash")
+  }
+}
+
+public enum PDFiumExtractionInterface {
+  public static func make() -> NSXPCInterface {
+    let interface = NSXPCInterface(with: PDFiumExtractionService.self)
+    let classes = NSSet(array: [PDFiumExtractionRequest.self, PDFiumExtractionKey.self,
+      PDFiumExtractionLimits.self, PDFiumStartAck.self, PDFiumBatch.self, PDFiumEnd.self,
+      PDFiumFailure.self, PDFiumRawPage.self, PDFiumSentence.self, PDFiumGlyph.self,
+      PDFiumRawQuad.self, NSArray.self, NSString.self, NSUUID.self, NSNumber.self])
+    let begin = #selector(PDFiumExtractionService.beginExtraction(_:pdf:withReply:))
+    let next = #selector(PDFiumExtractionService.nextExtractionBatch(_:sequence:withReply:))
+    let cancel = #selector(PDFiumExtractionService.cancelExtractionAndDrain(_:withReply:))
+    interface.setClasses(classes as! Set<AnyHashable>, for: begin, argumentIndex: 0, ofReply: false)
+    interface.setClasses(NSSet(array: [FileHandle.self]) as! Set<AnyHashable>, for: begin, argumentIndex: 1, ofReply: false)
+    for (selector, count) in [(begin, 2), (next, 3), (cancel, 2)] {
+      for index in 0..<count {
+        interface.setClasses(classes as! Set<AnyHashable>, for: selector, argumentIndex: index, ofReply: true)
+      }
+    }
+    for selector in [next, cancel] {
+      interface.setClasses(NSSet(array: [NSUUID.self]) as! Set<AnyHashable>, for: selector, argumentIndex: 0, ofReply: false)
+    }
+    return interface
+  }
 }
 
 enum TopologyIdentity {

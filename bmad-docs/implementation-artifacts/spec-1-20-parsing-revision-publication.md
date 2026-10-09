@@ -126,8 +126,9 @@ checkBudget guard into the local consume callback. The guard checks the original
 captured deadline/resource allowance and cancellation, not a new quota or renewed budget:
 withBatches(identity, consume: ([ExtractionBatch], ExtractionConsumptionScope) async throws).
 The existing validation loop checks this guard between canonical units and before/after
-validation. The existing sole-GRDB publication transaction checks it at its guarded
-publication boundary and before successful commit; failures roll back publication.
+validation. The existing sole-GRDB publication transaction checks it at transaction
+entry, between inserts, before visibility and just before transaction return;
+failures roll back all publication.
 The parent owns the Infrastructure publication signature and affected caller adaptation.
 No scope callback, provider configuration or ownership closure crosses XPC.
 Rejected duplicate/identified begins retain a captured received-handle debt owner when
@@ -136,6 +137,42 @@ reused descriptor or manufacture End. Acquired opaque PDF references must match 
 request UTF-8 exactly, in addition to all other identity/configuration guards.
 Parent-owned tests/build/review follow these source corrections. The initial four-file
 delivery and Review53 BLOCK are preserved; no helper/runtime or Story promotion follows.
+
+### Review53 owned source correction receipt (not integration evidence)
+
+Against the pre-implementation correction commit `9948634`, the producer now closes
+the sender after verified helper drain without releasing the child read pin. Consumer
+return/unwind and raw-array disposal precede pin release; captured ownership refuses
+pin release before recorded disposal, and accounting refuses completion before pin
+release succeeds. Reentrant cancellation drains native/sender resources only while
+the consumer remains active. Uncertain closure/release retains the session debt.
+
+The immutable, Sendable, Main-only `ExtractionConsumptionScope` requires a throwing
+guard. It retains the captured input's original deadline/allowance callback and a
+locked cancellation flag, so a detached DB transaction observes cancellation without
+depending on its own Task state. Validation checks before/after canonical units and
+at entry/exit. `ExtractionRevisionService` passes the scope guard to the parent-owned
+`publishExtraction(_:sentences:checkBudget:)` as a required `@Sendable () throws -> Void`.
+The parent must check it inside the real GRDB transaction at entry, between inserts,
+before visibility and just before transaction return, and adapt all callers/conformers.
+The required callback has no default; thrown failures roll back all publication. That DB guard
+is NOT closed by this source receipt; Infrastructure remains parent-owned and untouched.
+
+Duplicate/identified begin rejection retains the actual received FileHandle and wire
+key in serial native-owner debt on checked-close failure, without changing the accepted
+operation, re-closing uncertain FDs, or constructing End. Acquisition adds original
+request UTF-8 reference matching to the existing full identity/configuration guards.
+Shared reply-shape validation is used by the actual producer and local unit tests.
+
+`Tests/Product/PDFiumExtractionProducerTests.swift` contains bounded synthetic-only
+regressions for sender/pin/disposal/accounting ordering, reentrant release, cancellation
+and original deadline guards across detached consumption, guard failure after a
+canonical unit, canonically equivalent acquisition reference rejection before helper
+start, immutable secure request coding and invalid reply shapes. Genuine local fixture
+FDs are used; no production binding, renderer, vendor or helper trial is introduced.
+Tests/builds/gates/formatters/commits/runtime were explicitly not run in this delivery.
+Parent owns Package/Xcode membership, existing signature adaptations, DB transaction
+wiring, focused checks and final integration. Source corrections are not StoryDone.
 
 ### Owned source delivery (unverified)
 
@@ -223,3 +260,27 @@ were not run. Parent owns native compilation, focused DTO/malformed-protocol/FD/
 boundary/cancellation/deletion/publication tests, independent HIGH integrity/lifetime review
 and evidence commits. This receipt is source authorship only: StoryDone remains false and
 no AD8/P1/P2/P3 or runtime resource certification is asserted.
+
+### Parent integration verification — 2026-10-10
+
+Committed parent Specs `497db66` and `fb3fa60` precede integration of authored `08dd3e6`.
+The parent wired required captured-budget checks inside the sole GRDB publication
+transaction at entry, each insert, visibility admission and immediately before return.
+Budget failures roll back new revision/sentence/FTS/visible pointer/successful Job state;
+the old usable extraction remains. Explicit Retry uses the same `consumeReserved`
+consumer scope, including post-commit cleanup debt without rewriting committed success.
+All old array-returning producer paths are removed; fixture callers use explicitly
+synthetic bounded allowances, not production defaults. Missing producer rejects before
+reservation. Secure coder delegation uses explicit throwing init/catch-return-nil.
+
+`swift test --filter ProductTests`: 220 tests, zero failures (`artifact://894`), including
+eight bounded producer fixtures, nested secure batch/terminal round trips and actual
+GRDB rollback at all four one-row budget checkpoints. Original compiler failure
+`artifact://883` and intermediate 219-pass `artifact://885` are retained. Complete unsigned
+Release arm64/macOS15 scheme compilation with the actual helper source succeeded in
+fresh `.build/product-native-compile-20261010-g` (`artifact://891`). AppIntents/debug-map
+and unnecessary-await warnings remain. No app/helper binary was executed or signed.
+Review56 is CLEAR / APPROVE: the original three HIGH and one MEDIUM are RESOLVED,
+with no new concrete HIGH in its changed five-file source scope. Source/test/compilation is not runtime admission,
+calibration, visible UI/AD8/P1/P2/P3 or canonical Story acceptance. Production supplied
+read-pin/resource/geometry composition still requires actual owners, never fake callbacks.

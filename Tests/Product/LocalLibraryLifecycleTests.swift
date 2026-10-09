@@ -273,7 +273,7 @@ final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
     let usable = try extraction()
     try db.reserveExtraction(usable)
     // Storage fixture only: retained bytes do not attest calibrated geometry.
-    try db.publishExtraction(usable,
+    try publishFixtureExtraction(db, usable,
       sentences: [.init(page: 0, sentenceID: 0, text: "retained startup text", geometry: Data([1]))])
     let interrupted = try extraction()
     try db.reserveExtraction(interrupted)
@@ -315,7 +315,7 @@ final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
     XCTAssertEqual(retainedSaga, saga.uuidString)
     XCTAssertEqual(try Data(contentsOf: marker), bytes)
     XCTAssertEqual(try Data(contentsOf: namespace(deleting).appendingPathComponent("document.pdf")), deletingBytes)
-    XCTAssertThrowsError(try reopened.publishExtraction(interrupted,
+    XCTAssertThrowsError(try publishFixtureExtraction(reopened, interrupted,
       sentences: [.init(page: 0, sentenceID: 0, text: "stale", geometry: Data([2]))]))
     XCTAssertThrowsError(try reopened.publish(pending, stage: marker,
       final: namespace(pending.paperID).appendingPathComponent("document.pdf"),

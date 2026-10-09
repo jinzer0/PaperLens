@@ -42,7 +42,7 @@ struct StartupSummaryFixture {
       configuration: try database.providerConfiguration())
     try database.reserveExtraction(extraction)
     let quotes = ["main contribution alpha", "results conclusion beta"]
-    try database.publishExtraction(extraction, sentences: quotes.enumerated().map {
+    try publishFixtureExtraction(database, extraction, sentences: quotes.enumerated().map {
       .init(page: 0, sentenceID: $0.offset, text: $0.element, geometry: Data("startup-quad".utf8))
     })
     // Explicit synthetic trusted-context generation, not derived from a durable UUID.
@@ -347,7 +347,7 @@ final class ProductJobRecoveryTests: XCTestCase, @unchecked Sendable {
     let first = try extraction(paper, generation, epoch: UUID())
     try database.reserveExtraction(first)
     // Storage-only fixture: does not assert calibrated geometry or renderer acceptance.
-    try database.publishExtraction(first,
+    try publishFixtureExtraction(database, first,
       sentences: [.init(page: 0, sentenceID: 0, text: "retained original", geometry: Data([1, 2, 3]))])
     let interrupted = try extraction(paper, generation, epoch: UUID())
     try database.reserveExtraction(interrupted)
@@ -364,7 +364,7 @@ final class ProductJobRecoveryTests: XCTestCase, @unchecked Sendable {
     assertUnchanged(before, try row("extractionAttempt", paper: paper), except: ["state", "failure"])
     assertUnchanged(beforePaper, try row("paper", paper: paper))
     XCTAssertEqual(try Data(contentsOf: marker), bytes)
-    XCTAssertThrowsError(try database.publishExtraction(interrupted,
+    XCTAssertThrowsError(try publishFixtureExtraction(database, interrupted,
       sentences: [.init(page: 0, sentenceID: 0, text: "late stale output", geometry: Data([4]))]))
     XCTAssertThrowsError(try database.publish(oldImport, stage: marker,
       final: namespace.appendingPathComponent("document.pdf"), sha256: String(repeating: "b", count: 64)))
