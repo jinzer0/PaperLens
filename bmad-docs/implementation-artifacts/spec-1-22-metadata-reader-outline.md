@@ -204,6 +204,25 @@ failure across real same-object reopen, stable metadata-only/different new-sessi
 identity and stale refresh scheduling as shared production logic. Parent repeats focused/
 union/native/source review; no app/helper/renderer/protected trial or Story acceptance.
 
+#### Parent concrete overlapping workspace error completion
+
+After review73 source-only approval, parent found a separate same-admission interleaving:
+metadata callback1 captures a real failed DB read and waits; callback2 applies a healthy
+current pointer and resolves latest status intent; callback1 later clears that metadata.
+The status-view request guard AFTER callback does not fence callback side effects inside
+workspace. Identical healthy polls can then stay resolved with false unavailability.
+Preserve23/zero996,289/zero998,native-v999 as pre-correction evidence.
+
+Capture a workspace-local request ID for each actual current-mount metadata read BEFORE
+suspension. Both success and failure application must require the latest actual request,
+in addition to cancellation/session/admission/hash/current-pointer guards. Stale requests
+must not clear metadata, change failure, close a Reader or resolve current pending intent.
+New session/return must invalidate old work; obsolete mount intent remains dismissible.
+Use shared production capture/read/apply seams and actual GRDB failed/healthy reads for
+deterministic coverage; no fabricated fetch, identity, success flag or replacement store.
+Same five-file scope, no new timer/owner/permission. Parent re-verifies only changed
+source and reviews this exact new interleaving; existing resolved findings remain reused.
+
 #### Correction source handoff from committed Spec c6b7506
 
 ReaderSessionAdmissionState is read-only scheduling data: pending before admission,
@@ -230,3 +249,30 @@ close/reopen rejects a captured real read from its old actual admission UUID. Th
 six refresh tests remain intact. Correction tests/builds/gates/lint/formatting/runtime
 are NOT RUN by worker instruction. Parent reruns focused/union/native verification and
 review73; pre-correction evidence remains historical, visible runtime/UI unverified.
+
+#### Follow-up source handoff from committed Spec 64bd6a9
+
+PublishedMetadataOutcome captures real GRDB success/failure and actual admission before
+suspension. applyPublishedMetadataFailure shares production error application with tests:
+cancelled/noncurrent mount is dismissed (true); still-current different nonclosed admission
+defers (false); actual closed ownership remains denial. Old A errors cannot modify B's
+metadata/error or dismiss its pending polling intent. No throwable Sendable wrapper over
+a MainActor session, fake getter/store or successful fallback is introduced.
+
+OpenReader.mountIdentity is Hashable Paper/generation/ObjectIdentifier(actual session).
+The root Reader container uses this key; metadata-only replacement is stable, but a new
+session object remounts even without an intervening Library render. Actual admission UUID
+does not participate in this mount key, so initial native admission cannot remount itself.
+
+ParsingMetadataReconciliation.beginRequest issues a per-refresh request UUID. Production
+poll/manual refresh checks it after DB await, after context await and before publication;
+after callback await, stale requests cannot resolve newer pending intent. No timer/queue
+is added. Shared production request guards are tested using actual status reads and real
+workspace callback deferral/dismissal, not fake successful callbacks or counter defaults.
+
+Three follow-up tests are authored for delayed real GRDB query failure across same-object
+real reopen, metadata-stable/new-session-distinct actual mount keys, and overlapping actual
+poll reads with stale callback completion. Prior ten refresh/admission tests remain intact.
+Worker verification is read-only source inspection; tests/builds/gates/formatting/runtime
+are NOT RUN by instruction. Parent repeats focused/union/native and review73; 991/993/994
+are pre-follow-up evidence only. Runtime/UI/Story acceptance remains unverified.
