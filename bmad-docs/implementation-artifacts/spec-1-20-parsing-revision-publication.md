@@ -400,3 +400,14 @@ compilation succeeds (`artifact://912`). Project plutil syntax also passes.
 Review59 is CLEAR / APPROVE for this actual shared-registry lifetime/FD-owner slice.
 Required resource/deadline/geometry acquisition composition is still separate; no app/
 helper binary execution, trial renewal, calibration/P1/P2/P3/AD8 or Story promotion.
+
+### Already-cancelled parser admission correction
+
+Direct parse currently launches detached durable reservation even when its caller was
+already cancelled. Check the original caller's cancellation before spawning reservation,
+after existing required producer/geometry admission. An already-cancelled action creates
+zero invocation/attempt/revision rows and dispatches no producer. This does not promise
+atomic cancellation after admission or interrupt SQLite/native calls. Exact bounded
+change: ExtractionRevisionService.swift and ExtractionRevisionTests.swift; parent
+updates this existing Spec/evidence and runs the changed behavior/Product union.
+No budget renewal, new owner, helper execution or Story/runtime certification.
