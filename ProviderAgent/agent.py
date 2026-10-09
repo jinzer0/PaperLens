@@ -112,6 +112,7 @@ class AttemptProducer:
     stop: threading.Event = field(default_factory=threading.Event)
     closed: threading.Event = field(default_factory=threading.Event)
     success: bool = False
+    execution: threading.Lock = field(default_factory=threading.Lock)
     deadline: float = field(default_factory=lambda: time.monotonic() + LIMITS['maxTimeoutMs'] / 1000)
 
 
@@ -603,6 +604,11 @@ class AttemptFixtures:
         producer = producer or self.session.register(identity)
         if producer.identity != identity:
             raise AttemptInvalid('producerIdentity')
+        # Only the callback that claims execution may publish underlying closure.
+        # A rejected duplicate must not run the active writer's finally.
+        # Never release this one-shot latch, including after failed validation.
+        if not producer.execution.acquire(blocking=False):
+            raise AttemptInvalid('consumedProducer')
         try:
             self.session.require_producer(producer)
             result = self.prepare_owned(identity, producer)

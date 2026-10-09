@@ -19,6 +19,8 @@ Epic의 명시적 일괄 SCOPE+IMPLEMENTATION 승인으로 구현한다. 이 Spe
 
 ## Existing authority / file slice
 
+Renewed human Story1.1–1.26 batch implementation/verification and explicit worktree parallelism admit a concrete same-owner repair in only ProviderAgent/agent.py and Tests/Topology/test_agent.py. A duplicate registered prepare callback could publish another still-active callback's producer.closed event from its own failing finally. Add one irreversible nonblocking per-producer execution latch; only the winning callback enters completion accounting. Keep bounded census/descriptor/filesystem validation inside its actual completion finally, preventing the reviewed state-lock timeout from leaving ended work undrained. Do not remove descriptor-closure failure guards, renew SDK/live/control/collector/renderer trials or create another owner. Six parent registered-synthetic tests pass, including real duplicate-writer barriers and held-state timeout followed by purge/session release; independent delta rereview CLEAR/APPROVE resolves that specific finding. Verified bytes are integrated without rerunning unchanged inputs. Existing signed artifacts do not contain this later source fix and must not be promoted as its runtime proof.
+
 - `ProviderAgent/agent.py`: fixture_profile, descriptor ownership/closed diagnostics/Server dispatch 패턴 재사용. 작은 `AttemptFixtures` store와 아래 topology methods를 실제 연결한다. 임의 generic storage engine/DB/product provider는 추가하지 않는다.
 - `Contracts/ProviderRPC/contract.json`: 유일 wire schema에 세 method와 generation/outcome definitions를 추가한다. 기존 topology major/minor/capability를 유지하는 additive 시험 method이며 제품 RPC Story1.9로 전용하지 않는다.
 - `Tests/Topology/test_agent.py`: 실제 temporary filesystem과 Server RPC를 이용한 lifecycle/재시작/충돌/오류 tests.

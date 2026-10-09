@@ -577,6 +577,80 @@ class AttemptFixtureTests(unittest.TestCase):
         return {**self.identity, 'generation': generation or self.identity['generation'],
                 'correlationID': str(uuid.uuid4())}
 
+    def test_duplicate_registered_callback_cannot_publish_active_writer_closure(self):
+        for phase in ('beforeWrite', 'afterMarker', 'beforeTerminal'):
+            with self.subTest(phase=phase):
+                self.identity = self.new_identity()
+                producer = self.store.session.register(self.identity)
+                reached, release = threading.Event(), threading.Event()
+                checkpoint = self.store.checkpoint
+                def held(current, active):
+                    if current == phase:
+                        reached.set()
+                        if not release.wait(5):
+                            raise RuntimeError('real callback barrier timed out')
+                    checkpoint(current, active)
+                purge = self.purge_identity()
+                with ThreadPoolExecutor(max_workers=1) as pool, \
+                        patch.object(self.store, 'checkpoint', side_effect=held):
+                    work = pool.submit(self.store.prepare, **self.identity, producer=producer)
+                    try:
+                        self.assertTrue(reached.wait(1))
+                        tracked = self.paths()[2:] if phase != 'beforeWrite' else ()
+                        before = {path: self.snapshot(path) for path in tracked}
+                        with self.assertRaises(agent.AttemptInvalid):
+                            self.store.prepare(**self.identity, producer=producer)
+                        self.assertFalse(producer.closed.is_set())
+                        with self.assertRaises(TimeoutError):
+                            self.store.paper_purge(**purge, deadline=time.monotonic() + 0.03)
+                        self.assertFalse(producer.closed.is_set())
+                        self.assertFalse(work.done())
+                        for path, snapshot in before.items():
+                            self.assertEqual(self.snapshot(path), snapshot)
+                    finally:
+                        release.set()
+                    with self.assertRaises(agent.AttemptCancelled):
+                        work.result(timeout=1)
+                self.assertTrue(producer.closed.is_set())
+                self.assertEqual(self.store.paper_purge(**purge), {'absent': True, 'drained': True})
+
+    def test_expired_registered_callback_closes_without_filesystem_admission(self):
+        producer = self.store.session.register(self.identity)
+        producer.deadline = 0.0
+        with self.assertRaises(TimeoutError):
+            self.store.prepare(**self.identity, producer=producer)
+        self.assertTrue(producer.closed.is_set())
+        self.assertFalse(self.root.exists())
+        self.store.close()
+        self.assertTrue(self.store.session.released)
+
+    def test_registered_callback_state_timeout_publishes_actual_closure(self):
+        producer = self.store.session.register(self.identity)
+        reached = threading.Event()
+        original = self.store.session.require_producer
+        def validation(active):
+            reached.set()
+            original(active)
+        with ThreadPoolExecutor(max_workers=1) as pool, \
+                patch.object(self.store.session, 'require_producer', side_effect=validation):
+            with self.store.session.state:
+                producer.deadline = time.monotonic() + 0.03
+                work = pool.submit(self.store.prepare, **self.identity, producer=producer)
+                self.assertTrue(reached.wait(1))
+                # Keep census unavailable until the actual callback has exited.
+                with self.assertRaises(TimeoutError):
+                    work.result(timeout=1)
+                self.assertTrue(work.done())
+                self.assertTrue(producer.closed.is_set())
+                self.assertTrue(producer.execution.locked())
+                self.assertFalse(self.root.exists())
+                with self.assertRaises(agent.AttemptInvalid):
+                    self.store.prepare(**self.identity, producer=producer)
+        self.assertEqual(self.store.paper_purge(**self.purge_identity()),
+                         {'absent': True, 'drained': True})
+        self.store.close()
+        self.assertTrue(self.store.session.released)
+
     def test_purge_two_generations_joined_stores_and_independent_reopened_absence(self):
         joined = agent.AttemptFixtures(self.store.session)
         second = {**self.identity, 'generation': 2, 'correlationID': str(uuid.uuid4())}
