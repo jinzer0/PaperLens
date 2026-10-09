@@ -650,3 +650,23 @@ Eight-source-file binary delta against preimplementation5bda8dd is
 Genuine input acquisition is composed; required genuine geometry/calibration and product
 activation remain incomplete. Main-only residency is not combined RSS or hard-bound
 proof. Existing Story/Epic/protected acceptance stays false; no trial was renewed.
+
+### Next local slice — sole canonical codec binding
+
+The existing PDFium geometry validator currently accepts arbitrary caller encoding and
+only checks nonempty bytes. This is not a composed canonical persistence codec, even
+though production activation remains denied. Remove that callback from the required
+geometry binding and use the existing CanonicalExtractionGeometry version1 sorted-key
+encoder, shared with its ownership-aware validator/decoder. Do not create a second
+format, published membership, precision default, page mapping, runtime calibration or
+production activation. Native-delivered text/glyph/identity/matrix/page/roundtrip checks
+remain mandatory before canonical encoding. Existing owning-anchor decode validation
+must accept the actual output and reject wrong ownership/text/geometry.
+
+Bounded source scope is CanonicalExtractionGeometry.swift, ExtractionRevisionService.swift,
+CanonicalExtractionGeometryTests.swift and this Spec; parent owns aggregate verification
+and existing evidence. Regression cases must use explicit owned fixture precision/mapping
+and typed native glyph provenance, decode the output through the existing ownership
+validator, and prove invalid text/provenance/identity/mapping fails rather than becoming
+nonempty arbitrary bytes. No helper/SDK/app execution, external calibration claim,
+protected-trial renewal, new database/authority or geometry fallback is admitted.
