@@ -25,9 +25,9 @@
   "verification": {
     "productUnion": {
       "command": "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --filter ProductTests",
-      "tests": 291,
+      "tests": 296,
       "failures": 0,
-      "output": "artifact://1001",
+      "output": "artifact://1007",
       "evidence": "Real GRDB transactions, owned synthetic files and actual local FIFO IO/close/peer metadata/EPIPE; mocked provider/HTTP transport and synthetic windowless PDFKit conversions. Not authenticated provider, app UI, SDK producer or PDFium execution."
     },
     "nativeCompilation": {
@@ -35,11 +35,11 @@
       "configuration": "Release",
       "architecture": "arm64",
       "minimumOS": "15.0",
-      "derivedData": ".build/product-native-compile-20261010-w",
+      "derivedData": ".build/product-native-compile-20261010-x",
       "codeSigningAllowed": false,
       "result": "BUILD SUCCEEDED",
-      "rawOutput": "artifact://1002",
-      "output": "artifact://1002",
+      "rawOutput": "artifact://1010",
+      "output": "artifact://1010",
       "applicationAndHelperBinariesExecuted": false,
       "warnings": "AppIntents metadata skipped, PDFium debug-map duplicate/missing-symbol warnings and an unnecessary-await Swift warning remain; no warning suppression or debug-symbol repair claimed."
     },
@@ -291,6 +291,25 @@
     "underlyingNativeBindingSchemaAndMembershipChanged": false,
     "visibleUIOrAccessibilityVerified": false,
     "runtimeParsingOrCalibrationVerified": false,
+    "helperExecuted": false,
+    "storyAccepted": false
+  },
+  "selectedPDFReadOwnership": {
+    "baseVerifiedFeatureCommit": "fe7ea93",
+    "preImplementationSpecificationCommit": "aa39aab",
+    "sourceDiffAgainstSpecificationSha256": "c45ea42346e98a3e5b37595b2d6f02992a5d38da4938f83cbdfce27344ce3052",
+    "sourceDiffScope": "Two exact FolderImportService/FolderImportTests paths againstaa39aab; docs excluded",
+    "actualOwnership": "Actual import lease/security-scope acquisition and closeOnDealloc:false FileHandle strongly rooted before read/close. Nonblocking readonly nofollow/cloexec open and actual fstat regular/device/inode/positive bounded size before reads. One checked close; unknown retains actual FD/lease/scope, no pending intent/Paper/Job or retry/ARC/numeric-FD closure proof.",
+    "preservedFailures": ["artifact://1003: test attempted fileprivate RequestContractError initializer; repaired by asserting actual public code/field", "artifact://1004:13 tests/one incorrect single-slot-cap assumption; actual retained occupancy was1 and cap permits more; repaired by filling remaining contract-defined slots and checking at-cap denial without changing source pool"],
+    "focusedTests": {"tests": 13, "failures": 0, "newCases": 5, "output": "artifact://1005"},
+    "productUnion": {"tests": 296, "failures": 0, "output": "artifact://1007"},
+    "nativeOutput": "artifact://1010",
+    "nativeDerivedData": ".build/product-native-compile-20261010-x",
+    "review": "agent://75-SelectedInputOwnershipIntegrity: SOURCE-ONLY CLEAR / APPROVE",
+    "sharedPoolCapAndNonblockingPolicyChanged": false,
+    "manualFixtureTeardownIsRuntimeAck": false,
+    "grantedSecurityScopeRuntimeVerified": false,
+    "deterministicReadErrorAndBodyBudgetBranchesRuntimeVerified": false,
     "helperExecuted": false,
     "storyAccepted": false
   },

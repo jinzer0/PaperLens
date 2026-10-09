@@ -88,3 +88,38 @@ Tests use owned synthetic files/FIFOs/symlinks only, no user document or SDK/run
 Parent owns focused/union/native verification, independent retention review/evidence/local
 commit. Current291 tests1001/native-w1002 remain prior baseline, not correction evidence.
 Story/privacy/P1/P2/P3/renderer/trial/remote boundaries remain unchanged and unproved.
+
+Implementation handoff (aa39aab Spec before code): Darwin admission uses lstat of the
+selected URL, O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_NONBLOCK open, and fstat of the actual
+descriptor. Both observations must be regular files with identical device/inode;
+actual positive size within pdfBytes is pinned for final read-count comparison.
+URL content type remains recognition evidence, never physical admission authority.
+A lock-protected static root captures the real handle, actual import lease and original
+security-scope flag before fstat/read/close effects. Locks arbitrate ownership only;
+no filesystem, scope, budget, read or close effect runs under them. Known checked close
+removes the root after lease/scope release; unknown remains retained indefinitely.
+Internal required close injection receives the actual FileHandle; optional beforeOpen
+hook only permits owned-fixture substitution between observation and real open.
+Read-only unknown ownership inspection exposes the actual handle/lease and scope facts
+for manual fixture teardown, not runtime repair, retry, closure evidence or ACK.
+Tests authored, NOT RUN by the worker: normal hash/release, retained real FD after facade
+loss with actual capacity denial/no intent or durable effects, typed signature failure,
+size admission, symlink/FIFO/directory and regular-to-FIFO/symlink/regular replacement.
+Parent owns all verification/build/review/commit; prior baseline is unchanged evidence.
+Parent concurred not to add beforeRead hooks or racing fixture writers just to inject
+read/budget errors. Their original catch/preserve-cause path remains source-reviewable;
+those runtime failure branches remain explicitly unverified by the authored tests.
+
+Parent verification:13 focused tests passed (artifact1005), including5 new actual owned
+source/FD/retention cases. Full Product union296 passed, zero failures (artifact1007).
+Fresh unsigned native Release arm64/macOS15 compiled in native-x (artifact1010).
+Independent review75 SOURCE-ONLY CLEAR / APPROVE. Two-source binary delta vsaa39aab:
+c45ea42346e98a3e5b37595b2d6f02992a5d38da4938f83cbdfce27344ce3052.
+Preserve1003 inaccessible private error initializer and1004 incorrect cap-one test
+assumption. Public error fields and actual contract-derived capacity saturation repaired
+the tests; shared pool caps/nonblocking admission remain unchanged. Unknown debt consumes
+its actual slot, not a guessed blanket prohibition of all remaining contract capacity.
+Manual owned-fixture physical cleanup precedes lease/scope teardown but does not alter
+runtime unknown state or fabricate ACK. Granted user security scope and deterministic
+read/body-budget error branches remain runtime-unverified. No actual user PDFs, helper/
+SDK/app/renderer/paid/remote/trial renewal ran; Story/P1/P2/P3/hard bounds remain unproved.

@@ -1,9 +1,28 @@
+import CryptoKit
+import Darwin
 import Foundation
 import GRDB
+import ProviderRequest
 import XCTest
 @testable import PaperLensProduct
 
 final class FolderImportTests: XCTestCase {
+  // The only mutable hook state is protected by this lock, never held over close/read.
+  private final class CloseCalls: @unchecked Sendable {
+    private let lock = NSLock()
+    private var calls = 0
+    func record() {
+      lock.lock()
+      defer { lock.unlock() }
+      calls += 1
+    }
+    var count: Int {
+      lock.lock()
+      defer { lock.unlock() }
+      return calls
+    }
+  }
+
   private struct TestNamespacePurge: AgentLibraryPurging {
     func purgeLibraryPaper(paperID: UUID, deletionID: UUID) async throws -> AgentLibraryPurgeReceipt {
       // These fixtures never create an Agent namespace or start a producer.
@@ -202,6 +221,171 @@ final class FolderImportTests: XCTestCase {
     XCTAssertThrowsError(try db.assignPaper(UUID(), to: folder.id)) { error in
       XCTAssertEqual(error as? FolderImportError, .paperNotReady)
     }
+  }
+
+  func testSelectedSourceRealHashKnownCloseReleasesActualCapacity() async throws {
+    let (root, source, db) = try fixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let pool = try RequestResourcePool(authority: ProviderRequest(), kind: "import")
+    XCTAssertEqual(pool.active, 0)
+    let lifecycle = try await LocalLibraryLifecycle.open(database: db)
+    let calls = CloseCalls()
+    let service = FolderImportService(database: db, lifecycle: lifecycle,
+      closeSelectedSource: { handle in calls.record(); try handle.close() })
+    let confirmation = try await service.prepare(source: source)
+    let digest = SHA256.hash(data: try Data(contentsOf: source))
+      .map { String(format: "%02x", $0) }.joined()
+    XCTAssertEqual(confirmation.sha256, digest)
+    XCTAssertEqual(calls.count, 1)
+    XCTAssertEqual(pool.active, 0)
+    XCTAssertFalse(FolderImportService.unknownSelectedSourceReads().contains { $0.source == source })
+    try assertNoImportEffects(db)
+  }
+
+  func testUnknownCloseRetainsRealHandleLeaseAndScopeAfterFacadeLoss() async throws {
+    let (root, source, db) = try fixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let authority = try ProviderRequest()
+    let pool = try RequestResourcePool(authority: authority, kind: "import")
+    XCTAssertEqual(pool.active, 0)
+    let lifecycle = try await LocalLibraryLifecycle.open(database: db)
+    let calls = CloseCalls()
+    var service: FolderImportService? = FolderImportService(database: db, lifecycle: lifecycle,
+      closeSelectedSource: { _ in
+        calls.record()
+        // Deliberately do not close the real fixture descriptor.
+        throw CocoaError(.fileReadUnknown)
+      })
+    do {
+      _ = try await service!.prepare(source: source)
+      XCTFail("Unproved close must not create a confirmation")
+    } catch { XCTAssertEqual(error as? LocalLibraryError, .producerClosureUnknown) }
+    let pending = await service!.pendingConfirmationCount
+    XCTAssertEqual(pending, 0)
+    XCTAssertEqual(calls.count, 1)
+    weak var retainedHandle: FileHandle?
+    weak var retainedOwner: SelectedSourceReadOwner?
+    do {
+      let captured = try XCTUnwrap(FolderImportService.unknownSelectedSourceReads().first { $0.source == source })
+      retainedHandle = captured.handle
+      retainedOwner = captured
+    }
+    service = nil
+    // No test-owned strong handle/owner exists at these assertions: the static root owns it.
+    XCTAssertNotNil(retainedHandle)
+    XCTAssertNotNil(retainedOwner)
+    let debt = try XCTUnwrap(FolderImportService.unknownSelectedSourceReads().first { $0.source == source })
+    // Manual owned-fixture teardown only, independent of runtime unknown state or ACK.
+    defer {
+      do {
+        try debt.handle.close()
+        debt.lease.close()
+        if debt.securityScoped { debt.source.stopAccessingSecurityScopedResource() }
+        XCTAssertEqual(pool.active, 0)
+        XCTAssertTrue(FolderImportService.unknownSelectedSourceReads().contains { $0.id == debt.id })
+      } catch { XCTFail("Fixture physical teardown failed: \(error)") }
+    }
+    XCTAssertEqual(pool.active, 1)
+    let cap = authority.limit(authority.contract["pools"]["import"]["limit"].string)
+    var remaining: [RequestResourceLease] = []
+    defer { remaining.forEach { $0.close() } }
+    for _ in 1..<cap { remaining.append(try XCTUnwrap(pool.acquire())) }
+    XCTAssertEqual(pool.active, cap)
+    XCTAssertNil(pool.acquire(), "The retained real lease must consume a contract-defined slot")
+    // Inspect the captured real handle, not a possibly reused numeric descriptor.
+    try debt.handle.seek(toOffset: 0)
+    XCTAssertEqual(try debt.handle.read(upToCount: 5), Data("%PDF-".utf8))
+    XCTAssertEqual(calls.count, 1)
+    XCTAssertTrue(FolderImportService.unknownSelectedSourceReads().contains { $0.id == debt.id })
+    try assertNoImportEffects(db)
+  }
+
+  func testSignatureFailureKnownClosePreservesTypedCauseAndReleasesCapacity() async throws {
+    let (root, source, db) = try fixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    try Data("not a PDF".utf8).write(to: source)
+    let pool = try RequestResourcePool(authority: ProviderRequest(), kind: "import")
+    let lifecycle = try await LocalLibraryLifecycle.open(database: db)
+    let calls = CloseCalls()
+    let service = FolderImportService(database: db, lifecycle: lifecycle,
+      closeSelectedSource: { handle in calls.record(); try handle.close() })
+    do { _ = try await service.prepare(source: source); XCTFail("Invalid signature admitted") }
+    catch {
+      let failure = try XCTUnwrap(error as? RequestContractError)
+      XCTAssertEqual(failure.code, "importRejected")
+      XCTAssertEqual(failure.field, "import")
+    }
+    XCTAssertEqual(calls.count, 1)
+    XCTAssertEqual(pool.active, 0)
+    let pending = await service.pendingConfirmationCount
+    XCTAssertEqual(pending, 0)
+    try assertNoImportEffects(db)
+  }
+
+  func testSelectedSourceRejectsSpecialFilesAndOversizeWithoutReadOrReservation() async throws {
+    let (root, source, db) = try fixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let lifecycle = try await LocalLibraryLifecycle.open(database: db)
+    let service = FolderImportService(database: db, lifecycle: lifecycle)
+    let symlink = root.appendingPathComponent("link.pdf")
+    try FileManager.default.createSymbolicLink(at: symlink, withDestinationURL: source)
+    let fifo = root.appendingPathComponent("pipe.pdf")
+    XCTAssertEqual(fifo.withUnsafeFileSystemRepresentation { Darwin.mkfifo($0!, 0o600) }, 0)
+    let directory = root.appendingPathComponent("directory.pdf")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+    let large = root.appendingPathComponent("large.pdf")
+    let empty = root.appendingPathComponent("empty.pdf")
+    try Data().write(to: empty)
+    try Data("%PDF-".utf8).write(to: large)
+    let output = try FileHandle(forWritingTo: large)
+    try output.truncate(atOffset: UInt64(try ProviderRequest().limit("pdfBytes")) + 1)
+    try output.close()
+    for candidate in [symlink, fifo, directory, empty, large] {
+      do { _ = try await service.prepare(source: candidate); XCTFail("Invalid source admitted") }
+      catch { XCTAssertEqual(error as? FolderImportError, .invalidSource) }
+      XCTAssertEqual(try RequestResourcePool(authority: ProviderRequest(), kind: "import").active, 0)
+    }
+    let pending = await service.pendingConfirmationCount
+    XCTAssertEqual(pending, 0)
+    try assertNoImportEffects(db)
+  }
+
+  func testObservedRegularSourceSwapRejectsActualFIFOOrSymlinkOrDifferentInode() async throws {
+    for replacement in ["fifo", "symlink", "regular"] {
+      let (root, source, db) = try fixture()
+      defer { try? FileManager.default.removeItem(at: root) }
+      let target = root.appendingPathComponent("other.pdf")
+      try Data("%PDF-1.4\nother\n%%EOF".utf8).write(to: target)
+      let lifecycle = try await LocalLibraryLifecycle.open(database: db)
+      let calls = CloseCalls()
+      let service = FolderImportService(database: db, lifecycle: lifecycle,
+        closeSelectedSource: { handle in calls.record(); try handle.close() },
+        beforeOpen: { selected in
+          // Move rather than unlink so the observed inode cannot be reused by replacement.
+          try FileManager.default.moveItem(at: selected, to: root.appendingPathComponent("observed.pdf"))
+          switch replacement {
+          case "fifo":
+            guard selected.withUnsafeFileSystemRepresentation({ Darwin.mkfifo($0!, 0o600) }) == 0
+            else { throw CocoaError(.fileWriteUnknown) }
+          case "symlink":
+            try FileManager.default.createSymbolicLink(at: selected, withDestinationURL: target)
+          default: try FileManager.default.copyItem(at: target, to: selected)
+          }
+        })
+      do { _ = try await service.prepare(source: source); XCTFail("Swapped source admitted") }
+      catch { XCTAssertEqual(error as? FolderImportError, .invalidSource) }
+      XCTAssertEqual(calls.count, replacement == "symlink" ? 0 : 1)
+      XCTAssertEqual(try RequestResourcePool(authority: ProviderRequest(), kind: "import").active, 0)
+      let pending = await service.pendingConfirmationCount
+      XCTAssertEqual(pending, 0)
+      try assertNoImportEffects(db)
+    }
+  }
+
+  private func assertNoImportEffects(_ db: ProductDatabase) throws {
+    XCTAssertTrue(try db.libraryRecords().isEmpty)
+    XCTAssertEqual(try db.adapterRead { try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM importJob") }, 0)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: db.root.appendingPathComponent("papers").path))
   }
 
   private func pdf(_ database: ProductDatabase, _ id: UUID) -> URL {
