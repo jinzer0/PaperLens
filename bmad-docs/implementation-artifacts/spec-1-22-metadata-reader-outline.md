@@ -178,3 +178,55 @@ revocation and failed admission still deny. No new polling timer, renderer/app/h
 default-success callback or fake identity. Existing atomic published pointer, read access,
 hash/generation/cancellation fences remain mandatory. Parent repeats changed-source
 verification and review73, preserving all protected/runtime/Story boundaries.
+
+#### Correction follow-up: old error must not resolve a new admission
+
+Review73 confirms the two prior MEDIUM defects resolved but finds another concrete
+MEDIUM: failure under admission A returns completed=true after the same session object
+reopens as B. This dismisses the still-mounted reconciliation intent without querying B.
+Split cancellation/non-current-mount dismissal from actual admission mismatch. A current
+nonclosed replacement admission returns deferred=false scheduling completion, so the
+existing poll retries; old errors never clear/close/advertise data for B. Actual closed
+ownership remains denied. Preserve focused20/zero991, union286/zero993 and native-u994
+as pre-follow-up evidence, not final coverage of this newly identified error branch.
+
+Also retain a distinct SwiftUI mount identity for each actual OpenReader session object.
+Paper/generation alone can reuse an old StateObject when same-Paper close/reopen occurs
+without an intermediate render commit. Use actual ObjectIdentifier(session) alongside
+Paper/generation, not mutable admission UUID, so metadata-only replacement leaves the
+existing PDF/lease mount stable while a genuinely new session gets a new mount. No new
+owner, generated revision or default-success state. Fence overlapping manual/poll refresh
+completion by its actual request generation before publishing status or resolving newer
+reconciliation intent; do not introduce another polling timer.
+
+Same five-file scope and unchanged native binding. Tests cover delayed actual query
+failure across real same-object reopen, stable metadata-only/different new-session mount
+identity and stale refresh scheduling as shared production logic. Parent repeats focused/
+union/native/source review; no app/helper/renderer/protected trial or Story acceptance.
+
+#### Correction source handoff from committed Spec c6b7506
+
+ReaderSessionAdmissionState is read-only scheduling data: pending before admission,
+admitted(actual private sessionID UUID) only after successful actual open, and closed
+on pre-lease failure, failed open, revoke or close. No read permission, lease acquisition,
+claim/release or PDF lifetime authority is replaced by this state. Workspace defers pending
+admission without querying/closing it; admitted refresh still requires withReadAccess.
+Captured real DB reads fence actual admission ID before apply and before advertisement,
+in addition to cancellation/Paper/generation/exact session object. Same-object reopen
+cannot accept an old admission result. Closed/revoked Reader still resolves as denial.
+
+The required MainActor status callback now returns Bool: false means retain this refresh
+intent awaiting actual admission and retry through the existing poll; true means resolved
+or dismissed, NOT successful publication. ParsingMetadataReconciliation, used by the
+production status view, reconciles the first outcome including nil/error, retains deferred
+intent across identical polls, and becomes change-based after resolution. Error is a
+distinct scheduling outcome, never a fabricated metadata identity.
+
+Four additional tests are authored: first nil/error clears open-time metadata using real
+GRDB query/removal failures; pre-admission polling defers then actual owned-PDF open
+admits exactly once and preserves its read token; missing provider/nonready pre-lease
+open failure becomes closed instead of indefinitely pending; same ReaderSession object
+close/reopen rejects a captured real read from its old actual admission UUID. The original
+six refresh tests remain intact. Correction tests/builds/gates/lint/formatting/runtime
+are NOT RUN by worker instruction. Parent reruns focused/union/native verification and
+review73; pre-correction evidence remains historical, visible runtime/UI unverified.
