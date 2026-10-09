@@ -25,9 +25,9 @@
   "verification": {
     "productUnion": {
       "command": "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --filter ProductTests",
-      "tests": 276,
+      "tests": 291,
       "failures": 0,
-      "output": "artifact://972",
+      "output": "artifact://1001",
       "evidence": "Real GRDB transactions, owned synthetic files and actual local FIFO IO/close/peer metadata/EPIPE; mocked provider/HTTP transport and synthetic windowless PDFKit conversions. Not authenticated provider, app UI, SDK producer or PDFium execution."
     },
     "nativeCompilation": {
@@ -35,11 +35,11 @@
       "configuration": "Release",
       "architecture": "arm64",
       "minimumOS": "15.0",
-      "derivedData": ".build/product-native-compile-20261010-s",
+      "derivedData": ".build/product-native-compile-20261010-w",
       "codeSigningAllowed": false,
       "result": "BUILD SUCCEEDED",
-      "rawOutput": "artifact://976",
-      "output": "artifact://976",
+      "rawOutput": "artifact://1002",
+      "output": "artifact://1002",
       "applicationAndHelperBinariesExecuted": false,
       "warnings": "AppIntents metadata skipped, PDFium debug-map duplicate/missing-symbol warnings and an unnecessary-await Swift warning remain; no warning suppression or debug-symbol repair claimed."
     },
@@ -272,6 +272,25 @@
     "geometryCalibrationComposed": false,
     "productionAppParsingActivated": false,
     "combinedRSSOrHardBoundsCertified": false,
+    "helperExecuted": false,
+    "storyAccepted": false
+  },
+  "liveReaderPublishedMetadataCaller": {
+    "baseVerifiedFeatureCommit": "d3f3bef",
+    "preImplementationSpecificationCommit": "5694ac1",
+    "correctionSpecificationCommits": ["c6b7506", "64bd6a9", "5f78347"],
+    "sourceDiffAgainstFinalCorrectionSpecificationSha256": "6b48d58e4ba554165b8bd257f5361866544e9775d5ddb7b0bf885082689436cf",
+    "sourceDiffScope": "Four exact ReaderSession/ProductWorkspaceView/ParsingStatusView/ProductWorkspaceTests paths against5f78347; docs excluded",
+    "actualCaller": "Existing persisted status poll triggers current sole-GRDB published metadata read; actual session object/Paper/generation/admissionUUID/read access/hash/pointer fences. First nil/error reconciles; actual pending admission defers on same poll, closed/failed admission denies. Session-object mount preserves PDF across metadata-only changes. Status and workspace actual requestUUIDs independently fence stale completion and side effects; no new timer/lease/store or parsing dispatch.",
+    "focusedTests": {"tests": 25, "failures": 0, "output": "artifact://1000", "newCases": 15},
+    "productUnion": {"tests": 291, "failures": 0, "output": "artifact://1001"},
+    "nativeOutput": "artifact://1002",
+    "nativeDerivedData": ".build/product-native-compile-20261010-w",
+    "review": "agent://73-LiveReaderMetadataIntegrity: final SOURCE-ONLY CLEAR / APPROVE; initial first-nil/error and pending-admission MEDIUM findings, old-admission failure scheduling MEDIUM and parent stale callback side-effect interleaving resolved",
+    "preservedPreCorrectionEvidence": ["focused16/zero981; union282/zero989; native-t990", "focused20/zero991; union286/zero993; native-u994", "focused23/zero996; union289/zero998; native-v999"],
+    "underlyingNativeBindingSchemaAndMembershipChanged": false,
+    "visibleUIOrAccessibilityVerified": false,
+    "runtimeParsingOrCalibrationVerified": false,
     "helperExecuted": false,
     "storyAccepted": false
   },

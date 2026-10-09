@@ -276,3 +276,44 @@ poll reads with stale callback completion. Prior ten refresh/admission tests rem
 Worker verification is read-only source inspection; tests/builds/gates/formatting/runtime
 are NOT RUN by instruction. Parent repeats focused/union/native and review73; 991/993/994
 are pre-follow-up evidence only. Runtime/UI/Story acceptance remains unverified.
+
+#### Workspace side-effect fencing handoff from committed Spec 5f78347
+
+ProductWorkspace.metadataReadRequest records the latest actual metadata query UUID before
+suspension. Each real readPublishedMetadata or readPublishedMetadataOutcome call stamps
+exactly once; their private shared read takes captured admission/request and never mints
+at application. PublishedMetadataRefresh and PublishedMetadataFailure carry request UUIDs.
+Post-apply errors use the same refresh admission/request, never an unstamped error context.
+Success/error application checks latest request before read-access cleanup or mutation,
+and again before metadata advertisement/error cleanup. Stale current-mount work returns
+false (defer), obsolete/cancelled mount true (dismiss); neither signifies publication.
+New workspace session and return invalidate the latest request. Existing session-object,
+actual admission UUID, GRDB current pointer, SHA/generation and read-lease guards remain.
+Status/ReaderSession/native owners require no additional changes for this correction.
+
+Two tests authored: an actual query fails while the owned extractionVisible table is
+temporarily renamed, then the same transaction-owned schema/data is restored and a newer
+healthy actual query advertises R; old failure returns false without clearing R/error/
+Reader/token. A stale successful read cannot reconcile a changed pointer or invoke Reader
+cleanup after a newer request; the latest request still reconciles current publication
+and actual ownership denial. No fake identity/getter or budget/admission substitute.
+Worker tests/builds/gates/formatters/runtime are NOT RUN by instruction. Parent repeats
+focused/union/native and exact reviewer73 interleaving review; 996/998/999 are historical
+pre-correction receipts, not proof of this change. Visible UI/Story remains unverified.
+
+#### Live metadata caller — final parent verification
+
+Final25 focused Workspace tests passed (artifact1000), including15 new actual owned
+GRDB/Reader/session/admission/query-fault/overlap/mount cases. Full Product union291
+passed with zero failures (artifact1001). Fresh unsigned native Release arm64/macOS15
+compiled in native-w (artifact1002); app/helper/renderer binaries did not run. Unchanged
+NativeReaderView/ReaderMetadataBinding/DB/schema/Package/native membership are reused.
+Four-source-file binary delta against final correctionSpec5f78347:
+6b48d58e4ba554165b8bd257f5361866544e9775d5ddb7b0bf885082689436cf.
+
+Review73 final SOURCE-ONLY CLEAR / APPROVE resolves the first-nil/error, pending Reader
+admission and old-admission failure findings; parent overlapping workspace error side
+effects are independently cleared after actual request fencing. Preserve981/989/990,
+991/993/994,996/998/999 as historical pre-correction receipts. Successful tests/compilation
+do not establish visible UI/accessibility, actual parser/calibration, AD8/P1/P2/P3 or Story
+completion. No paid/live/private SDK, trial renewal, push/PR/remote/release action occurred.

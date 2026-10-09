@@ -1,10 +1,43 @@
 import SwiftUI
 
+/// Tracks scheduling intent, not publication authority. The first nil/error matters too.
+struct ParsingMetadataReconciliation {
+  enum Outcome: Equatable { case revision(UUID?), unavailable }
+  private var latest: Outcome?
+  private var pending = true
+  private var request: UUID?
+  mutating func beginRequest() -> UUID {
+    let value = UUID()
+    request = value
+    return value
+  }
+  func isCurrent(_ value: UUID) -> Bool { request == value }
+  mutating func observe(_ outcome: Outcome, request: UUID) -> Bool {
+    guard isCurrent(request) else { return false }
+    return observe(outcome)
+  }
+  mutating func resolve(_ outcome: Outcome, completed: Bool, request: UUID) {
+    guard isCurrent(request) else { return }
+    resolve(outcome, completed: completed)
+  }
+  mutating func observe(_ outcome: Outcome) -> Bool {
+    if latest != outcome { pending = true }
+    latest = outcome
+    return pending
+  }
+  mutating func resolve(_ outcome: Outcome, completed: Bool) {
+    guard latest == outcome else { return }
+    pending = !completed
+  }
+}
+
 /// Reads persisted attempt/visibility state. Dispatching a task is never shown as success.
 public struct ParsingStatusView: View {
   public let database: ProductDatabase
   public let paperID: UUID
   public let coordinator: ParsingRecoveryCoordinator?
+  private let onUsableRevisionChange: @MainActor () async -> Bool
+  @State private var reconciliation = ParsingMetadataReconciliation()
   @State private var status: ExtractionStatus?
   @State private var recoveryContext: ParsingRecoveryContext?
   @State private var retrying = false
@@ -12,10 +45,12 @@ public struct ParsingStatusView: View {
   @State private var unavailable = false
 
   public init(database: ProductDatabase, paperID: UUID,
-    coordinator: ParsingRecoveryCoordinator? = nil) {
+    coordinator: ParsingRecoveryCoordinator? = nil,
+    onUsableRevisionChange: @escaping @MainActor () async -> Bool) {
     self.database = database
     self.paperID = paperID
     self.coordinator = coordinator
+    self.onUsableRevisionChange = onUsableRevisionChange
   }
 
   public var body: some View {
@@ -45,6 +80,7 @@ public struct ParsingStatusView: View {
       status = nil
       recoveryContext = nil
       retryFailure = nil
+      reconciliation = ParsingMetadataReconciliation()
       // Persisted polling continues while this view is mounted, including after restart.
       repeat {
         await refresh()
@@ -103,18 +139,29 @@ public struct ParsingStatusView: View {
   @MainActor private func refresh() async {
     let database = database
     let id = paperID
+    let request = reconciliation.beginRequest()
     do {
       let latest = try await Task.detached { try database.extractionStatus(paperID: id) }.value
+      guard reconciliation.isCurrent(request), id == paperID, !Task.isCancelled else { return }
       let context = try await coordinator?.context(paperID: id)
-      guard id == paperID, !Task.isCancelled else { return }
+      guard reconciliation.isCurrent(request), id == paperID, !Task.isCancelled else { return }
       status = latest
       recoveryContext = context
       unavailable = false
+      await reconcile(.revision(latest.usableRevision), request: request)
     } catch {
-      guard id == paperID, !Task.isCancelled else { return }
+      guard reconciliation.isCurrent(request), id == paperID, !Task.isCancelled else { return }
       unavailable = true
       status = nil
       recoveryContext = nil
+      await reconcile(.unavailable, request: request)
     }
+  }
+
+  @MainActor private func reconcile(_ outcome: ParsingMetadataReconciliation.Outcome, request: UUID) async {
+    guard reconciliation.observe(outcome, request: request) else { return }
+    let completed = await onUsableRevisionChange()
+    guard !Task.isCancelled, reconciliation.isCurrent(request) else { return }
+    reconciliation.resolve(outcome, completed: completed, request: request)
   }
 }

@@ -32,6 +32,11 @@ public enum ReaderError: Error, Equatable, Sendable {
   case invalidDocument, invalidPosition, invalidStoredPosition, sequenceExhausted, notOpen
 }
 
+/// Scheduling information only. Actual operations still require withReadAccess.
+public enum ReaderSessionAdmissionState: Equatable, Sendable {
+  case pending, admitted(UUID), closed
+}
+
 /// Implemented by the shared lifecycle, not a Reader-local ownership surrogate.
 /// Acquisition pins the exact identity against physical deletion until close.
 /// Revocation synchronously invokes onRevoked on MainActor before deletion drains.
@@ -72,6 +77,7 @@ public enum ReaderNavigation {
   private var discardContent: (@MainActor () -> Void)?
   public private(set) var restoredPosition: ReaderPosition?
   public private(set) var currentPaper: ReaderPaperSnapshot?
+  public private(set) var admissionState: ReaderSessionAdmissionState = .pending
 
   public init(database: ProductDatabase, leaseProvider: (any ReaderLeaseProvider)? = nil) {
     self.database = database
@@ -85,8 +91,16 @@ public enum ReaderNavigation {
     discard: @escaping @MainActor () -> Void
   ) throws -> ReaderPosition {
     guard lease == nil else { throw ReaderError.replacedSession }
-    guard let leaseProvider else { throw ReaderError.leaseUnavailable }
-    let admitted = try database.readerSnapshot(paperID: paperID)
+    admissionState = .pending
+    let admitted: ReaderPaperSnapshot
+    do {
+      guard leaseProvider != nil else { throw ReaderError.leaseUnavailable }
+      admitted = try database.readerSnapshot(paperID: paperID)
+    } catch {
+      admissionState = .closed
+      throw error
+    }
+    guard let leaseProvider else { admissionState = .closed; throw ReaderError.leaseUnavailable }
     discardContent = discard
     do {
       lease = try leaseProvider.acquireReadLease(for: admitted) { [weak self] in
@@ -113,6 +127,7 @@ public enum ReaderNavigation {
       sequence = 0
       restoredPosition = position
       currentPaper = admitted
+      admissionState = .admitted(owner)
       return position
     } catch {
       // A validator may complete after reentrant revocation; discard its late candidate too.
@@ -161,6 +176,7 @@ public enum ReaderNavigation {
   public func close() { revoke() }
 
   private func revoke() {
+    admissionState = .closed
     let discard = discardContent
     discardContent = nil
     discard?()

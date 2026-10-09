@@ -24,6 +24,15 @@ public final class ProductWorkspace: ObservableObject {
     public let session: ReaderSession
     public let annotationIdentity: AnnotationPaperIdentity
     public let metadataIdentity: ReaderMetadataIdentity?
+    public var mountIdentity: ReaderMountIdentity {
+      ReaderMountIdentity(paperID: id, generation: annotationIdentity.generation,
+        session: ObjectIdentifier(session))
+    }
+  }
+  public struct ReaderMountIdentity: Hashable {
+    let paperID: UUID
+    let generation: UUID
+    let session: ObjectIdentifier
   }
   public let organization: LibraryOrganizationService
   public let imports: FolderImportService
@@ -35,6 +44,7 @@ public final class ProductWorkspace: ObservableObject {
   private let readLeases: LibraryReadLeaseProvider
   private var scopedSource: URL?
   private var pendingConfirmation: UUID?
+  private var metadataReadRequest: UUID?
   @Published public var sheet: Sheet?
   @Published public var libraryFilter = OrganizationFilter()
   @Published public private(set) var reader: OpenReader?
@@ -148,15 +158,147 @@ public final class ProductWorkspace: ObservableObject {
       guard metadataIdentity.generation == identity.generation,
         metadataIdentity.pdfSHA256 == identity.pdfSHA256 else { throw ReaderMetadataError.staleIdentity }
     }
+    metadataReadRequest = nil
     reader = OpenReader(id: paper.id, session: ReaderSession(database: database, leaseProvider: provider),
       annotationIdentity: identity, metadataIdentity: metadataIdentity)
     failure = nil
   }
 
   public func returnToLibrary() {
+    metadataReadRequest = nil
     reader?.session.close() // Synchronously discards PDF/search/selection before closing the lease.
     reader = nil
     revision += 1
+  }
+
+  /// Intent from the mounted status view, never an authoritative revision supplied by it.
+  /// False means pending admission: retain the intent for the existing poll to retry.
+  /// True means reconciled or dismissed, not proof that metadata was published.
+  @discardableResult public func refreshPublishedMetadata(for observed: OpenReader) async -> Bool {
+    guard isCurrentReader(observed), !Task.isCancelled else { return true }
+    let admission = observed.session.admissionState
+    guard admission != .pending else { return false }
+    let outcome = await readPublishedMetadataOutcome(for: observed)
+    switch outcome {
+    case .failure(let failed): return applyPublishedMetadataFailure(failed)
+    case .success(let refresh):
+      do { return try applyPublishedMetadata(refresh) }
+      catch {
+        return applyPublishedMetadataFailure(.init(observed: observed, admission: refresh.admission,
+          request: refresh.request, error: error))
+      }
+    }
+  }
+
+  // Split only to exercise real GRDB reads that complete after close/reopen in tests.
+  struct PublishedMetadataRefresh {
+    let observed: OpenReader
+    let admission: ReaderSessionAdmissionState
+    let request: UUID
+    let identity: ReaderMetadataIdentity?
+  }
+
+  struct PublishedMetadataFailure {
+    let observed: OpenReader
+    let admission: ReaderSessionAdmissionState
+    let request: UUID
+    let error: Error
+  }
+
+  enum PublishedMetadataOutcome {
+    case success(PublishedMetadataRefresh), failure(PublishedMetadataFailure)
+  }
+
+  func readPublishedMetadataOutcome(for observed: OpenReader) async -> PublishedMetadataOutcome {
+    let admission = observed.session.admissionState
+    let request = beginMetadataRead()
+    do { return .success(try await readPublishedMetadata(for: observed, admission: admission, request: request)) }
+    catch { return .failure(.init(observed: observed, admission: admission, request: request, error: error)) }
+  }
+
+  func applyPublishedMetadataFailure(_ failed: PublishedMetadataFailure) -> Bool {
+    let observed = failed.observed
+    guard isCurrentReader(observed), !Task.isCancelled else { return true }
+    guard metadataReadRequest == failed.request else { return false }
+    guard observed.session.admissionState == failed.admission || observed.session.admissionState == .closed
+    else { return false }
+    if observed.session.currentPaper == nil {
+      observed.session.close()
+      reader = nil
+    } else {
+      reader = OpenReader(id: observed.id, session: observed.session,
+        annotationIdentity: observed.annotationIdentity, metadataIdentity: nil)
+    }
+    failure = "현재 논문의 메타데이터를 확인하지 못했습니다: \(failed.error)"
+    return true
+  }
+
+  func readPublishedMetadata(for observed: OpenReader) async throws -> PublishedMetadataRefresh {
+    let admission = observed.session.admissionState
+    let request = beginMetadataRead()
+    return try await readPublishedMetadata(for: observed, admission: admission, request: request)
+  }
+
+  private func beginMetadataRead() -> UUID {
+    let request = UUID()
+    metadataReadRequest = request
+    return request
+  }
+
+  private func readPublishedMetadata(for observed: OpenReader,
+    admission: ReaderSessionAdmissionState, request: UUID) async throws -> PublishedMetadataRefresh {
+    let database = database
+    let paperID = observed.id
+    let identity = try await Task.detached {
+      try database.publishedMetadataPaperIdentity(paperID: paperID)
+    }.value
+    return PublishedMetadataRefresh(observed: observed, admission: admission, request: request, identity: identity)
+  }
+
+  @discardableResult func applyPublishedMetadata(_ refresh: PublishedMetadataRefresh) throws -> Bool {
+    let observed = refresh.observed
+    guard !Task.isCancelled, isCurrentReader(observed) else { return true }
+    guard metadataReadRequest == refresh.request else { return false }
+    if observed.session.admissionState == .closed { throw ReaderError.notOpen }
+    guard observed.session.admissionState == refresh.admission,
+      refresh.admission != .pending else { return false }
+    do {
+      try observed.session.withReadAccess {
+        guard let paper = observed.session.currentPaper,
+          paper.paperID == observed.id, paper.generation == observed.annotationIdentity.generation,
+          try database.annotationIdentity(paperID: observed.id) == observed.annotationIdentity
+        else { throw ReaderMetadataError.staleIdentity }
+        // The detached read can race publication/removal. Only the sole DB's current
+        // pointer may be advertised, and this recheck stays under actual Reader access.
+        let current = try database.publishedMetadataPaperIdentity(paperID: observed.id)
+        let identity = current == refresh.identity ? refresh.identity : current
+        if let identity {
+          guard identity.paperID == paper.paperID, identity.generation == paper.generation,
+            identity.pdfSHA256 == observed.annotationIdentity.pdfSHA256,
+            identity.pdfReference == paper.pdfReference
+          else { throw ReaderMetadataError.staleIdentity }
+        }
+        guard isCurrentReader(observed), !Task.isCancelled, let reader,
+          metadataReadRequest == refresh.request,
+          observed.session.admissionState == refresh.admission,
+          reader.metadataIdentity != identity else { return }
+        self.reader = OpenReader(id: reader.id, session: reader.session,
+          annotationIdentity: reader.annotationIdentity, metadataIdentity: identity)
+      }
+    } catch {
+      guard isCurrentReader(observed), !Task.isCancelled else { return true }
+      guard metadataReadRequest == refresh.request else { return false }
+      // Ownership/hash denial cannot keep a document admitted under obsolete facts.
+      if error as? ReaderMetadataError == .staleIdentity { observed.session.close() }
+      throw error
+    }
+    return metadataReadRequest == refresh.request
+  }
+
+  private func isCurrentReader(_ observed: OpenReader) -> Bool {
+    guard let reader else { return false }
+    return reader.id == observed.id && reader.annotationIdentity.generation == observed.annotationIdentity.generation
+      && reader.session === observed.session
   }
 
   public func reportSaveFailure(_ error: Error) {
@@ -188,7 +330,8 @@ public struct ProductWorkspaceView: View {
     VStack(spacing: 0) {
       if let reader = workspace.reader {
         VStack(spacing: 0) {
-          ParsingStatusView(database: workspace.database, paperID: reader.id)
+          ParsingStatusView(database: workspace.database, paperID: reader.id,
+            onUsableRevisionChange: { await workspace.refreshPublishedMetadata(for: reader) })
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
           Divider()
@@ -198,7 +341,7 @@ public struct ProductWorkspaceView: View {
             onReturn: { workspace.returnToLibrary() },
             onSaveFailure: { workspace.reportSaveFailure($0) })
         }
-        .id([reader.id, reader.annotationIdentity.generation])
+        .id(reader.mountIdentity)
       } else {
         HStack {
           Button("폴더 관리") { workspace.sheet = .folders }
