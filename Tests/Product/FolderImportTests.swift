@@ -86,11 +86,12 @@ final class FolderImportTests: XCTestCase {
     let reopened = try ProductDatabase.open(at: db.root)
     XCTAssertEqual(try reopened.folders().first(where: { $0.id == first.id })?.name, "Renamed")
     XCTAssertEqual(try reopened.folderID(for: paper), first.id)
-    XCTAssertThrowsError(try reopened.assignPaper(paper, to: UUID()))
+    let captured = try capture(reopened, paper)
+    XCTAssertThrowsError(try reopened.movePaper(captured, to: UUID()))
     XCTAssertEqual(try reopened.folderID(for: paper), first.id)
     XCTAssertThrowsError(try reopened.renameFolder(id: first.id, name: " \n "))
     XCTAssertEqual(try reopened.folders().first(where: { $0.id == first.id })?.name, "Renamed")
-    try await service.assignPaper(paper, to: second.id)
+    try await service.movePaper(captured, to: second.id)
     XCTAssertEqual(try reopened.folderID(for: paper), second.id)
     try await service.deleteFolder(id: second.id)
     XCTAssertNil(try reopened.folderID(for: paper))
@@ -135,12 +136,13 @@ final class FolderImportTests: XCTestCase {
     let secondAttributes = try FileManager.default.attributesOfItem(atPath: secondPDF.path)
     XCTAssertNotEqual(firstAttributes[.systemFileNumber] as? NSNumber,
       secondAttributes[.systemFileNumber] as? NSNumber)
+    let capturedFirst = try capture(db, first)
     try await lifecycle.delete(paperID: first)
     let reopened = try ProductDatabase.open(at: db.root)
     XCTAssertEqual(try reopened.libraryRecords().map(\.id), [second])
     XCTAssertEqual(try Data(contentsOf: secondPDF), try Data(contentsOf: source))
     XCTAssertFalse(FileManager.default.fileExists(atPath: firstPDF.path))
-    XCTAssertThrowsError(try reopened.assignPaper(first, to: nil))
+    XCTAssertThrowsError(try reopened.movePaper(capturedFirst, to: nil))
   }
 
   func testCopiedBytesDigestMismatchCannotPublish() async throws {
@@ -218,9 +220,10 @@ final class FolderImportTests: XCTestCase {
     XCTAssertTrue(try db.libraryRecords().isEmpty)
     XCTAssertEqual(try db.adapterRead { try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM importJob") }, 0)
     let folder = try db.createFolder(name: "Destination")
-    XCTAssertThrowsError(try db.assignPaper(UUID(), to: folder.id)) { error in
+    XCTAssertThrowsError(try db.capturePaperPlacement(paperID: UUID(), generation: UUID())) { error in
       XCTAssertEqual(error as? FolderImportError, .paperNotReady)
     }
+    XCTAssertEqual(try db.folders(), [folder])
   }
 
   func testSelectedSourceRealHashKnownCloseReleasesActualCapacity() async throws {
@@ -380,6 +383,211 @@ final class FolderImportTests: XCTestCase {
       XCTAssertEqual(pending, 0)
       try assertNoImportEffects(db)
     }
+  }
+
+  func testCapturedMovementUnfiledAndReopenPreserveOwnedPDFAndPaperJobIdentity() async throws {
+    let (root, source, db) = try fixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let lifecycle = try await LocalLibraryLifecycle.open(database: db)
+    let service = FolderImportService(database: db, lifecycle: lifecycle)
+    // Equal names must still represent distinct UUID destinations.
+    let first = try await service.createFolder(name: "동일 이름")
+    let second = try await service.createFolder(name: "동일 이름")
+    let intent = try await service.prepare(source: source, destinationFolderID: first.id)
+    let paper = try await service.continueImport(intent.id, destinationFolderID: first.id)
+    let original = try capture(db, paper)
+    let observed = try await service.capturePaperPlacement(paperID: paper, generation: original.generation)
+    XCTAssertEqual(observed, original)
+    XCTAssertEqual(observed.folder, first)
+    let bytes = try Data(contentsOf: pdf(db, paper))
+    let inode = try XCTUnwrap(try FileManager.default.attributesOfItem(atPath: pdf(db, paper).path)[.systemFileNumber] as? NSNumber)
+    let papers = try db.adapterRead { try Row.fetchAll($0, sql: "SELECT * FROM paper ORDER BY id") }
+    let jobs = try db.adapterRead { try Row.fetchAll($0, sql: "SELECT * FROM importJob ORDER BY id") }
+
+    try await service.movePaper(observed, to: second.id)
+    let reopened = try ProductDatabase.open(at: db.root)
+    let moved = try reopened.capturePaperPlacement(paperID: paper, generation: original.generation)
+    XCTAssertEqual(moved.folder, second)
+    XCTAssertEqual(moved.sha256, original.sha256)
+    XCTAssertEqual(moved.pdfReference, original.pdfReference)
+    try reopened.movePaper(moved, to: nil)
+    let unfiledDB = try ProductDatabase.open(at: db.root)
+    let unfiled = try unfiledDB.capturePaperPlacement(paperID: paper, generation: original.generation)
+    XCTAssertNil(unfiled.folder)
+    try unfiledDB.movePaper(unfiled, to: first.id)
+    XCTAssertEqual(try ProductDatabase.open(at: db.root).folderID(for: paper), first.id)
+    XCTAssertEqual(try db.adapterRead { try Row.fetchAll($0, sql: "SELECT * FROM paper ORDER BY id") }, papers)
+    XCTAssertEqual(try db.adapterRead { try Row.fetchAll($0, sql: "SELECT * FROM importJob ORDER BY id") }, jobs)
+    XCTAssertEqual(try Data(contentsOf: pdf(db, paper)), bytes)
+    XCTAssertEqual(try FileManager.default.attributesOfItem(atPath: pdf(db, paper).path)[.systemFileNumber] as? NSNumber, inode)
+    XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: db.root.appendingPathComponent("papers").path), [paper.uuidString])
+    XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: pdf(db, paper).deletingLastPathComponent().path), ["document.pdf"])
+  }
+
+  func testCapturedMovementRejectsReboundImmutableFactsDeletionAndMissingPaperWithoutWrite() async throws {
+    let mutations = [
+      "generation = '\(UUID().uuidString)'",
+      "pdfSHA256 = '\(String(repeating: "0", count: 64))'",
+      "pdfSHA256 = 'invalid'",
+      "pdfReference = 'papers/other/document.pdf'",
+      "pdfReference = NULL",
+      "deletionID = '\(UUID().uuidString)'",
+      "status = 'deleting'",
+      "status = 'tombstone'",
+    ]
+    for mutation in mutations + ["missing"] {
+      let (root, source, db) = try fixture()
+      defer { try? FileManager.default.removeItem(at: root) }
+      let lifecycle = try await LocalLibraryLifecycle.open(database: db)
+      let service = FolderImportService(database: db, lifecycle: lifecycle)
+      let first = try db.createFolder(name: "First")
+      let destination = try db.createFolder(name: "Destination")
+      let intent = try await service.prepare(source: source, destinationFolderID: first.id)
+      let paper = try await service.continueImport(intent.id, destinationFolderID: first.id)
+      let observed = try capture(db, paper)
+      try db.adapterWrite { sql in
+        if mutation == "missing" {
+          try sql.execute(sql: "DELETE FROM importJob WHERE paperID = ?", arguments: [paper.uuidString])
+          try sql.execute(sql: "DELETE FROM paper WHERE id = ?", arguments: [paper.uuidString])
+        } else {
+          try sql.execute(sql: "UPDATE paper SET \(mutation) WHERE id = ?", arguments: [paper.uuidString])
+        }
+      }
+      try assertRejectedMove(db, observed, to: destination.id)
+    }
+  }
+
+  func testCapturedMovementRejectsChangedPlacementFolderNameAndDeletedDestinationWithoutWrite() async throws {
+    for change in ["move", "unfile", "rename", "deleteCurrent", "deleteDestination"] {
+      let (root, source, db) = try fixture()
+      defer { try? FileManager.default.removeItem(at: root) }
+      let lifecycle = try await LocalLibraryLifecycle.open(database: db)
+      let service = FolderImportService(database: db, lifecycle: lifecycle)
+      let first = try db.createFolder(name: "First")
+      let destination = try db.createFolder(name: "Destination")
+      let intent = try await service.prepare(source: source, destinationFolderID: first.id)
+      let paper = try await service.continueImport(intent.id, destinationFolderID: first.id)
+      let observed = try capture(db, paper)
+      switch change {
+      case "move": try db.movePaper(observed, to: destination.id)
+      case "unfile": try db.movePaper(observed, to: nil)
+      case "rename": try db.renameFolder(id: first.id, name: "Renamed")
+      case "deleteCurrent": try db.deleteFolder(id: first.id)
+      default: try db.deleteFolder(id: destination.id)
+      }
+      try assertRejectedMove(db, observed, to: destination.id)
+      // A fresh, explicit observation can be saved; the old command is never replayed.
+      let fresh = try capture(db, paper)
+      try db.movePaper(fresh, to: nil)
+      XCTAssertNil(try db.folderID(for: paper))
+    }
+  }
+
+  func testCaptureRequiresRequestedGenerationAndValidStoredIdentity() async throws {
+    let (root, source, db) = try fixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let lifecycle = try await LocalLibraryLifecycle.open(database: db)
+    let service = FolderImportService(database: db, lifecycle: lifecycle)
+    let intent = try await service.prepare(source: source)
+    let paper = try await service.continueImport(intent.id, destinationFolderID: nil)
+    let observed = try capture(db, paper)
+    XCTAssertThrowsError(try db.capturePaperPlacement(paperID: paper, generation: UUID())) { error in
+      XCTAssertEqual(error as? FolderImportError, .paperNotReady)
+    }
+    for mutation in ["pdfSHA256 = NULL", "pdfSHA256 = 'bad'", "pdfReference = '../document.pdf'"] {
+      try db.adapterWrite { try $0.execute(sql: "UPDATE paper SET \(mutation) WHERE id = ?", arguments: [paper.uuidString]) }
+      XCTAssertThrowsError(try db.capturePaperPlacement(paperID: paper, generation: observed.generation)) { error in
+        XCTAssertEqual(error as? ProductDatabaseError, .invalidRecord)
+      }
+      try db.adapterWrite { try $0.execute(sql: "UPDATE paper SET pdfSHA256 = ?, pdfReference = ? WHERE id = ?",
+        arguments: [observed.sha256, observed.pdfReference, paper.uuidString]) }
+    }
+    try db.adapterWrite { try $0.execute(sql: "UPDATE paper SET generation = 'invalid' WHERE id = ?", arguments: [paper.uuidString]) }
+    XCTAssertThrowsError(try db.capturePaperPlacement(paperID: paper, generation: observed.generation))
+  }
+
+  func testPlacementLoadFenceDismissalReplacementAndLateFailureAreQuiescent() async throws {
+    let (root, source, db) = try fixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let lifecycle = try await LocalLibraryLifecycle.open(database: db)
+    let paper = try await lifecycle.importPDF(from: source)
+    let captured = try capture(db, paper)
+    var state = PaperPlacementLoadState()
+    let dismissed = state.begin(paperID: paper, generation: captured.generation)
+    state.invalidate()
+    XCTAssertFalse(state.accept(captured, folders: [], request: dismissed))
+    state.reject(dismissed)
+    XCTAssertFalse(state.loading)
+    XCTAssertFalse(state.failed)
+    XCTAssertNil(state.captured)
+    let replaced = state.begin(paperID: paper, generation: captured.generation)
+    let current = state.begin(paperID: paper, generation: captured.generation)
+    XCTAssertFalse(state.accept(captured, folders: [], request: replaced))
+    state.reject(replaced)
+    XCTAssertTrue(state.loading)
+    XCTAssertFalse(state.failed)
+    XCTAssertTrue(state.accept(captured, folders: [], request: current))
+    state.reject(replaced)
+    state.reject(current)
+    XCTAssertEqual(state.captured, captured)
+    XCTAssertFalse(state.loading)
+    XCTAssertFalse(state.failed)
+    state.invalidate()
+    XCTAssertNil(state.captured)
+    XCTAssertTrue(state.folders.isEmpty)
+  }
+
+  func testPlacementLoadFenceRequiresCapturedTargetAndActualFolderBeforeFreshSave() async throws {
+    let (root, source, db) = try fixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let lifecycle = try await LocalLibraryLifecycle.open(database: db)
+    let folder = try db.createFolder(name: "Actual")
+    let paper = try await lifecycle.importPDF(from: source, destinationFolderID: folder.id)
+    let captured = try capture(db, paper)
+    var state = PaperPlacementLoadState()
+    let wrongTarget = state.begin(paperID: UUID(), generation: captured.generation)
+    XCTAssertFalse(state.accept(captured, folders: [folder], request: wrongTarget))
+    state.reject(wrongTarget)
+    XCTAssertTrue(state.failed)
+    let wrongGeneration = state.begin(paperID: paper, generation: UUID())
+    XCTAssertFalse(state.accept(captured, folders: [folder], request: wrongGeneration))
+    state.reject(wrongGeneration)
+    let missingFolder = state.begin(paperID: paper, generation: captured.generation)
+    XCTAssertFalse(state.accept(captured, folders: [], request: missingFolder))
+    state.reject(missingFolder)
+    XCTAssertNil(state.captured)
+    XCTAssertFalse(state.loading)
+    try db.renameFolder(id: folder.id, name: "Renamed")
+    let renamedFolder = state.begin(paperID: paper, generation: captured.generation)
+    XCTAssertFalse(state.accept(captured, folders: try db.folders(), request: renamedFolder))
+    state.reject(renamedFolder)
+    let current = try capture(db, paper)
+    let fresh = state.begin(paperID: paper, generation: captured.generation)
+    XCTAssertTrue(state.accept(current, folders: try db.folders(), request: fresh))
+    XCTAssertEqual(state.captured, current)
+    XCTAssertFalse(state.failed)
+  }
+
+  private func capture(_ db: ProductDatabase, _ paper: UUID) throws -> CapturedPaperPlacement {
+    let raw = try XCTUnwrap(try db.adapterRead { try String.fetchOne($0,
+      sql: "SELECT generation FROM paper WHERE id = ?", arguments: [paper.uuidString]) })
+    let generation = try XCTUnwrap(UUID(uuidString: raw))
+    return try db.capturePaperPlacement(paperID: paper, generation: generation)
+  }
+
+  private func assertRejectedMove(_ db: ProductDatabase, _ captured: CapturedPaperPlacement,
+    to destination: UUID?) throws {
+    let papers = try db.adapterRead { try Row.fetchAll($0, sql: "SELECT * FROM paper ORDER BY id") }
+    let jobs = try db.adapterRead { try Row.fetchAll($0, sql: "SELECT * FROM importJob ORDER BY id") }
+    let placements = try db.adapterRead { try Row.fetchAll($0, sql: "SELECT * FROM paperFolder ORDER BY paperID") }
+    let bytes = try Data(contentsOf: pdf(db, captured.paperID))
+    let inode = try XCTUnwrap(try FileManager.default.attributesOfItem(atPath: pdf(db, captured.paperID).path)[.systemFileNumber] as? NSNumber)
+    XCTAssertThrowsError(try db.movePaper(captured, to: destination))
+    XCTAssertEqual(try db.adapterRead { try Row.fetchAll($0, sql: "SELECT * FROM paper ORDER BY id") }, papers)
+    XCTAssertEqual(try db.adapterRead { try Row.fetchAll($0, sql: "SELECT * FROM importJob ORDER BY id") }, jobs)
+    XCTAssertEqual(try db.adapterRead { try Row.fetchAll($0, sql: "SELECT * FROM paperFolder ORDER BY paperID") }, placements)
+    XCTAssertEqual(try Data(contentsOf: pdf(db, captured.paperID)), bytes)
+    XCTAssertEqual(try FileManager.default.attributesOfItem(atPath: pdf(db, captured.paperID).path)[.systemFileNumber] as? NSNumber, inode)
   }
 
   private func assertNoImportEffects(_ db: ProductDatabase) throws {

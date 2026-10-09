@@ -93,22 +93,22 @@ public struct FolderManagementView: View {
 
   public var body: some View {
     VStack(alignment: .leading) {
-      Picker("Folder", selection: $selected) {
-        Text("New folder").tag(nil as UUID?)
+      Picker("폴더", selection: $selected) {
+        Text("새 폴더").tag(nil as UUID?)
         ForEach(folders) { Text($0.name).tag(Optional($0.id)) }
       }
       .onChange(of: selected) { _, value in
         name = folders.first(where: { $0.id == value })?.name ?? ""
       }
-      TextField("Folder name", text: $name)
+      TextField("폴더 이름", text: $name)
       HStack {
-        Button(selected == nil ? "Create folder" : "Rename folder") {
+        Button(selected == nil ? "폴더 만들기" : "폴더 이름 변경") {
           perform {
             if let selected { try await service.renameFolder(id: selected, name: name) }
             else { _ = try await service.createFolder(name: name) }
           }
         }
-        Button("Delete folder (keep Papers)") {
+        Button("폴더 삭제 · 논문 유지") {
           guard let selected else { return }
           perform { try await service.deleteFolder(id: selected); self.selected = nil }
         }.disabled(selected == nil)
@@ -118,7 +118,7 @@ public struct FolderManagementView: View {
     .disabled(working)
     .task {
       do { folders = try await service.folders() }
-      catch { errorMessage = "Unable to load folders." }
+      catch { errorMessage = "폴더를 불러오지 못했습니다." }
     }
   }
 
@@ -129,7 +129,7 @@ public struct FolderManagementView: View {
         try await action()
         folders = try await service.folders()
         errorMessage = nil
-      } catch { errorMessage = "Folder change failed; prior placement was preserved." }
+      } catch { errorMessage = "폴더 변경에 실패했습니다. 현재 저장된 배치를 다시 확인하세요." }
       working = false
     }
   }

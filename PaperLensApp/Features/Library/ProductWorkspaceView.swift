@@ -354,7 +354,7 @@ public struct ProductWorkspaceView: View {
           openReader: { workspace.openImportedURL($0) },
           chooseLocalPDF: { workspace.pickPDF() },
           confirmLocalPDF: { workspace.acceptDroppedPDF($0) }) {
-            LibraryBrowserView(service: workspace.organization,
+            LibraryBrowserView(service: workspace.organization, folderService: workspace.imports,
               filter: $workspace.libraryFilter, refreshRevision: workspace.revision,
               sortFacts: { try await workspace.sortFacts() },
               openPaper: { try await workspace.open($0) }, importPDF: { workspace.pickPDF() })

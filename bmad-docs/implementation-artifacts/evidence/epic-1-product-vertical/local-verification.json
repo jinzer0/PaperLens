@@ -25,9 +25,9 @@
   "verification": {
     "productUnion": {
       "command": "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --filter ProductTests",
-      "tests": 299,
+      "tests": 305,
       "failures": 0,
-      "output": "artifact://1026",
+      "output": "artifact://1045",
       "evidence": "Real GRDB transactions, owned synthetic files and actual local FIFO IO/close/peer metadata/EPIPE; mocked provider/HTTP transport and synthetic windowless PDFKit conversions. Not authenticated provider, app UI, SDK producer or PDFium execution."
     },
     "nativeCompilation": {
@@ -35,11 +35,11 @@
       "configuration": "Release",
       "architecture": "arm64",
       "minimumOS": "15.0",
-      "derivedData": ".build/product-native-compile-20261010-y",
+      "derivedData": ".build/product-native-compile-20261010-z",
       "codeSigningAllowed": false,
       "result": "BUILD SUCCEEDED",
-      "rawOutput": "artifact://1027",
-      "output": "artifact://1027",
+      "rawOutput": "artifact://1047",
+      "output": "artifact://1047",
       "applicationAndHelperBinariesExecuted": false,
       "warnings": "AppIntents metadata skipped, PDFium debug-map duplicate/missing-symbol warnings and an unnecessary-await Swift warning remain; no warning suppression or debug-symbol repair claimed."
     },
@@ -291,6 +291,25 @@
     "underlyingNativeBindingSchemaAndMembershipChanged": false,
     "visibleUIOrAccessibilityVerified": false,
     "runtimeParsingOrCalibrationVerified": false,
+    "helperExecuted": false,
+    "storyAccepted": false
+  },
+  "capturedPaperFolderMovement": {
+    "baseVerifiedFeatureCommit": "2260e36",
+    "preImplementationSpecificationCommit": "edf2751",
+    "canonicalCriteria": "Root Story1.17 epics858–862/876: existing Paper movement and durable Folder placement; no canonical scope change.",
+    "sourceDiffAgainstSpecificationSha256": "82218ac38a35d38daf825b6141216499c75a56e68da7c0c6ca4fd576a0507922",
+    "sourceDiffScope": "Six exact FolderImportService, ProductDatabase+Folders, LibraryBrowserView, FolderImportTests, ProductWorkspaceView and labels-only ImportConfirmationView paths againstedf2751; docs excluded",
+    "actualBinding": "Same workspace.imports service, captured sole-GRDB ready/nondeleted Paper generation/SHA/canonical reference/prior Folder UUID/name, existing-transaction recapture value comparison and actual destination validation before membership write. Removed public UUID-only assignPaper entry points; internal ready-import publication unchanged. Card/list share native UUID destination/Unfiled sheet; pure actual load fencing, captured Save, explicit reload after failure, no automatic replay or late-commit undo.",
+    "preservedFailures": ["artifact://1036:19 focused tests/one actual FK failure in missing-Paper test fault, before command rejection; repaired owned fault by deleting its referencing importJob then Paper in same transaction, keeping FK enforcement and production guards unchanged"],
+    "focusedTests": {"tests": 19, "failures": 0, "newCases": 6, "output": "artifact://1044"},
+    "productUnion": {"tests": 305, "failures": 0, "output": "artifact://1045"},
+    "nativeOutput": "artifact://1047",
+    "nativeDerivedData": ".build/product-native-compile-20261010-z",
+    "review": "agent://80-CapturedFolderMovementIntegrity: SOURCE-ONLY CLEAR / APPROVE; final FK-preserving fixture reread",
+    "newStoreMigrationCounterJobCopyOrLease": false,
+    "observedValueComparisonIsABAOrReadAuthority": false,
+    "physicalMoveSheetCancelSaveFocusAccessibilityVerified": false,
     "helperExecuted": false,
     "storyAccepted": false
   },

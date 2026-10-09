@@ -3,6 +3,7 @@ import SwiftUI
 @MainActor
 public struct LibraryBrowserView: View {
   private let service: LibraryOrganizationService
+  private let folderService: FolderImportService
   private let sortFacts: @Sendable () async throws -> [OrganizationSortFacts]
   private let openPaper: @MainActor (OrganizedPaper) async throws -> Void
   private let importPDF: @MainActor () -> Void
@@ -14,19 +15,22 @@ public struct LibraryBrowserView: View {
   @State private var busy = false
   @State private var deleting: OrganizedPaper?
   @State private var editing: OrganizedPaper?
+  @State private var moving: LibraryMovement?
+  @State private var movementFocusToRestore: OrganizedPaper?
   @State private var identification: LibraryIdentification?
   @FocusState private var focusedPaper: UUID?
   @FocusState private var focusedIdentification: UUID?
+  @FocusState private var focusedMovement: UUID?
   private var snapshot: OrganizationSnapshot? { query.snapshot }
   private var loading: Bool { query.loading }
   private var loadFailed: Bool { query.failed }
 
-  public init(service: LibraryOrganizationService,
+  public init(service: LibraryOrganizationService, folderService: FolderImportService,
     filter: Binding<OrganizationFilter>, refreshRevision: Int,
     sortFacts: @escaping @Sendable () async throws -> [OrganizationSortFacts],
     openPaper: @escaping @MainActor (OrganizedPaper) async throws -> Void,
     importPDF: @escaping @MainActor () -> Void) {
-    self.service = service; self.sortFacts = sortFacts
+    self.service = service; self.folderService = folderService; self.sortFacts = sortFacts
     _filter = filter; self.refreshRevision = refreshRevision
     self.openPaper = openPaper; self.importPDF = importPDF
   }
@@ -105,6 +109,14 @@ public struct LibraryBrowserView: View {
     .task(id: refreshRevision) { refresh() }
     .onDisappear { invalidateObservation() }
     .onChange(of: filter) { _, _ in refresh() }
+    .onChange(of: loading) { _, value in
+      if !value, let opener = movementFocusToRestore {
+        if snapshot?.papers.contains(where: { $0.id == opener.id && $0.generation == opener.generation }) == true {
+          focusedMovement = opener.id
+        }
+        movementFocusToRestore = nil
+      }
+    }
     .alert("논문을 영구 삭제하시겠습니까?",
       isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }), presenting: deleting) { paper in
         Button("삭제", role: .destructive) { deleting = nil; perform { try await service.delete(paper, retry: false) } }
@@ -131,6 +143,14 @@ public struct LibraryBrowserView: View {
     .sheet(item: $identification) { captured in
       LibraryIdentificationDetail(captured: captured)
         .onDisappear { focusedIdentification = captured.paper.id }
+    }
+    .sheet(item: $moving, onDismiss: { refresh() }) { captured in
+      PaperMovementSheet(paper: captured.paper, service: folderService, committed: {
+        if moving?.id == captured.id { moving = nil }
+        refresh()
+      })
+      .id(captured.id)
+      .onDisappear { movementFocusToRestore = captured.paper }
     }
   }
 
@@ -159,6 +179,12 @@ public struct LibraryBrowserView: View {
         }.disabled(busy || loading || loadFailed)
           .focused($focusedIdentification, equals: paper.id)
           .accessibilityLabel("\(paper.title) 초록·출처 주제 상세")
+        Button("폴더 이동") {
+          guard paper.readable, !busy, !loading, !loadFailed else { return }
+          invalidateObservation(); moving = LibraryMovement(paper: paper)
+        }.disabled(!paper.readable || busy || loading || loadFailed)
+          .focused($focusedMovement, equals: paper.id)
+          .accessibilityLabel("\(paper.title) 폴더 이동")
         Menu("더 보기") {
           Button("태그·읽기 상태·즐겨찾기 편집") {
             invalidateObservation(); editing = paper
@@ -222,6 +248,104 @@ public struct LibraryBrowserView: View {
     case .deleting: return "삭제 중 · 열기 불가"
     case .deletionFailed: return "삭제 미완료 · 삭제 다시 시도"
     case .tombstone: return "삭제됨"
+    }
+  }
+}
+
+private struct LibraryMovement: Identifiable {
+  let id = UUID()
+  let paper: OrganizedPaper
+}
+
+@MainActor private struct PaperMovementSheet: View {
+  let paper: OrganizedPaper
+  let service: FolderImportService
+  let committed: @MainActor () -> Void
+  @Environment(\.dismiss) private var dismiss
+  @State private var observation = PaperPlacementLoadState()
+  @State private var destination: UUID?
+  @State private var loadTask: Task<Void, Never>?
+  @State private var saveTask: Task<Void, Never>?
+  @State private var saving = false
+  @State private var saveFailed = false
+  @State private var visible = false
+
+  var body: some View {
+    Form {
+      Text(paper.title).font(.headline)
+      Text("논문의 폴더 배치만 변경합니다. 앱 소유 PDF는 이동하거나 복사하지 않습니다.")
+        .font(.caption)
+      if observation.loading { ProgressView("현재 폴더 불러오는 중") }
+      if let captured = observation.captured {
+        Text("현재 폴더: \(captured.folder?.name ?? "미분류")")
+        Picker("이동할 폴더", selection: $destination) {
+          Text("미분류").tag(Optional<UUID>.none)
+          ForEach(observation.folders) { folder in
+            Text(folder.name).tag(Optional(folder.id))
+          }
+        }.disabled(saving)
+      }
+      if observation.failed || saveFailed {
+        Text(saveFailed
+          ? "이동 실패 · 현재 상태를 다시 불러온 뒤 목적지를 선택하고 새로 저장하세요. 자동으로 다시 이동하지 않습니다."
+          : "현재 배치를 확인할 수 없습니다. 다시 불러오세요.")
+        Button("현재 상태 다시 불러오기") { reload() }.disabled(saving || observation.loading)
+      }
+      HStack {
+        Button("취소", role: .cancel) { cancelObservation(); dismiss() }
+          .keyboardShortcut(.cancelAction)
+        Button("저장") { save() }
+          .keyboardShortcut(.defaultAction)
+          .disabled(saving || observation.loading || observation.captured == nil || saveFailed)
+      }
+    }
+    .padding().frame(minWidth: 400)
+    .task { visible = true; reload() }
+    .onDisappear { visible = false; cancelObservation() }
+  }
+
+  private func cancelObservation() {
+    loadTask?.cancel(); loadTask = nil
+    saveTask?.cancel(); saveTask = nil
+    observation.invalidate()
+  }
+
+  private func reload() {
+    loadTask?.cancel()
+    let request = observation.begin(paperID: paper.id, generation: paper.generation)
+    destination = nil
+    loadTask = Task {
+      do {
+        let captured = try await service.capturePaperPlacement(paperID: request.paperID,
+          generation: request.generation)
+        try Task.checkCancellation()
+        let folders = try await service.folders()
+        try Task.checkCancellation()
+        guard visible else { return }
+        if observation.accept(captured, folders: folders, request: request) {
+          destination = captured.folder?.id; saveFailed = false
+        } else { observation.reject(request) }
+      } catch {
+        guard !Task.isCancelled, visible else { return }
+        observation.reject(request)
+      }
+    }
+  }
+
+  private func save() {
+    guard !saving, !saveFailed, !observation.loading,
+      let captured = observation.captured else { return }
+    let selectedDestination = destination
+    saving = true
+    saveTask = Task {
+      do {
+        try await service.movePaper(captured, to: selectedDestination)
+        // A committed transaction can win a late dismissal; refresh, never undo it.
+        committed()
+      } catch {
+        guard visible, !Task.isCancelled else { return }
+        observation.invalidate(); saveFailed = true; saving = false
+      }
     }
   }
 }

@@ -164,3 +164,57 @@ stale Paper/generation/hash/reference/current placement/destination/delete rejec
 no extra Paper/Job/copies, cancellation/late-load fixtures as feasible, full Product/native;
 independent changed-source review and exact local evidence commit. Protected/runtime/remote/
 calibration/auth/Story boundaries are unchanged; previous299/native-y are prior evidence.
+
+### Captured movement source handoff (baseline Spec edf2751)
+
+Authored exactly the five worker-owned files above. Public DB and async service APIs are
+`capturePaperPlacement(paperID: UUID, generation: UUID) -> CapturedPaperPlacement` and
+`movePaper(_ captured: CapturedPaperPlacement, to folderID: UUID?)`. The data-only value
+holds paperID/generation/SHA/reference and optional actual LibraryFolder UUID/name. Capture
+requires the requested current ready/nondeleted generation and valid stored UUID/digest/
+canonical reference. Movement compares all observed facts in adapterWrite, including the
+prior folder name; a concurrent rename also requires explicit fresh observation. Destination
+validation and membership mutation reuse the unchanged internal assignImportedPaper body.
+Removed both UUID-only public assignment entry points; updated all four known test calls.
+No migration, lifecycle, import publication, resource owner or physical PDF operation changed.
+
+LibraryBrowserView requires `folderService: FolderImportService` after `service:`; parent
+injects the existing `workspace.imports`. Both presentations share the native Korean move
+button and sheet. UUID-tagged destinations include explicit 미분류. Each presentation has a
+fresh sheet identity; a late committed Save refreshes Library but cannot dismiss a reopened
+sheet. Save freezes placement/destination before suspension. Failure discards the observation
+and requires explicit reload before another Save. Cancellation invalidates quiescent load
+requests and cancels tasks without DB undo. Dismissal refreshes the existing Library query
+to avoid permanent Loading; opener UUID/generation is retained for native focus restoration
+after load only when that same Paper is still in the current Library result.
+Entering movement clears prior metadata/query observations without altering their fences.
+
+Six new test methods authored: actual owned import move/Unfiled/reopen with unchanged full
+Paper/Job rows, PDF bytes/inode and namespace entries; stale generation/SHA/reference,
+deletion/status/missing Paper rejection without writes; changed placement/name/current
+folder and missing destination rejection followed only by explicit fresh capture; required
+generation/invalid stored identity; and two tests of the actual production shared pure load
+state covering dismissal/replacement/late failure/wrong target/wrong generation/missing
+folder. Existing 13 tests retain import/source-ownership semantics. Pure-state fixtures prove
+only observation fencing, not SwiftUI task scheduling, keyboard focus, sheet presentation,
+Cancel/Save interactions or physical UI acceptance. Value CAS is not ABA protection or PDF
+read authority. All worker tests/builds/gates/formatters/commits/runtime explicitly skipped;
+source-only handoff is not PASS. Parent owns focused/full/native checks and independent
+review. StoryDone/Epic/protected acceptance and historical verification evidence unchanged.
+
+### Parent verified durable captured movement
+
+Parent supplied workspace.imports to the required Browser argument and Korean folder-manager
+labels only; no extra behavior, owner or migration. Focused19 passed, zero failures1044,
+including6 new movement/actual-load-state methods. Full Product305 passed, zero failures1045.
+Fresh unsigned native-z Release arm64/macOS15 compilation succeeded1047. Independent80
+SOURCE-ONLY CLEAR / APPROVE; final fixture was reread. Six-source binary delta vsedf2751:
+82218ac38a35d38daf825b6141216499c75a56e68da7c0c6ca4fd576a0507922.
+Preserve1036 focused19/one: missing-Paper fault hit genuine importJob FK before command
+rejection. Owned fixture removes that Paper's referencing importJob then Paper in one
+fault transaction; foreign keys remain enforced, production/schema/guards unchanged.
+Successful move proves reopened membership with unchanged complete Paper/Job rows, PDF
+bytes/inode/namespace; rejected observations preserve the post-fault placement/rows/bytes.
+Physical sheet scheduling/Cancel/Save/focus/accessibility are NOT those fixture proofs.
+No user PDF, provider/SDK/app/helper/renderer execution, paid/trial renewal or remote action;
+observed-value CAS is not ABA/read authority. Canonical0/26/Epicfalse/StoryDone=false unchanged.

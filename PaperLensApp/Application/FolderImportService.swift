@@ -14,6 +14,47 @@ public struct LocalImportConfirmation: Identifiable, Equatable, Sendable {
   public let destinationFolderID: UUID?
 }
 
+/// Quiescent sheet observation state. Invalidated requests cannot publish late results.
+struct PaperPlacementLoadState {
+  struct Request: Equatable, Sendable {
+    let id: UUID
+    let paperID: UUID
+    let generation: UUID
+  }
+  private var request: Request?
+  private(set) var captured: CapturedPaperPlacement?
+  private(set) var folders: [LibraryFolder] = []
+  private(set) var loading = false
+  private(set) var failed = false
+
+  mutating func begin(paperID: UUID, generation: UUID) -> Request {
+    invalidate()
+    let value = Request(id: UUID(), paperID: paperID, generation: generation)
+    request = value; loading = true
+    return value
+  }
+
+  mutating func invalidate() {
+    request = nil; captured = nil; folders = []; loading = false; failed = false
+  }
+
+  @discardableResult
+  mutating func accept(_ value: CapturedPaperPlacement, folders: [LibraryFolder],
+    request: Request) -> Bool {
+    guard self.request == request, value.paperID == request.paperID,
+      value.generation == request.generation,
+      value.folder.map({ folders.contains($0) }) ?? true else { return false }
+    self.request = nil; captured = value; self.folders = folders
+    loading = false; failed = false
+    return true
+  }
+
+  mutating func reject(_ request: Request) {
+    guard self.request == request else { return }
+    self.request = nil; loading = false; failed = true
+  }
+}
+
 /// Immutable physical ownership. Only the detached hashing operation performs runtime I/O.
 final class SelectedSourceReadOwner: Sendable {
   let id = UUID()
@@ -116,9 +157,17 @@ public actor FolderImportService {
     try await Task.detached { try database.deleteFolder(id: id) }.value
   }
 
-  public func assignPaper(_ paperID: UUID, to folderID: UUID?) async throws {
+  public func capturePaperPlacement(paperID: UUID, generation: UUID) async throws -> CapturedPaperPlacement {
     let database = database
-    try await Task.detached { try database.assignPaper(paperID, to: folderID) }.value
+    return try await Task.detached {
+      try database.capturePaperPlacement(paperID: paperID, generation: generation)
+    }.value
+  }
+
+  public func movePaper(_ captured: CapturedPaperPlacement, to folderID: UUID?) async throws {
+    try Task.checkCancellation()
+    let database = database
+    try await Task.detached { try database.movePaper(captured, to: folderID) }.value
   }
 
   /// The URL is picker-selected. No bookmark, owned copy, Job or Paper is created here.

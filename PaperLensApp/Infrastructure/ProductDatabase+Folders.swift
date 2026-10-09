@@ -6,8 +6,18 @@ public struct LibraryFolder: Identifiable, Equatable, Sendable {
   public let name: String
 }
 
+/// An observed value, not PDF read authority or protection against placement ABA.
+public struct CapturedPaperPlacement: Equatable, Sendable {
+  public let paperID: UUID
+  public let generation: UUID
+  public let sha256: String
+  public let pdfReference: String
+  public let folder: LibraryFolder?
+}
+
 public enum FolderImportError: Error, Equatable, Sendable {
   case invalidName, missingFolder, paperNotReady, invalidSource, sourceChanged, consumedIntent
+  case stalePlacement
 }
 
 extension ProductDatabase {
@@ -78,10 +88,50 @@ extension ProductDatabase {
     }
   }
 
-  public func assignPaper(_ paperID: UUID, to folderID: UUID?) throws {
-    try adapterWrite { db in
-      try Self.assignImportedPaper(paperID, folderID: folderID, in: db)
+  public func capturePaperPlacement(paperID: UUID, generation: UUID) throws -> CapturedPaperPlacement {
+    try adapterRead { db in
+      try Self.capturePaperPlacement(paperID: paperID, generation: generation, in: db)
     }
+  }
+
+  public func movePaper(_ captured: CapturedPaperPlacement, to folderID: UUID?) throws {
+    try adapterWrite { db in
+      let current = try Self.capturePaperPlacement(paperID: captured.paperID,
+        generation: captured.generation, in: db)
+      guard current == captured else { throw FolderImportError.stalePlacement }
+      try Self.assignImportedPaper(captured.paperID, folderID: folderID, in: db)
+    }
+  }
+
+  private static func capturePaperPlacement(paperID: UUID, generation: UUID,
+    in db: Database) throws -> CapturedPaperPlacement {
+    guard let row = try Row.fetchOne(db, sql: """
+      SELECT p.id, p.generation, p.pdfSHA256, p.pdfReference,
+        pf.folderID, f.name AS folderName
+      FROM paper p LEFT JOIN paperFolder pf ON pf.paperID = p.id
+      LEFT JOIN libraryFolder f ON f.id = pf.folderID
+      WHERE p.id = ? AND p.generation = ? AND p.status = 'ready' AND p.deletionID IS NULL
+      """, arguments: [paperID.uuidString, generation.uuidString])
+    else { throw FolderImportError.paperNotReady }
+    let id: String = row["id"], storedGeneration: String = row["generation"]
+    let digest: String? = row["pdfSHA256"], reference: String? = row["pdfReference"]
+    guard UUID(uuidString: id) == paperID, UUID(uuidString: storedGeneration) == generation,
+      let digest, digest.count == 64, digest.allSatisfy({ "0123456789abcdef".contains($0) }),
+      let reference, reference == "papers/\(id)/document.pdf"
+    else { throw ProductDatabaseError.invalidRecord }
+    let rawFolder: String? = row["folderID"], name: String? = row["folderName"]
+    let folder: LibraryFolder?
+    if let rawFolder {
+      guard let folderID = UUID(uuidString: rawFolder), let name else {
+        throw ProductDatabaseError.invalidRecord
+      }
+      folder = LibraryFolder(id: folderID, name: name)
+    } else {
+      guard name == nil else { throw ProductDatabaseError.invalidRecord }
+      folder = nil
+    }
+    return CapturedPaperPlacement(paperID: paperID, generation: generation,
+      sha256: digest, pdfReference: reference, folder: folder)
   }
 
   public func validateFolderDestination(_ folderID: UUID?) throws {
