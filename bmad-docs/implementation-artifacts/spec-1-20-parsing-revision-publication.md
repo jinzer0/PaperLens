@@ -476,6 +476,40 @@ pool implementations. Earlier244/one failure919 and candidate924/925 remain hist
 These are real Main accounting/source/owned-unit proofs, not combined RSS/watchdog,
 input-factory/geometry activation, helper execution, calibration or Story acceptance.
 
+### Actual input acquisition composition before implementation
+
+Compose the now-real Main resource owner and Library child pin into PDFiumPinnedInput.
+Required API: LibraryPDFiumInputAcquirer(lifecycle:) and async acquireInput(resources:
+PDFiumExtractionResourceOwner, onRevoked: required MainActor callback). No resource
+closure substitute/default gauge, separate database/registry/root or credential access.
+The resource owner supplies original identity/operation/limits/deadline, cannot renew.
+Require its original epoch to match the retained lifecycle and a sole-GRDB snapshot
+which proves exact running extraction lineage, ready Paper/generation/SHA/reference,
+current durable slot/generation/model. Validate again around actual Library pin opening;
+opaque references compare original UTF8 bytes, never canonically normalized strings.
+Do not nested-read GRDB from budget callbacks inside publication: those callbacks use
+actual registry validation and real resource observation; publication repeats DB guards.
+
+Actual readonly sender ownership transfers once into existing PDFiumPinnedInput. Bind
+captured release to pin.release(operationID:) and finish to the real resource owner.
+Before return, failure disposes a created sender by checked close, then only after known
+sender/original-pin closure releases its actual resource lease. Any uncertain sender
+close retains actual handle/key in the same Library registry, fails the token observation
+and retains the resource owner/lease; no blind retry, ARC closure or fake End. Failures
+before acquisition may release only that unused resource capture. Revocation callback
+is required and does not itself release the asynchronous child; no helper is started here.
+
+Parent owns tiny same-registry uncertain-sender-retention adapters in LibraryReadLeaseProvider
+and LibraryExtractionReadPin. Worker exact four files: new LibraryPDFiumInputAcquirer.swift,
+ProductDatabase+Extraction.swift, new LibraryPDFiumInputAcquirerTests.swift and this Spec.
+Parent registers Package/native/tests, runs real owned-file+GRDB+resource regressions,
+fresh unsigned native compile and independent lifetime review before local commit.
+Tests cover exact current identity/epoch/model, missing reservation rejection before FD
+effects, original-budget expiry, readonly actual transfer, real pin/accounting drain and
+unknown constructor cleanup ownership. No app/helper/SDK/renderer execution or calibration.
+Geometry/precision/canonical-codec composition remains separately required; no product
+activation, hard combined-RSS/watchdog proof, renewed protected trial or Story acceptance.
+
 ### Actual Main resource-owner implementation handoff (unverified source)
 
 Added `PDFiumExtractionResourceOwner` with public readonly `identity`, `operationID`,
