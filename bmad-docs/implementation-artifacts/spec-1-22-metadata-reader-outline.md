@@ -121,3 +121,60 @@ independent review/evidence/local commit. Tests use actual owned GRDB publicatio
 Reader lease/session, covering nil-to-published, replacement, stale/closed/reopened/deleted
 session fences and retained annotation/Reader ownership; no app/helper/renderer trial runs.
 Visible UI/accessibility and runtime parsing/AD8/P1/P2/P3/Story completion remain unproved.
+
+#### Source handoff at pre-source HEAD 5694ac1 (2026-10-10)
+
+The required MainActor ParsingStatusView callback carries refresh intent only and captures
+the mounted OpenReader, including its exact session object. Its existing persisted poll
+signals usableRevision changes (including removal/error); no second polling owner exists.
+ProductWorkspace.refreshPublishedMetadata(for:) captures that Reader before the actual
+detached GRDB read. Internal read/apply stages allow tests to delay an actual DB result,
+not inject a fabricated identity. Apply fences cancellation, Paper/generation and exact
+session, validates live read access/current Paper/annotation SHA, and rechecks the current
+published pointer inside that access before changing metadata only. Query failure clears
+metadata advertisement with a truthful failure; lost ownership closes the current Reader.
+Nil current publication keeps a valid original Reader usable with unavailable controls.
+
+Authored tests in ProductWorkspaceTests use the actual owned Library, ReaderSession and
+canonical synthetic extraction validation with the existing locked fixture budget. Parent
+must run focused ProductWorkspaceTests plus aggregate/native/source review; worker tests,
+builds, gates, lint, formatting and runtime verification are NOT RUN by instruction.
+No visible UI, producer calibration, app/helper/renderer or Story acceptance is claimed.
+
+Authored coverage: live nil→published→replacement→removal retains the actual session,
+annotation identity, read token and saved position; identical pointer emits no workspace
+replacement. Captured real reads and old callbacks cannot retarget same-Paper/generation
+reopen; captured publication/removal is rechecked under read access and cancelled work
+cannot advertise it. Real GRDB query failure clears metadata without guessing a revision;
+closed/deletion-revoked sessions and changed Paper hash/generation reject advertisement.
+No test fetch hook, substitute store, new read lease or identity assembled from a callback
+was introduced. The internal read/apply seam uses production GRDB reads in both stages.
+
+#### Review73 initialization corrections before follow-up implementation
+
+Source review73 requests two MEDIUM fixes. First nil/error poll currently compares nil
+to its nil initial history and misses removal of the identity captured at Reader open.
+Also workspace exposes a not-yet-opened ReaderSession before native admission; sibling
+status task ordering is not guaranteed, so withReadAccess failure can prematurely close
+that legitimate pending Reader. Preserve focused16/zero981, union282/zero989 and native-t
+990 as pre-correction evidence; they do not cover these initialization interleavings.
+
+Reconcile the FIRST accepted poll outcome, including nil/error, independently of equality.
+If reconciliation is awaiting actual Reader admission, retain that intent and retry via
+the same existing poll; subsequent reconciled outcomes remain change-based. Callback
+completion/deferral is UI scheduling only, not metadata publication or closure proof.
+Do not simply ignore all nil currentPaper failures, since closed/revoked ownership must
+still close/deny. Add a small read-only actual admission-state surface to existing
+ReaderSession: pending admission, admitted with its actual sessionID, and closed/failed.
+Drive it only from actual open success/failure/revoke/close, including pre-lease failures;
+it cannot grant read access, fabricate an owner, alter claim/release or create a new lease.
+Where applicable fence delayed results by the actual admission ID as well as session
+object/Paper/generation, including reuse of the same session object after close/reopen.
+
+Scope expands by exactly PaperLensApp/Application/ReaderSession.swift (five worker files
+total); NativeReaderView and binding owners remain unchanged. Tests cover first nil/error
+reconciliation and pre-admission deferral followed by real admission, while genuine close,
+revocation and failed admission still deny. No new polling timer, renderer/app/helper run,
+default-success callback or fake identity. Existing atomic published pointer, read access,
+hash/generation/cancellation fences remain mandatory. Parent repeats changed-source
+verification and review73, preserving all protected/runtime/Story boundaries.
