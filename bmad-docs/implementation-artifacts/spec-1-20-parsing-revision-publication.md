@@ -725,3 +725,39 @@ Canonical serialization is now genuinely composed. Native mapping/calibration an
 production activation remain incomplete; owning membership is not inferred from
 encoded bytes, synthetic mappings or successful codec roundtrips. Story/Epic/protected
 acceptance remains false. No protected trial, remote or release action occurred.
+
+### Real Main parsing ownership graph — bounded next source slice
+
+Compose the already verified genuine lifecycle/input acquirer, captured Main parser
+resource owner, typed producer, sole geometry validator/codec and existing service/Retry
+coordinator in one Main-owned factory. Require explicit geometry binding; missing binding
+rejects construction before any resource lease, Job reservation or helper effect. Do not
+create or certify mapping/precision/calibration. Production App activation remains denied
+until its genuine calibrated dependencies and protected execution admission exist.
+
+The graph reuses lifecycle.database and lifecycle.epoch and the caller's actual authority.
+Each producer acquisition captures resources with its original identity/operation and
+acquires the actual lifecycle pin. On physical Library revocation, synchronously poison
+that original resource budget, then request cancellation of that exact producer operation.
+No cancellation request is helper drain/FD closure/accounting finish or successful Job.
+Preserve first sticky budget failure; wrong operation cannot mutate another allowance.
+
+Producer cancellation admission must cover its awaited input-acquisition phase, not just
+already-begun sessions. Record only the currently generated acquisition operation; stale
+or foreign operations reject rather than create a cancellation cache. After successful
+acquisition a pending cancellation poisons that returned input before any helper begin.
+Already-started cancellation reuses existing same-operation native drain/failure/debt;
+never drop uncertainty, renew deadlines, fabricate End or release the captured resources.
+All existing scoped consume/publication/Retry contracts remain unchanged.
+
+Exact worker scope: new Application/MainPDFiumParsingComposition.swift, existing
+Application/PDFiumExtractionResourceOwner.swift and Application/ExtractionRevisionService.swift,
+new Tests/Product/MainPDFiumParsingCompositionTests.swift, and this Spec. Parent owns
+membership, verification, independent review and existing evidence/local commit. Tests
+may invoke the graph's actual input-acquisition path with owned immutable GRDB fixtures,
+real Main Mach observation and real FDs, and cancellation/request admission without
+starting/resuming an XPC connection. No fake producer/counter/database/root/selector,
+no default-success callback/gauge, and no app/helper/SDK/renderer or paid request runs.
+Missing-binding zero-effect tests and wrong-operation/sticky cancellation, actual pin/
+resource disposal/revocation, same epoch/config and source graph wiring are local proof
+only; geometry calibration, native helper execution and Story acceptance remain false.
