@@ -592,6 +592,206 @@ class PinTests(IsolatedTest):
         self.assertFalse(reader.enabled({"condition": "checkout_linux and unknown_platform_flag"}))
 
 
+class GRDBSourceStageTests(IsolatedTest):
+    # Model Git only; exercise the real source-stage implementation without
+    # fetching/executing vendor source, SwiftPM, build tools or runtime probes.
+    package_bytes = b"// synthetic Package.swift, never executed\n"
+    tree = "1" * 40
+
+    def setUp(self):
+        super().setUp()
+        self.lock = acquire.load_lock()
+        self.manifest = self.root / "dependencies.json"
+        self.manifest.write_text(json.dumps(self.lock))
+        patch = mock.patch.object(acquire, "LOCK_PATH", self.manifest)
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.work = self.root / "fresh-work"
+        self.replies = {}
+        self.calls = []
+
+    def fake_git(self, path, *args):
+        self.calls.append(args)
+        self.assertEqual(path, self.work / "grdb-source/src")
+        if args in self.replies:
+            return self.replies[args]
+        if args == ("init",):
+            return ""
+        if args == ("fetch", "--depth=1", "--no-tags", self.lock["grdb"]["url"], self.lock["grdb"]["commit"]):
+            return ""
+        if args == ("checkout", "--detach", self.lock["grdb"]["commit"]):
+            (path / "Package.swift").write_bytes(self.package_bytes)
+            return ""
+        if args == ("rev-parse", "HEAD"):
+            return self.lock["grdb"]["commit"]
+        if args == ("rev-parse", "HEAD^{tree}"):
+            return self.tree
+        if args == ("ls-files", "-v"):
+            return "H Package.swift"
+        if args == ("ls-files", "--error-unmatch", "--", "Package.swift"):
+            return "Package.swift"
+        if args in (
+            ("diff", "--cached", "--name-only", "-z", "HEAD", "--"),
+            ("ls-files", "--deleted"),
+            ("diff", "--no-ext-diff", "--no-textconv", "--ignore-submodules=none", "--raw", "--no-abbrev", "HEAD", "--"),
+        ):
+            return ""
+        raise AssertionError(f"unexpected Git command: {args}")
+
+    def stage(self):
+        with mock.patch.object(acquire, "git", side_effect=self.fake_git):
+            return acquire.grdb_source_stage(self.lock, self.work)
+
+    def test_exact_pin_required_before_filesystem_or_git_mutation(self):
+        pins = [None, {}, {**self.lock["grdb"], "extra": True}]
+        for key, value in (("url", "https://github.com/other/GRDB.swift.git"), ("version", "7.11.2"), ("commit", "0" * 40)):
+            pins.append({**self.lock["grdb"], key: value})
+        for pin in pins:
+            with self.subTest(pin=pin):
+                lock = {**self.lock, "grdb": pin}
+                with mock.patch.object(acquire, "git") as git, mock.patch.object(acquire, "ensure_root") as ensure:
+                    with self.assertRaisesRegex(acquire.Failure, "grdb_pin_mismatch"):
+                        acquire.grdb_source_stage(lock, self.work)
+                git.assert_not_called()
+                ensure.assert_not_called()
+                self.assertFalse(self.work.exists())
+
+    def test_manifest_binding_rejected_before_mutation(self):
+        lock = {**self.lock, "unrecorded": True}
+        with mock.patch.object(acquire, "git") as git:
+            with self.assertRaisesRegex(acquire.Failure, "grdb_manifest_mismatch"):
+                acquire.grdb_source_stage(lock, self.work)
+        git.assert_not_called()
+        self.assertFalse(self.work.exists())
+
+    def test_existing_destination_is_preserved_without_git(self):
+        destination = self.work / "grdb-source"
+        destination.mkdir(parents=True)
+        marker = destination / "source-only.json"
+        marker.write_bytes(b"historical receipt")
+        with mock.patch.object(acquire, "git") as git:
+            with self.assertRaisesRegex(acquire.Failure, "grdb_source_destination_occupied"):
+                acquire.grdb_source_stage(self.lock, self.work)
+        git.assert_not_called()
+        self.assertEqual(marker.read_bytes(), b"historical receipt")
+        self.assertEqual(list(destination.iterdir()), [marker])
+
+    def test_symlink_destination_is_rejected_without_git(self):
+        self.work.mkdir()
+        destination = self.work / "grdb-source"
+        destination.symlink_to(self.root / "missing")
+        with mock.patch.object(acquire, "git") as git:
+            with self.assertRaisesRegex(acquire.Failure, "symlink_path"):
+                acquire.grdb_source_stage(self.lock, self.work)
+        git.assert_not_called()
+        self.assertTrue(destination.is_symlink())
+        self.assertFalse((self.root / "missing").exists())
+
+    def test_commit_tree_and_dirty_source_reject_without_receipt(self):
+        cases = (
+            (("rev-parse", "HEAD"), "0" * 40, "git_commit_mismatch"),
+            (("rev-parse", "HEAD^{tree}"), "not-a-tree", "grdb_invalid_tree"),
+            (("ls-files", "-v"), "h Package.swift", "grdb_hidden_source"),
+            (("diff", "--cached", "--name-only", "-z", "HEAD", "--"), "Package.swift", "grdb_staged_source"),
+            (("ls-files", "--deleted"), "Package.swift", "missing_git_source"),
+            (("diff", "--no-ext-diff", "--no-textconv", "--ignore-submodules=none", "--raw", "--no-abbrev", "HEAD", "--"), "changed source", "grdb_dirty_source"),
+            (("ls-files", "--error-unmatch", "--", "Package.swift"), "", "grdb_package_untracked"),
+        )
+        for index, (command, reply, reason) in enumerate(cases):
+            with self.subTest(reason=reason):
+                self.work = self.root / f"rejected-{index}"
+                self.replies = {command: reply}
+                with self.assertRaisesRegex(acquire.Failure, reason):
+                    self.stage()
+                self.assertFalse((self.work / "grdb-source/source-only.json").exists())
+                with mock.patch.object(acquire, "git") as git:
+                    with self.assertRaisesRegex(acquire.Failure, "grdb_source_destination_occupied"):
+                        acquire.grdb_source_stage(self.lock, self.work)
+                git.assert_not_called()
+
+    def test_truthful_exclusive_source_only_receipt(self):
+        hosts = acquire.GIT_HOSTS.copy()
+        receipt = self.stage()
+        self.assertEqual(receipt, {
+            "schemaRevision": "grdb-source-only-v1", "sourceOnly": True,
+            "lockHash": hashlib.sha256(self.manifest.read_bytes()).hexdigest(),
+            "pin": self.lock["grdb"], "source": "grdb-source/src", "tree": self.tree,
+            "packageSwiftSha256": hashlib.sha256(self.package_bytes).hexdigest(),
+        })
+        path = self.work / "grdb-source/source-only.json"
+        original = path.read_bytes()
+        self.assertEqual(json.loads(original), receipt)
+        self.assertEqual(self.calls[:3], [
+            ("init",),
+            ("fetch", "--depth=1", "--no-tags", self.lock["grdb"]["url"], self.lock["grdb"]["commit"]),
+            ("checkout", "--detach", self.lock["grdb"]["commit"]),
+        ])
+        self.assertEqual(acquire.GIT_HOSTS, hosts)
+        self.assertNotIn("github.com", acquire.GIT_HOSTS)
+        with mock.patch.object(acquire, "git") as git:
+            with self.assertRaisesRegex(acquire.Failure, "grdb_source_destination_occupied"):
+                acquire.grdb_source_stage(self.lock, self.work)
+        git.assert_not_called()
+        self.assertEqual(path.read_bytes(), original)
+
+    def test_existing_git_wrapper_is_used_for_every_command(self):
+        def fake_run(argv):
+            self.assertEqual(argv[:12], [
+                "/usr/bin/git", "-c", "core.hooksPath=/dev/null",
+                "-c", "core.fsmonitor=false", "-c", "core.filemode=true",
+                "-c", "core.ignorestat=false", "-c", "protocol.file.allow=never", "-C",
+            ])
+            return self.fake_git(argv[12], *argv[13:])
+
+        with mock.patch.object(acquire, "run", side_effect=fake_run):
+            receipt = acquire.grdb_source_stage(self.lock, self.work)
+        self.assertEqual(receipt["tree"], self.tree)
+        self.assertEqual(acquire.clean_env()["GIT_CONFIG_GLOBAL"], "/dev/null")
+        self.assertEqual(acquire.clean_env()["GIT_CONFIG_NOSYSTEM"], "1")
+        self.assertEqual(acquire.clean_env()["GIT_TERMINAL_PROMPT"], "0")
+
+    def test_package_symlink_is_rejected_without_following_it(self):
+        outside = self.root / "outside"
+        outside.write_bytes(b"preserve")
+
+        def fake_git(path, *args):
+            reply = self.fake_git(path, *args)
+            if args == ("checkout", "--detach", self.lock["grdb"]["commit"]):
+                (path / "Package.swift").unlink()
+                (path / "Package.swift").symlink_to(outside)
+            return reply
+
+        with mock.patch.object(acquire, "git", side_effect=fake_git):
+            with self.assertRaisesRegex(acquire.Failure, "symlink_path"):
+                acquire.grdb_source_stage(self.lock, self.work)
+        self.assertEqual(outside.read_bytes(), b"preserve")
+        self.assertFalse((self.work / "grdb-source/source-only.json").exists())
+
+    def test_changed_manifest_during_fetch_cannot_receive_receipt(self):
+        def fake_git(path, *args):
+            reply = self.fake_git(path, *args)
+            if args[0] == "fetch":
+                self.manifest.write_text(json.dumps({**self.lock, "changed": True}))
+            return reply
+
+        with mock.patch.object(acquire, "git", side_effect=fake_git):
+            with self.assertRaisesRegex(acquire.Failure, "grdb_manifest_changed"):
+                acquire.grdb_source_stage(self.lock, self.work)
+        self.assertFalse((self.work / "grdb-source/source-only.json").exists())
+
+    def test_receipt_creation_is_exclusive_even_on_collision(self):
+        save_json = acquire.save_json
+
+        def occupied_receipt(path, value):
+            path.write_bytes(b"preserve concurrent receipt")
+            save_json(path, value)
+
+        with mock.patch.object(acquire, "save_json", side_effect=occupied_receipt):
+            with self.assertRaises(FileExistsError):
+                self.stage()
+        self.assertEqual((self.work / "grdb-source/source-only.json").read_bytes(), b"preserve concurrent receipt")
+
+
 class PDFiumPatchTests(IsolatedTest):
     # Exact approved UTF-8/LF input. Git is modeled offline; no fetched source,
     # tools, hooks, patch commands or compiler are executed by these tests.

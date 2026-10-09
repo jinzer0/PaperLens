@@ -391,6 +391,40 @@ def checkout(path, url, commit):
     require(git(path, "ls-files", "--deleted") == "", "missing_git_source")
 
 
+def grdb_source_stage(lock, work):
+    """Prepare only the approved GRDB source; return its exclusive receipt dict."""
+    pin = {"url": "https://github.com/groue/GRDB.swift.git", "version": "7.11.1", "commit": "b83108d10f42680d78f23fe4d4d80fc88dab3212"}
+    require(isinstance(lock, dict) and lock.get("grdb") == pin, "grdb_pin_mismatch")
+    manifest = LOCK_PATH.read_bytes()
+    require(json.loads(manifest) == lock, "grdb_manifest_mismatch")
+    lock_hash = hashlib.sha256(manifest).hexdigest()
+    destination = safe_path(work, "grdb-source")
+    require(not destination.exists(), "grdb_source_destination_occupied")
+    ensure_root(work)
+    # Reserve a fresh stage exclusively; failures retain their partial source,
+    # never repair/relabel a previous checkout or erase caller-owned artifacts.
+    destination.mkdir()
+    source = safe_path(destination, "src")
+    source.mkdir()
+    git(source, "init")
+    git(source, "fetch", "--depth=1", "--no-tags", pin["url"], pin["commit"])
+    git(source, "checkout", "--detach", pin["commit"])
+    require(git(source, "rev-parse", "HEAD") == pin["commit"], "git_commit_mismatch")
+    tree = git(source, "rev-parse", "HEAD^{tree}")
+    require(COMMIT.fullmatch(tree), "grdb_invalid_tree")
+    require(all(line.startswith("H ") for line in git(source, "ls-files", "-v").splitlines()), "grdb_hidden_source")
+    require(git(source, "diff", "--cached", "--name-only", "-z", "HEAD", "--") == "", "grdb_staged_source")
+    require(git(source, "ls-files", "--deleted") == "", "missing_git_source")
+    require(git(source, "diff", "--no-ext-diff", "--no-textconv", "--ignore-submodules=none", "--raw", "--no-abbrev", "HEAD", "--") == "", "grdb_dirty_source")
+    require(git(source, "ls-files", "--error-unmatch", "--", "Package.swift") == "Package.swift", "grdb_package_untracked")
+    package = safe_path(source, "Package.swift")
+    require(package.is_file(), "grdb_package_missing")
+    require(LOCK_PATH.read_bytes() == manifest, "grdb_manifest_changed")
+    receipt = {"schemaRevision": "grdb-source-only-v1", "sourceOnly": True, "lockHash": lock_hash, "pin": pin, "source": "grdb-source/src", "tree": tree, "packageSwiftSha256": sha256(package)}
+    save_json(safe_path(destination, "source-only.json"), receipt)
+    return receipt
+
+
 def pdfium_patch_receipt(lock):
     require(lock["pdfium"].get("patch") == PDFIUM_PATCH, "pdfium_patch_pin_mismatch")
     require(lock["pdfium"]["commit"] == "ad5bc13610718aefe737bd9b2f1b258d08e39428" and lock["pdfium"]["tree"] == "7a17f761fbcaca163cef3575ed98a0a2058dbb3d" and lock["pdfium"]["depsBlob"] == "169680f06af94277eba6ec9e9597635b40092daf", "pdfium_pin_mismatch")
