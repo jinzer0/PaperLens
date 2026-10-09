@@ -551,3 +551,102 @@ Unknown cleanup intentionally can hold process admission indefinitely. Checks ar
 point-in-time Main residency/original elapsed observations, not combined Main/helper RSS,
 watchdog coverage, an allocator limit, an uninterruptible-call bound, P1 or SDK/Story
 certification; native helper cumulative accounting remains owned by the existing helper.
+
+### Actual Library input-acquisition implementation handoff (unverified source)
+
+The committed acquisition contract (baseline `5bda8dd`) is implemented by public actor
+`LibraryPDFiumInputAcquirer.init(lifecycle:)` and
+`acquireInput(resources:onRevoked:) async throws -> PDFiumPinnedInput`. The required
+arguments are the actual `PDFiumExtractionResourceOwner` and an escaping MainActor
+revocation callback. The retained lifecycle supplies its sole database, epoch and
+actual Library provider/registry; no alternate root, database, selector, resource
+callback owner, geometry capability or helper connection is introduced.
+
+The new internal sole-adapter method `extractionReadSnapshot(_:)` runs existing
+`guardExtractionAttempt`, including the full running lineage and ready Paper facts,
+and an explicit current slot/generation/model check within one `adapterRead` snapshot.
+It constructs actual ready Reader facts directly from that same transaction, without
+nested reads, Reader claims or position changes. Reference checks use exact UTF8 bytes.
+Admission requires the captured epoch to match the lifecycle before opening a pin.
+The acquirer repeats snapshot/registry/budget validation around MainActor pin opening,
+sender transfer and the real constructor, including a final snapshot before return.
+
+One actual readonly sender transfers to the existing `PDFiumPinnedInput` with the
+owner's unchanged operation, identity, limits and original deadline. Its budget
+callback invokes only actual pin validation and resource observation, so publication
+can call it inside its writer transaction without a nested GRDB read. Release captures
+`pin.release(operationID:)`; finish captures `resources.finishOperation(_:)`. The
+existing input disposal state machine orders sender/consumer disposal, own-pin closure
+and resource finish. The required revocation callback is forwarded unchanged; it is
+not treated as closure evidence. Repeated operation admission is fenced on the actual
+resource owner under its effect lock, including across separate acquirers, and fails
+busy without releasing an allowance already handed off.
+
+Acquisition failure checked-closes any acquired sender before releasing its original
+pin and only then finishes resources. A failed checked sender close atomically retains
+the actual FileHandle in the same registry through the parent's internal
+`pin.retainUncertainSender(_:)`, permanently fails the token's closure observation,
+and returns `producerClosureUnknown` without releasing pin/resources or retrying.
+Unknown transfer/provider cleanup and original-pin closure likewise retain resources;
+only known unused pre-pin failures finish immediately. Otherwise the original error
+is preserved. The parent's provider adapter must surface unknown failed-open cleanup
+as `producerClosureUnknown`, not hide it behind its original acquisition error.
+
+Authored tests use private synthetic imported files, actual GRDB and the actual parser
+pool with explicit test-only time/residency observations. Cases cover all copied caps,
+full original identity, readonly/CLOEXEC sender, full running lineage, missing reservation,
+stale lifecycle epoch, model-only change, exact UTF8 reference rejection, original-budget
+expiry, checked constructor failure, real constructor expiry/empty-file rejection,
+final-snapshot races, callback execution inside a writer transaction, independent Reader
+survival, revocation denial, no early finish/repeated capture, and actual disposal/drain.
+Unknown cleanup tests check registry strong retention after dropping test sender holders,
+live FD/token/pool debt and no physical blind retry. Explicit owned-fixture teardown is
+not an acquirer retry or successful End receipt. Internal hooks inject failure around
+the real constructor/checked sender close; production always uses the real constructor
+and throwing FileHandle close, with no default-success resource/close replacement.
+
+Exactly four worker files changed: the new acquirer and its tests, the extraction DB
+adapter, and this existing Spec. No commands, tests, native compilation, gates, lint,
+formatters, commits, remotes or runtime workflows were run. Parent owns Package/project
+registration, current caller binding, focused new/actual-pin/resource-owner/Reader and
+extraction regressions, Product union, fresh unsigned native compilation, independent
+lifetime review and local commit. Source inspection is not passing-test evidence.
+Parent must also verify failed-provider cleanup propagation and own-pin unknown-close
+retention. Actual resource captures now enforce single-input transfer across separate
+acquirer instances rather than relying on callers to preserve that restriction.
+
+Product composition remains unactivated until genuine geometry/calibration dependencies
+are available. No renderer/helper/app/SDK execution, privacy-boundary relaxation, renewed
+protected trial, combined-RSS/watchdog proof, release authorization or Story acceptance
+is claimed. Native compilation alone will not establish execution evidence.
+
+### Parent integration verification — 2026-10-10
+
+The common atomic paper guard now includes current durable model as well as slot and
+generation; reservation, publication and input snapshot reuse it. The snapshot has no
+parallel configuration query. Actual registry sender debt adapters and resource-owner
+single-input fencing are integrated with Package/native membership. No new selector,
+quota, database, successful fake cleanup or resource observation was introduced.
+
+Review63's original HIGH identified a hidden original-FD acquisition cleanup outcome.
+The provider now captures its actual closure observation before installation/removal,
+handles post-open validation and revoked installation in one catch, derives opening
+state from the registry, closes only once, and requires terminal receipt success before
+preserving the original error. Pending/failed cleanup reports producerClosureUnknown,
+so the factory retains the actual resource allowance. Known no-FD and physical-close
+success remain releasable. Final review63 is SOURCE-ONLY CLEAR / APPROVE.
+
+Eleven input cases, including cross-acquirer reuse and post-open/revoked-install uncertain
+cleanup, passed within 257 Product tests (zero failures, artifact942). Intermediate255
+passed (artifact936). Failed257/one (artifact940) is retained: macOS raises when querying
+a disposed Foundation FileHandle; the test now checks the captured numeric FD with
+fcntl/EBADF before suspension. This changes the observation, not closure behavior.
+Fresh unsigned native arm64/macOS15 Release compiled successfully in native-o
+(artifact941); earlier native-n (artifact937) is preserved. No application/helper binary
+ran. Original Main source phase ordering is unchanged except the new factory member.
+Eight-source-file binary delta against preimplementation5bda8dd is
+45ed07535a2c8407735d0b46cd62f3d903387fb65604d45941d25c7257457511.
+
+Genuine input acquisition is composed; required genuine geometry/calibration and product
+activation remain incomplete. Main-only residency is not combined RSS or hard-bound
+proof. Existing Story/Epic/protected acceptance stays false; no trial was renewed.

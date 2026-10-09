@@ -31,6 +31,7 @@ public final class PDFiumExtractionResourceOwner: @unchecked Sendable {
   private var lastUptimeNanoseconds: UInt64
   private var failure: PDFiumFailure?
   private var released = false
+  private var inputClaimed = false
 
   public convenience init(identity: ExtractionIdentity, operationID: UUID,
     authority: ProviderRequest) throws {
@@ -110,6 +111,15 @@ public final class PDFiumExtractionResourceOwner: @unchecked Sendable {
       throw PDFiumFailure(code: .resourceExceeded)
     }
     return bytes
+  }
+
+  /// An actual allowance transfers to one input, even across separate acquirers.
+  func claimInputAcquisition() throws {
+    try effectLock.withLock {
+      guard !inputClaimed else { throw PDFiumFailure(code: .busy) }
+      guard !released else { throw PDFiumFailure(code: .cleanupIncomplete) }
+      inputClaimed = true
+    }
   }
 
   public func checkBudget() throws {

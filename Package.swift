@@ -30,6 +30,7 @@ let package = Package(
         "Application/LibraryReadLeaseProvider.swift",
         "Application/LibraryExtractionReadPin.swift",
         "Application/PDFiumExtractionResourceOwner.swift",
+        "Application/LibraryPDFiumInputAcquirer.swift",
         "Application/LibraryURLImportWriter.swift",
         "Application/NativeAPIKeyConnection.swift",
         "Application/ProviderSettingsService.swift",
@@ -86,7 +87,7 @@ let package = Package(
         "ParsingRecoveryCoordinatorTests.swift", "ReaderMetadataBindingTests.swift",
         "LibrarySummaryServiceTests.swift", "PDFiumExtractionProducerTests.swift",
         "ExtractionFixtureBudget.swift", "LibraryExtractionReadPinTests.swift",
-        "PDFiumExtractionResourceOwnerTests.swift"]
+        "PDFiumExtractionResourceOwnerTests.swift", "LibraryPDFiumInputAcquirerTests.swift"]
     ),
     .target(
       name: "PDFReadiness",

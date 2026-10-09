@@ -33,6 +33,13 @@ final class LibraryPinClosureObservation: @unchecked Sendable {
       if let result { continuation.resume(with: result) }
     }
   }
+
+  func requireConfirmedClosure() throws {
+    guard let result = lock.withLock({ outcome }) else {
+      throw LocalLibraryError.producerClosureUnknown
+    }
+    try result.get()
+  }
 }
 
 /// A child of the actual Library lifecycle. Producer disposal must precede release.
@@ -54,6 +61,11 @@ public final class LibraryExtractionReadPin: @unchecked Sendable {
 
   /// Transfers one owned readonly descriptor to PDFiumPinnedInput. Caller must dispose it.
   public func takeSenderPDF() throws -> FileHandle { try registry.takeSenderPDF(token) }
+
+  /// Acquisition cleanup failed: retain the actual sender and original token as debt.
+  func retainUncertainSender(_ sender: FileHandle) {
+    registry.retainSenderCleanupUnknown(sender, token: token)
+  }
 
   public func release(operationID: UUID) async throws {
     guard operationID == self.operationID else { throw LibraryExtractionPinError.wrongOperation }

@@ -25,9 +25,9 @@
   "verification": {
     "productUnion": {
       "command": "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --filter ProductTests",
-      "tests": 246,
+      "tests": 257,
       "failures": 0,
-      "output": "artifact://928",
+      "output": "artifact://942",
       "evidence": "Real GRDB transactions and owned synthetic files; mocked provider/HTTP transport and synthetic windowless PDFKit conversions. Not authenticated provider, app UI or PDFium execution."
     },
     "nativeCompilation": {
@@ -35,11 +35,11 @@
       "configuration": "Release",
       "architecture": "arm64",
       "minimumOS": "15.0",
-      "derivedData": ".build/product-native-compile-20261010-m",
+      "derivedData": ".build/product-native-compile-20261010-o",
       "codeSigningAllowed": false,
       "result": "BUILD SUCCEEDED",
-      "rawOutput": "artifact://929",
-      "output": "artifact://929",
+      "rawOutput": "artifact://941",
+      "output": "artifact://941",
       "applicationAndHelperBinariesExecuted": false,
       "warnings": "AppIntents metadata skipped, PDFium debug-map duplicate/missing-symbol warnings and an unnecessary-await Swift warning remain; no warning suppression or debug-symbol repair claimed."
     },
@@ -179,6 +179,28 @@
     "helperExecuted": false,
     "storyAccepted": false
   },
+  "actualLibraryResourceInputAcquisition": {
+    "baseVerifiedCommit": "3ab24ad",
+    "preImplementationSpecificationCommit": "5bda8dd",
+    "sourceDiffAgainstSpecificationSha256": "45ed07535a2c8407735d0b46cd62f3d903387fb65604d45941d25c7257457511",
+    "sourceDiffScope": "Eight exact Package/project/LibraryReadLeaseProvider/LibraryExtractionReadPin/PDFiumExtractionResourceOwner/LibraryPDFiumInputAcquirer/ProductDatabase+Extraction/LibraryPDFiumInputAcquirerTests paths against5bda8dd; docs excluded",
+    "actualOwnership": "Sole lifecycle child-pin and readonly FD, original Main process parser lease/residency/deadline/caps, exact running epoch/lineage and ready identity/current durable slot-generation-model. Budget callback has no nested GRDB read. One input claim on actual resource owner rejects reuse across distinct acquirers before cleanup.",
+    "initialFocusedTests": {"tests": 8, "failures": 0, "output": "artifact://935"},
+    "intermediateProductUnion": {"tests": 255, "failures": 0, "output": "artifact://936"},
+    "intermediateNativeOutput": "artifact://937",
+    "resolvedReviewFinding": "Original acquisition could hide uncertain original-FD cleanup behind its admission error and prematurely finish resources. Provider now captures actual token closure receipt before installation/removal and reports producerClosureUnknown unless cleanup terminal success is proven; revoked-install and post-open paths do not reinstall or retry unknown closure.",
+    "preservedFailedUnion": {"tests": 257, "failures": 1, "output": "artifact://940", "cause": "Test queried disposed Foundation FileHandle.fileDescriptor, which raises NSFileHandleOperationException on macOS; repaired to observe captured numeric FD with fcntl/EBADF before suspension"},
+    "finalProductUnion": {"tests": 257, "failures": 0, "output": "artifact://942"},
+    "ownedInputTestsInUnion": 11,
+    "nativeOutput": "artifact://941",
+    "nativeDerivedData": ".build/product-native-compile-20261010-o",
+    "nativeSourcePhase": "Exact original Main source phase order plus only B00000000000000000000054 LibraryPDFiumInputAcquirer",
+    "review": "agent://63-ActualInputResourcePinReview: final SOURCE-ONLY CLEAR / APPROVE; original HIGH resolved",
+    "genuineInputAcquisitionComposed": true,
+    "geometryCalibrationComposed": false,
+    "helperExecuted": false,
+    "storyAccepted": false
+  },
   "grdbPreparationDriver": {
     "offlineTests": 22,
     "offlineFailures": 0,
@@ -212,7 +234,7 @@
   "limitations": [
     "No actual product UI, live authentication, paid provider request, protected renderer/collector trial renewal, notarization, deployment, push, PR or merge",
     "Actual Agent purge is not bound: deletion retains failure/debt rather than returning a no-op success",
-    "Metadata/outline is mounted only with an actual published extraction identity; actual PDFium source and genuine Library child-pin API are integrated/tested/compiled but not activated or composed with required actual resources/original deadline/calibrated geometry. Fixtures and compiled controls are not visible UI/accessibility acceptance",
+    "Metadata/outline is mounted only with an actual published extraction identity; actual PDFium source and genuine Library/resource/original-deadline input acquisition are integrated/tested/compiled. Production activation still lacks required calibrated geometry. Fixtures and compiled controls are not visible UI/accessibility acceptance",
     "Geometry caller precision is explicit; synthetic floating-arithmetic test budget is not an owning calibrated product profile or AD-8 correspondence proof",
     "Native model profile is uncertified; genuine Codex channel and two-provider parity remain absent",
     "OS/CPU matrix, loadedSQLite identity, P1/P2/P3 and canonical Story acceptance remain unestablished",

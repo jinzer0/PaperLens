@@ -56,9 +56,10 @@ extension ProductDatabase {
       WHERE paper.id = ? AND paper.generation = ? AND paper.pdfSHA256 = ?
         AND paper.pdfReference = ? AND paper.status = 'ready' AND paper.deletionID IS NULL
         AND providerConfig.singleton = 1 AND providerConfig.generation = ? AND providerConfig.slotID IS ?
+        AND providerConfig.model IS ?
       """, arguments: [identity.paperID.uuidString, identity.generation.uuidString,
         identity.pdfSHA256, identity.pdfReference, identity.configuration.generation,
-        identity.configuration.slotID?.uuidString])
+        identity.configuration.slotID?.uuidString, identity.configuration.model])
     guard count == 1 else { throw ExtractionError.staleAttempt }
   }
 
@@ -79,6 +80,26 @@ extension ProductDatabase {
       i.revision.uuidString, i.job.uuidString, i.attempt.uuidString, i.fence.uuidString,
       i.correlation.uuidString, i.input.uuidString, i.epoch.uuidString,
       i.configuration.slotID?.uuidString, i.configuration.generation]
+  }
+
+  /// Admission facts from one read snapshot; never claims or moves a Reader session.
+  func extractionReadSnapshot(_ identity: ExtractionIdentity) throws -> ReaderPaperSnapshot {
+    try adapterRead { db in
+      try guardExtractionAttempt(db, identity)
+      guard let row = try Row.fetchOne(db, sql: """
+        SELECT generation, pdfReference, title FROM paper
+        WHERE id = ? AND status = 'ready' AND deletionID IS NULL
+        """, arguments: [identity.paperID.uuidString]),
+        let generation = UUID(uuidString: row["generation"]),
+        let reference: String = row["pdfReference"],
+        reference.utf8.elementsEqual("papers/\(identity.paperID.uuidString)/document.pdf".utf8),
+        generation == identity.generation,
+        reference.utf8.elementsEqual(identity.pdfReference.utf8) else {
+        throw ExtractionError.staleAttempt
+      }
+      return ReaderPaperSnapshot(paperID: identity.paperID, generation: generation,
+        pdfReference: reference, title: row["title"])
+    }
   }
 
   func reserveExtraction(_ identity: ExtractionIdentity) throws {

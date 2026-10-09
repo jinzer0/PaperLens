@@ -81,6 +81,14 @@ final class LibraryReadLeaseRegistry: @unchecked Sendable {
     lock.withLock { entries[token]!.receipt }
   }
 
+  func cleanupFailedAcquisition(_ handle: FileHandle?, token: UUID,
+    observation: LibraryPinClosureObservation) throws {
+    let opening = lock.withLock { entries[token]?.opening == true }
+    if opening { try? install(handle, token: token) }
+    close(token)
+    try observation.requireConfirmedClosure()
+  }
+
   /// Linearize admission and transfer, but perform duplication/cleanup outside arbitration.
   func takeSenderPDF(_ token: UUID) throws -> FileHandle {
     let original: FileHandle = try lock.withLock {
@@ -102,8 +110,7 @@ final class LibraryReadLeaseRegistry: @unchecked Sendable {
     guard admitted else {
       do { try closeHandle(sender) }
       catch {
-        lock.withLock { entries[token]!.cleanupDebt.append(sender) }
-        recordUnknownClosure(token)
+        recordUnknownClosure(token, retaining: sender)
         throw LocalLibraryError.producerClosureUnknown
       }
       throw ReaderError.revoked
@@ -111,8 +118,13 @@ final class LibraryReadLeaseRegistry: @unchecked Sendable {
     return sender
   }
 
-  private func recordUnknownClosure(_ token: UUID) {
+  func retainSenderCleanupUnknown(_ sender: FileHandle, token: UUID) {
+    recordUnknownClosure(token, retaining: sender)
+  }
+
+  private func recordUnknownClosure(_ token: UUID, retaining sender: FileHandle? = nil) {
     let result = lock.withLock {
+      if let sender { entries[token]!.cleanupDebt.append(sender) }
       entries[token]!.closing = false
       entries[token]!.closureUnknown = true
       return (entries[token]!.receipt,
@@ -212,6 +224,7 @@ final class LibraryReadLeaseRegistry: @unchecked Sendable {
   ) throws -> UUID {
     let registry = lifecycle.readLeaseRegistry
     let token = try registry.reserve(snapshot, revoke: onRevoked)
+    let observation = registry.closureObservation(token)
     var handle: FileHandle?
     do {
       let database = lifecycle.readLeaseDatabase
@@ -228,13 +241,12 @@ final class LibraryReadLeaseRegistry: @unchecked Sendable {
       // Only registry checked-close owns disposal, including uncertain-close debt.
       handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: false)
       try database.validateReaderSnapshot(snapshot)
+      try registry.install(handle, token: token)
+      return token
     } catch {
-      try? registry.install(handle, token: token)
-      registry.close(token)
+      try registry.cleanupFailedAcquisition(handle, token: token, observation: observation)
       throw error
     }
-    try registry.install(handle, token: token)
-    return token
   }
 }
 
