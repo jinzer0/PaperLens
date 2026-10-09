@@ -33,6 +33,24 @@ public final class AgentConnectionLifecycle {
     }
   }
 
+  /// Exclusive Main-owned FIFO transfer. Construct/bind before any I/O; start remains
+  /// explicit. Duplex endpoint closure is not SDK shutdown or process-reaping proof.
+  public static func ownedPipe(readStdout: FileHandle, writeStdin: FileHandle) throws
+    -> AgentConnectionLifecycle {
+    let channel = try OwnedPipeAgentRPCChannel(readStdout: readStdout, writeStdin: writeStdin)
+    do {
+      let lifecycle = try AgentConnectionLifecycle(channel: channel)
+      channel.observeClosure { [weak lifecycle] outcome in
+        guard outcome.bothClosed else { return }
+        lifecycle?.transportDidClose()
+      }
+      return lifecycle
+    } catch {
+      channel.requestClose()
+      throw error
+    }
+  }
+
   public func start() throws {
     guard !started, !closeIssued, !closureReported else { throw AgentRPCConnection.Failure.notReady }
     started = true

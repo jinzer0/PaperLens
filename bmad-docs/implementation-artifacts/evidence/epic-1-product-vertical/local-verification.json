@@ -25,22 +25,21 @@
   "verification": {
     "productUnion": {
       "command": "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --filter ProductTests",
-      "tests": 261,
+      "tests": 271,
       "failures": 0,
-      "output": "artifact://945",
-      "verifiedBeforeReaderNoticeMount": "fc9f804; reused full union. Changed Reader mount separately compiled and scoped recovery tests passed; no new full-union or visible-UI claim",
-      "evidence": "Real GRDB transactions and owned synthetic files; mocked provider/HTTP transport and synthetic windowless PDFKit conversions. Not authenticated provider, app UI or PDFium execution."
+      "output": "artifact://962",
+      "evidence": "Real GRDB transactions, owned synthetic files and actual local FIFO IO/close/peer metadata/EPIPE; mocked provider/HTTP transport and synthetic windowless PDFKit conversions. Not authenticated provider, app UI, SDK producer or PDFium execution."
     },
     "nativeCompilation": {
       "scheme": "PaperLensTopology",
       "configuration": "Release",
       "architecture": "arm64",
       "minimumOS": "15.0",
-      "derivedData": ".build/product-native-compile-20261010-q",
+      "derivedData": ".build/product-native-compile-20261010-r",
       "codeSigningAllowed": false,
       "result": "BUILD SUCCEEDED",
-      "rawOutput": "artifact://954",
-      "output": "artifact://954",
+      "rawOutput": "artifact://963",
+      "output": "artifact://963",
       "applicationAndHelperBinariesExecuted": false,
       "warnings": "AppIntents metadata skipped, PDFium debug-map duplicate/missing-symbol warnings and an unnecessary-await Swift warning remain; no warning suppression or debug-symbol repair claimed."
     },
@@ -231,6 +230,28 @@
     "review": "agent://66-ReaderParsingNoticeMount: SOURCE-ONLY CLEAR / APPROVE",
     "visibleUINotificationOrAccessibilityVerified": false,
     "runtimeLimit": "No renewed protected product/renderer trial. Layout, immediate visible notice, VoiceOver/focus, app/helper execution and real Retry/relaunch remain unverified",
+    "helperExecuted": false,
+    "storyAccepted": false
+  },
+  "actualOwnedPipeRPCTransport": {
+    "baseVerifiedFeatureCommit": "525194a",
+    "preImplementationSpecificationCommit": "b76b638",
+    "aliasCorrectionSpecificationCommit": "5557fd3",
+    "sourceDiffAgainstCorrectionSpecificationSha256": "cbf334aa9a7f1ba95b303fed8305574ad9cf7993fd1e048d634ea7c6446a124a",
+    "sourceDiffScope": "Five exact Package/project/OwnedPipeAgentRPCChannel/AgentConnectionLifecycle/OwnedPipeAgentRPCChannelTests paths against5557fd3; docs excluded",
+    "actualOwnership": "Exclusive Main-owned FIFO handles; public exact self-FD pipe/peer observations refuse aliases before effects; verified nonblocking flags and per-FD no-SIGPIPE. MainActor native syscalls, authority-bounded frame/chunk, readiness-generation fencing and source cancellation joins precede one checked close per endpoint. Unknown close strongly retains actual handles/debt; EOF alone is not duplex ACK.",
+    "preservedFocusedFailure": {"tests": 10, "failures": 2, "output": "artifact://958", "cause": "macOS anonymous pipe peer endpoints have distinct fstat identities; paired alias was accepted and changed read flag. Kept assertions and repaired with public proc_pidfdinfo(getpid,selfFD,PROC_PIDFDPIPEINFO), exact size/nonzero opaque peer observations, no fallback"},
+    "focusedTests": {"tests": 10, "failures": 0, "output": "artifact://959"},
+    "actualClosedPeerEPIPEAndNoSIGPIPEVerified": true,
+    "productUnion": {"tests": 271, "failures": 0, "output": "artifact://962"},
+    "nativeOutput": "artifact://963",
+    "nativeDerivedData": ".build/product-native-compile-20261010-r",
+    "nativeSourcePhase": "Exact original Main source order plus only B00000000000000000000055 OwnedPipeAgentRPCChannel",
+    "review": "agent://69-OwnedPipeTransportIntegrity: SOURCE-ONLY CLEAR / APPROVE",
+    "schemaAndDispatcherChanged": false,
+    "actualSDKProducerProcessBoundOrReaped": false,
+    "sdkAuthenticationOrPurgeVerified": false,
+    "sandboxP1P2P3Certified": false,
     "helperExecuted": false,
     "storyAccepted": false
   },

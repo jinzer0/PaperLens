@@ -203,3 +203,21 @@ admitted. Named/unsupported FIFO identity may refuse rather than broaden transpo
 Actual EPIPE/no-SIGPIPE survival already passed in artifact958 but is not Story/P1/P3
 proof. Source scope remains the exact existing channel and owned-Pipe tests; API and
 fixed wire authority stay unchanged. Parent repeats only changed-source verification.
+
+### Parent actual owned-pipe verification
+
+Ten focused actual local-Pipe tests passed after the peer-identity correction (artifact959),
+including per-FD no-SIGPIPE readback and real EPIPE survival, bounded/backpressured IO,
+revocation, EOF versus duplex cleanup, retained unknown-close FD and lifecycle decoder
+closure. Prior10/two alias assertions (artifact958) remain preserved, not suppressed.
+The same exact implementation passed 271 Product tests (zero failures, artifact962).
+Fresh unsigned native Release arm64/macOS15 compiled in native-r (artifact963); only
+new build member55 was appended to the unchanged original Main source phase order.
+
+Independent review69 returned SOURCE-ONLY CLEAR / APPROVE. Five-source-file binary
+delta against correctionSpec5557fd3:
+cbf334aa9a7f1ba95b303fed8305574ad9cf7993fd1e048d634ea7c6446a124a.
+Existing dispatcher and fixed schema remain byte-identical; no SDK/app/helper producer,
+credentials, remote peer or protected trial ran. Actual local duplex endpoint closure
+does not establish SDK termination/reaping, authentication or content purge. Sandbox
+P1/P2/P3/product protocol and Story/Epic acceptance remain unproved and false.

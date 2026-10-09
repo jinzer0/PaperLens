@@ -49,6 +49,7 @@ let package = Package(
         "Adapters/PDFKitGeometryAdapter.swift",
         "Adapters/HTTPSPDFImportAdapter.swift",
         "Adapters/AgentRPCConnection.swift",
+        "Adapters/OwnedPipeAgentRPCChannel.swift",
         "Infrastructure/ProductDatabase.swift",
         "Infrastructure/APIKeySlotStore.swift",
         "Infrastructure/DatabaseAPIKeySelector.swift",
@@ -87,7 +88,8 @@ let package = Package(
         "ParsingRecoveryCoordinatorTests.swift", "ReaderMetadataBindingTests.swift",
         "LibrarySummaryServiceTests.swift", "PDFiumExtractionProducerTests.swift",
         "ExtractionFixtureBudget.swift", "LibraryExtractionReadPinTests.swift",
-        "PDFiumExtractionResourceOwnerTests.swift", "LibraryPDFiumInputAcquirerTests.swift"]
+        "PDFiumExtractionResourceOwnerTests.swift", "LibraryPDFiumInputAcquirerTests.swift",
+        "OwnedPipeAgentRPCChannelTests.swift"]
     ),
     .target(
       name: "PDFReadiness",
