@@ -659,6 +659,36 @@ final class ProviderRPCTests: XCTestCase {
     XCTAssertEqual(try decoder.feed(Data(maximum.suffix(1)) + first), [maximum, first])
   }
 
+  func testSuccessfulEOFSealsEmptyCompleteAndFragmentedStreams() throws {
+    let frame = try ProviderRPC.encode(request())
+    for chunks in [[], [frame], [Data(frame.prefix(2)), Data(frame.dropFirst(2))]] as [[Data]] {
+      let decoder = ProviderFrameDecoder()
+      var frames: [Data] = []
+      for chunk in chunks { frames += try decoder.feed(chunk) }
+      XCTAssertEqual(frames, chunks.isEmpty ? [] : [frame])
+      try decoder.finish()
+      try decoder.finish()
+      rejects { try decoder.feed(Data()) }
+      rejects { try decoder.feed(frame) }
+    }
+  }
+
+  func testMalformedCoalescedBatchReturnsNoFramesAndPoisonsStream() throws {
+    let frame = try ProviderRPC.encode(request())
+    let malformed = [
+      raw(Data("{\"x\":\"".utf8) + Data([255]) + Data("\"}".utf8)),
+      raw(#"{"x":1,"\u0078":2}"#), raw("null"), prefix(0),
+    ]
+    for invalid in malformed {
+      let decoder = ProviderFrameDecoder()
+      XCTAssertEqual(try decoder.feed(Data(frame.prefix(2))), [])
+      rejects { try decoder.feed(Data(frame.dropFirst(2)) + invalid + frame) }
+      rejects { try decoder.feed(Data()) }
+      rejects { try decoder.feed(frame) }
+      rejects { try decoder.finish() }
+    }
+  }
+
   func testEOFRejectsEveryTruncatedPrefixAndBody() throws {
     let frame = try ProviderRPC.encode(request())
     try ProviderFrameDecoder().finish()

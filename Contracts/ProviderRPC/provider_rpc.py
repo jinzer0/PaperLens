@@ -259,12 +259,13 @@ def validate_terminal(object: dict, method: str) -> None:
 
 
 class FrameDecoder:
-    """Retains at most one bounded frame. A violation permanently poisons the reader."""
+    """Retains one bounded frame; EOF seals it and violations permanently poison it."""
 
     def __init__(self):
         self._buffer = bytearray()
         self._length = None
         self._failed = False
+        self._closed = False
 
     def finish(self) -> None:
         if self._failed or self._buffer or self._length is not None:
@@ -272,13 +273,16 @@ class FrameDecoder:
             self._buffer.clear()
             self._length = None
             _violation()
+        self._closed = True
 
     def feed(self, data: bytes) -> list[bytes]:
-        if self._failed or not isinstance(data, bytes):
+        if self._failed or self._closed:
             _violation()
         frames = []
         offset = 0
         try:
+            if not isinstance(data, bytes):
+                _violation()
             while offset < len(data):
                 target = 4 if self._length is None else self._length + 4
                 count = min(target - len(self._buffer), len(data) - offset)

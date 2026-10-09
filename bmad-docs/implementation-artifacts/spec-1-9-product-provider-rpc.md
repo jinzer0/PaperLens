@@ -9,6 +9,12 @@
 
 ## Ownership and scope
 
+### Existing decoder boundary repair under renewed batch authority
+
+The human renewed Story1.1–1.26 implementation/verification authority and explicitly required independent worktree parallelism. Repair the already implemented fixed-v1 decoder, not invent product dispatch: successful EOF formerly permitted feed to reopen the stream in both languages; Python non-bytes input formerly raised before the poison handler and retained partial state. Successful EOF now rejects every subsequent feed while repeated successful finish remains idempotent; invalid dynamic input permanently poisons and clears retained framing state. Preserve contract.json, envelope/field/limit/error authority and atomic malformed-batch rejection.
+
+Exact files: Contracts/ProviderRPC/ProviderRPC.swift, Contracts/ProviderRPC/provider_rpc.py, Tests/Topology/ProviderRPCTests.swift and Tests/Topology/test_provider_rpc.py. Parent verified the combined snapshot with 21 Python wire tests plus five separately registered-synthetic Agent tests, and 20 selected Swift RPC tests; no renderer/SDK/live/control/collector execution. Independent ParallelBoundaryReview approved this RPC delta while blocking a different Agent change; exclude that blocked Agent delta from this workunit. Byte-identical approved RPC files are integrated here without rerunning unchanged tests. This repair does not provide actual product RPC/Main/SDK owners or pass P1/P2/P3 or Story Done.
+
 Fix one native/Agent wire authority before product implementations diverge. Application owns durable state, filesystem publication, input/Paper/config generations and result selection. Agent does not own Main filesystem/SQLite state or native API-key slots. Agent-private authentication/config metadata is distinct from Paper-linked content, which remains verified attempt-scoped temporary state.
 
 Authentication execution, usable-connection decisions, slots, Onboarding/Settings and Paper Chat are Stories1.10–1.12/later work, not delivered here. Their future wire boundary must nevertheless be specified before product dispatch. Existing topology, local Job contracts and synthetic/native tests are precursors, not admission evidence.

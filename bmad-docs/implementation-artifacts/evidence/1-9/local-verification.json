@@ -1,0 +1,26 @@
+{
+  "schema": "story-1-9-local-verification-v1",
+  "scope": "existing-fixed-v1-decoder-repair-only",
+  "sourceBaseCommit": "ff3a029e24c2b01ab5d6a3aca3eef0d120058272",
+  "counterexamples": [
+    "Successful finish previously accepted later feed and reopened EOF in both languages",
+    "Python non-bytes input previously retained partial state outside poison catch"
+  ],
+  "pythonWireTestsPassed": 21,
+  "combinedRegisteredSyntheticAgentTestsPassed": 5,
+  "swiftRPCSelectedTestsPassed": 20,
+  "swiftFilter": "^ProviderRPCTests.ProviderRPCTests/",
+  "rendererTestsSelected": 0,
+  "canonicalFilesByteIdenticalToVerifiedSnapshot": true,
+  "independentReview": "20-ParallelBoundaryReview: RPC fixes correct; distinct Agent change blocked and excluded",
+  "sourceInputsVerified": "Actual current implementations and paired EOF/poison/malformed-batch regressions",
+  "frozenWireContractChanged": false,
+  "sdkOrControlOrCollectorTrialExecuted": false,
+  "actualUserDocumentsAccessed": false,
+  "productRPCIntegrationComplete": false,
+  "P1Passed": false,
+  "P2Passed": false,
+  "P3Passed": false,
+  "storyComplete": false,
+  "promotion": "not_promoted"
+}

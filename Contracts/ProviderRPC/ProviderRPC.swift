@@ -525,6 +525,7 @@ public final class ProviderFrameDecoder {
   private var buffer = Data()
   private var bodyLength: Int?
   private var failed = false
+  private var closed = false
 
   public init() {}
 
@@ -535,10 +536,11 @@ public final class ProviderFrameDecoder {
       bodyLength = nil
       throw ProviderRPCError.protocolViolation
     }
+    closed = true
   }
 
   public func feed(_ bytes: Data) throws -> [Data] {
-    guard !failed else { throw ProviderRPCError.protocolViolation }
+    guard !failed, !closed else { throw ProviderRPCError.protocolViolation }
     var frames: [Data] = []
     var offset = bytes.startIndex
     do {

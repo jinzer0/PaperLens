@@ -379,6 +379,44 @@ class ProviderRPCTests(unittest.TestCase):
         self.assertEqual(decoder.feed(maximum[:-1]), [])
         self.assertEqual(decoder.feed(maximum[-1:] + first), [maximum, first])
 
+    def test_successful_eof_seals_empty_complete_and_fragmented_streams(self):
+        frame = rpc.encode_frame(request())
+        for chunks in ((), (frame,), (frame[:2], frame[2:])):
+            with self.subTest(chunks=len(chunks)):
+                decoder = rpc.FrameDecoder()
+                frames = []
+                for chunk in chunks:
+                    frames.extend(decoder.feed(chunk))
+                self.assertEqual(frames, [frame] if chunks else [])
+                decoder.finish()
+                decoder.finish()
+                self.rejects(lambda: decoder.feed(b""))
+                self.rejects(lambda: decoder.feed(frame))
+
+    def test_malformed_coalesced_batch_returns_no_frames_and_poisons_stream(self):
+        frame = rpc.encode_frame(request())
+        for invalid in (raw(b'{"x":"\xff"}'), raw(b'{"x":1,"\\u0078":2}'),
+                        raw(b"null"), struct.pack(">I", 0)):
+            with self.subTest(invalid=invalid):
+                decoder = rpc.FrameDecoder()
+                self.assertEqual(decoder.feed(frame[:2]), [])
+                self.rejects(lambda: decoder.feed(frame[2:] + invalid + frame))
+                self.rejects(lambda: decoder.feed(b""))
+                self.rejects(lambda: decoder.feed(frame))
+                self.rejects(decoder.finish)
+
+    def test_non_bytes_input_poisons_empty_and_partial_streams(self):
+        frame = rpc.encode_frame(request())
+        for prefix_length in (0, 2, 5):
+            for invalid in (None, "", bytearray(), memoryview(b""), 0):
+                with self.subTest(prefix_length=prefix_length, invalid=invalid):
+                    decoder = rpc.FrameDecoder()
+                    self.assertEqual(decoder.feed(frame[:prefix_length]), [])
+                    self.rejects(lambda: decoder.feed(invalid))
+                    self.rejects(lambda: decoder.feed(frame[prefix_length:]))
+                    self.rejects(lambda: decoder.feed(frame))
+                    self.rejects(decoder.finish)
+
     def test_eof_rejects_every_truncated_prefix_and_body(self):
         frame = rpc.encode_frame(request())
         rpc.FrameDecoder().finish()
