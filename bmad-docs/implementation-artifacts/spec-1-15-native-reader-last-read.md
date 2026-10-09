@@ -72,3 +72,21 @@ Real stored multipage PDF Open/navigation both bounds/zoom/search matches/no-res
 Barrier deletion versus load/open/restore/save in both orders, stale generation/replaced Reader/duplicate-reversed callback: no presentation or update that recreates revoked identity. Actual keyboard/accessibility naming/focus/navigation/zoom/search/selection/no-results. Raster/policy assertions alone not durable restart/visible rendering/physical deletion evidence.
 
 Architect44 COMMENT/WATCH, exact five-source read-only proposal; no writes/tests/gates/formatter/build/GUI/SDK/auth/network/credentials/commits. Done needs actual owners/functionality and separately genuine P6 timing, parent focused evidence/independent review. Planning passes no product/gate.
+
+## Captured Reader close uncertainty correction (2026-10-10)
+
+Concrete current source issue: LibraryReadLeaseRegistry records closureUnknown after
+checked close failure but finishClose admits that same entry again via close/read unwind
+or deletion retry. A failed close may already have released its numeric descriptor;
+retry must not affect a descriptor reused by an unrelated owner. Quarantine uncertain
+entries at the single physical-effect admission guard. Keep captured handle/snapshot/debt,
+deny new reads and keep drain failing; do not manufacture closure or silently clear debt.
+Known pending close requests may still complete once opening/active reads actually cease.
+Exact source/test scope: LibraryReadLeaseProvider.swift, LibraryReadLeaseTests.swift and
+this Spec; parent updates the existing aggregation receipt, runs owned fixture checks
+and compiles the current native source, obtains a narrow independent integrity review
+and locally commits. No external PDF, helper/renderer/SDK trial, permission repair,
+private API, runtime gate renewal, remote operation or Story promotion is authorized.
+Regressions cover repeated close/delete-retry/read-unwind after uncertainty and an actual
+test-owned numeric FD reused for another read-only file: no second close effect, live
+unrelated descriptor and original data preserved, original registry debt retained.
