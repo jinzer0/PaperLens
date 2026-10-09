@@ -76,3 +76,27 @@ Release arm64/macOS15 build succeeded (`artifact://891`, fresh native-g). Synthe
 failing-producer/storage tests and compilation do not establish actual Retry/native
 notification/relaunch/AD8/P1/P2/P3 or Story completion. Production owner bindings and
 protected runtime evidence remain separate from this source caller adaptation.
+
+## Reader notice mounting — bounded local source slice
+
+Current ProductWorkspaceView mounts NativeReaderView but not the existing persisted
+ParsingStatusView. Mount that existing notice next to the original Reader using the
+workspace's same ProductDatabase and the admitted Paper generation as SwiftUI identity.
+No new database, job, lease or provider owner is admitted. Preserve Reader annotations,
+metadata, search, selection, position and synchronous close behavior. Status reads use
+the existing durable extraction adapter; failure is not rewritten to success.
+
+Required calibrated geometry and producer activation remain unavailable. Do not create
+a successful placeholder coordinator or dispatch parsing/Retry. With no genuine bound
+coordinator, retain the existing disabled Retry and explicit unavailable-service notice.
+This is source-level mounting of real persisted status, not full Retry or Story acceptance.
+Same-paper generation replacement must discard the old notice's state; existing mounted
+polling cancellation and identifier checks remain intact. No UI renderer/app/helper trial
+or privacy/approval limit is relaxed.
+
+Exact source scope: ProductWorkspaceView.swift; reuse ParsingStatusView unchanged.
+Parent verifies actual recovery/state regression suite and fresh unsigned native compile,
+then narrow independent source review and local evidence commit. UI visibility,
+VoiceOver/focus/accessibility and runtime notification/relaunch remain unverified because
+protected product/renderer execution has not been renewed; compilation is not a visible
+witness. This does not authorize geometry defaults, automatic replay or remote effects.
