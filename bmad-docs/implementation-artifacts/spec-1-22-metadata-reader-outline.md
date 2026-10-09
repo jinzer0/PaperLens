@@ -92,3 +92,32 @@ Parent verification: 211 ProductTests with zero failures (artifact://871) and fu
 native Release arm64/macOS15 BUILD SUCCEEDED (artifact://872; artifact://873), namespace
 product-native-compile-20261010-f. Windowless owned-PDF tests and compilation are not
 visible UI/accessibility evidence. Live revision publication composition remains separate.
+
+### Live current-revision Reader caller — bounded local slice
+
+Current workspace captures metadata identity only at Reader open. The existing native
+Reader supports replacement, but no caller supplies a newly published extraction while
+that same Reader remains mounted. Wire the already mounted persisted ParsingStatusView
+to request an actual metadata-identity refresh when its observed usable revision changes.
+Reuse its existing polling; no new timer/store, generated revision or provider work.
+
+The workspace refresh must fetch publishedMetadataPaperIdentity from its sole GRDB
+owner, not trust a callback-supplied identity. Capture the actual current Reader session,
+Paper ID/generation before suspension; after read, fence cancellation and require the
+same session object and Paper/generation. Same-Paper close/reopen cannot accept an old
+completion. Validate actual Reader read access and matching Paper/hash facts before
+replacing only OpenReader.metadataIdentity, preserving the same ReaderSession and
+annotation identity. Same identity is no-op, changed/nil actual identity flows through
+existing NativeReaderView.onChange to synchronous metadata/annotation invalidation and
+weak binding replacement, never reopening a PDF or inventing membership. Query/ownership
+failure must not advertise new metadata; retain truthful error/denial and cleanup.
+
+No genuine producer/calibration or product activation is admitted by this UI caller.
+Absent extraction stays unavailable and leaves original Reader usable. Do not mount a
+new Reader owner or add source defaults, successful fake completion, parsing/Retry dispatch.
+Exact worker files: ProductWorkspaceView.swift, ParsingStatusView.swift,
+ProductWorkspaceTests.swift and this Spec. Parent owns aggregate/native verification,
+independent review/evidence/local commit. Tests use actual owned GRDB publication and
+Reader lease/session, covering nil-to-published, replacement, stale/closed/reopened/deleted
+session fences and retained annotation/Reader ownership; no app/helper/renderer trial runs.
+Visible UI/accessibility and runtime parsing/AD8/P1/P2/P3/Story completion remain unproved.
