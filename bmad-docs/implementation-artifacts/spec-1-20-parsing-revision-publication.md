@@ -417,3 +417,35 @@ regression. Product union passes 230 tests/zero failures (`artifact://913`); nat
 unsigned Release arm64/macOS15 compilation succeeds (`artifact://914`). No invocation,
 attempt or revision row is created in the already-cancelled fixture. This proportional
 behavioral check does not reopen unchanged HIGH lifecycle reviews or promote Story gates.
+
+### Actual Main resource-accounting source slice before implementation
+
+Implement Main's missing captured parser resource owner by reusing the existing
+ProviderRequest, RequestResourcePool(kind: parser), RequestResourceLease and
+RequestResourceBudget(kind: parser), never a parallel quota/selector/store. Exact worker
+files: new Application/PDFiumExtractionResourceOwner.swift, new
+Tests/Product/PDFiumExtractionResourceOwnerTests.swift and this Spec. Parent registers
+Package/native source membership, verifies, reviews the actual lifetime and commits.
+
+Capture the required original operation UUID and full ExtractionIdentity once. Limits
+derive exclusively from the parsed existing policy; original monotonic start/deadline
+must use checked arithmetic and cannot reset on retries/checks. Acquire the actual
+process-scoped parser lease or deny admission. Main residency checks use successful
+public MACH_TASK_BASIC_INFO observations of the actual Main process, not guessed RSS,
+copied constants, record-size estimates or a zero fallback. Fail closed on observation
+errors, expiry, cancellation, backwards clock, invalid limits or released ownership.
+Check the same captured elapsed/residency authority during later consumer callbacks.
+Only captured-operation finish releases its actual resource lease, idempotently after
+the existing producer's disposal/pin-release milestone; wrong IDs change nothing.
+Unknown cleanup retains the owner/lease; deallocation must not be used as closure proof.
+
+This owner covers Main residency, original elapsed budget and actual process pool.
+Native helper cumulative checks and canonical array checks remain with their existing
+owners. No combined Main/helper RSS, hard allocator/uninterruptible-call bound,
+watchdog coverage, calibrated geometry or runtime enforcement certification is inferred.
+The actual input factory still requires all genuine dependencies before helper admission.
+Internal explicit synthetic clock/residency injection is tests-only; production uses
+real monotonic time/kernel observation. No production noop/default-success callback.
+Owned-unit tests cover busy pool, original-deadline/monotonicity, actual positive kernel
+observation, fail-closed observer/cancel/limit paths, wrong-operation/no renewal and
+idempotent post-disposal finish. No app/helper/SDK/renderer trial or Story promotion.
