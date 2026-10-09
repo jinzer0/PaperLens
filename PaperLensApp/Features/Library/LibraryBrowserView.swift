@@ -14,7 +14,9 @@ public struct LibraryBrowserView: View {
   @State private var busy = false
   @State private var deleting: OrganizedPaper?
   @State private var editing: OrganizedPaper?
+  @State private var identification: LibraryIdentification?
   @FocusState private var focusedPaper: UUID?
+  @FocusState private var focusedIdentification: UUID?
   private var snapshot: OrganizationSnapshot? { query.snapshot }
   private var loading: Bool { query.loading }
   private var loadFailed: Bool { query.failed }
@@ -34,7 +36,7 @@ public struct LibraryBrowserView: View {
       HStack {
         Text("Library").font(.largeTitle)
         Spacer()
-        Button("PDF 추가", action: importPDF)
+        Button("PDF 추가", action: requestImport)
         Button("새로고침") { refresh() }.disabled(busy)
       }
       TextField("제목 또는 사용자 태그 검색", text: $filter.search)
@@ -80,7 +82,7 @@ public struct LibraryBrowserView: View {
         if snapshot.totalCount == 0 {
           ContentUnavailableView("아직 논문이 없습니다", systemImage: "books.vertical",
             description: Text("PDF 추가로 시작하세요."))
-          Button("PDF 추가", action: importPDF)
+          Button("PDF 추가", action: requestImport)
         } else if snapshot.papers.isEmpty {
           ContentUnavailableView("일치하는 논문 없음", systemImage: "line.3.horizontal.decrease.circle",
             description: Text("저장된 논문은 있습니다. 검색과 필터를 변경하세요."))
@@ -101,7 +103,7 @@ public struct LibraryBrowserView: View {
     }
     .padding()
     .task(id: refreshRevision) { refresh() }
-    .onDisappear { query.invalidate() }
+    .onDisappear { invalidateObservation() }
     .onChange(of: filter) { _, _ in refresh() }
     .alert("논문을 영구 삭제하시겠습니까?",
       isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }), presenting: deleting) { paper in
@@ -115,7 +117,7 @@ public struct LibraryBrowserView: View {
     } message: { Text("성공으로 저장되지 않았습니다. 새로 불러온 현재 상태를 확인하세요.") }
     .sheet(item: $editing, onDismiss: { refresh() }) { paper in
       OrganizationEditor(paper: paper, save: { value, observed in
-        busy = true; query.invalidate()
+        busy = true; invalidateObservation()
         do {
           try await service.save(value, for: observed)
           busy = false; refresh()
@@ -125,6 +127,10 @@ public struct LibraryBrowserView: View {
         }
       }, revalidate: { observed in try await service.revalidate(observed) })
       .onDisappear { focusedPaper = paper.id }
+    }
+    .sheet(item: $identification) { captured in
+      LibraryIdentificationDetail(captured: captured)
+        .onDisappear { focusedIdentification = captured.paper.id }
     }
   }
 
@@ -139,12 +145,24 @@ public struct LibraryBrowserView: View {
       if let date = currentFacts[paper.id]?.lastReadAt {
         Text("최근 읽음 \(date.formatted())").font(.caption)
       }
+      Text("초록 · \(LibraryMetadataPresentation.preview(currentFacts[paper.id]?.metadata?.abstract, limit: 220))")
+        .font(.caption).textSelection(.enabled)
+      Text("출처 주제 (사용자 태그 아님) · \(LibraryMetadataPresentation.preview(currentFacts[paper.id]?.metadata?.topics, limit: 120))")
+        .font(.caption).textSelection(.enabled)
       if paper.status == .importing { ProgressView(); Text("\(paper.bytesCopied) bytes 복사됨") }
       HStack {
         Button("열기") { perform { try await service.admitOpen(paper); try await openPaper(paper) } }
           .disabled(!paper.readable || busy)
+        Button("초록·출처 주제 상세") {
+          guard !busy, !loading, !loadFailed else { return }
+          identification = LibraryIdentification(paper: paper, metadata: currentFacts[paper.id]?.metadata)
+        }.disabled(busy || loading || loadFailed)
+          .focused($focusedIdentification, equals: paper.id)
+          .accessibilityLabel("\(paper.title) 초록·출처 주제 상세")
         Menu("더 보기") {
-          Button("태그·읽기 상태·즐겨찾기 편집") { editing = paper }.disabled(!paper.readable)
+          Button("태그·읽기 상태·즐겨찾기 편집") {
+            invalidateObservation(); editing = paper
+          }.disabled(!paper.readable)
           if paper.status == .deletionFailed {
             Button("삭제 다시 시도") { perform { try await service.delete(paper, retry: true) } }
           } else {
@@ -157,18 +175,30 @@ public struct LibraryBrowserView: View {
   private func savePreferences(_ preference: OrganizationPreferences) {
     perform { try await service.savePreferences(preference) }
   }
+  private func requestImport() {
+    invalidateObservation()
+    importPDF()
+    refresh()
+  }
   private func perform(_ operation: @escaping @MainActor () async throws -> Void) {
     guard !busy else { return }
-    busy = true; query.invalidate()
+    busy = true; invalidateObservation()
     Task {
       do { try await operation() } catch { operationFailed = true }
       busy = false; refresh()
     }
   }
   private func refresh() {
+    invalidateObservation()
     guard !busy else { return }
     let request = query.begin(filter: filter)
     Task { await load(request) }
+  }
+  private func invalidateObservation() {
+    if let identification { focusedIdentification = identification.paper.id }
+    identification = nil
+    currentFacts = [:]
+    query.invalidate()
   }
   private func load(_ request: OrganizationQueryState.Request) async {
     do {
@@ -192,6 +222,63 @@ public struct LibraryBrowserView: View {
     case .deleting: return "삭제 중 · 열기 불가"
     case .deletionFailed: return "삭제 미완료 · 삭제 다시 시도"
     case .tombstone: return "삭제됨"
+    }
+  }
+}
+
+private struct LibraryIdentification: Identifiable {
+  var id: UUID { paper.id }
+  let paper: OrganizedPaper
+  let metadata: ReaderMetadataSnapshot?
+}
+
+/// Character prefixes preserve extended grapheme clusters, including emoji and combining marks.
+enum LibraryMetadataPresentation {
+  static func excerpt(_ text: String, limit: Int) -> String {
+    let prefix = text.prefix(limit)
+    return String(prefix) + (prefix.endIndex == text.endIndex ? "" : "…")
+  }
+  static func preview(_ field: ReaderMetadataField?, limit: Int) -> String {
+    guard let field, !field.candidates.isEmpty else { return "미확인" }
+    guard !field.isConflict else { return "출처 간 충돌 · 상세에서 후보 확인" }
+    return excerpt(field.candidates[0].text, limit: limit)
+  }
+}
+
+@MainActor private struct LibraryIdentificationDetail: View {
+  let captured: LibraryIdentification
+  @Environment(\.dismiss) private var dismiss
+  var body: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      Text(captured.paper.title).font(.headline).textSelection(.enabled)
+      Text("불러온 시점의 저장된 출처 정보입니다. 현재 발행 상태나 PDF 열기 권한을 보장하지 않습니다.")
+        .font(.caption)
+      ScrollView {
+        VStack(alignment: .leading, spacing: 16) {
+          field("초록", captured.metadata?.abstract)
+          field("출처 주제 · 사용자 태그 아님", captured.metadata?.topics)
+        }.frame(maxWidth: .infinity, alignment: .leading)
+      }
+      Button("닫기", role: .cancel) { dismiss() }.keyboardShortcut(.cancelAction)
+    }.padding().frame(minWidth: 420, idealWidth: 560, minHeight: 280, idealHeight: 480)
+  }
+  @ViewBuilder private func field(_ title: String, _ value: ReaderMetadataField?) -> some View {
+    VStack(alignment: .leading, spacing: 8) {
+      Text(title).font(.headline)
+      if let value, !value.candidates.isEmpty {
+        Text(value.isConflict ? "출처 간 충돌 · 어느 후보도 확정하지 않았습니다." : "저장된 출처 후보")
+        Text("후보별 텍스트 최대 1,200자, 출처 식별자 최대 256자 발췌").font(.caption)
+        ForEach(value.candidates.indices, id: \.self) { index in
+          let candidate = value.candidates[index]
+          VStack(alignment: .leading, spacing: 4) {
+            Text(LibraryMetadataPresentation.excerpt(candidate.text, limit: 1200))
+            Text("출처 종류: \(candidate.source.rawValue)").font(.caption)
+            Text("출처 ID: \(LibraryMetadataPresentation.excerpt(candidate.sourceID, limit: 256))").font(.caption)
+          }.textSelection(.enabled)
+        }
+      } else {
+        Text("미확인 · 저장된 출처 후보가 없습니다.")
+      }
     }
   }
 }

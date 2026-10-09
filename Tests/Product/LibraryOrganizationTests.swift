@@ -126,9 +126,9 @@ final class LibraryOrganizationTests: XCTestCase {
     let c = try seed(database, title: "Alpha", createdAt: 20)
     let lifecycle = try await LocalLibraryLifecycle.open(database: database)
     let service = LibraryOrganizationService(database: database, lifecycle: lifecycle)
-    let facts = [OrganizationSortFacts(paperID: a.0, generation: a.1, lastReadAt: Date(timeIntervalSince1970: 30), publicationYear: 2025),
-      OrganizationSortFacts(paperID: b.0, generation: b.1, lastReadAt: Date(timeIntervalSince1970: 10), publicationYear: 2020),
-      OrganizationSortFacts(paperID: c.0, generation: UUID(), lastReadAt: Date(timeIntervalSince1970: 100), publicationYear: 9999)]
+    let facts = [OrganizationSortFacts(paperID: a.0, generation: a.1, lastReadAt: Date(timeIntervalSince1970: 30), publicationYear: 2025, metadata: nil),
+      OrganizationSortFacts(paperID: b.0, generation: b.1, lastReadAt: Date(timeIntervalSince1970: 10), publicationYear: 2020, metadata: nil),
+      OrganizationSortFacts(paperID: c.0, generation: UUID(), lastReadAt: Date(timeIntervalSince1970: 100), publicationYear: 9999, metadata: nil)]
     let ties = [b.0, c.0].sorted { $0.uuidString < $1.uuidString }
     for (sort, expected) in [(LibrarySort.name, ties + [a.0]), (.recentlyAdded, ties + [a.0]),
       (.recentlyRead, [a.0, b.0, c.0]), (.publicationYear, [a.0, b.0, c.0])] {
@@ -140,6 +140,23 @@ final class LibraryOrganizationTests: XCTestCase {
       _ = try await service.snapshot(filter: .init(), facts: [facts[0], facts[0]])
       XCTFail("Duplicate facts must not pick arbitrary owner values")
     } catch { XCTAssertEqual(error as? OrganizationError, .invalidSortFacts) }
+  }
+
+  func testMetadataExcerptsPreserveGraphemesAndPreviewNeverChoosesConflictingCandidate() {
+    let cluster = "é한한"
+    XCTAssertEqual(LibraryMetadataPresentation.excerpt(cluster, limit: 1), "é…")
+    XCTAssertEqual(LibraryMetadataPresentation.excerpt(cluster, limit: 2), "é한…")
+    XCTAssertEqual(LibraryMetadataPresentation.excerpt(cluster, limit: 3), cluster)
+    XCTAssertEqual(LibraryMetadataPresentation.preview(nil, limit: 220), "미확인")
+    XCTAssertEqual(LibraryMetadataPresentation.preview(.init(), limit: 120), "미확인")
+    let source = ReaderMetadataValue(text: cluster, source: .source, sourceID: "actual-source")
+    let same = ReaderMetadataValue(text: cluster, source: .acceptedExtraction, sourceID: "actual-revision")
+    XCTAssertEqual(LibraryMetadataPresentation.preview(.init([source, same]), limit: 1), "é…")
+    let other = ReaderMetadataValue(text: "different candidate", source: .acceptedExtraction, sourceID: "other-revision")
+    for candidates in [[source, other], [other, source]] {
+      XCTAssertEqual(LibraryMetadataPresentation.preview(.init(candidates), limit: 220),
+        "출처 간 충돌 · 상세에서 후보 확인")
+    }
   }
 
   func testSameGenerationEditorsDuplicateAndReopenedServiceCannotOverwriteNewerFields() async throws {

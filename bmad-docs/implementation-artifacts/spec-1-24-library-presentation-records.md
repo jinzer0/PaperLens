@@ -105,3 +105,54 @@ Parent verifies real owned GRDB storage/reopen/current-revision/generation/no-pa
 corrupt-data behavior, unchanged user-tag filters and focused/union/native compilation;
 then concrete metadata/query-lifetime review, exact evidence/local commit. Existing protection,
 calibration/provider/SDK/P1/P2/P3/UI/trial/remote/Story boundaries remain unchanged and unproved.
+
+### Authored identification surface and paired regressions (not executed)
+
+`OrganizationSortFacts.metadata` is a required optional constructor argument carrying only
+the stored query-time `ReaderMetadataSnapshot`; all worker-owned constructor calls explicitly
+pass nil. Both mounted presentations use the existing `paperContent` and generation-filtered
+`currentFacts` for abstract/source-topic previews, explicit unknown/conflict and a native detail
+button. Source topics remain separate from user tags and existing title/user-tag search.
+`LibraryIdentification` captures the exact OrganizedPaper and data-only snapshot; detail lists
+all actual candidate texts/source kinds/source IDs with character-safe 1,200/256-character
+excerpts. Previews are bounded to 220/120 characters; conflict never selects the first candidate.
+The detail expressly describes a stored observation, not current publication or access authority.
+
+`invalidateObservation` synchronously clears the captured detail and currentFacts alongside
+the existing query invalidation on refresh/filter, mutation/preferences/editor work, import
+intent and disappearance. Only accepted query completions install generation-matching facts;
+no asynchronous completion opens detail. Dismissal targets the captured detail button's
+dedicated native focus binding, not the existing more-actions opener.
+
+Authored tests: `testMetadataExcerptsPreserveGraphemesAndPreviewNeverChoosesConflictingCandidate`;
+extended `testYearFactsOnlyUseCurrentRevisionWithNoConflictPrecedence` using the existing owned
+canonical extraction publication fixture for persisted abstracts/topics/provenance/conflicts,
+reopen, no payload, publication replacement, pointer removal, generation replacement and
+unchanged topic-versus-user-tag/search behavior; and
+`testLibraryMetadataQueryRejectsCorruptPayloadAndFencesMismatchedRevisionIdentity` for retained
+payload with mismatched revision/generation/SHA/reference and malformed/invalid metadata.
+`testLateLibraryQueryCannotAdmitOldMetadataFactsAfterInvalidation` pairs actual stored facts
+and service projections with the existing request-revision acceptance and Paper-generation
+fences; it does not claim to mount or exercise the native sheet.
+These are authored source, not execution evidence or native accessibility acceptance.
+Parent owns DB fact extraction, focused/union/native verification, query-lifetime/detail/focus
+review, durable evidence and commit. No worker tests/builds/gates/lint/formatters/runtime or
+commits were run; canonical 0/26, Epicfalse, product BLOCKED and StoryDone=false are unchanged.
+
+### Parent verified actual persisted identification binding
+
+Parent updated only ProductDatabase+LibraryFacts alongside the worker-owned five paths:
+unchanged one-read-transaction identity joins now return the validated metadata snapshot;
+corrupt data still throws. Focused LibraryOrganization/ProductWorkspace40 tests passed,
+zero failures (artifact1022), including3 new cases and the expanded year/published fixture.
+Full Product299 passed, zero failures (artifact1026). Fresh unsigned native-y Release
+arm64/macOS15 compilation succeeded (artifact1027). Independent source review78 returned
+SOURCE-ONLY CLEAR/APPROVE, no concrete metadata/provenance/query/detail delta finding.
+Five-source binary delta against preimplementationaa1b787:
+8fefb89e817ff05cff9d0ddfc0f3d6e49908e8d463f0de6cc3726745fe6c69ed.
+No new migration/database/selector/poll/lease or actual document/provider/helper operation.
+The mounted source now renders stored abstract/topic observations and true missing/conflict
+states, not generated summaries or synthetic successful metadata. Physical card/list/detail,
+native opener-focus return, accessibility/contrast/resize remain unverified; compilation,
+windowless owned-fixture tests and source review are not those proofs. Canonical0/26,
+Epicfalse and StoryDone=false remain unchanged; no protected trial or remote action ran.

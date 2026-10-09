@@ -2,7 +2,7 @@ import Foundation
 import GRDB
 
 extension ProductDatabase {
-  /// One read transaction binds both facts to the current ready Paper and visible revision.
+  /// One read transaction binds read, year and metadata observations to the ready Paper/revision.
   public func librarySortFacts() throws -> [OrganizationSortFacts] {
     try adapterRead { db in
       try Row.fetchAll(db, sql: """
@@ -21,9 +21,11 @@ extension ProductDatabase {
           let timestamp: Double? = row["lastReadAt"]
           guard timestamp?.isFinite != false else { throw ProductDatabaseError.invalidRecord }
           var year: Int?
+          var metadata: ReaderMetadataSnapshot?
           if let payload: Data = row["payload"] {
             let snapshot = try JSONDecoder().decode(ReaderMetadataSnapshot.self, from: payload)
             try snapshot.validate()
+            metadata = snapshot
             let field = snapshot.year
             if !field.isConflict, let text = field.candidates.first?.text,
               !text.isEmpty, text.count <= 4, text.allSatisfy({ $0 >= "0" && $0 <= "9" }),
@@ -32,7 +34,8 @@ extension ProductDatabase {
             }
           }
           return OrganizationSortFacts(paperID: paperID, generation: generationID,
-            lastReadAt: timestamp.map(Date.init(timeIntervalSince1970:)), publicationYear: year)
+            lastReadAt: timestamp.map(Date.init(timeIntervalSince1970:)), publicationYear: year,
+            metadata: metadata)
         }
     }
   }

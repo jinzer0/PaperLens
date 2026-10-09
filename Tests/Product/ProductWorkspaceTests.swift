@@ -749,34 +749,55 @@ import ProviderRequest
     let f = try await fixture()
     let id = try await importSelected(f)
     let selected = try await paper(f, id: id)
-    let digest = try XCTUnwrap(f.database.adapterRead { db in
-      try String.fetchOne(db, sql: "SELECT pdfSHA256 FROM paper WHERE id = ?", arguments: [id.uuidString])
-    })
-    let identity = ReaderMetadataIdentity(paperID: id, generation: selected.generation,
-      pdfSHA256: digest, pdfReference: "papers/\(id.uuidString)/document.pdf", revisionID: UUID())
-    try f.database.adapterWrite { db in
-      try db.execute(sql: """
-        INSERT INTO extractionRevision(id, paperID, generation, pdfSHA256, pdfReference) VALUES (?, ?, ?, ?, ?)
-        """, arguments: [identity.revisionID.uuidString, id.uuidString, identity.generation.uuidString,
-          digest, identity.pdfReference])
-      try db.execute(sql: "INSERT INTO extractionVisible(paperID, revision) VALUES (?, ?)",
-        arguments: [id.uuidString, identity.revisionID.uuidString])
-    }
+    XCTAssertNil(try f.database.librarySortFacts().first?.metadata)
+    let identity = try publishMetadataRevision(f, id: id)
+    XCTAssertNil(try f.database.librarySortFacts().first?.metadata, "Published revision alone is not metadata")
     let source = ReaderMetadataValue(text: "2024", source: .source, sourceID: "actual-source")
     let accepted = ReaderMetadataValue(text: "2024", source: .acceptedExtraction, sourceID: identity.revisionID.uuidString)
-    try f.database.saveReaderMetadata(.init(year: .init([source, accepted])), for: identity)
+    let abstract = ReaderMetadataValue(text: "실제 저장 초록 é", source: .source, sourceID: "saved-abstract-source")
+    let topics = ReaderMetadataValue(text: "source-only-topic; 기하학", source: .acceptedExtraction,
+      sourceID: identity.revisionID.uuidString)
+    let stored = ReaderMetadataSnapshot(year: .init([source, accepted]), abstract: .init([abstract]), topics: .init([topics]))
+    try f.database.saveReaderMetadata(stored, for: identity)
     XCTAssertEqual(try f.database.librarySortFacts().first?.publicationYear, 2024)
+    XCTAssertEqual(try f.database.librarySortFacts().first?.metadata, stored)
+    var filter = OrganizationFilter(); filter.tag = "source-only-topic"
+    let tagResult = try await f.workspace.organization.snapshot(filter: filter, facts: f.database.librarySortFacts())
+    XCTAssertEqual(tagResult.totalCount, 1)
+    XCTAssertTrue(tagResult.papers.isEmpty, "Source topics never become user tag matches")
+    filter.tag = nil; filter.search = "source-only-topic"
+    let searchResult = try await f.workspace.organization.snapshot(filter: filter, facts: f.database.librarySortFacts())
+    XCTAssertTrue(searchResult.papers.isEmpty, "Title/user-tag search does not silently search source topics")
+    XCTAssertTrue(try f.database.organizationSnapshot(filter: .init()).papers.first?.organization.tags.isEmpty == true)
     let conflict = ReaderMetadataValue(text: "2023", source: .acceptedExtraction, sourceID: identity.revisionID.uuidString)
-    try f.database.saveReaderMetadata(.init(year: .init([source, conflict])), for: identity)
+    let otherAbstract = ReaderMetadataValue(text: "다른 저장 초록", source: .acceptedExtraction, sourceID: identity.revisionID.uuidString)
+    let otherTopics = ReaderMetadataValue(text: "different source topics", source: .source, sourceID: "other-topic-source")
+    let conflicts = ReaderMetadataSnapshot(year: .init([source, conflict]),
+      abstract: .init([abstract, otherAbstract]), topics: .init([topics, otherTopics]))
+    try f.database.saveReaderMetadata(conflicts, for: identity)
     XCTAssertNil(try f.database.librarySortFacts().first?.publicationYear)
-    try f.database.saveReaderMetadata(.init(year: .init([accepted])), for: identity)
     let reopened = try ProductDatabase.open(at: f.database.root)
+    let recovered = try XCTUnwrap(reopened.librarySortFacts().first?.metadata)
+    XCTAssertEqual(recovered, conflicts, "Texts, source kinds and source IDs survive sole-DB reopen")
+    XCTAssertTrue(recovered.abstract.isConflict)
+    XCTAssertTrue(recovered.topics.isConflict)
+    XCTAssertEqual(LibraryMetadataPresentation.preview(recovered.abstract, limit: 220), "출처 간 충돌 · 상세에서 후보 확인")
+    XCTAssertEqual(LibraryMetadataPresentation.preview(recovered.topics, limit: 120), "출처 간 충돌 · 상세에서 후보 확인")
+    try f.database.saveReaderMetadata(stored, for: identity)
     XCTAssertEqual(try reopened.librarySortFacts().first?.generation, selected.generation)
     XCTAssertEqual(try reopened.librarySortFacts().first?.publicationYear, 2024)
+    XCTAssertEqual(try reopened.librarySortFacts().first?.metadata, stored)
+    let next = try publishMetadataRevision(f, id: id)
+    XCTAssertNotEqual(next.revisionID, identity.revisionID)
+    XCTAssertNil(try reopened.librarySortFacts().first?.metadata, "New published revision cannot reuse prior metadata")
+    try f.database.saveReaderMetadata(stored, for: next)
     try f.database.adapterWrite { db in
       try db.execute(sql: "DELETE FROM extractionVisible WHERE paperID = ?", arguments: [id.uuidString])
     }
     XCTAssertNil(try reopened.librarySortFacts().first?.publicationYear)
+    XCTAssertNil(try reopened.librarySortFacts().first?.metadata)
+    let current = try publishMetadataRevision(f, id: id)
+    try f.database.saveReaderMetadata(stored, for: current)
     try f.database.adapterWrite { db in
       try db.execute(sql: "UPDATE paper SET generation = ? WHERE id = ?", arguments: [UUID().uuidString, id.uuidString])
     }
@@ -784,5 +805,86 @@ import ProviderRequest
     XCTAssertNotEqual(replaced.generation, selected.generation)
     XCTAssertNil(replaced.publicationYear)
     XCTAssertNil(replaced.lastReadAt)
+    XCTAssertNil(replaced.metadata)
+  }
+
+  func testLateLibraryQueryCannotAdmitOldMetadataFactsAfterInvalidation() async throws {
+    let f = try await fixture()
+    let id = try await importSelected(f)
+    let identity = try publishMetadataRevision(f, id: id)
+    let stored = ReaderMetadataSnapshot(abstract: .init([
+      .init(text: "Captured stored abstract", source: .source, sourceID: "captured-source")
+    ]))
+    try f.database.saveReaderMetadata(stored, for: identity)
+    var query = OrganizationQueryState()
+    let oldRequest = query.begin(filter: .init())
+    let oldFacts = try f.database.librarySortFacts()
+    let oldProjection = try await f.workspace.organization.snapshot(filter: .init(), facts: oldFacts)
+    XCTAssertEqual(oldFacts.first?.metadata, stored)
+    query.invalidate()
+    XCTAssertFalse(query.accept(oldProjection, request: oldRequest, currentFilter: .init()),
+      "The UI facts-install gate rejects a completion immediately after work invalidation")
+    let replacementGeneration = UUID()
+    try f.database.adapterWrite { db in
+      try db.execute(sql: "UPDATE paper SET generation = ? WHERE id = ?",
+        arguments: [replacementGeneration.uuidString, id.uuidString])
+    }
+    let currentRequest = query.begin(filter: .init())
+    let currentFacts = try f.database.librarySortFacts()
+    let currentProjection = try await f.workspace.organization.snapshot(filter: .init(), facts: currentFacts)
+    XCTAssertEqual(currentFacts.first?.generation, replacementGeneration)
+    XCTAssertNil(currentFacts.first?.metadata)
+    XCTAssertTrue(query.accept(currentProjection, request: currentRequest, currentFilter: .init()))
+    XCTAssertFalse(query.accept(oldProjection, request: oldRequest, currentFilter: .init()))
+    query.reject(request: oldRequest, currentFilter: .init())
+    XCTAssertFalse(query.failed)
+    XCTAssertEqual(query.snapshot?.papers.first?.generation, replacementGeneration)
+    XCTAssertNotEqual(oldFacts.first?.generation, query.snapshot?.papers.first?.generation,
+      "Retained data-only old facts also fail the existing UI generation match")
+  }
+
+  func testLibraryMetadataQueryRejectsCorruptPayloadAndFencesMismatchedRevisionIdentity() async throws {
+    let f = try await fixture()
+    let id = try await importSelected(f)
+    let identity = try publishMetadataRevision(f, id: id)
+    let stored = ReaderMetadataSnapshot(abstract: .init([
+      .init(text: "Persisted abstract", source: .acceptedExtraction, sourceID: identity.revisionID.uuidString)
+    ]))
+    try f.database.saveReaderMetadata(stored, for: identity)
+    let reopened = try ProductDatabase.open(at: f.database.root)
+    // Reversible faults in this owned fixture leave metadata physically present to test the join.
+    for (column, wrong, original) in [
+      ("generation", UUID().uuidString, identity.generation.uuidString),
+      ("pdfSHA256", String(repeating: "0", count: 64), identity.pdfSHA256),
+      ("pdfReference", "papers/wrong/document.pdf", identity.pdfReference)
+    ] {
+      try f.database.adapterWrite { db in
+        try db.execute(sql: "UPDATE extractionRevision SET \(column) = ? WHERE id = ?",
+          arguments: [wrong, identity.revisionID.uuidString])
+      }
+      XCTAssertNil(try reopened.librarySortFacts().first?.metadata, "Mismatched \(column) must not leak old candidates")
+      try f.database.adapterWrite { db in
+        try db.execute(sql: "UPDATE extractionRevision SET \(column) = ? WHERE id = ?",
+          arguments: [original, identity.revisionID.uuidString])
+      }
+      XCTAssertEqual(try reopened.librarySortFacts().first?.metadata, stored)
+    }
+    try f.database.adapterWrite { db in
+      try db.execute(sql: "UPDATE readerMetadata SET revisionID = ? WHERE paperID = ?",
+        arguments: [UUID().uuidString, id.uuidString])
+    }
+    XCTAssertNil(try reopened.librarySortFacts().first?.metadata, "Payload bound to a different revision is absent")
+    try f.database.saveReaderMetadata(stored, for: identity)
+    for corrupt in [Data("not JSON".utf8), try JSONEncoder().encode(ReaderMetadataSnapshot(abstract: .init([
+      .init(text: "", source: .source, sourceID: "invalid-empty-text")
+    ])))] {
+      try f.database.adapterWrite { db in
+        try db.execute(sql: "UPDATE readerMetadata SET payload = ? WHERE paperID = ?",
+          arguments: [corrupt, id.uuidString])
+      }
+      XCTAssertThrowsError(try reopened.librarySortFacts(), "Corrupt or invalid metadata is a failed query, not nil")
+      try f.database.saveReaderMetadata(stored, for: identity)
+      XCTAssertEqual(try reopened.librarySortFacts().first?.metadata, stored)
+    }
   }
 }

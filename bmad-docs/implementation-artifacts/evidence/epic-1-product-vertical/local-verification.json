@@ -25,9 +25,9 @@
   "verification": {
     "productUnion": {
       "command": "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --filter ProductTests",
-      "tests": 296,
+      "tests": 299,
       "failures": 0,
-      "output": "artifact://1007",
+      "output": "artifact://1026",
       "evidence": "Real GRDB transactions, owned synthetic files and actual local FIFO IO/close/peer metadata/EPIPE; mocked provider/HTTP transport and synthetic windowless PDFKit conversions. Not authenticated provider, app UI, SDK producer or PDFium execution."
     },
     "nativeCompilation": {
@@ -35,11 +35,11 @@
       "configuration": "Release",
       "architecture": "arm64",
       "minimumOS": "15.0",
-      "derivedData": ".build/product-native-compile-20261010-x",
+      "derivedData": ".build/product-native-compile-20261010-y",
       "codeSigningAllowed": false,
       "result": "BUILD SUCCEEDED",
-      "rawOutput": "artifact://1010",
-      "output": "artifact://1010",
+      "rawOutput": "artifact://1027",
+      "output": "artifact://1027",
       "applicationAndHelperBinariesExecuted": false,
       "warnings": "AppIntents metadata skipped, PDFium debug-map duplicate/missing-symbol warnings and an unnecessary-await Swift warning remain; no warning suppression or debug-symbol repair claimed."
     },
@@ -291,6 +291,25 @@
     "underlyingNativeBindingSchemaAndMembershipChanged": false,
     "visibleUIOrAccessibilityVerified": false,
     "runtimeParsingOrCalibrationVerified": false,
+    "helperExecuted": false,
+    "storyAccepted": false
+  },
+  "libraryPublishedIdentification": {
+    "baseVerifiedFeatureCommit": "bdffce6",
+    "preImplementationSpecificationCommit": "aa1b787",
+    "canonicalCriteria": "Root epics Story1.24 lines1093–1094: actual missing states and abstract/topic information in hover/detail; summary generation/display not certified by this slice.",
+    "sourceDiffAgainstSpecificationSha256": "8fefb89e817ff05cff9d0ddfc0f3d6e49908e8d463f0de6cc3726745fe6c69ed",
+    "sourceDiffScope": "Five exact LibraryOrganizationService, ProductDatabase+LibraryFacts, LibraryBrowserView, LibraryOrganizationTests and ProductWorkspaceTests paths againstaa1b787; docs excluded",
+    "actualBinding": "Validated stored ReaderMetadataSnapshot from unchanged sole GRDB ready/nondeleting/Paper-generation/SHA/reference/visible-revision join; required optional facts field; existing accepted query and generation-filtered currentFacts reused by both card/list and captured native detail. Corrupt payload propagates failure. Source topics never become user tags; missing/conflicting candidates remain explicit; bounded grapheme-safe text/provenance excerpts, no invented confidence or generated metadata.",
+    "lifetime": "Synchronous captured detail/facts invalidation on refresh/filter/import/editor/work/disappearance; async completion cannot open detail; native source focus targets captured actual detail button. Descriptive query-time observations do not grant continuously current publication or PDF-reading authority.",
+    "focusedTests": {"command": "swift test --filter 'LibraryOrganizationTests|ProductWorkspaceTests'", "tests": 40, "failures": 0, "newCases": 3, "extendedCase": "testYearFactsOnlyUseCurrentRevisionWithNoConflictPrecedence", "output": "artifact://1022"},
+    "productUnion": {"tests": 299, "failures": 0, "output": "artifact://1026"},
+    "nativeOutput": "artifact://1027",
+    "nativeDerivedData": ".build/product-native-compile-20261010-y",
+    "review": "agent://78-LibraryIdentificationIntegrity: SOURCE-ONLY CLEAR/APPROVE; no concrete changed-source finding",
+    "newDatabaseMigrationSelectorTimerOrLease": false,
+    "physicalCardListDetailFocusAccessibilityVerified": false,
+    "metadataGenerationOrProviderActivationCertified": false,
     "helperExecuted": false,
     "storyAccepted": false
   },

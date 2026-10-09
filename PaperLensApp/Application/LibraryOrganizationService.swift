@@ -33,9 +33,13 @@ public struct OrganizationSortFacts: Sendable {
   public let generation: UUID
   public let lastReadAt: Date?
   public let publicationYear: Int?
-  public init(paperID: UUID, generation: UUID, lastReadAt: Date?, publicationYear: Int?) {
+  /// Validated stored observation at query time, not publication or read authority.
+  public let metadata: ReaderMetadataSnapshot?
+  public init(paperID: UUID, generation: UUID, lastReadAt: Date?, publicationYear: Int?,
+    metadata: ReaderMetadataSnapshot?) {
     self.paperID = paperID; self.generation = generation
     self.lastReadAt = lastReadAt; self.publicationYear = publicationYear
+    self.metadata = metadata
   }
 }
 public struct OrganizedPaper: Identifiable, Equatable, Sendable {
