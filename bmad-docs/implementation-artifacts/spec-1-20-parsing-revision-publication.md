@@ -108,8 +108,118 @@ to validateAndEncode. Main owns actual child read pin, extraction sender FD and 
 operation/resource accounting, supplied through required callbacks that cannot default to
 success. Immutable PDFiumPinnedInput owns checked close/idempotent captured operations;
 uncertain close retains actual owner debt. Validate all delivery/end facts, checked sender
-close and child-pin release before geometry/publication; retain resource ownership through
-consumer/transaction/disposal. Supplied actual precision/page mapping/paired canonical codec
+close before geometry/publication; retain the actual child read pin and resource ownership
+through canonical validation, consumer/transaction completion and raw/canonical array disposal.
+Release the pin only after those consumer milestones, then finish operation accounting.
+Supplied actual precision/page mapping/paired canonical codec
 remain required; no calibration, identity transforms or second codec is manufactured.
 Missing real acquisition/resources/geometry bindings deny admission before input effects.
 Source implementation/compilation is not helper activation, AD8, P1/P2/P3 or StoryDone.
+
+### Review53 correction contract before further implementation
+
+Keep helper drain, checked sender closure, child-pin release and final accounting as
+separate captured milestones. Cancellation/error paths retain the pin until consumer data
+is disposed; uncertain native/sender closure still retains unresolved ownership debt.
+Pass an immutable Main-only ExtractionConsumptionScope with a required throwing
+checkBudget guard into the local consume callback. The guard checks the originally
+captured deadline/resource allowance and cancellation, not a new quota or renewed budget:
+withBatches(identity, consume: ([ExtractionBatch], ExtractionConsumptionScope) async throws).
+The existing validation loop checks this guard between canonical units and before/after
+validation. The existing sole-GRDB publication transaction checks it at its guarded
+publication boundary and before successful commit; failures roll back publication.
+The parent owns the Infrastructure publication signature and affected caller adaptation.
+No scope callback, provider configuration or ownership closure crosses XPC.
+Rejected duplicate/identified begins retain a captured received-handle debt owner when
+checked closure is uncertain. Preserve the accepted operation; never retry a potentially
+reused descriptor or manufacture End. Acquired opaque PDF references must match original
+request UTF-8 exactly, in addition to all other identity/configuration guards.
+Parent-owned tests/build/review follow these source corrections. The initial four-file
+delivery and Review53 BLOCK are preserved; no helper/runtime or Story promotion follows.
+
+### Owned source delivery (unverified)
+
+The four admitted files now contain the native producer source, not a fixture-backed
+product result. The independent transport is `PDFiumExtractionService` with the three
+specified selectors; `PDFTopologyService` is public so the public inherited protocol is
+valid. Both product endpoints use `PDFiumExtractionInterface.make()` for identical
+secure allowed-class registration, including nested arrays, glyphs, quads and UUIDs.
+The new protocol and all DTOs have explicit stable PaperLens-prefixed Objective-C runtime
+names so separately compiled Main/helper modules do not archive incompatible class names.
+Topology smoke selectors, fixture admission and signing requirements remain distinct.
+
+The helper uses actual descriptor access/size checks, read-only mmap, SHA256 over the
+mapping, and direct locked public PDFium symbols. Header review used only the controlled
+parent source at `.build/topology/full-acquisition-arm64-ae7a27c9-e584-40ef-a164-e9631d68d11a/pdfium/src/public/`:
+`fpdfview.h`, `fpdf_text.h`, `fpdf_edit.h` and `fpdf_transformpage.h`. FS_RECTF is four
+Floats in left/top/right/bottom order; FS_MATRIX is six Floats in a/b/c/d/e/f order.
+Box accessors write Floats; character boxes write Doubles; opaque pointers and Darwin
+size_t/unsigned-long/int widths are declared explicitly. No optional symbol lookup,
+vendor acquisition, compilation or vendor execution was performed.
+
+One queue and a process-wide reservation cover native library lifetime between pulls
+and through document/map/received-FD cleanup. An independently locked cancellation
+flag is checked during work; connection invalidation only requests serial cleanup.
+Uncertain FD closure is not retried against a potentially reused descriptor. Unresolved
+native handles remain retained even after connection invalidation. Pull uses one page
+workspace, one batch and one sentence lookahead. Unicode/native/UTF16 mapping and
+Foundation enclosing sentence ranges retain exact source text; visible unmappable,
+non-axis-aligned, mirrored, collapsed or oversize geometry fails instead of being dropped.
+Whitespace may omit geometry only following a successful collapsed native character-box
+observation; generated flags and matrices still come from actual native calls.
+
+Application API changes requiring parent integration:
+
+- `ExtractionBatchProducing.extract` is removed, replaced by
+  `withBatches(_:consume:) async throws` with a required Sendable async consumer.
+- `ExtractionGeometryValidating.validateAndEncode` now requires `expectedText`.
+- `PDFiumExtractionProducer.init(acquireInput:)`, `withBatches` and
+  `cancelAndDrain(operationID:)` implement the required captured-operation scope.
+- `PDFiumPinnedInput` takes the exact required constructor callbacks. It owns the
+  transferred sender FileHandle (not publicly exposed), verifies actual FD identity,
+  closes it with checked errors and captures idempotent pin/resource release states.
+  No callback defaults or caller-declared closed flags exist. Input limits are compared
+  to the parsed ProviderRequest authority; resident allowance cannot exceed its RSS cap,
+  and remaining original deadline cannot exceed its parser elapsed cap.
+- `PDFiumPageMapping`, `PDFiumGeometryBinding`, `PDFiumGeometryInput` and
+  `PDFiumGeometryValidator(binding:)` supply the required actual mapping/precision/paired
+  codec boundary. The validator compares exact expected text, complete glyph provenance,
+  delivered identity, transformed quads and supplied Reader transform/inverse. It does
+  not invent published membership or a canonical codec.
+
+Main keeps the full original ExtractionIdentity/ProviderConfiguration. It verifies the
+signed connection PID, wire keys, actual hash/size/page observations, batch order, global
+consecutive sentence IDs and final totals. Confirmed helper drain precedes checked sender
+close and actual child-pin release; the resource owner remains captured through consumer,
+sole-DB publication and disposal. Concurrent drain callers await the same actual release
+tasks. Timeout fails only the waiter: the captured session/debt remains. A late same-session
+cancel response can record verified drain proof, but cannot publish, release ownership on
+its own or modify a newer operation. Retrying drain after the scope has disposed its data
+can release the original retained resource owner. Ordinary failures before publication keep
+the old usable revision via the existing sole reserve/publish/fail DB contract. An actual
+post-commit resource-release error remains cleanup debt and propagates without falsely
+marking an already committed publication as a failed Job.
+
+Parent must adapt affected test conformers/callers and Package/project membership, bind
+actual Main read-pin/resource acquisition and original-config checks, and supply actual
+1.19 precision/page mapping/paired encoding. These are required bindings, not successful
+defaults. Missing producer/geometry binding is rejected before DB reservation. No DB,
+Domain, cache, FTS, Provider or other SDK owner was changed in this producer lane.
+
+Resource/proof limitations remain explicit. Helper RSS is measured with successful actual
+MACH_TASK_BASIC_INFO observations, not inferred from a quota. Batch byte checks count the
+typed field payload from actual UTF8 text and primitive field widths; they do not certify
+Foundation/XPC serialization overhead or allocator peaks. Native calls and allocator
+transients remain uninterruptible/hard-bound-unproved until protected runtime evidence.
+If admission fails before actual SHA/page-count observations exist, the required nonoptional
+End fields cannot honestly be manufactured: no End is sent, and Main retains pin/resource
+debt pending a valid same-operation End or the existing owner's independent process-exit
+proof. Parent must exercise and integrate that failure-debt path; transport failure alone
+does not authorize release.
+
+No tests were authored in this exact-four-file lane. Tests, builds, gates, lint, formatting,
+commits, remotes, helper/app execution, trials and workflows were explicitly forbidden and
+were not run. Parent owns native compilation, focused DTO/malformed-protocol/FD/geometry/
+boundary/cancellation/deletion/publication tests, independent HIGH integrity/lifetime review
+and evidence commits. This receipt is source authorship only: StoryDone remains false and
+no AD8/P1/P2/P3 or runtime resource certification is asserted.
