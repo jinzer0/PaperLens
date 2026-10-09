@@ -449,3 +449,55 @@ real monotonic time/kernel observation. No production noop/default-success callb
 Owned-unit tests cover busy pool, original-deadline/monotonicity, actual positive kernel
 observation, fail-closed observer/cancel/limit paths, wrong-operation/no renewal and
 idempotent post-disposal finish. No app/helper/SDK/renderer trial or Story promotion.
+
+Parent union919 exposed concurrent independent imports rejected as importCapacity.
+The existing sole RequestResourcePool uses a failed short NSLock.try as if its kind's
+cap were exhausted; another kind or simultaneous under-cap confirmation can cause this
+false rejection. Use normal mutual exclusion for that short counter-only arbitration,
+then decide admission solely against the unchanged actual cap. No callbacks, kernel,
+file/DB/network effects occur under that lock. Do not increase quotas or claim a hard
+wall-clock mutex bound. Existing FolderImport concurrent confirmation regression and
+Main actual pool tests must pass; preserve the original 244/one-failure output919.
+Exact shared-contract source addition: Contracts/ProviderRequest/ProviderRequest.swift.
+
+### Actual Main resource-owner implementation handoff (unverified source)
+
+Added `PDFiumExtractionResourceOwner` with public readonly `identity`, `operationID`,
+`limits`, and `deadlineUptimeNanoseconds`; required production initializer
+`init(identity:operationID:authority:)`, throwing `checkBudget()`, and throwing
+`finishOperation(_:)`. Production uses DispatchTime uptime and successful positive
+public `task_info(MACH_TASK_BASIC_INFO)` residency of `mach_task_self_`. Tests alone
+can explicitly inject `testingClock` and `testingResidentBytes` through the internal
+initializer. All caps come from the supplied existing ProviderRequest; admission and
+metric observations reuse its actual parser pool, lease and resource budget.
+
+Successful allocations retain the owner and therefore its actual lease in private
+operation-indexed lifetime storage. This is not another quota: counts/admission remain
+exclusively in RequestResourcePool. The storage's short lock only inserts/removes
+references; a separate per-operation effect lock serializes complete before/after
+clock, cancellation and kernel observations with finish. Constructor failure, before
+any input handoff, closes only its newly acquired lease. Successful capture never uses
+ARC as closure evidence. Cancellation, observer/budget failure and backwards time are
+sticky and do not release the lease; only correct-ID explicit finish closes it once.
+Later correct-ID finish is idempotent; wrong IDs cannot change ownership or budget.
+
+Authored owned-unit tests cover actual pool contention, every copied policy cap,
+exact original deadline without renewal, sub-millisecond backwards time, checked
+deadline overflow, zero/overflow/error residency, positive real Main kernel observation,
+constructor cleanup, sticky observation and cancellation failures, cancellation during
+observation, wrong-ID finish, idempotent finish without releasing a subsequent owner,
+released checks, and uncertain cleanup retaining the actual lease after facade drop.
+The observation/finish race uses explicit semaphore barriers with bounded waits, no
+sleeps; expiry during the blocked observation must fail before finish can close it.
+
+No commands, compilation, tests, formatters, gates, commits or runtime trials were run
+in this worker slice. Parent must register Package/native/test membership, run focused
+PDFiumExtractionResourceOwnerTests plus the Product union/native compilation, and review
+the actual retention/finish contract before committing evidence. No passing-test claim
+is made here. The genuine input factory and geometry composition remain required and
+unactivated: this source does not supply those dependencies or admit a helper. Finish
+is a trusted post-disposal/pin-release callback, not independent detection of disposal.
+Unknown cleanup intentionally can hold process admission indefinitely. Checks are
+point-in-time Main residency/original elapsed observations, not combined Main/helper RSS,
+watchdog coverage, an allocator limit, an uninterruptible-call bound, P1 or SDK/Story
+certification; native helper cumulative accounting remains owned by the existing helper.
