@@ -142,3 +142,64 @@ retention/no retry. Test-only injected close failure is not physical closure pro
 no-SIGPIPE setup/readback or EPIPE safety fails, refuse; do not broaden privileges.
 Existing product/renderer/live/collector trials remain unrenewed; no remote/release action
 or privacy/profile/Story acceptance follows from transport source or owned-pipe tests.
+
+### Source authoring handoff (not verification evidence)
+
+Authored exactly the four admitted files: `Adapters/OwnedPipeAgentRPCChannel.swift`,
+`Application/AgentConnectionLifecycle.swift`, `Tests/Product/OwnedPipeAgentRPCChannelTests.swift`,
+and this existing Spec. Public channel API is `init(readStdout:writeStdin:)`,
+`write(_:) async throws`, `read() async throws -> Data?`, `requestClose()`,
+`closureOutcome`, and `observeClosure(_:)`. Typed endpoint outcomes are pending/closed/unknown;
+only `ClosureOutcome.bothClosed` authorizes the lifecycle callback. Factory
+`AgentConnectionLifecycle.ownedPipe(readStdout:writeStdin:)` constructs the actual channel,
+constructs the lifecycle, then installs a weak callback before return; `start()` remains explicit.
+Lifecycle factory failure requests checked native cleanup rather than abandoning captured handles.
+
+The MainActor owner captures genuine FileHandles after preflight, keeps a process-lifetime
+strong retention root until genuine both-closed, and retains unknown ownership debt with
+no retry. Dispatch readiness sources are one-shot, activated before cancellation; queued
+event callbacks recheck generation and per-source tokens, and observed cancellation handlers
+join all outstanding sources before checked endpoint closes. Native synchronous nonblocking
+syscalls share the MainActor lane; active syscall count must also be zero. EINTR/short-write
+work yields after sixteen attempts (a fairness quantum, not a deadline or wait bound).
+Operation UUIDs prevent late cancellation callbacks from revoking a subsequent operation.
+Frame retention and read allocation use public ProviderRPC.maxFrameBytes65540, not a new limit.
+
+Authored owned-Pipe tests cover paired alias/wrong access mode/ambient/invalid refusal,
+ordinary file/directory/socket/O_RDWR FIFO refusal, preserved flags and verified writer
+no-SIGPIPE, one-over frame refusal, partial reads, actual EAGAIN backpressure with ordered
+maximum-frame delivery, same-direction busy, pending read/write revocation and cancellation,
+EOF awaiting physical duplex closure, real EPIPE host survival, unknown-close actual-handle
+retention after facade drop/no retry, EOF debt throwing instead of nil, and lifecycle hello/
+EOF decoder finish including truncation. Tests use explicit bounded XCTest expectations;
+manual fixture debt cleanup is not runtime ACK. A lifecycle state waiter is cooperatively
+cancelled/joined after the bounded expectation, not CPU/time certification.
+
+Parent must register Package/native targets and perform source/type/native compilation,
+focused owned-FD tests plus existing lifecycle/contract union, independent review, evidence
+and local commit. Worker ran no tests/builds/gates/lint/formatters/processes/SDK/network,
+and these authored cases are not pass evidence. Public FIFO no-SIGPIPE setup/readback and
+actual EPIPE safety remain required parent checks. This channel closes local endpoints only:
+actual producer Process ownership, SDK dispatch/authentication, cancellation/purge/reaping,
+P1/P2/P3, private/live/renderer/trial boundaries and Story Done remain separate and unproved.
+
+### Observed anonymous-pipe peer identity correction
+
+Parent focused owned-FD run artifact958 executed10 tests with2 assertions failing:
+paired endpoints of one anonymous macOS Pipe were not rejected and preflight changed
+the read flag. Existing fstat device/inode comparison is not sufficient to recognize
+the two peer endpoints on this OS. Preserve the failed output and the paired-alias/
+unchanged-flags assertions; do not weaken the requirement to make tests pass.
+
+Before ownership/setup effects, use public libproc.h proc_pidfdinfo(getpid(), fd,
+PROC_PIDFDPIPEINFO, ...) for these actual self-owned descriptors, requiring exact
+pipe_fdinfo result size and nonzero pipe_handle/pipe_peerhandle. Refuse same handles
+or either handle matching the other's peer handle, in addition to existing type/mode/
+descriptor checks. Unavailable/partial/ambiguous observation refuses before effects;
+no fstat-only fallback. Do not dereference, persist, expose or log opaque kernel handles.
+Public sys/proc_info.h600–610/786–787 and libproc.h97 provide this bounded self-FD API;
+no SDK private property, foreign-process query, new privilege or environment change is
+admitted. Named/unsupported FIFO identity may refuse rather than broaden transport.
+Actual EPIPE/no-SIGPIPE survival already passed in artifact958 but is not Story/P1/P3
+proof. Source scope remains the exact existing channel and owned-Pipe tests; API and
+fixed wire authority stay unchanged. Parent repeats only changed-source verification.
