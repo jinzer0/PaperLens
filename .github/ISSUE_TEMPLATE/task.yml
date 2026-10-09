@@ -1,0 +1,109 @@
+name: BMAD + Hyper-Waterfall 작업
+description: BMAD 기반 위험도별 자율 실행과 필요한 Human 결정을 기록합니다.
+body:
+  - type: dropdown
+    id: work_type
+    attributes:
+      label: 작업 유형
+      description: 이 작업의 성격을 선택하세요.
+      options:
+        - Epic
+        - Story
+        - Bug
+        - Chore
+    validations:
+      required: true
+
+  - type: textarea
+    id: why
+    attributes:
+      label: Why — 왜 필요한가?
+      description: 이 작업이 해결하려는 문제와 필요한 이유를 작성합니다.
+      placeholder: |
+        이 작업이 필요한 이유와 해결하려는 문제를 설명합니다.
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope — 이번 작업에 포함되는 것
+      description: 구현·계획만·리뷰만 등 요청된 작업 종류와 포함 범위를 작성합니다. 명확한 MEDIUM 실행 요청은 범위 내 lifecycle을 위임합니다.
+      placeholder: |
+        - 포함 범위 1
+        - 포함 범위 2
+    validations:
+      required: true
+
+  - type: textarea
+    id: non_goals
+    attributes:
+      label: Non-goals — 이번 작업에서 하지 않는 것
+      description: Scope 확대를 방지할 제외 조건과 허용하지 않은 작업을 작성합니다. 폼 작성은 HIGH·원격·Merge/Release 권한이 아닙니다.
+      placeholder: |
+        - 이번 작업에서는 하지 않는 것 1
+        - 이번 작업에서는 하지 않는 것 2
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance Criteria — 완료 조건
+      description: 이 작업이 완료되었다고 판단할 수 있는 검증 가능한 조건을 작성합니다.
+      placeholder: |
+        - [ ] 완료 조건 1
+        - [ ] 완료 조건 2
+        - [ ] 완료 조건 3
+    validations:
+      required: true
+
+  - type: dropdown
+    id: risk
+    attributes:
+      label: 위험도
+      description: 파일 수가 아니라 영향·가역성·보안·데이터·외부 부작용으로 판단합니다. LOW는 요청 범위 자율 실행, MEDIUM은 명확한 요청 기반 위임, HIGH는 위험 결정/행동 직전 명시 승인입니다. docs/ai-governance.md를 따릅니다.
+      options:
+        - LOW
+        - MEDIUM
+        - HIGH
+    validations:
+      required: true
+
+  - type: textarea
+    id: execution_authority
+    attributes:
+      label: 실행 요청 / 권한 경계
+      description: 비사소한 작업의 실제 요청·task/Story·baseline·허용 작업·제한을 기록합니다. 별도 LOW/MEDIUM 승인이나 토큰을 요구하는 항목이 아니며 위험도 선택 자체는 권한을 부여하지 않습니다.
+      placeholder: |
+        실제 실행 요청 / 참조:
+        Task / Story / range와 baseline Spec / commit:
+        허용된 작업 / 제외 조건 / trial 상태:
+        필요한 HIGH 결정과 실제 승인 (해당할 때만):
+
+  - type: input
+    id: parent
+    attributes:
+      label: Parent
+      description: 관련 Epic Issue, Parent Issue 또는 Milestone을 작성합니다.
+      placeholder: "#1 또는 v0.1"
+
+  - type: textarea
+    id: artifacts
+    attributes:
+      label: 관련 BMAD Artifacts
+      description: 이 작업의 근거가 되는 PRD, SPEC, Architecture, Epic/Story 문서를 기록합니다.
+      placeholder: |
+        PRD:
+        SPEC:
+        Architecture:
+        Epic / Story:
+
+  - type: textarea
+    id: constraints
+    attributes:
+      label: 추가 제약사항
+      description: 호환성, 보호 데이터/tool 권한, no-test/no-commit/no-remote, 실행 허용 소진 등 제한을 기록합니다. 범위 위임이나 Stage 전환으로 제한이 갱신되지 않습니다.
+      placeholder: |
+        - 기존 public API 호환성을 유지한다.
+        - ...
