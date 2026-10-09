@@ -284,3 +284,40 @@ Review56 is CLEAR / APPROVE: the original three HIGH and one MEDIUM are RESOLVED
 with no new concrete HIGH in its changed five-file source scope. Source/test/compilation is not runtime admission,
 calibration, visible UI/AD8/P1/P2/P3 or canonical Story acceptance. Production supplied
 read-pin/resource/geometry composition still requires actual owners, never fake callbacks.
+
+### Actual Library child-pin owner slice before implementation
+
+The next bounded local source slice implements the missing physical Library input pin,
+not parser activation or a resource/calibration substitute. Exact worker ownership:
+`Application/LibraryReadLeaseProvider.swift`, new
+`Application/LibraryExtractionReadPin.swift`, new
+`Tests/Product/LibraryExtractionReadPinTests.swift`, and this Spec. Parent owns Package/
+native source membership, actual verification, narrow integrity review and local commits.
+
+The provider constructed from the existing LocalLibraryLifecycle acquires a fresh
+registry token for the admitted ReaderPaperSnapshot before real readonly file opening,
+with existing before/after durable validation and revoke semantics. The new captured
+LibraryExtractionReadPin has a required original operation UUID, the actual registry
+token/physical handle and a per-token closure observation from that same registry.
+No second registry, database, selector, guessed root or caller-declared closed flag.
+It exposes validated one-time readonly sender-FD duplication outside state arbitration,
+using an active read pin so actual original closure cannot race duplication; returned
+handle ownership transfers to the existing PDFiumPinnedInput, never an openable path.
+Revocation blocks new work/duplication but does not release this asynchronous consumer
+pin: actual producer drain/disposal still precedes captured pin release.
+
+The captured operation's async release requests closure once and awaits its own actual
+registry-close outcome, not all Reader pins for the Paper. Verified physical close
+records success only afterward; uncertain closure remains permanent debt, throws and
+cannot be retried. A concurrent live Reader must neither be released nor prevent proof
+of this child pin's actual closure. A wrong operation ID changes nothing. Constructor/
+open/duplication/close failures preserve actual ownership or checked cleanup debt.
+Readiness does not claim parser budgets: required actual resource accounting, original
+deadline and supplied geometry/precision remain separate Main dependencies and must
+deny producer admission when unavailable. No fake success callback or preset gauge.
+
+Owned-file regressions cover readonly duplication/one-time transfer, deletion waiting
+for actual child release, revocation/late duplication denial, wrong-operation no effect,
+independent Reader lifetime, uncertain close retention/no retry and release reentrancy.
+No helper/app/renderer/SDK execution, trial renewal, credentials, network or runtime
+Story/P1/P2/P3/AD8 certification is admitted by this source slice.
