@@ -2,6 +2,34 @@
   "story": "1.7",
   "issue": 5,
   "scope": "pure-python-and-local-native-contract",
+  "mimeUTF8BoundRepair": {
+    "scope": "pure-contract-only",
+    "counterexample": "Network MIME parameters with four-byte characters exceeded headerBytes while remaining below the previous character ceiling; a discarded lone surrogate also bypassed strict UTF-8 validation.",
+    "repair": "Use existing strict UTF-8 encoding before MIME parameter removal and enforce unchanged headerBytes byte ceiling. Swift production validator remains unchanged.",
+    "regression": "Exact-byte ceiling accepted; ceiling plus one rejected for all three network source kinds; Python lone surrogate rejected as importRejected/import.",
+    "combinedVerification": {
+      "topologyPythonPassed": 436,
+      "contractPythonPassed": 35,
+      "requestSwiftPassed": 32,
+      "failures": 0,
+      "pythonOutput": "artifact://272",
+      "swiftOutput": "artifact://280",
+      "swiftFilter": "^ProviderRequestTests.ProviderRequestTests/",
+      "rendererTestsSelected": false,
+      "observedDiagnostics": ["asyncio-slow-task-diagnostics"],
+      "swiftWarningTokens": 0,
+      "whitespace": "pass"
+    },
+    "independentReview": {
+      "verdict": "CLEAR / APPROVE",
+      "reference": "agent://12-12-ContractRecoveryReview",
+      "scope": "read-only source and regression review; no independent test execution"
+    },
+    "P1": false,
+    "P2": false,
+    "P3": false,
+    "storyComplete": false
+  },
   "specCommit": "af2d9d1590b73b311d91865b63b6dfe8ce469cd3",
   "verification": {
     "runtime": "approved-python-3.13.16-arm64",

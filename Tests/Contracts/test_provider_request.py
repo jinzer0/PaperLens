@@ -640,6 +640,19 @@ class ContractTests(unittest.TestCase):
         provider_request.validate_http_response(current, 302, [("Location", "/b")], b"", budget)
         self.rejected(lambda: provider_request.validate_http_response(current, 200, many, b"%PDF-", budget), "importRejected")
 
+    def test_pdf_signature_mime_uses_strict_utf8_byte_bound(self):
+        base = "application/pdf;"
+        cap = provider_request.LIMITS["headerBytes"]
+        remaining = cap - len(base.encode("utf-8"))
+        mime = base + "𐐀" * (remaining // 4) + "x" * (remaining % 4)
+        self.assertEqual(len(mime.encode("utf-8")), cap)
+        for kind in ("httpsPDF", "arxivPDF", "arxivAbstract"):
+            self.assertTrue(provider_request.validate_pdf_signature(b"%PDF-", mime, kind))
+            self.rejected(lambda: provider_request.validate_pdf_signature(b"%PDF-", mime + "x", kind),
+                          "importRejected", "import")
+            self.rejected(lambda: provider_request.validate_pdf_signature(b"%PDF-", base + "\ud800", kind),
+                          "importRejected", "import")
+
     def test_every_metric_mode_unit_scope_ceiling_and_terminal_failure(self):
         for kind, resource in provider_request.CONTRACT["resources"].items():
             for metric, policy in resource["metrics"].items():

@@ -1159,7 +1159,7 @@ def resolve_redirect_url(current, location, sourceKind=None):
 def validate_pdf_signature(prefix, mime, sourceKind):
     if sourceKind not in POLICIES["sourceKinds"] or type(prefix) is not bytes or len(prefix) > LIMITS["readBufferBytes"] or not prefix.startswith(_utf8(POLICIES["pdfMagic"])):
         _fail("importRejected", "import")
-    if sourceKind != "localPDF" and (type(mime) is not str or len(mime) > LIMITS["headerBytes"] or mime.split(";", 1)[0].strip().lower() != POLICIES["pdfMIME"]):
+    if sourceKind != "localPDF" and (type(mime) is not str or len(mime) > LIMITS["headerBytes"] or len(_utf8(mime, "importRejected", "import")) > LIMITS["headerBytes"] or mime.split(";", 1)[0].strip().lower() != POLICIES["pdfMIME"]):
         _fail("importRejected", "import")
     return True
 

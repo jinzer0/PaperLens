@@ -1234,6 +1234,23 @@ final class ProviderRequestTests: XCTestCase {
         sourceKind: "localPDF")
     }
   }
+  func testPDFSignatureMIMEUsesUTF8ByteBound() throws {
+    let api = try ProviderRequest()
+    let base = "application/pdf;"
+    let cap = api.limit("headerBytes")
+    let remaining = cap - base.utf8.count
+    let mime = base + String(repeating: "𐐀", count: remaining / 4)
+      + String(repeating: "x", count: remaining % 4)
+    XCTAssertEqual(mime.utf8.count, cap)
+    for kind in ["httpsPDF", "arxivPDF", "arxivAbstract"] {
+      XCTAssertTrue(
+        try api.validatePDFSignature(prefix: Data("%PDF-".utf8), mime: mime, sourceKind: kind))
+      rejects("importRejected", "import") {
+        try api.validatePDFSignature(
+          prefix: Data("%PDF-".utf8), mime: mime + "x", sourceKind: kind)
+      }
+    }
+  }
   func testHTTPHeadersRedirectAccountingAndTerminalAdmission() throws {
     let api = try ProviderRequest()
     let url = try api.validateImportURL("https://example.org/a.pdf")
