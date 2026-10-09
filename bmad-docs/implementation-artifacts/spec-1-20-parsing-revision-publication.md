@@ -58,3 +58,58 @@ Barrierdispatch/batch/validation/commit mismatcheachguard, reverse/late/reparse 
 ApplicableUI NativeCanvassemantic/Koreanstateaction/noncolorcues/actualcontrast/textscaling/resize/keyboardVoiceOver/focusreturn/accessibleRetryCancelDelete and ALLcurrentPaperfailure-restart-delete races, not deferredpolish. NoUIstubtofakecompletion.
 
 Architect52 COMMENT/WATCH/read-only fiveinputs/no tests/gates/formatter/build/GUI/SDK/auth/network/commits. Done requires actualowners/gates/physicaldurableproof/parentverification/independentreview, no planningpromotion.
+
+## 2026-10-10 actual PDFium producer source phase
+
+Whole-Story source authority and independent contract40 admit these exact four files:
+PaperLensApp/App/TopologyFixtures.swift, PDFiumXPC/main.swift,
+PaperLensApp/Application/ExtractionRevisionService.swift, and this Spec.
+Parent commits this amendment before worker source edits and owns every affected test
+conformer, Package/project membership, shared-caller integration and final verification.
+Architecture, acceptance, numeric resource policy and protected trial allowances do not change.
+
+Add an independently named PDFiumExtractionService inheriting PDFTopologyService;
+beginExtraction(request,pdf,reply), nextExtractionBatch(operationID,sequence,reply),
+cancelExtractionAndDrain(operationID,reply). Preserve distinct topology smoke selectors
+and checks; product admission never uses fixture-map/profile/canary/network checks.
+One extraction per connection, one outstanding pull and one process-wide native library
+session span initialization through real cleanup. Topology native calls cannot interleave.
+
+Wire uses immutable final NSObject/NSSecureCoding DTOs and matching allowed-class lists
+on both ends. Reject missing fields, unsupported schema/ranges, nonfinite coordinates,
+illegal reply combinations and identity/sequence mismatch. No JSON, Any dictionaries,
+ProviderRPC, arbitrary openable paths, credentials/configuration or closures cross XPC.
+Key carries original operation/Paper/generation/revision/Job/attempt/fence/correlation/input/
+epoch UUIDs, exact SHA and opaque reference; retain complete ProviderConfiguration in Main.
+Requests carry actual byte count, original monotonic deadline and immutable limits from
+existing parsed ProviderRequest parser/pool/limits authority plus actual reserved allowance.
+Limits contain input/pages/sentences/sentence-bytes/text-bytes/quads/batch-bytes/batch-count/
+resident-bytes; no new numeric policy, copied caps, guessed gauge or no-op reservation.
+
+Use checked real read-only FD and regular-file size/access, SHA-256 and bounded read-only
+mmap retained through FPDF_CloseDocument. Call locked public PDFium document/page/text/
+box/matrix/rotation APIs with exact C pointer/primitive ABI. Extract real Unicode/native-to-
+UTF16 provenance and Foundation sentence ranges. Deliver actual page metadata, native
+glyph spans/matrices/generated flags and raw quads; never label raw coordinates canonical.
+Initial actual geometry supports positive axis-aligned native matrices only; unsupported
+orientation, unmappable visible text, missing geometry, oversized sentence/page/result or
+empty usable document fail, not fallback/drop/truncate/OCR/PDFKit extraction.
+
+Pull retains at most one page workspace and response batch, checks original deadline and
+actual resources before/after native calls/loops, and never publishes incremental results.
+Typed completed/cancelled/failed end is emitted only after text/page/document/mapping/FD/
+library cleanup. Checked close failures retain debt/no end. Timeout/interruption/invalidation
+is not closure proof. Independently observable cancellation requests serial captured-operation
+drain; never close live PDFium handles concurrently. Native allocation/uninterruptible-call
+hard bounds still require protected runtime proof, not source claims.
+
+Replace array-returning extract with scoped withBatches(identity,consume); add expectedText
+to validateAndEncode. Main owns actual child read pin, extraction sender FD and existing
+operation/resource accounting, supplied through required callbacks that cannot default to
+success. Immutable PDFiumPinnedInput owns checked close/idempotent captured operations;
+uncertain close retains actual owner debt. Validate all delivery/end facts, checked sender
+close and child-pin release before geometry/publication; retain resource ownership through
+consumer/transaction/disposal. Supplied actual precision/page mapping/paired canonical codec
+remain required; no calibration, identity transforms or second codec is manufactured.
+Missing real acquisition/resources/geometry bindings deny admission before input effects.
+Source implementation/compilation is not helper activation, AD8, P1/P2/P3 or StoryDone.
