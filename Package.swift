@@ -23,6 +23,8 @@ let package = Package(
       sources: [
         "App/ProductAppComposition.swift",
         "Application/JobRecoveryPolicy.swift",
+        "Application/ProductJobRecovery.swift",
+        "Application/AgentConnectionLifecycle.swift",
         "Application/LocalLibraryLifecycle.swift",
         "Application/LibraryReadLeaseProvider.swift",
         "Application/LibraryURLImportWriter.swift",
@@ -33,11 +35,16 @@ let package = Package(
         "Application/FolderImportService.swift",
         "Application/URLImportService.swift",
         "Application/ExtractionRevisionService.swift",
+        "Application/CanonicalExtractionGeometry.swift",
+        "Application/ParsingRecoveryCoordinator.swift",
+        "Application/LibrarySummaryService.swift",
         "Application/ReaderMetadataService.swift",
+        "Application/ReaderMetadataBinding.swift",
         "Application/LibraryOrganizationService.swift",
         "Domain/PDFGeometry.swift",
         "Adapters/PDFKitGeometryAdapter.swift",
         "Adapters/HTTPSPDFImportAdapter.swift",
+        "Adapters/AgentRPCConnection.swift",
         "Infrastructure/ProductDatabase.swift",
         "Infrastructure/APIKeySlotStore.swift",
         "Infrastructure/DatabaseAPIKeySelector.swift",
@@ -45,6 +52,7 @@ let package = Package(
         "Infrastructure/ProductDatabase+Annotations.swift",
         "Infrastructure/ProductDatabase+Folders.swift",
         "Infrastructure/ProductDatabase+Extraction.swift",
+        "Infrastructure/ProductDatabase+LibrarySummary.swift",
         "Infrastructure/ProductDatabase+ReaderMetadata.swift",
         "Infrastructure/ProductDatabase+Organization.swift",
         "Infrastructure/ProductDatabase+LibraryFacts.swift",
@@ -70,7 +78,10 @@ let package = Package(
         "FolderImportTests.swift", "URLImportTests.swift", "PDFGeometryTests.swift",
         "ExtractionRevisionTests.swift", "ReaderMetadataTests.swift", "LibraryOrganizationTests.swift",
         "LibraryReadLeaseTests.swift", "ProductWorkspaceTests.swift", "LibraryURLImportWriterTests.swift",
-        "ReaderAnnotationBindingTests.swift"]
+        "ReaderAnnotationBindingTests.swift", "AgentRPCConnectionTests.swift",
+        "ProductJobRecoveryTests.swift", "CanonicalExtractionGeometryTests.swift",
+        "ParsingRecoveryCoordinatorTests.swift", "ReaderMetadataBindingTests.swift",
+        "LibrarySummaryServiceTests.swift"]
     ),
     .target(
       name: "PDFReadiness",
@@ -114,6 +125,7 @@ let package = Package(
         "test_agent_matrix.py", "PackagedDBProbeTests.swift", "JobRecoveryPolicyTests.swift",
         "ReportPublicationTests.swift", "ActorIdentityProbe.swift",
         "PDFiumRollTests.cpp", "test_pdfium_roll.py",
+        "test_product_grdb.py", "test_device_login.py",
       ],
       sources: ["ProviderRPCTests.swift"]
     ),

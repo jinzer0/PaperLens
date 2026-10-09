@@ -35,3 +35,26 @@ Vary every attempt/fence/input/Paper/config/epoch guard, stale/reverse/duplicate
 Native Canvas semantics/Korean state+nextaction/non-color progress/error/delete cues, actual-background contrast/text scaling/window resize/keyboardVoiceOver label-role-state. Notification/Retry discoverable, same guardedcommand/no bypass, focus preserved/dialog-drawer opener return/accessible RetryCancelDelete. Validate all existingPaper data failure/restart/delete races here, no deferredpolish.
 
 Architect53 COMMENT/WATCH/read-only five-source only; no writes/tests/gates/formatter/build/GUI/SDK/auth/network/credentials/commits. Done needs actual1.20+accepted1.13/gates, real durable parser/ReaderUI/restart evidence, parent verification/independentreview. Planning passes none.
+
+## Human-requested independent source slice (2026-10-10)
+
+The current human instruction supersedes the historical source-absence assessment for this
+slice only. Exact ownership: ParsingRecoveryCoordinator.swift, ParsingStatusView.swift,
+ParsingRecoveryCoordinatorTests.swift and this Spec. No execution gates or commits in this
+session; parent commits the reconciled Spec/source and verifies the integrated union.
+
+Coordinator uses the existing ProductDatabase GRDB queue and extraction tables, without
+schema changes. A captured failed-attempt context contains complete old lineage, the usable
+revision and current provider configuration. Retry checks all three atomically against the
+ready/nondeleting Paper before replacing the failed attempt; immutable invocation rows remain.
+Missing producer/geometry validator rejects before reservation. Main supplies its existing
+epoch, never a coordinator-generated process epoch. JobRecoveryPolicy admits/claims/dispatches
+fresh parser lineage; existing ExtractionRevisionService batch validation and database
+publication/failure methods retain sole extraction result ownership. No second store or
+unchecked geometry producer is introduced. Safe failure text never interpolates diagnostics.
+
+Parent must bind the actual producer and geometry validator, supply the Main epoch, recover
+interrupted extractions once before exposing commands, bind the guarded Retry context and
+immediate floating notice to Reader, and include the new source in explicit build source lists.
+Storage fixtures and injected failing producers are tests of coordination, not parser proof.
+Actual producer/native Reader/relaunch evidence remains unproved; no StoryDone claim.

@@ -85,3 +85,46 @@ Before product admission, pin exact durable lineage/epoch allocator, dispatch/re
 Register helper, pipes, reader tasks and fixture resources from first acquisition. One existing cumulative≤300ms cleanup deadline covers eligible worker/store/inherited callbacks and owned process/reader teardown; do not restart callbacks, swallow errors, remove uncertain fixture namespaces, or mark ownership finished before observed closure/reap. Reserve owned-child termination escalation and reader completion within that budget, never rely on the outer watchdog as cleanup proof.
 
 Both directions use the existing4096-byte test-control cap and2s control deadline for complete incremental frames, not merely first-byte readiness. Partial/oversized/malformed control fails safely without unbounded readline/allocation. Add deterministic setup-failure, partial-frame, expired-join and cleanup-callback negative coverage; safe failure reporting is not successful cleanup. Preserve initial29nativePASS followed by reviewer61BLOCK, the unchanged accepted25pure slice, and false product/SDK/gate status. This clarification changes no product protocol, Agent, policy or runtime budget.
+
+## 2026-10-10 parent-integrated startup source slice
+
+The human's independent Story1.13 session owns only `Application/ProductJobRecovery.swift`,
+`Tests/Product/ProductJobRecoveryTests.swift`, and this Spec. No execution gates, formatter,
+commit or remote operation run in this session; parent owns admission/commits and verification.
+Existing production owners are ProductDatabase's sole GRDB queue, importJob/extractionAttempt,
+LocalLibraryLifecycle's epoch, and JobRecoveryPolicy. The old import startup routine fails all
+running imports irrespective of epoch; the extraction routine is a separate transaction.
+
+Implement `ProductJobRecovery(database:).recoverStartup(currentEpoch:)` using the existing
+adapterWrite transaction and `.startup` policy transition. Hydrate only durable running rows
+from prior epochs; validate opaque UUID lineage without reserving new identities. Atomically
+fail both classes as interrupted, retaining immutable inputs, attempts, fences, correlations,
+epochs, extraction revisions/visible pointers and unrelated rows. Read back exact lineage and
+paper metadata inside the same transaction before returning a typed committed receipt.
+Any malformed lineage, failed update or readback mismatch rolls back the whole recovery.
+Import uncertainty remains cleanupDebt; no file unlink, producer-closure attestation, replay,
+Retry, dispatch, credential/config mutation or second database/epoch owner is introduced.
+Extraction pointer retention is not an attestation of usability or producer closure.
+
+Parent must add explicit SwiftPM/Xcode membership, expose the existing Main lifecycle epoch,
+and wire this call before admitting producers instead of the two independent Job recovery
+updates. Keep deletion reconciliation and missing-PDF validation as separate existing-owner
+work; this slice does not claim those responsibilities or change acceptance/safety policy.
+Authored tests cover mixed states/epochs, repeat/reopen, retained extraction content and stale
+publication rejection, preserved deletion/cleanup debt, transaction failure and lineage
+readback rollback. All tests remain unrun here; StoryDone and P1/P2/P3 remain unclaimed.
+
+### Parent integration and registered-job recovery
+
+The actual retained LocalLibraryLifecycle allocates its existing epoch once and awaits
+ProductJobRecovery plus deletion/missing-reference reconciliation before returning any
+command owner. The single GRDB startup transaction now includes registered
+librarySummaryJob rows as well as imports and extraction attempts. Captured summary
+identity, duplicated execution columns and exact-lineage readback are validated; only
+prior-epoch running jobs are interrupted. Current/terminal jobs, retained summary results,
+usable extraction pointers and immutable Paper inputs remain unchanged. No replay occurs.
+Obsolete separate import/extraction/summary startup helpers and their callers were removed.
+Parent union verification: 211 ProductTests, zero failures, artifact://871; unsigned
+native Release arm64/macOS15 compilation succeeded in product-native-compile-20261010-f,
+artifact://872 and artifact://873.
+These fixture/source/compilation results do not prove producer closure or Story completion.

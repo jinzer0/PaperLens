@@ -54,6 +54,39 @@ input contract, not a calibrated product profile. Unknown geometry remains failu
 
 ## Immutable identity and geometry
 
+### Application codec phase — explicit 2026-10-10 source order
+
+This independent phase owns only `PaperLensApp/Application/CanonicalExtractionGeometry.swift`,
+`Tests/Product/CanonicalExtractionGeometryTests.swift`, and this Spec. It connects
+the existing `ExtractionGeometryValidating` protocol without changing Domain,
+publication, database, recovery, producer, or numeric policy. Parent alone commits
+the amended Spec and integrated evidence and runs gates/formatters; this session
+runs none, as explicitly instructed.
+
+`CanonicalExtractionGeometryInput(anchor:)` accepts only already-canonical typed
+`PDFSentenceAnchor`, never raw backend coordinates. The stateless
+`CanonicalExtractionGeometryValidator(owningAnchors:precision:)` requires actual
+caller-owned revision anchors and explicit `PDFGeometryPrecision`; there is no
+default, selected product profile, guessed membership, or geometry conversion.
+Domain validates the exact Paper/hash/revision/page/sentence tuple and membership.
+Validation additionally requires exact page metadata, full source quote and quad
+count, and compares each ordered vertex against the owning full semantic extent
+using the supplied inclusive per-axis PDF-point precision. Duplicate ownership,
+unknown input, missing membership, truncated text/quads and altered page fail.
+Versioned sorted-key JSON stores the complete canonical anchor with exact doubles,
+CropBox origin and separate rotation. Decode reconstructs through Domain
+initializers and revalidates against the same owning revision; serialized bytes
+are never their own membership authority.
+
+Parent must add both files to explicit package/native target lists, bind actual
+PDFium canonical output only after the backend coordinate contract is finalized,
+provide independently owned full-extent anchors/membership and the admitted
+precision profile, and require `ExtractionSentenceInput.text` to equal the typed
+anchor's `fullSourceQuote` before publication (the existing validator signature
+does not receive text). No service/producer outside this file list is edited.
+Synthetic codec/validator tests are authored, not run; actual calibrated
+PDFium/PDFKit correspondence, AD-8 and Story acceptance remain unclaimed.
+
 Identity tuple PaperUUID/PDFSHA256/extractionRevision/zero-basedPage/sentenceID immutable; local page/sentence pair or same PDF hash in another Paper insufficient. Preserve FULL original sentence/semantic extent including multiline/multiquad; display truncation never narrows identity/quote/citation, expansion same sentence.
 
 Canonical unrotated CropBox/PDF points/lower-left origin/+x right,+y up; quad TL/TR/BR/BL order, rotation separate metadata. Preserve actual CropBox offsets, no MediaBox substitution/zero-offset assumption/baked rotation/screen pixels. Application validates identity/revision; PDFium typed canonical batch, PDFKit display transform only. No adapter-owned publication/revision.

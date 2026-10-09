@@ -102,6 +102,7 @@ public final class ProductDatabase: @unchecked Sendable {
     Self.registerAnnotationMigrations(in: &migrator)
     Self.registerFolderMigrations(in: &migrator)
     Self.registerExtractionMigrations(in: &migrator)
+    Self.registerLibrarySummaryMigrations(in: &migrator)
     Self.registerReaderMetadataMigrations(in: &migrator)
     Self.registerOrganizationMigrations(in: &migrator)
     try migrator.migrate(queue)
@@ -275,37 +276,4 @@ public final class ProductDatabase: @unchecked Sendable {
     }
   }
 
-  /// Called once before the lifecycle is exposed; files never create database records.
-  func recoverInterruptedImports() throws {
-    try queue.write { db in
-      try db.execute(sql: """
-        UPDATE paper SET status = 'importFailed', pdfReference = NULL, cleanupDebt = 1
-        WHERE status = 'importing';
-        UPDATE importJob SET state = 'failed', failure = 'interrupted' WHERE state = 'running';
-        UPDATE paper SET status = 'deletionFailed', cleanupDebt = 1 WHERE status = 'deleting';
-        """)
-    }
-    // Validate referenced existence, not mere filesystem presence. Interrupted namespaces
-    // remain explicit cleanup debt, for deletion to drain/purge; never replay their attempt.
-    let references: [(String, String)] = try queue.read { db in
-      try Row.fetchAll(db, sql: "SELECT id, pdfReference FROM paper WHERE status = 'ready'").map {
-        ($0["id"], $0["pdfReference"])
-      }
-    }
-    for (id, reference) in references {
-      let expected = "papers/\(id)/document.pdf"
-      let url = root.appendingPathComponent(reference)
-      let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
-      if reference != expected || values?.isRegularFile != true || values?.isSymbolicLink == true {
-        try queue.write { db in
-          try db.execute(sql: """
-            UPDATE paper SET status = 'importFailed', pdfReference = NULL, cleanupDebt = 1
-            WHERE id = ? AND status = 'ready'
-            """, arguments: [id])
-          try db.execute(sql: "UPDATE importJob SET state = 'failed', failure = 'missingPDF' WHERE paperID = ?",
-            arguments: [id])
-        }
-      }
-    }
-  }
 }

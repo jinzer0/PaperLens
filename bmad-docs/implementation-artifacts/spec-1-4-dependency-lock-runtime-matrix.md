@@ -138,3 +138,90 @@ Actual human instruction: “좋아 story 1.1 ~ 1.26 일괄 구현 검증 승인
 Adapt only existing package.py and test_package.py so the actual unsigned products can consume separately named actual complete acquisition and actual runtime directories in the parent-owned namespaces. Validate full acquisition/native CPU/toolchain/frozen intent and prepared PDFium target before invoking its unchanged validator; validate runtime lock/CPU/actual tree separately. Do not treat the runtime-only receipt as complete acquisition, relabel/copy receipts, repeat acquisition/compilation, mutate borrowed inputs or weaken signature/entitlement/resource/output guards. Signed staging and final outputs remain exclusive in this isolated worktree. Use the existing signer and nested verification, not another signing recipe. Parent alone runs affected tests and actual packaging.
 
 The human's promise of intermediate push/merge approvals is not a current-HEAD merge token or an instruction to push now; keep remote operations pending applicable instruction. Actual user documents/credentials/existing CODEX_HOME, unapproved paid requests, deployment/notarization and separately exhausted live/renderer/collector allowances remain excluded. A new bounded signing operation does not renew those trials or certify P1/P2/P3, runtime cells or Story Done. No admission or editorial-review loop is required for this already-specified implementation.
+
+## Owned product preparation driver (independent Story 1.4 session)
+
+Exact new owners are `scripts/product/prepare-grdb.py` and
+`Tests/Topology/test_product_grdb.py`; topology drivers, manifests, historical
+receipts and vendor source remain frozen. Implement the already-admitted official
+`GRDB.xcodeproj` / `GRDB` target recipe, not SwiftPM or cached-binary acceptance.
+CLI consumes `--source-receipt`, optional `--manifest` (default current topology
+lock), and a mandatory fresh `--output`. Inputs are read-only. Validate the closed
+source-only receipt, current lock bytes, exact approved source pin, actual Git
+commit/tree and every tracked worktree blob, Package.swift digest and absence of
+extra source files. Revalidate the same input fingerprints after compilation.
+Reject symlink ancestors, changed inputs, source/output overlap and occupied
+outputs with typed fixed codes; never erase or resume partial outputs.
+
+Reserve output exclusively and isolate HOME, caches, intermediates and products
+there. Clear inherited environment, require native untranslated arm64 and the
+existing pinned Xcode/SDK/Swift/linker, deny network and all writes outside the
+owned output in the outer sandbox. Build Release/macOS/arm64/deployment 15.0 with
+CODE_SIGNING_ALLOWED=NO using the vendor project and its unchanged lint phase.
+Preserve complete build stdout/stderr even on failure; vendor ignored lint exit
+status is not lint success. Statically validate actual framework CPU, Mach-O
+type/install ID, macOS deployment/SDK, system-only dependencies including SQLite,
+module/header/plist presence and contained framework symlinks. Bind real output
+inventory, source/receipt/manifest/driver hashes and toolchain identities in an
+exclusive preparation receipt. Linker-generated ad-hoc signatures, if present,
+are not Developer ID signing or runtime evidence.
+
+Parent owns tests, formatter, real bounded build, independent review and commits.
+This child authors offline mocked-subprocess/adversarial tests but runs no gates,
+builds or commits. Parent wires the returned `products/GRDB.framework` into the
+existing native dependency destination after validation; this driver never
+copies into or overwrites that destination. No GRDB/library/app execution,
+SQLite provenance, runtime cell promotion, P1/P2/P3 or StoryDone follows.
+
+### Actual preparation failure / predicate correction (2026-10-10)
+
+The parent reports 20 offline tests passing. The single actual unsigned official
+Xcode recipe in `.build/product-grdb-prepare-20261010-a` failed during
+`ComputePackagePrebuildTargetDependencyGraph`: NSCocoaErrorDomain513 with
+NSPOSIXErrorDomain1/EPERM saving a workspace PIFCache file under the exclusive
+output's `intermediates/XCBuildData/PIFCache/workspace`. Complete original
+`logs/build.stdout` and `logs/build.stderr` remain read-only retained evidence;
+there is no successful preparation receipt. The previously reused product GRDB
+framework from ef5f012 is unaffected, not proof this preparation succeeded.
+
+Bounded read-only inspection found the output and workspace directory's
+`realpath` and Darwin `F_GETPATH` identical to the recipe's logical paths, with
+directory modes0755. The pinned receipt identifies tree
+ff52b3c22f4fc259de0adb63560b968cc4f0722a and the same approved source pin; the
+recipe already directs OBJROOT and other writes into that output. These findings
+do not support symlink/physical-path repair, permission changes or vendor edits.
+They do not establish the effective sandbox denial's origin or rule precedence.
+
+The narrowly scoped correction makes write predicates mutually exclusive:
+deny `file-write*` only outside the output subpath and literal `/dev/null`, and
+allow those exact same locations. Read-only input commands allow only the
+existing `/dev/null` exception. Network remains denied; no ancestor, borrowed
+source/receipt/manifest, shared cache or other writable location is added. This
+removes overlap between unconditional write denial and the output allowance,
+but is not evidence of the actual cause being resolved. Offline regressions
+cover the exact predicates/escaping, retained PIFCache-style failure logs,
+unchanged borrowed inputs and no retry/cache success on an occupied namespace;
+the existing byte-identical preexisting-success-receipt assertion is preserved.
+
+This child runs no tests, gates, builds, formatters or vendor/product code.
+Parent owns focused tests, actual allowed/denied-write and network checks and
+any admitted fresh-namespace compilation; the failed namespace must not be
+repaired, erased or reused. Until those checks succeed, preparation remains
+failed/unverified, without signing, runtime, SDK/helper trials or gate promotion.
+No broader authority is requested or exercised by this predicate-only change.
+
+### Parent verification of corrected preparation scope
+
+22 offline preparation regressions pass. The controlled synthetic Seatbelt proof in
+`.build/grdb-policy-proof-20261010-a/outcome.json` observes an output-contained write
+allowed, sibling/borrowed-marker writes denied with EPERM, and loopback network access
+denied with EPERM; the immutable marker remains byte-identical. This executes only the
+previously approved Python and system sandbox tool, not product/helper/vendor binaries.
+The admitted corrected fresh preparation in `.build/product-grdb-prepare-20261010-b`
+still fails package dependency-graph preparation with the same output-contained PIFCache
+EPERM. Its complete logs and the earlier failed `-a` namespace remain preserved, without
+a successful receipt. Predicate enforcement is observed; effective Xcode denial origin
+and fresh preparation success remain unproved. No further blind retry, sandbox disabling,
+broader writable scope or permission repair is admitted by this result. Current native
+product compilation reuses the independently prepared pinned ef5f012 framework, not a
+framework returned by either failed preparation. Story/gate status remains unchanged.

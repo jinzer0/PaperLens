@@ -1,4 +1,5 @@
 import Foundation
+import GRDB
 import ProviderRequest
 import XCTest
 
@@ -249,6 +250,84 @@ final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
     XCTAssertEqual(records.first?.failure, "interrupted")
     XCTAssertEqual(records.first?.cleanupDebt, true)
     XCTAssertFalse(FileManager.default.fileExists(atPath: owned.appendingPathComponent("document.pdf").path))
+  }
+
+  func testStartupUsesOwnedEpochForBothKindsAndRetainsUsableDataAndDeletionDebt() async throws {
+    let db = try ProductDatabase.open(at: root)
+    let original = try await LocalLibraryLifecycle.open(database: db)
+    let ready = try await original.importPDF(from: source())
+    let generation: String = try db.adapterRead { database in
+      try XCTUnwrap(String.fetchOne(database, sql: "SELECT generation FROM paper WHERE id = ?",
+        arguments: [ready.uuidString]))
+    }
+    let digest: String = try db.adapterRead { database in
+      try XCTUnwrap(String.fetchOne(database, sql: "SELECT pdfSHA256 FROM paper WHERE id = ?",
+        arguments: [ready.uuidString]))
+    }
+    func extraction() throws -> ExtractionIdentity {
+      .init(paperID: ready, generation: try XCTUnwrap(UUID(uuidString: generation)),
+        pdfSHA256: digest, pdfReference: "papers/\(ready.uuidString)/document.pdf",
+        revision: UUID(), job: UUID(), attempt: UUID(), fence: UUID(), correlation: UUID(),
+        input: UUID(), epoch: original.epoch, configuration: try db.providerConfiguration())
+    }
+    let usable = try extraction()
+    try db.reserveExtraction(usable)
+    // Storage fixture only: retained bytes do not attest calibrated geometry.
+    try db.publishExtraction(usable,
+      sentences: [.init(page: 0, sentenceID: 0, text: "retained startup text", geometry: Data([1]))])
+    let interrupted = try extraction()
+    try db.reserveExtraction(interrupted)
+    let pending = identity()
+    try db.reserveImport(pending, title: "Interrupted owned import")
+    let marker = namespace(pending.paperID).appendingPathComponent("\(pending.attempt.uuidString).stage")
+    try FileManager.default.createDirectory(at: marker.deletingLastPathComponent(), withIntermediateDirectories: true)
+    let bytes = Data("%PDF-1.7\nuncertain closed-or-open stage".utf8)
+    try bytes.write(to: marker)
+    let deleting = try await original.importPDF(from: source("deleting.pdf"))
+    let saga = try XCTUnwrap(db.beginDeletion(deleting))
+    let deletingBytes = try Data(contentsOf: namespace(deleting).appendingPathComponent("document.pdf"))
+
+    let reopened = try ProductDatabase.open(at: root)
+    let restarted = try await LocalLibraryLifecycle.open(database: reopened)
+    XCTAssertNotEqual(restarted.epoch, original.epoch)
+    let running = try reopened.adapterRead { database in
+      try Int.fetchOne(database, sql: """
+        SELECT (SELECT COUNT(*) FROM importJob WHERE state = 'running') +
+          (SELECT COUNT(*) FROM extractionAttempt WHERE state = 'running')
+        """)
+    }
+    XCTAssertEqual(running, 0)
+    let status = try reopened.extractionStatus(paperID: ready)
+    XCTAssertEqual(status.failure, "interrupted")
+    XCTAssertEqual(status.usableRevision, usable.revision)
+    XCTAssertEqual(try reopened.searchExtraction(paperID: ready, matching: "retained").map(\.text),
+      ["retained startup text"])
+    let records = try await restarted.list()
+    XCTAssertEqual(records.first { $0.id == ready }?.status, .ready)
+    XCTAssertEqual(records.first { $0.id == pending.paperID }?.failure, "interrupted")
+    XCTAssertEqual(records.first { $0.id == pending.paperID }?.cleanupDebt, true)
+    XCTAssertEqual(records.first { $0.id == deleting }?.status, .deletionFailed)
+    XCTAssertEqual(records.first { $0.id == deleting }?.cleanupDebt, true)
+    let retainedSaga = try reopened.adapterRead { database in
+      try String.fetchOne(database, sql: "SELECT deletionID FROM paper WHERE id = ?",
+        arguments: [deleting.uuidString])
+    }
+    XCTAssertEqual(retainedSaga, saga.uuidString)
+    XCTAssertEqual(try Data(contentsOf: marker), bytes)
+    XCTAssertEqual(try Data(contentsOf: namespace(deleting).appendingPathComponent("document.pdf")), deletingBytes)
+    XCTAssertThrowsError(try reopened.publishExtraction(interrupted,
+      sentences: [.init(page: 0, sentenceID: 0, text: "stale", geometry: Data([2]))]))
+    XCTAssertThrowsError(try reopened.publish(pending, stage: marker,
+      final: namespace(pending.paperID).appendingPathComponent("document.pdf"),
+      sha256: String(repeating: "a", count: 64)))
+    let fresh = try await restarted.importPDF(from: source("fresh.pdf"))
+    let freshEpoch = try reopened.adapterRead { database in
+      try String.fetchOne(database, sql: "SELECT epoch FROM importJob WHERE paperID = ?",
+        arguments: [fresh.uuidString])
+    }
+    XCTAssertEqual(freshEpoch, restarted.epoch.uuidString)
+    XCTAssertTrue(try ProductJobRecovery(database: reopened)
+      .recoverStartup(currentEpoch: restarted.epoch).interruptedJobs.isEmpty)
   }
 
   func testMissingReferencedPDFIsFailureOnRestart() async throws {

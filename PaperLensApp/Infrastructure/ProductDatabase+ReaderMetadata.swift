@@ -2,6 +2,29 @@ import Foundation
 import GRDB
 
 extension ProductDatabase {
+  /// Capture only the actually published revision of a live ready Paper in this owner DB.
+  public func publishedMetadataPaperIdentity(paperID: UUID) throws -> ReaderMetadataIdentity? {
+    try adapterRead { db in
+      guard let row = try Row.fetchOne(db, sql: """
+        SELECT p.generation, p.pdfSHA256, p.pdfReference, r.id AS revisionID
+        FROM paper p
+        JOIN extractionVisible v ON v.paperID = p.id
+        JOIN extractionRevision r ON r.id = v.revision AND r.paperID = p.id
+        WHERE p.id = ? AND p.status = 'ready' AND p.deletionID IS NULL
+          AND r.generation = p.generation AND r.pdfSHA256 = p.pdfSHA256
+          AND r.pdfReference = p.pdfReference
+        """, arguments: [paperID.uuidString]) else { return nil }
+      let generation: String = row["generation"]
+      let revision: String = row["revisionID"]
+      guard let generationID = UUID(uuidString: generation),
+        let revisionID = UUID(uuidString: revision) else { throw ReaderMetadataError.staleIdentity }
+      let identity = ReaderMetadataIdentity(paperID: paperID, generation: generationID,
+        pdfSHA256: row["pdfSHA256"], pdfReference: row["pdfReference"], revisionID: revisionID)
+      try Self.guardReaderMetadata(identity, in: db)
+      return identity
+    }
+  }
+
   public static func registerReaderMetadataMigrations(in migrator: inout DatabaseMigrator) {
     migrator.registerMigration("readerMetadataV1") { db in
       try db.execute(sql: """

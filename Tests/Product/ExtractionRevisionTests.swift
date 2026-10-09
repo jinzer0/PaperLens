@@ -7,7 +7,7 @@ final class ExtractionRevisionTests: XCTestCase {
   private struct UnboundGeometry: ExtractionGeometryInput {}
   private struct RejectingGeometryValidator: ExtractionGeometryValidating {
     func validateAndEncode(_ input: any ExtractionGeometryInput,
-      identity: ExtractionSentenceIdentity) throws -> ExtractionGeometryEncoding {
+      identity: ExtractionSentenceIdentity, expectedText: String) throws -> ExtractionGeometryEncoding {
       throw ExtractionError.geometryUnavailable
     }
   }
@@ -37,6 +37,82 @@ final class ExtractionRevisionTests: XCTestCase {
   // BLOB/text/index persistence, not PDFium production or canonical geometry calibration.
   private func rows(_ text: String) -> [ValidatedExtractionSentence] {
     [.init(page: 0, sentenceID: 0, text: text, geometry: Data([1, 2, 3]))]
+  }
+
+  private func canonicalBatch(_ id: ExtractionIdentity, quote: String, text: String) throws
+    -> (ExtractionBatch, CanonicalExtractionGeometryValidator) {
+    // Synthetic geometry and precision for contract tests, not a production PDF/profile.
+    let key = ExtractionSentenceIdentity(paperID: id.paperID, pdfSHA256: id.pdfSHA256,
+      revision: id.revision, page: 0, sentenceID: 0)
+    let page = try PDFPageGeometry(pageIndex: 0, cropOrigin: PDFPoint(x: 0, y: 0),
+      width: 100, height: 100, rotation: 0)
+    let first = try PDFQuad(topLeft: PDFPoint(x: 10, y: 90), topRight: PDFPoint(x: 90, y: 90),
+      bottomRight: PDFPoint(x: 90, y: 80), bottomLeft: PDFPoint(x: 10, y: 80), page: page)
+    let continuation = try PDFQuad(topLeft: PDFPoint(x: 10, y: 70), topRight: PDFPoint(x: 80, y: 70),
+      bottomRight: PDFPoint(x: 80, y: 60), bottomLeft: PDFPoint(x: 10, y: 60), page: page)
+    let anchor = try PDFSentenceAnchor(identity: PDFSentenceIdentity(paperID: key.paperID,
+      pdfSHA256: key.pdfSHA256, extractionRevision: key.revision.uuidString.lowercased(),
+      pageIndex: key.page, sentenceID: key.sentenceID), fullSourceQuote: quote,
+      page: page, quads: [first, continuation])
+    let validator = try CanonicalExtractionGeometryValidator(owningAnchors: [anchor],
+      precision: PDFGeometryPrecision(maximumErrorPDFPoints: 0))
+    let batch = ExtractionBatch(identity: id, sequence: 0, sentences: [
+      .init(identity: key, text: text, geometry: CanonicalExtractionGeometryInput(anchor: anchor)),
+    ], complete: true, totalSentences: 1)
+    return (batch, validator)
+  }
+
+  func testCanonicalTextMismatchRejectsBeforePersistenceAndRetainsUsableRevision() throws {
+    let (db, paper, generation, root) = try fixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let quote = "Original café sentence\nincluding its continuation."
+    let first = try identity(db, paper, generation)
+    let (originalBatch, originalValidator) = try canonicalBatch(first, quote: quote, text: quote)
+    try db.reserveExtraction(first)
+    let originalRows = try ExtractionRevisionService.validate([originalBatch], identity: first,
+      validator: originalValidator)
+    XCTAssertTrue(try XCTUnwrap(originalRows.first).text.utf8.elementsEqual(quote.utf8))
+    try db.publishExtraction(first, sentences: originalRows)
+    let original = try XCTUnwrap(db.searchExtraction(paperID: paper, matching: "Original").first)
+    XCTAssertTrue(original.text.utf8.elementsEqual(quote.utf8))
+    let decoded = try originalValidator.decodeAndValidate(original.canonicalGeometry,
+      identity: originalBatch.sentences[0].identity)
+    XCTAssertTrue(decoded.fullSourceQuote.utf8.elementsEqual(quote.utf8))
+
+    for text in ["Different sentence.", "Original café sentence",
+      "Original café sentence including its continuation.",
+      "Original café sentence\nincluding a different continuation.",
+      "Original café sentence\nincluding its continuation."] {
+      let next = try identity(db, paper, generation)
+      let (batch, validator) = try canonicalBatch(next, quote: quote, text: text)
+      try db.reserveExtraction(next)
+      // Exercise the service's actual pre-publication boundary with the real GRDB owner.
+      XCTAssertThrowsError(try ExtractionRevisionService.validate([batch], identity: next,
+        validator: validator)) {
+        XCTAssertEqual($0 as? CanonicalExtractionGeometryError, .semanticExtentMismatch)
+      }
+      XCTAssertEqual(try db.adapterRead { try Int.fetchOne($0,
+        sql: "SELECT COUNT(*) FROM extractionRevision WHERE id = ?",
+        arguments: [next.revision.uuidString]) }, 0)
+      XCTAssertEqual(try db.adapterRead { try Int.fetchOne($0,
+        sql: "SELECT COUNT(*) FROM extractionSentence WHERE revision = ?",
+        arguments: [next.revision.uuidString]) }, 0)
+      // parse maps a non-ExtractionError validation failure to storageFailure.
+      try db.failExtraction(next, failure: .storageFailure)
+      let status = try db.extractionStatus(paperID: paper)
+      XCTAssertEqual(status.failure, "storageFailure")
+      XCTAssertEqual(status.usableRevision, first.revision)
+      let retained = try XCTUnwrap(db.searchExtraction(paperID: paper, matching: "Original").first)
+      XCTAssertEqual(retained.revision, first.revision)
+      XCTAssertTrue(retained.text.utf8.elementsEqual(quote.utf8))
+      XCTAssertEqual(retained.canonicalGeometry, original.canonicalGeometry)
+      XCTAssertEqual(try db.adapterRead { try Int.fetchOne($0,
+        sql: "SELECT COUNT(*) FROM extractionFTS") }, 1)
+    }
+    let reopened = try ProductDatabase.open(at: root)
+    XCTAssertEqual(try reopened.extractionStatus(paperID: paper).usableRevision, first.revision)
+    XCTAssertEqual(try reopened.searchExtraction(paperID: paper, matching: "Original").first?
+      .canonicalGeometry, original.canonicalGeometry)
   }
 
   func testPublishSearchRetainsPinnedOldRevisionAndRestart() throws {
@@ -124,7 +200,7 @@ final class ExtractionRevisionTests: XCTestCase {
     try db.publishExtraction(first, sentences: rows("retained"))
     let pending = try identity(db, paper, generation)
     try db.reserveExtraction(pending)
-    try db.recoverInterruptedExtractions(currentEpoch: UUID())
+    _ = try ProductJobRecovery(database: db).recoverStartup(currentEpoch: UUID())
     XCTAssertThrowsError(try db.publishExtraction(pending, sentences: rows("late")))
     XCTAssertEqual(try db.extractionStatus(paperID: paper).failure, "interrupted")
     let retry = try identity(db, paper, generation)

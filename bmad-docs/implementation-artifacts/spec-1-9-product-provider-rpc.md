@@ -9,6 +9,46 @@
 
 ## Ownership and scope
 
+### Human-assigned Main-side fixed-v1 source slice (2026-10-10)
+
+The current independent-session instruction assigns exactly
+`PaperLensApp/Adapters/AgentRPCConnection.swift`,
+`PaperLensApp/Application/AgentConnectionLifecycle.swift`,
+`Tests/Product/AgentRPCConnectionTests.swift`, and this Spec. This is a
+source-order-only dispatcher phase over the existing finalized fixed-v1 contract
+and actual Agent `accept`/`serve` implementation, not admission of new product
+methods. The parent owns integration, gates, formatting and commits; this session
+does not run tests/builds, execute a helper/SDK, or change the wire authority.
+
+The dispatcher owns one bounded session, exact hello 1/1/topology-v1 identity,
+contract-validated requests and correlated terminals, ordinary/reserved cancel
+lanes, non-reused UUIDs, bounded outbound queue, aggregate monotonic deadlines,
+atomic supplied-batch terminal validation, fail-closed timeout/poison, and drain.
+Unknown product login/auth/chat/usable methods are refused locally. Existing
+topology methods remain contract operations, not product admission or permission
+to execute controls. No product auth/usable/purge schema is invented.
+
+`AgentRPCChannel.write/read/requestClose` is the exact integration seam for the
+parent's actual XPC/process adapter. Main has one reader, serialized writer and
+deadline timer; only observed EOF or actual external channel invalidation marks
+transport closure. A requested close, thrown IO, accepted cancel or wire terminal
+does not establish producer shutdown, process reaping, scoped absence or job
+cleanup. Parent must supply an adapter whose close revokes IO and unblocks pending
+reads/writes, plus bounded process reaping and its independent observed evidence.
+
+Parent must register both production files and the test in Package.swift and
+native targets, then run the integrated tests/build and independent review. The
+authored supplied-frame tests cover handshake/refusal, fragmentation, duplicate/
+unknown/unsent correlations, wrong-method atomic batch rejection, reserved cancel,
+cancel selection versus closure, timeout/late reply, drain/EOF, truncated EOF,
+version mismatch and lifetime request exhaustion. None ran in this session.
+
+This layer does not publish Paper results or persist Job state. Required future
+Paper callsites must use the existing GRDB queue and JobRecoveryPolicy arbitration;
+no second store or synthetic closure attestation is introduced. Authenticated
+product dispatch still requires the exact missing product methods and SDK effects
+listed below. Existing P1/P2/P3 and StoryDone blockers remain unchanged.
+
 ### Existing decoder boundary repair under renewed batch authority
 
 The human renewed Story1.1–1.26 implementation/verification authority and explicitly required independent worktree parallelism. Repair the already implemented fixed-v1 decoder, not invent product dispatch: successful EOF formerly permitted feed to reopen the stream in both languages; Python non-bytes input formerly raised before the poison handler and retained partial state. Successful EOF now rejects every subsequent feed while repeated successful finish remains idempotent; invalid dynamic input permanently poisons and clears retained framing state. Preserve contract.json, envelope/field/limit/error authority and atomic malformed-batch rejection.

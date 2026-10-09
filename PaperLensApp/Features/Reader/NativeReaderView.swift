@@ -2,7 +2,7 @@ import AppKit
 import PDFKit
 import SwiftUI
 
-@MainActor private final class ReaderPresentation: NSObject, ObservableObject {
+@MainActor final class ReaderPresentation: NSObject, ObservableObject {
   enum SearchState: Equatable { case idle, searching, matches(Int), noResults }
   let session: ReaderSession
   let pdfView = PDFView()
@@ -15,6 +15,10 @@ import SwiftUI
   @Published var title = "Reader"
   @Published var opened = false
   @Published private(set) var annotationContext: ReaderAnnotationContext?
+  @Published private(set) var metadataBinding: ReaderMetadataBinding?
+  @Published private(set) var metadataFailure: String?
+  private var metadataIdentity: ReaderMetadataIdentity?
+  private let metadataService: ReaderMetadataService
   private let annotationIdentity: AnnotationPaperIdentity
   private let annotationService: AnnotationService
   private var matches: [PDFSelection] = []
@@ -24,10 +28,13 @@ import SwiftUI
   private var restoring = false
 
   init(session: ReaderSession, annotationIdentity: AnnotationPaperIdentity,
-    annotationService: AnnotationService) {
+    annotationService: AnnotationService, metadataService: ReaderMetadataService,
+    metadataIdentity: ReaderMetadataIdentity?) {
     self.session = session
     self.annotationIdentity = annotationIdentity
     self.annotationService = annotationService
+    self.metadataService = metadataService
+    self.metadataIdentity = metadataIdentity
     super.init()
     pdfView.displayMode = .singlePageContinuous
     pdfView.displayDirection = .vertical
@@ -39,6 +46,8 @@ import SwiftUI
       name: .PDFViewPageChanged, object: pdfView)
     NotificationCenter.default.addObserver(self, selector: #selector(positionChanged),
       name: .PDFViewScaleChanged, object: pdfView)
+    NotificationCenter.default.addObserver(self, selector: #selector(positionChanged),
+      name: .PDFViewVisiblePagesChanged, object: pdfView)
   }
 
   func open(paperID: UUID) {
@@ -77,6 +86,7 @@ import SwiftUI
       title = session.currentPaper?.title ?? "Reader"
       opened = true
       failure = nil
+      mountMetadata()
     } catch {
       session.close()
       failure = "Unable to open Reader: \(error)"
@@ -86,18 +96,55 @@ import SwiftUI
   func discard() {
     // Detaching a PDF synchronously emits page notifications; block saves first.
     opened = false
-    closeAnnotations()
     searchGeneration = UUID()
     searchTask?.cancel()
     searchTask = nil
-    pdfView.document?.cancelFindString()
-    pdfView.clearSelection()
-    pdfView.highlightedSelections = nil
-    pdfView.document = nil
-    matches.removeAll()
+    // Drain autoreleased PDFKit detach work before the real read lease is released.
+    autoreleasepool {
+      closeMetadata()
+      closeAnnotations()
+      pdfView.document?.cancelFindString()
+      pdfView.clearSelection()
+      pdfView.highlightedSelections = nil
+      matches.removeAll()
+      pdfView.document = nil
+    }
     searchState = .idle
     pageCount = 0
     failure = "Reader access ended. The Paper may have been deleted or replaced."
+  }
+
+  func replaceMetadataIdentity(_ identity: ReaderMetadataIdentity?) {
+    guard identity != metadataIdentity else { return }
+    closeMetadata()
+    closeAnnotations()
+    metadataIdentity = identity
+    if opened { mountMetadata() }
+  }
+
+  private func closeMetadata() {
+    metadataBinding?.invalidate()
+    metadataBinding = nil
+    metadataFailure = nil
+  }
+
+  private func mountMetadata() {
+    guard opened, let identity = metadataIdentity else {
+      metadataFailure = "발행된 추출 정보가 없어 논문 정보와 목차를 사용할 수 없습니다. PDF는 계속 읽을 수 있습니다."
+      return
+    }
+    do {
+      let binding = try session.withReadAccess {
+        guard let document = pdfView.document else { throw ReaderError.notOpen }
+        return try ReaderMetadataBinding(session: session, service: metadataService,
+          identity: identity, view: pdfView, document: document)
+      }
+      guard opened, binding.state != nil else { binding.invalidate(); return }
+      metadataBinding = binding
+      metadataFailure = nil
+    } catch {
+      metadataFailure = "논문 정보를 사용할 수 없습니다: \(error)"
+    }
   }
 
   func toggleAnnotations() {
@@ -132,6 +179,10 @@ import SwiftUI
       try session.save(ReaderPosition(pageIndex: pageIndex, zoom: zoom))
       failure = nil
     } catch { failure = "Reading position was not saved: \(error)" }
+    // Only actual PDFKit position notifications confirm metadata navigation.
+    guard opened, let binding = metadataBinding else { return }
+    do { try binding.observePosition(); metadataFailure = nil }
+    catch { metadataFailure = (error as? ReaderMetadataError)?.message ?? "읽기 위치 미확인" }
   }
 
   func navigate(delta: Int) {
@@ -218,17 +269,21 @@ import SwiftUI
 @MainActor public struct NativeReaderView: View {
   @StateObject private var presentation: ReaderPresentation
   private let paperID: UUID
+  private let metadataIdentity: ReaderMetadataIdentity?
   private let onReturn: () -> Void
   private let onSaveFailure: (Error) -> Void
   public init(paperID: UUID, session: ReaderSession,
     annotationIdentity: AnnotationPaperIdentity, annotationService: AnnotationService,
+    metadataService: ReaderMetadataService, metadataIdentity: ReaderMetadataIdentity?,
     onReturn: @escaping () -> Void,
     onSaveFailure: @escaping (Error) -> Void) {
     self.paperID = paperID
+    self.metadataIdentity = metadataIdentity
     self.onReturn = onReturn
     self.onSaveFailure = onSaveFailure
     _presentation = StateObject(wrappedValue: ReaderPresentation(session: session,
-      annotationIdentity: annotationIdentity, annotationService: annotationService))
+      annotationIdentity: annotationIdentity, annotationService: annotationService,
+      metadataService: metadataService, metadataIdentity: metadataIdentity))
   }
 
   public var body: some View {
@@ -284,6 +339,15 @@ import SwiftUI
       HStack(spacing: 0) {
         NativePDFSurface(pdfView: presentation.pdfView)
           .frame(maxWidth: .infinity, maxHeight: .infinity)
+        Divider()
+        VStack(alignment: .leading) {
+          if let binding = presentation.metadataBinding {
+            MetadataOutlineView(binding: binding)
+          }
+          if let failure = presentation.metadataFailure {
+            Text(failure).foregroundStyle(.secondary).padding().textSelection(.enabled)
+          }
+        }.frame(width: 300)
         if let context = presentation.annotationContext {
           Divider()
           AnnotationInspector(context: context, onClose: { presentation.closeAnnotations() })
@@ -293,6 +357,7 @@ import SwiftUI
     }
     .padding()
     .onAppear { presentation.open(paperID: paperID) }
+    .onChange(of: metadataIdentity) { presentation.replaceMetadataIdentity(metadataIdentity) }
     .onDisappear { presentation.disappear(reportFailure: onSaveFailure) }
   }
 }

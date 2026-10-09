@@ -1,5 +1,41 @@
 # Story 1.23 Build Spec — Grounded Library Summary
 
+## Independent source-only slice (2026-10-10)
+
+Human session instruction limits edits to LibrarySummaryService.swift,
+ProductDatabase+LibrarySummary.swift, LibrarySummaryServiceTests.swift and this Spec.
+Parent commits specifications, registers migrations/source lists, runs all gates and
+wires Library plus the certified live adapter. This session runs no gates or commits.
+Implement sole-queue immutable request/context/result storage with guarded atomic
+Job success and visible pointer replacement. Saved context is reconstructed locally
+for existing ProviderRequest result validation; restoration never generates or sends.
+Canonical geometry decoding is an injected synchronous validating boundary: absent
+decoder denies send/publication/restore. No opaque geometry BLOB is treated as proof.
+Parent owns serialized JobRecoveryPolicy snapshots and real permit/closure execution;
+publication consumes its already-admitted publication permit, without synthesizing
+rename/closure success. Adapter consumes AuthorizedProviderRequest and returns
+ValidatedProviderResult under existing certified enforcement; no new wire fields.
+Previous results and their extraction revision references remain retained. This is
+an application/persistence slice, not StoryDone, live certification or UI acceptance.
+
+Parent integration: add both Swift sources and paired test to Package/Xcode source
+lists; register `registerLibrarySummaryMigrations(in:)` after extraction migrations
+(summary tombstone cleanup must precede extraction revision removal). Retain all
+referenced extraction revisions. Call `recoverInterruptedLibrarySummaries(currentEpoch:)`
+without dispatch replay. Serialize current epoch/input/config authority and publication
+permit admission through commit, adopting the policy's successful publish snapshot
+only after SQL commit. Failed/interrupted jobs do not prove adapter closure or purge;
+parent must drain actual permits/cleanup before admitting a fresh invocation.
+`LibrarySummaryProviding.execute(_:identity:)` consumes authorized requests plus
+frozen local lineage and returns `ValidatedProviderResult`; actual certification,
+credential/config binding and real closure remain mandatory adapter responsibilities.
+`LibrarySummaryGeometryValidating.resolve(_:identity:)` must decode the production
+canonical encoding and validate full quote extent; no current opaque BLOB inference.
+Identity requires explicit `requestPaperGeneration: Int` from the trusted identity
+owner alongside the local generation UUID, with no generated/default numeric mapping.
+Tests contain controlled synthetic storage/geometry only; eleven authored tests have
+not been executed, compiled, formatted or reviewed by an independent parent gate.
+
 ## Authority and admission
 
 Issue#25 / issue/25-story-1-23; basef14f15f3f1c1fed02657ebf0c7ecdcb23721bfa8. PRODUCT5eac3bb9424ad893eca7d63bc319b71f580838ed; ARCHITECTURE1195c92227cc628e325f5ff24d70cc93639bf7a9; Whole-Epic https://github.com/jinzer0/PaperLens/issues/3#issuecomment-6049004229. OwnSpecbeforecode/no repeatedunchangedSHAapproval(parentreconciledgenericproposal wording); no gate/live/paid/credential/remote/distribution permission.

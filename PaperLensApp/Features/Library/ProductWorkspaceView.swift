@@ -23,12 +23,14 @@ public final class ProductWorkspace: ObservableObject {
     public let id: UUID
     public let session: ReaderSession
     public let annotationIdentity: AnnotationPaperIdentity
+    public let metadataIdentity: ReaderMetadataIdentity?
   }
   public let organization: LibraryOrganizationService
   public let imports: FolderImportService
   public let settings: ProviderSettingsService
   public let urls: URLImportService
   public let annotations: AnnotationService
+  public let metadata: ReaderMetadataService
   private let database: ProductDatabase
   private let readLeases: LibraryReadLeaseProvider
   private var scopedSource: URL?
@@ -45,6 +47,7 @@ public final class ProductWorkspace: ObservableObject {
     connection: NativeAPIKeyConnection) throws {
     self.database = database
     annotations = AnnotationService(database: database)
+    metadata = ReaderMetadataService(database: database)
     organization = LibraryOrganizationService(database: database, lifecycle: lifecycle)
     imports = FolderImportService(database: database, lifecycle: lifecycle)
     settings = ProviderSettingsService(connection: connection)
@@ -140,8 +143,13 @@ public final class ProductWorkspace: ObservableObject {
     let provider = SelectedPaperReadLeases(base: readLeases, paper: paper)
     let identity = try database.annotationIdentity(paperID: paper.id)
     guard identity.generation == paper.generation else { throw AnnotationError.stalePaper }
+    let metadataIdentity = try database.publishedMetadataPaperIdentity(paperID: paper.id)
+    if let metadataIdentity {
+      guard metadataIdentity.generation == identity.generation,
+        metadataIdentity.pdfSHA256 == identity.pdfSHA256 else { throw ReaderMetadataError.staleIdentity }
+    }
     reader = OpenReader(id: paper.id, session: ReaderSession(database: database, leaseProvider: provider),
-      annotationIdentity: identity)
+      annotationIdentity: identity, metadataIdentity: metadataIdentity)
     failure = nil
   }
 
@@ -181,6 +189,7 @@ public struct ProductWorkspaceView: View {
       if let reader = workspace.reader {
         NativeReaderView(paperID: reader.id, session: reader.session,
           annotationIdentity: reader.annotationIdentity, annotationService: workspace.annotations,
+          metadataService: workspace.metadata, metadataIdentity: reader.metadataIdentity,
           onReturn: { workspace.returnToLibrary() },
           onSaveFailure: { workspace.reportSaveFailure($0) })
           .id(reader.id)

@@ -37,9 +37,9 @@ public struct ExtractionGeometryEncoding: Sendable {
   public let quadCount: Int
 }
 public protocol ExtractionGeometryValidating: Sendable {
-  /// Must verify actual membership, canonical geometry and full semantic extent using 1.19.
+  /// Must verify actual membership, canonical geometry, full semantic extent and exact text using 1.19.
   func validateAndEncode(_ input: any ExtractionGeometryInput,
-    identity: ExtractionSentenceIdentity) throws -> ExtractionGeometryEncoding
+    identity: ExtractionSentenceIdentity, expectedText: String) throws -> ExtractionGeometryEncoding
 }
 public struct ExtractionSentenceInput: Sendable {
   public let identity: ExtractionSentenceIdentity
@@ -124,7 +124,8 @@ public struct ExtractionRevisionService: Sendable {
           sentence.text.utf8.count <= authority.limit("sentenceBytes") else {
           throw ExtractionError.invalidBatch
         }
-        let geometry = try validator.validateAndEncode(sentence.geometry, identity: key)
+        let geometry = try validator.validateAndEncode(sentence.geometry, identity: key,
+          expectedText: sentence.text)
         guard !geometry.canonicalBytes.isEmpty, geometry.quadCount > 0,
           geometry.quadCount <= authority.limit("quadsPerSentence"),
           geometry.canonicalBytes.count <= authority.limit("batchBytes") else {

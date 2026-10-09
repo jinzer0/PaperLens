@@ -147,15 +147,6 @@ extension ProductDatabase {
     }
   }
 
-  public func recoverInterruptedExtractions(currentEpoch: UUID) throws {
-    try adapterWrite { db in
-      try db.execute(sql: """
-        UPDATE extractionAttempt SET state = 'failed', failure = 'interrupted'
-        WHERE state = 'running' AND epoch != ?
-        """, arguments: [currentEpoch.uuidString])
-    }
-  }
-
   public func extractionStatus(paperID: UUID) throws -> ExtractionStatus {
     try adapterRead { db in
       guard let row = try Row.fetchOne(db, sql: """

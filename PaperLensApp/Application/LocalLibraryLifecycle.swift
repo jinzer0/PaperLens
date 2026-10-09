@@ -50,7 +50,7 @@ public actor LocalLibraryLifecycle {
   nonisolated let readLeaseRegistry = LibraryReadLeaseRegistry()
   nonisolated var readLeaseDatabase: ProductDatabase { database }
   private let agentPurge: (any AgentLibraryPurging)?
-  private let epoch = UUID()
+  nonisolated let epoch = UUID()
   private var snapshots: [UUID: JobRecoveryPolicy.Snapshot] = [:]
   private var cancellations: [UUID: ImportCancellation] = [:]
   private var drains: [UUID: [CheckedContinuation<Void, Never>]] = [:]
@@ -59,8 +59,16 @@ public actor LocalLibraryLifecycle {
   public static func open(
     database: ProductDatabase, agentPurge: (any AgentLibraryPurging)? = nil
   ) async throws -> LocalLibraryLifecycle {
-    try await Task.detached { try database.recoverInterruptedImports() }.value
-    return LocalLibraryLifecycle(database: database, agentPurge: agentPurge)
+    // Allocate Main's lifetime epoch once, before recovery, and expose no owner until
+    // all registered job kinds and library validation have completed successfully.
+    let lifecycle = LocalLibraryLifecycle(database: database, agentPurge: agentPurge)
+    let epoch = lifecycle.epoch
+    try await Task.detached {
+      let recovery = ProductJobRecovery(database: database)
+      _ = try recovery.recoverStartup(currentEpoch: epoch)
+      try recovery.reconcileLibraryStartup()
+    }.value
+    return lifecycle
   }
 
   private init(database: ProductDatabase, agentPurge: (any AgentLibraryPurging)?) {

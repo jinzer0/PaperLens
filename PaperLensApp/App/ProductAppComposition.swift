@@ -59,6 +59,8 @@ public final class ProductAppComposition: ObservableObject {
       let slots = try APIKeySlotStore(directory: root.appendingPathComponent("api-key-slots", isDirectory: true))
       let authority = try ProviderRequest()
       // No Agent receipt is invented. Deletion remains failed/debt until a real peer is bound.
+      // open binds startup recovery to this retained Main owner before any connection,
+      // workspace command or producer can obtain the library/read-lease owners.
       let lifecycle = try await LocalLibraryLifecycle.open(database: database, agentPurge: nil)
       self.database = database
       self.slots = slots
