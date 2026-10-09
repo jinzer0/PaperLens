@@ -321,3 +321,82 @@ for actual child release, revocation/late duplication denial, wrong-operation no
 independent Reader lifetime, uncertain close retention/no retry and release reentrancy.
 No helper/app/renderer/SDK execution, trial renewal, credentials, network or runtime
 Story/P1/P2/P3/AD8 certification is admitted by this source slice.
+
+### Actual Library child-pin source handoff
+
+Source authored after committed Spec `0043513`, against the `a92b5ec` Reader
+unknown-close baseline. Exact four-file lane only; no StoryDone or runtime admission.
+`LibraryReadLeaseProvider` now shares one private acquisition routine between Reader
+and extraction: reserve on the lifecycle registry, validate durable ready snapshot,
+open actual readonly PDF, validate durable snapshot again, then install the owned FD.
+No new database, root, registry, path-returning interface or ReaderSession API.
+The shared open uses `O_RDONLY | O_NOFOLLOW | O_CLOEXEC`, and the original handle
+disables deallocation-close so registry destruction cannot blindly retry unknown closure.
+
+Exact new public API:
+```swift
+@MainActor public func acquireExtractionReadPin(
+  for snapshot: ReaderPaperSnapshot, operationID: UUID,
+  onRevoked: @escaping @MainActor () -> Void
+) throws -> LibraryExtractionReadPin
+
+public final class LibraryExtractionReadPin: @unchecked Sendable {
+  public let operationID: UUID
+  public func validate() throws
+  public func takeSenderPDF() throws -> FileHandle
+  public func release(operationID: UUID) async throws
+}
+```
+Typed errors are `LibraryExtractionPinError.wrongOperation`, `.senderAlreadyTaken`
+and `.duplicateFailed(Int32)`; revocation uses existing ReaderError and uncertain
+physical cleanup uses existing LocalLibraryError.producerClosureUnknown.
+
+The registry creates each token's ephemeral closure observation; only checked physical
+close completes it successfully. Reentrant/concurrent release joins this same outcome,
+independently of ordinary Reader tokens. The existing `!entry.closureUnknown` physical
+effect guard remains. Close failures permanently retain ownership/debt, never retry.
+Duplication uses actual `F_DUPFD_CLOEXEC` outside arbitration with an active read counter;
+release cannot close the original while duplication or rejected-sender cleanup runs.
+One attempted duplication consumes sender admission, including syscall failure. Transfer
+linearizes at the post-duplication locked admission check: release/revoke winning before
+that check denies transfer and checks sender cleanup before retiring the active read.
+A transfer winning that check is already admitted; producer disposal remains required
+before releasing its child token. Rejected-sender unknown cleanup retains both handles
+and fails the token observation, never declares the original closed. Sender handles have
+no deallocation-close fallback; ownership must transfer directly to PDFiumPinnedInput.
+Revocation alone does not close an installed asynchronous child.
+
+Eight authored owned-file tests cover readonly/CLOEXEC and single transfer, wrong-operation
+no effect, independent Reader lifetime, deletion callback/drain, bounded concurrent dup/
+release barriers, uncertain original close/no retry, rejected sender cleanup debt/no retry,
+duplication failure/reentrant close, and durable snapshot identity. Close fault injection
+uses the registry-owned physical effect, not a FileHandle subclass. Fixtures are synthetic;
+no user documents or helper calls are involved.
+
+Parent must add `Application/LibraryExtractionReadPin.swift` to both Package.swift's
+PaperLensProduct sources and native PaperLens source membership, and register
+`Tests/Product/LibraryExtractionReadPinTests.swift` in ProductTests when explicitly listed.
+Bind actual caller's captured operation/snapshot, transfer `takeSenderPDF()` directly to
+PDFiumPinnedInput, and bind its release callback to `pin.release(operationID:)`; revoke
+requests actual producer cancellation/drain, not immediate child release. Required actual
+resource accounting, original deadline, and supplied geometry/precision remain separate
+Main owners; absent owners must reject helper admission.
+
+Only source inspection was performed. All tests/builds/gates/lint/formatters/commits,
+remotes/workflows/SDK/helper/app/renderer/runtime/delegation were explicitly skipped.
+Parent owns focused execution, fresh native compile-i, independent integrity review and
+local evidence commit. No test PASS, resource calibration, P1/P2/P3 or StoryDone claimed.
+
+#### Parent actual child-pin verification
+
+Parent registered the new actual source in Package/native targets and the eight fixture
+tests in ProductTests. Initial focused run `artifact://906` had one failure: the fixture
+provided no Agent purge but expected deletion success. The repaired assertion requires
+exact `agentPurgeUnavailable`, durable deletionFailed/debt and retained original; local
+registry drain proves only child FD closure, never Agent purge. The original failure is
+retained. Current union passes 229 tests/zero failures (`artifact://908`), including all
+eight child-pin cases (lines 142–160). Fresh unsigned Release arm64/macOS15 native-i
+compilation succeeds (`artifact://912`). Project plutil syntax also passes.
+Review59 is CLEAR / APPROVE for this actual shared-registry lifetime/FD-owner slice.
+Required resource/deadline/geometry acquisition composition is still separate; no app/
+helper binary execution, trial renewal, calibration/P1/P2/P3/AD8 or Story promotion.

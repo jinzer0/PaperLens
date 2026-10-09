@@ -19,14 +19,15 @@
     "Framed Agent RPC correlation with actual duplex-I/O quiescence barrier; unsupported product methods still deny admission",
     "Mounted data-only metadata/outline controls under actual Reader admission and published extraction identity; weak PDF ownership and synchronous revocation",
     "Explicit-precision geometry, revision/FTS and metadata/outline source APIs and fixture regressions",
-    "Typed secure PDFium pull producer source with original-budget consumer scope and native/sender/pin/accounting milestones; compiled, not activated or calibrated"
+    "Typed secure PDFium pull producer source with original-budget consumer scope and native/sender/pin/accounting milestones; compiled, not activated or calibrated",
+    "Actual Library child-pin API on the sole lifecycle registry, readonly one-time sender FD transfer and checked per-token physical closure independent of live Reader tokens"
   ],
   "verification": {
     "productUnion": {
       "command": "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --filter ProductTests",
-      "tests": 221,
+      "tests": 229,
       "failures": 0,
-      "output": "artifact://900",
+      "output": "artifact://908",
       "evidence": "Real GRDB transactions and owned synthetic files; mocked provider/HTTP transport and synthetic windowless PDFKit conversions. Not authenticated provider, app UI or PDFium execution."
     },
     "nativeCompilation": {
@@ -34,11 +35,11 @@
       "configuration": "Release",
       "architecture": "arm64",
       "minimumOS": "15.0",
-      "derivedData": ".build/product-native-compile-20261010-h",
+      "derivedData": ".build/product-native-compile-20261010-i",
       "codeSigningAllowed": false,
       "result": "BUILD SUCCEEDED",
-      "rawOutput": "artifact://901",
-      "output": "artifact://901",
+      "rawOutput": "artifact://912",
+      "output": "artifact://912",
       "applicationAndHelperBinariesExecuted": false,
       "warnings": "AppIntents metadata skipped, PDFium debug-map duplicate/missing-symbol warnings and an unnecessary-await Swift warning remain; no warning suppression or debug-symbol repair claimed."
     },
@@ -58,7 +59,8 @@
       {"reviewer": "51-ActualStartupAdmissionReview", "result": "CLEAR / APPROVE after atomic registered-summary recovery", "output": "agent://51-ActualStartupAdmissionReview", "scope": "Original summary-before-owner-admission HIGH resolved; all three registered job kinds share the existing transaction and lifecycle epoch"},
       {"reviewer": "54-ActualReaderMetadataLifetimeReview", "result": "CLEAR / APPROVE", "output": "agent://54-ActualReaderMetadataLifetimeReview", "scope": "Actual weak-PDF metadata UI mount, data-only outline, notification observation and synchronous invalidate-before-detach/read-lease release; source review only"},
       {"reviewer": "56-PDFiumCorrectedPublicationReview", "result": "CLEAR / APPROVE: original three HIGH and one MEDIUM RESOLVED", "output": "agent://56-PDFiumCorrectedPublicationReview", "scope": "Five-file actual helper, scoped consumer, captured budget, rejected-FD debt, exact acquisition reference, sole DB publication and Retry caller; source-only, not hard RSS/runtime/Story proof"},
-      {"reviewer": "57-ReaderUncertainCloseQuarantine", "result": "CLEAR / APPROVE", "output": "agent://57-ReaderUncertainCloseQuarantine", "scope": "Single physical-close uncertainty admission, actual reused test-owned readonly FD, retained Reader debt and unchanged deletion drain/saga; source-only, no whole-Story/runtime certification"}
+      {"reviewer": "57-ReaderUncertainCloseQuarantine", "result": "CLEAR / APPROVE", "output": "agent://57-ReaderUncertainCloseQuarantine", "scope": "Single physical-close uncertainty admission, actual reused test-owned readonly FD, retained Reader debt and unchanged deletion drain/saga; source-only, no whole-Story/runtime certification"},
+      {"reviewer": "59-ActualLibraryInputPinIntegrity", "result": "CLEAR / APPROVE", "output": "agent://59-ActualLibraryInputPinIntegrity", "scope": "Actual shared-registry child token, one-time readonly FD duplication, checked per-token closure, release/revoke races and retained physical debt; source-only, not parser/resource/calibration/runtime admission"}
     ]
   },
   "previousIntegrationEvidence": {
@@ -125,6 +127,23 @@
     "binariesExecuted": false,
     "storyAccepted": false
   },
+  "libraryExtractionPhysicalPin": {
+    "baseVerifiedCommit": "a92b5ec",
+    "preImplementationSpecificationCommit": "0043513",
+    "sourceDiffAgainstBaseSha256": "10a7db226d0509d3f4de91243f403cfb571ff142dd94cc8bcc54c151f1899217",
+    "sourceDiffScope": "git diff --cached --binary against0043513 for exact staged Package/project/LibraryReadLeaseProvider/LibraryExtractionReadPin/LibraryExtractionReadPinTests paths; Spec/evidence excluded",
+    "productUnion": {"tests": 229, "failures": 0, "output": "artifact://908"},
+    "scopedTestsInUnion": {"tests": 8, "failures": 0, "output": "artifact://908", "lines": "142-160"},
+    "preservedFocusedFailure": {"tests": 8, "failures": 1, "output": "artifact://906", "cause": "Fixture had no Agent purge but expected deletion success; repaired exact agentPurgeUnavailable/deletionFailed/debt/original-retained assertions, without a fake purge"},
+    "nativeOutput": "artifact://912",
+    "nativeDerivedData": ".build/product-native-compile-20261010-i",
+    "review": "agent://59-ActualLibraryInputPinIntegrity: CLEAR / APPROVE",
+    "ownership": "Same LocalLibraryLifecycle registry; readonly no-follow actual open with durable checks, active-read-pinned F_DUPFD_CLOEXEC outside arbitration, one transfer, wrong-operation no effect, checked own-token release independent of live Reader, permanent unknown cleanup debt",
+    "packageAndNativeMembershipRegistered": true,
+    "actualResourceAndGeometryComposition": false,
+    "helperExecuted": false,
+    "storyAccepted": false
+  },
   "grdbPreparationDriver": {
     "offlineTests": 22,
     "offlineFailures": 0,
@@ -158,7 +177,7 @@
   "limitations": [
     "No actual product UI, live authentication, paid provider request, protected renderer/collector trial renewal, notarization, deployment, push, PR or merge",
     "Actual Agent purge is not bound: deletion retains failure/debt rather than returning a no-op success",
-    "Metadata/outline is mounted only with an actual published extraction identity; actual PDFium source is integrated/tested/compiled but not activated or bound to supplied calibrated geometry and production resource/read-pin composition. Fixtures and compiled controls are not visible UI/accessibility acceptance",
+    "Metadata/outline is mounted only with an actual published extraction identity; actual PDFium source and genuine Library child-pin API are integrated/tested/compiled but not activated or composed with required actual resources/original deadline/calibrated geometry. Fixtures and compiled controls are not visible UI/accessibility acceptance",
     "Geometry caller precision is explicit; synthetic floating-arithmetic test budget is not an owning calibrated product profile or AD-8 correspondence proof",
     "Native model profile is uncertified; genuine Codex channel and two-provider parity remain absent",
     "OS/CPU matrix, loadedSQLite identity, P1/P2/P3 and canonical Story acceptance remain unestablished",

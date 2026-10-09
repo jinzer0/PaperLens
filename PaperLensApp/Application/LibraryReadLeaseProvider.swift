@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 /// One registry per lifecycle. Only accounting is performed under this lock.
@@ -12,15 +13,27 @@ final class LibraryReadLeaseRegistry: @unchecked Sendable {
     var closing = false
     var closureUnknown = false
     var reads = 0
+    var senderTaken = false
+    var cleanupDebt: [FileHandle] = []
+    let receipt = LibraryPinClosureObservation()
   }
   private let lock = NSLock()
   private var closed: Set<UUID> = []
   private var entries: [UUID: Entry] = [:]
   private var waiters: [UUID: [CheckedContinuation<Void, any Error>]] = [:]
   private let closeHandle: @Sendable (FileHandle) throws -> Void
+  private let duplicateHandle: @Sendable (FileHandle) throws -> FileHandle
 
-  init(closeHandle: @escaping @Sendable (FileHandle) throws -> Void = { try $0.close() }) {
+  init(
+    closeHandle: @escaping @Sendable (FileHandle) throws -> Void = { try $0.close() },
+    duplicateHandle: @escaping @Sendable (FileHandle) throws -> FileHandle = { handle in
+      let descriptor = fcntl(handle.fileDescriptor, F_DUPFD_CLOEXEC, 0)
+      guard descriptor >= 0 else { throw LibraryExtractionPinError.duplicateFailed(errno) }
+      return FileHandle(fileDescriptor: descriptor, closeOnDealloc: false)
+    }
+  ) {
     self.closeHandle = closeHandle
+    self.duplicateHandle = duplicateHandle
   }
 
   func reserve(_ snapshot: ReaderPaperSnapshot, revoke: @escaping @MainActor () -> Void) throws -> UUID {
@@ -64,6 +77,51 @@ final class LibraryReadLeaseRegistry: @unchecked Sendable {
     finishClose(token)
   }
 
+  func closureObservation(_ token: UUID) -> LibraryPinClosureObservation {
+    lock.withLock { entries[token]!.receipt }
+  }
+
+  /// Linearize admission and transfer, but perform duplication/cleanup outside arbitration.
+  func takeSenderPDF(_ token: UUID) throws -> FileHandle {
+    let original: FileHandle = try lock.withLock {
+      guard let entry = entries[token], !entry.revoked, !entry.closeRequested,
+        !entry.closureUnknown, !entry.opening, let handle = entry.handle else {
+        throw ReaderError.revoked
+      }
+      guard !entry.senderTaken else { throw LibraryExtractionPinError.senderAlreadyTaken }
+      entries[token]!.senderTaken = true
+      entries[token]!.reads += 1
+      return handle
+    }
+    defer { endRead(token) }
+    let sender = try duplicateHandle(original)
+    let admitted = lock.withLock {
+      let entry = entries[token]!
+      return !entry.revoked && !entry.closeRequested && !entry.closureUnknown
+    }
+    guard admitted else {
+      do { try closeHandle(sender) }
+      catch {
+        lock.withLock { entries[token]!.cleanupDebt.append(sender) }
+        recordUnknownClosure(token)
+        throw LocalLibraryError.producerClosureUnknown
+      }
+      throw ReaderError.revoked
+    }
+    return sender
+  }
+
+  private func recordUnknownClosure(_ token: UUID) {
+    let result = lock.withLock {
+      entries[token]!.closing = false
+      entries[token]!.closureUnknown = true
+      return (entries[token]!.receipt,
+        waiters.removeValue(forKey: entries[token]!.snapshot.paperID) ?? [])
+    }
+    result.0.finish(.failure(LocalLibraryError.producerClosureUnknown))
+    for waiter in result.1 { waiter.resume(throwing: LocalLibraryError.producerClosureUnknown) }
+  }
+
   func close(_ token: UUID) {
     lock.withLock { if entries[token] != nil { entries[token]!.closeRequested = true } }
     finishClose(token)
@@ -80,20 +138,18 @@ final class LibraryReadLeaseRegistry: @unchecked Sendable {
     do { if let handle = candidate.1 { try closeHandle(handle) } }
     catch {
       // Unknown physical closure is retained as debt, never an early release.
-      let resumes = lock.withLock {
-        entries[token]!.closing = false
-        entries[token]!.closureUnknown = true
-        return waiters.removeValue(forKey: entries[token]!.snapshot.paperID) ?? []
-      }
-      for waiter in resumes { waiter.resume(throwing: LocalLibraryError.producerClosureUnknown) }
+      recordUnknownClosure(token)
       return
     }
-    let resumes: [CheckedContinuation<Void, any Error>] = lock.withLock {
-      let paperID = entries.removeValue(forKey: token)!.snapshot.paperID
-      guard !entries.values.contains(where: { $0.snapshot.paperID == paperID }) else { return [] }
-      return waiters.removeValue(forKey: paperID) ?? []
+    let result: (LibraryPinClosureObservation, [CheckedContinuation<Void, any Error>]) = lock.withLock {
+      let entry = entries.removeValue(forKey: token)!
+      let paperID = entry.snapshot.paperID
+      let resumes = entries.values.contains(where: { $0.snapshot.paperID == paperID })
+        ? [] : waiters.removeValue(forKey: paperID) ?? []
+      return (entry.receipt, resumes)
     }
-    for waiter in resumes { waiter.resume(returning: ()) }
+    result.0.finish(.success(()))
+    for waiter in result.1 { waiter.resume(returning: ()) }
   }
 
   /// Closes admission before the caller changes durable visibility.
@@ -138,6 +194,22 @@ final class LibraryReadLeaseRegistry: @unchecked Sendable {
   public func acquireReadLease(
     for snapshot: ReaderPaperSnapshot, onRevoked: @escaping @MainActor () -> Void
   ) throws -> any ReaderReadLease {
+    let token = try acquireToken(for: snapshot, onRevoked: onRevoked)
+    return LibraryReadLease(registry: lifecycle.readLeaseRegistry, token: token)
+  }
+
+  public func acquireExtractionReadPin(
+    for snapshot: ReaderPaperSnapshot, operationID: UUID,
+    onRevoked: @escaping @MainActor () -> Void
+  ) throws -> LibraryExtractionReadPin {
+    let token = try acquireToken(for: snapshot, onRevoked: onRevoked)
+    return LibraryExtractionReadPin(operationID: operationID,
+      registry: lifecycle.readLeaseRegistry, token: token)
+  }
+
+  private func acquireToken(
+    for snapshot: ReaderPaperSnapshot, onRevoked: @escaping @MainActor () -> Void
+  ) throws -> UUID {
     let registry = lifecycle.readLeaseRegistry
     let token = try registry.reserve(snapshot, revoke: onRevoked)
     var handle: FileHandle?
@@ -149,7 +221,12 @@ final class LibraryReadLeaseRegistry: @unchecked Sendable {
       guard values.isRegularFile == true, values.isSymbolicLink != true else {
         throw ReaderError.invalidReference
       }
-      handle = try FileHandle(forReadingFrom: url)
+      let descriptor = Darwin.open(url.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+      guard descriptor >= 0 else {
+        throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+      }
+      // Only registry checked-close owns disposal, including uncertain-close debt.
+      handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: false)
       try database.validateReaderSnapshot(snapshot)
     } catch {
       try? registry.install(handle, token: token)
@@ -157,7 +234,7 @@ final class LibraryReadLeaseRegistry: @unchecked Sendable {
       throw error
     }
     try registry.install(handle, token: token)
-    return LibraryReadLease(registry: registry, token: token)
+    return token
   }
 }
 
