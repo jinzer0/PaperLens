@@ -243,13 +243,10 @@ public struct ProductJobRecovery: Sendable {
       let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
       if reference != expected || values?.isRegularFile != true || values?.isSymbolicLink == true {
         try database.adapterWrite { db in
-          try db.execute(sql: """
-            UPDATE paper SET status = 'importFailed', pdfReference = NULL, cleanupDebt = 1
-            WHERE id = ? AND status = 'ready' AND pdfReference = ?
-            """, arguments: [id, reference])
-          guard db.changesCount == 1 else { throw ProductJobRecoveryError.recoveryConflict }
-          try db.execute(sql: "UPDATE importJob SET state = 'failed', failure = 'missingPDF' WHERE paperID = ?",
-            arguments: [id])
+          guard let paperID = UUID(uuidString: id), paperID.uuidString == id else {
+            throw ProductJobRecoveryError.invalidLineage
+          }
+          try ProductDatabase.reconcileUnavailableImport(paperID, reference: reference, in: db)
         }
       }
     }

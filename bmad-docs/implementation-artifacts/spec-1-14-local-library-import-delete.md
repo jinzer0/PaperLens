@@ -1651,3 +1651,30 @@ case in per-test isolated processes, durable reopen/startup/legacy ineligibility
 cancel/delete both race orders, failed close/rename/CAS/finalization receipts,
 immutable prefixes/fresh identity denial, false cleanup/absence and no resurrection.
 Unsigned native compile is separate from app/helper/runtime/Story certification.
+
+### Coordinated cutover corrective integration receipt
+
+Parent correction also updates the existing ProductJobRecovery reconciliation seam;
+it does not add an owner, database, migration, policy or source file. When current
+bytes are missing/nonregular/symlinked, a genuine succeeded importJob and its full
+history remain byte-exact. Existing Paper availability becomes importFailed with
+NULL reference and debt1, retaining generation/SHA; this exact validated state
+lists missingPDF and admits genuine-history deletion, not Import Retry/publication.
+The existing startup check does not perform a regular-replacement SHA rescan.
+
+Known physical closure releases original concurrency capacity independently of
+receipt custody: HTTPS requires actual file-close plus final network drain, and
+validation requires actual checked read-FD close. Unknown original obligations do
+not release. Every deleting revoke protects terminal headroom transactionally,
+and the acknowledged capture is preflighted before Agent purge. Preview encoding
+is not physical authority; committed publication permits are not failed-stage
+cleanup, and irreversible unknown closure is not promoted by preview.
+
+Parent verified418 Product cases, every case in an isolated process, zero failures
+(artifact://1360), and fresh unsigned native-at BUILD SUCCEEDED (artifact://1369).
+Preserved failed attempts and scoped source hash are in local-verification.json.
+Review113's three findings have implemented/tested corrections; final independent
+correction reviews115/116 are SOURCE-ONLY CLEAR / APPROVE, no findings. Same-Job
+Retry, production Agent purge, runtime/profile
+calibration and Story/Epic acceptance remain incomplete. No application/helper
+binaries were executed; the owned XCTest scenarios above were executed.

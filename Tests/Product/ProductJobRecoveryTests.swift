@@ -30,11 +30,12 @@ struct StartupSummaryFixture {
     defer { try? FileManager.default.removeItem(at: source) }
     let paper = try await lifecycle.importPDF(from: source)
     let row = try database.adapterRead { db in
-      try XCTUnwrap(Row.fetchOne(db, sql: "SELECT generation, pdfSHA256 FROM paper WHERE id = ?",
+      try XCTUnwrap(Row.fetchOne(db, sql: "SELECT generation, pdfSHA256, status FROM paper WHERE id = ?",
         arguments: [paper.uuidString]))
     }
     let generation: String = row["generation"]
-    let hash: String = row["pdfSHA256"]
+    let hash = try XCTUnwrap(String.fromDatabaseValue(row["pdfSHA256"]),
+      "Actual owned summary import must publish: \(row)")
     let extraction = ExtractionIdentity(paperID: paper,
       generation: try XCTUnwrap(UUID(uuidString: generation)), pdfSHA256: hash,
       pdfReference: "papers/\(paper.uuidString)/document.pdf", revision: UUID(), job: UUID(),
@@ -122,7 +123,7 @@ final class ProductJobRecoveryTests: XCTestCase, @unchecked Sendable {
     let identity = ImportIdentity(paperID: UUID(), generation: UUID(), jobID: UUID(),
       attempt: UUID(), fence: UUID(), correlation: UUID(), input: UUID(), epoch: epoch,
       writer: UUID(), publication: UUID())
-    try database.reserveImport(identity, title: "Synthetic import")
+    try reserveLegacyImportFixture(in: database, identity: identity, title: "Synthetic import")
     if state != "running" {
       try database.adapterWrite { db in
         try db.execute(sql: "UPDATE importJob SET state = ?, failure = 'fixture' WHERE id = ?",

@@ -219,11 +219,12 @@ final class ProductCompositionTests: XCTestCase {
     try Data("%PDF-1.7\nsynthetic startup PDF\n%%EOF\n".utf8).write(to: source)
     let ready = try await original.importPDF(from: source)
     let metadata = try database.adapterRead { db in
-      try XCTUnwrap(Row.fetchOne(db, sql: "SELECT generation, pdfSHA256 FROM paper WHERE id = ?",
+      try XCTUnwrap(Row.fetchOne(db, sql: "SELECT generation, pdfSHA256, status FROM paper WHERE id = ?",
         arguments: [ready.uuidString]))
     }
     let generation: String = metadata["generation"]
-    let digest: String = metadata["pdfSHA256"]
+    let digest = try XCTUnwrap(String.fromDatabaseValue(metadata["pdfSHA256"]),
+      "Actual owned import must publish before extraction: \(metadata)")
     let extraction = ExtractionIdentity(paperID: ready,
       generation: try XCTUnwrap(UUID(uuidString: generation)), pdfSHA256: digest,
       pdfReference: "papers/\(ready.uuidString)/document.pdf", revision: UUID(), job: UUID(),
@@ -233,7 +234,7 @@ final class ProductCompositionTests: XCTestCase {
     let pending = ImportIdentity(paperID: UUID(), generation: UUID(), jobID: UUID(),
       attempt: UUID(), fence: UUID(), correlation: UUID(), input: UUID(), epoch: original.epoch,
       writer: UUID(), publication: UUID())
-    try database.reserveImport(pending, title: "Startup interrupted import")
+    try reserveLegacyImportFixture(in: database, identity: pending, title: "Startup interrupted import")
     let directory = database.root.appendingPathComponent("papers/\(pending.paperID.uuidString)")
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     let stage = directory.appendingPathComponent("\(pending.attempt.uuidString).stage")
@@ -266,7 +267,7 @@ final class ProductCompositionTests: XCTestCase {
     let pending = ImportIdentity(paperID: UUID(), generation: UUID(), jobID: UUID(),
       attempt: UUID(), fence: UUID(), correlation: UUID(), input: UUID(), epoch: UUID(),
       writer: UUID(), publication: UUID())
-    try database.reserveImport(pending, title: "Recovery rollback fixture")
+    try reserveLegacyImportFixture(in: database, identity: pending, title: "Recovery rollback fixture")
     try database.adapterWrite { db in
       try db.execute(sql: """
         CREATE TRIGGER rejectStartupRecovery BEFORE UPDATE OF state ON importJob
@@ -353,7 +354,7 @@ final class ProductCompositionTests: XCTestCase {
     let pending = ImportIdentity(paperID: UUID(), generation: UUID(), jobID: UUID(),
       attempt: UUID(), fence: UUID(), correlation: UUID(), input: UUID(), epoch: original.epoch,
       writer: UUID(), publication: UUID())
-    try database.reserveImport(pending, title: "Summary failure atomic rollback")
+    try reserveLegacyImportFixture(in: database, identity: pending, title: "Summary failure atomic rollback")
     let extraction = ExtractionIdentity(paperID: summary.identity.paperID,
       generation: summary.identity.generation, pdfSHA256: summary.identity.pdfSHA256,
       pdfReference: "papers/\(summary.identity.paperID.uuidString)/document.pdf", revision: UUID(), job: UUID(),

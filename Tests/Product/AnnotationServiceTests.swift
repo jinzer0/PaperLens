@@ -100,7 +100,7 @@ final class AnnotationServiceTests: XCTestCase {
     let old = try service.createNote(selected, text: "before deletion")
     _ = try service.createHighlight(selected)
     let unrelated = try service.createNote(selection(other), text: "unrelated")
-    let saga = try XCTUnwrap(db.beginDeletion(paper.id))
+    let saga = try XCTUnwrap(db.beginDeletion(paper.id)).saga
     XCTAssertThrowsError(try service.createHighlight(selected))
     XCTAssertThrowsError(try service.createNote(selected, text: "late note"))
     XCTAssertThrowsError(try service.updateNote(old, text: "late edit"))

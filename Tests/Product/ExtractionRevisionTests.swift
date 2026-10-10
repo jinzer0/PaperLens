@@ -216,7 +216,7 @@ final class ExtractionRevisionTests: XCTestCase {
     _ = try db.compareAndSwapProviderConfiguration(expected: retry.configuration, replacementSlotID: UUID(),
       replacementModel: "fixture-snapshot")
     XCTAssertThrowsError(try publishFixtureExtraction(db, retry, sentences: rows("stale")))
-    let saga = try XCTUnwrap(db.beginDeletion(paper))
+    let saga = try XCTUnwrap(db.beginDeletion(paper)).saga
     XCTAssertTrue(try db.searchExtraction(paperID: paper, matching: "retained").isEmpty)
     try db.finalizeDeletion(paper, saga: saga)
     XCTAssertThrowsError(try publishFixtureExtraction(db, retry, sentences: rows("resurrected")))

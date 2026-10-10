@@ -28,9 +28,9 @@
   "verification": {
     "productUnion": {
       "command": "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --parallel --num-workers 1 --filter ProductTests",
-      "tests": 413,
+      "tests": 418,
       "failures": 0,
-      "output": "artifact://1323",
+      "output": "artifact://1360",
       "evidence": "Real GRDB transactions, owned synthetic files and actual local FIFO IO/close/peer metadata/EPIPE; mocked provider/HTTP transport and synthetic windowless PDFKit conversions. Not authenticated provider, app UI, SDK producer or PDFium execution."
     },
     "nativeCompilation": {
@@ -38,11 +38,11 @@
       "configuration": "Release",
       "architecture": "arm64",
       "minimumOS": "15.0",
-      "derivedData": ".build/product-native-compile-20261010-as",
+      "derivedData": ".build/product-native-compile-20261010-at",
       "codeSigningAllowed": false,
       "result": "BUILD SUCCEEDED",
-      "rawOutput": "artifact://1324",
-      "output": "artifact://1324",
+      "rawOutput": "artifact://1369",
+      "output": "artifact://1369",
       "applicationAndHelperBinariesExecuted": false,
       "warnings": "AppIntents metadata skipped, PDFium debug-map duplicate/missing-symbol warnings and an unnecessary-await Swift warning remain; no warning suppression or debug-symbol repair claimed."
     },
@@ -296,6 +296,29 @@
     "runtimeParsingOrCalibrationVerified": false,
     "helperExecuted": false,
     "storyAccepted": false
+  },
+  "coordinatedJournaledImportLifecycle": {
+    "specificationCommit": "1aa47fda2a013115b58c3ae015a11acf131b3e1b",
+    "sourceDiffAgainstSpecificationSha256": "2f87b26b602d8d9baf63f42c792ded0397f1aa64ebf8603035de5070f0b697f7",
+    "sourceScope": "Exact staged Package, six existing production sources and ten Product test/fixture paths; Spec/evidence excluded from source hash",
+    "actualPaths": "Local and HTTPS URL owners use acknowledged sole-GRDB journal reservation, writer-open, actual completion, publication admission, checked move/SQL acknowledgment, fresh cleanup/removal admission and atomic tombstone/full-history erasure. Per-Paper FIFO spans database await/install, not producer/drain waits. Actual physical roots remain independently retained through failed acknowledgment; unknown FD/lease/scope/stage cannot be released by reason enums or numeric fixture teardown.",
+    "correctiveIntegration": "Existing ProductJobRecovery missing-file reconciliation preserves exact succeeded importJob/history and Paper generation/SHA; validated current unavailable-success is importFailed/NULL reference/debt1 and lists missingPDF without rewriting committed success. Namespace uses the same canonical root spelling as strict storage publication. Known HTTPS file-close plus final network drain returns scarce pool capacity before validation, while completion remains rooted until durable ACK. Known validator close returns quota separately from receipt-root acknowledgment. Deletion preflights acknowledged captures before Agent purge, and each new revoke protects terminal headroom before persistence.",
+    "affectedTests": {"tests": 193, "failures": 0, "output": "artifact://1359", "processMode": "SwiftPM --parallel --num-workers 1; every selected case invoked"},
+    "productUnion": {"tests": 418, "failures": 0, "output": "artifact://1360", "processMode": "SwiftPM --parallel --num-workers 1; every Product case invoked", "testsSkipped": 0},
+    "nativeCompilation": {"result": "BUILD SUCCEEDED", "output": "artifact://1369", "derivedData": ".build/product-native-compile-20261010-at", "codeSigningAllowed": false, "applicationAndHelperBinariesExecuted": false},
+    "preservedAttempts": ["bg_1: historical implementation launcher exited2, Unknown option: --cwd; no replay. Supported subprocess cwd launcher bg_2 exited0, source authorship only.", "artifact://1328, artifact://1329, artifact://1330, artifact://1331: compilation failures retained; exact API consumers, test-only legacy fixture membership and typed failure expectations corrected without production compatibility paths.", "artifact://1341: all192 affected cases invoked, failures and three fatal fixture casts retained; actual canonical namespace mismatch and obsolete receipt assertions diagnosed.", "artifact://1348: 17 actual local closure/unknown/reservation-refusal/missing-purge cases passed.", "artifact://1349: three startup importFailed failures reproduced without fatal casts; canonical-root constructor correction then passed all three.", "artifact://1357: 31 cases invoked, one legacy-only-finalization mismatch retained; actual missing-file success-history deletion case passed.", "artifact://1358: 193 cases invoked, committed-publication preview and network-versus-validator fixture flag failures retained; corrected without weakening physical guards."],
+    "initialReview": "agent://113-JournalCutoverReview: SOURCE-ONLY BLOCK, three findings; implemented/tested corrections independently reviewed CLEAR by115/116",
+    "correctionReviews": {"availability": "agent://115-AvailabilityReview: SOURCE-ONLY CLEAR / APPROVE; no findings; exact unavailable-success/job-history preservation, rollback and protected repeated deletion admission", "physical": "agent://116-PhysicalCutoverReview: SOURCE-ONLY CLEAR / APPROVE; no findings; known-close capacity/custody separation, sticky unknown obligations, Agent-before-effects headroom and canonical namespace construction"},
+    "physicalEvidence": "Real owned local copy/once-close/SHA/seal/progress and owned URLProtocol file-close/network-drain/validation. Known receipts return original quota while retaining roots until ACK. An actual unknown HTTPS close retains its original FD/stage/lease and blocks Agent effects; a separate fresh URL import can publish using the remaining same-pool slot. Near-quota genuine successful history rejects deletion before owned Agent purge, leaves rows/bytes exact and does not prune or enlarge quota. Missing PDF availability preserves exact successful history and can complete genuine-history deletion with the scoped synthetic peer.",
+    "formatter": "No project .swift-format/.swiftformat/.swiftlint.yml configuration found; source conventions retained and scoped git diff --check passed",
+    "sameJobRetryUIActivated": false,
+    "productionAgentPurgeAvailable": false,
+    "regularReplacementStartupSHARescanImplemented": false,
+    "sameUIDRaceABAOrGlobalClosureProved": false,
+    "certifiedEnforcementOrCalibrationVerified": false,
+    "helperRendererSDKOrAuthenticatedProviderExecuted": false,
+    "storyAccepted": false,
+    "epicAccepted": false
   },
   "checkedActualNamespaceAbsence": {
     "specificationCommit": "e651acb",

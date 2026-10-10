@@ -93,7 +93,8 @@ let package = Package(
         "ExtractionFixtureBudget.swift", "LibraryExtractionReadPinTests.swift",
         "PDFiumExtractionResourceOwnerTests.swift", "LibraryPDFiumInputAcquirerTests.swift",
         "OwnedPipeAgentRPCChannelTests.swift", "MainPDFiumParsingCompositionTests.swift",
-        "ImportRecoveryJournalTests.swift", "ImportRecoveryPersistenceTests.swift"]
+        "ImportRecoveryJournalTests.swift", "ImportRecoveryPersistenceTests.swift",
+        "LegacyImportFixture.swift"]
     ),
     .target(
       name: "PDFReadiness",

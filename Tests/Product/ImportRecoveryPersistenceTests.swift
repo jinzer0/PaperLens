@@ -31,7 +31,7 @@ final class ImportRecoveryPersistenceTests: XCTestCase {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     let db = try ProductDatabase.open(at: root)
     let id = identity()
-    try db.reserveImport(id, title: "Synthetic history fixture")
+    try reserveLegacyImportFixture(in: db, identity: id, title: "Synthetic history fixture")
     let pending = try ImportRecoveryJournal(identity: id, confirmedInput: facts)
     let claimed = try pending.recording(.claim(pending.snapshot().current.lineage))
     return (root, db, id, claimed)
@@ -440,7 +440,9 @@ final class ImportRecoveryPersistenceTests: XCTestCase {
       let (root, db, id, expected, stage) = try publicationFixture(confirmedHash: confirmedHash, folder: true)
       defer { try? FileManager.default.removeItem(at: root) }
       try db.recordProgress(id, bytes: stage.bytes)
-      let completed = try db.publishJournaledImport(expected: expected, closedStage: stage)
+      let receipt = ImportPublicationReceipt(stage: stage)
+      let completed = try db.publishJournaledImport(expected: expected, closedStage: stage, receipt: receipt)
+      XCTAssertTrue(receipt.moved)
       XCTAssertFalse(FileManager.default.fileExists(atPath: stage.file.path))
       XCTAssertEqual(try Data(contentsOf: finalURL(stage)), stageData)
       let snapshot = try completed.journal.snapshot()
@@ -477,7 +479,8 @@ final class ImportRecoveryPersistenceTests: XCTestCase {
     XCTAssertThrowsError(try db.appendJournaledImport(expected: expected, replacement: differentFacts))
     let updated = try db.appendJournaledImport(expected: expected, replacement: replacement)
     assertError(.staleHistory) { _ = try db.appendJournaledImport(expected: expected, replacement: replacement) }
-    assertError(.staleHistory) { _ = try db.publishJournaledImport(expected: expected, closedStage: stage) }
+    assertError(.staleHistory) { _ = try db.publishJournaledImport(expected: expected,
+      closedStage: stage, receipt: .init(stage: stage)) }
     try assertNoMove(updated, stage: stage, db: db)
   }
 
@@ -497,7 +500,8 @@ final class ImportRecoveryPersistenceTests: XCTestCase {
       case "upperHash": observation = ClosedImportStage(file: stage.file, sha256: stage.sha256.uppercased(), bytes: stage.bytes)
       default: break
       }
-      XCTAssertThrowsError(try db.publishJournaledImport(expected: supplied, closedStage: observation), denial)
+      XCTAssertThrowsError(try db.publishJournaledImport(expected: supplied,
+        closedStage: observation, receipt: .init(stage: observation)), denial)
       try assertNoMove(expected, stage: stage, db: db)
     }
   }
@@ -521,7 +525,8 @@ final class ImportRecoveryPersistenceTests: XCTestCase {
       }
       let replacement = try expected.journal.recording(.authorityChanged(expected.journal.snapshot().authority))
       XCTAssertThrowsError(try db.appendJournaledImport(expected: expected, replacement: replacement))
-      XCTAssertThrowsError(try db.publishJournaledImport(expected: expected, closedStage: stage))
+      XCTAssertThrowsError(try db.publishJournaledImport(expected: expected,
+        closedStage: stage, receipt: .init(stage: stage)))
       XCTAssertTrue(FileManager.default.fileExists(atPath: stage.file.path))
       XCTAssertFalse(FileManager.default.fileExists(atPath: finalURL(stage).path))
     }
@@ -530,7 +535,8 @@ final class ImportRecoveryPersistenceTests: XCTestCase {
     _ = try db.beginDeletion(id.paperID)
     XCTAssertThrowsError(try db.appendJournaledImport(expected: expected,
       replacement: expected.journal.recording(.revoke)))
-    XCTAssertThrowsError(try db.publishJournaledImport(expected: expected, closedStage: stage))
+    XCTAssertThrowsError(try db.publishJournaledImport(expected: expected,
+      closedStage: stage, receipt: .init(stage: stage)))
     XCTAssertTrue(FileManager.default.fileExists(atPath: stage.file.path))
     XCTAssertFalse(FileManager.default.fileExists(atPath: finalURL(stage).path))
   }
@@ -573,7 +579,8 @@ final class ImportRecoveryPersistenceTests: XCTestCase {
       }
       let observation = ClosedImportStage(file: file, sha256: stage.sha256,
         bytes: denial == "size" ? stage.bytes + 1 : stage.bytes)
-      XCTAssertThrowsError(try db.publishJournaledImport(expected: expected, closedStage: observation), denial)
+      XCTAssertThrowsError(try db.publishJournaledImport(expected: expected,
+        closedStage: observation, receipt: .init(stage: observation)), denial)
       XCTAssertEqual(try read(id, db: db).encoded, expected.encoded)
       XCTAssertTrue(fm.fileExists(atPath: stage.file.path))
       if denial == "overwrite" { XCTAssertEqual(try Data(contentsOf: final), stageData) }
@@ -598,7 +605,8 @@ final class ImportRecoveryPersistenceTests: XCTestCase {
     }
     let expected = try db.appendJournaledImport(expected: initial, replacement: journal)
     XCTAssertLessThanOrEqual(expected.encoded.count, maximum)
-    XCTAssertThrowsError(try db.publishJournaledImport(expected: expected, closedStage: stage))
+    XCTAssertThrowsError(try db.publishJournaledImport(expected: expected,
+      closedStage: stage, receipt: .init(stage: stage)))
     try assertNoMove(expected, stage: stage, db: db)
   }
 
@@ -627,7 +635,10 @@ final class ImportRecoveryPersistenceTests: XCTestCase {
         }
         try sql.execute(sql: "CREATE TRIGGER denyPublication \(statement)")
       }
-      XCTAssertThrowsError(try db.publishJournaledImport(expected: expected, closedStage: stage), trigger)
+      let receipt = ImportPublicationReceipt(stage: stage)
+      XCTAssertThrowsError(try db.publishJournaledImport(expected: expected,
+        closedStage: stage, receipt: receipt), trigger)
+      XCTAssertTrue(receipt.moved, "Rollback must not erase the actual move receipt")
       XCTAssertFalse(FileManager.default.fileExists(atPath: stage.file.path))
       XCTAssertEqual(try Data(contentsOf: finalURL(stage)), stageData)
       XCTAssertEqual(try read(id, db: db).encoded, expected.encoded)
@@ -689,7 +700,8 @@ final class ImportRecoveryPersistenceTests: XCTestCase {
       if denial != "revoked" {
         XCTAssertThrowsError(try db.appendJournaledImport(expected: expected, replacement: observation))
       }
-      XCTAssertThrowsError(try db.publishJournaledImport(expected: expected, closedStage: stage))
+      XCTAssertThrowsError(try db.publishJournaledImport(expected: expected,
+        closedStage: stage, receipt: .init(stage: stage)))
       XCTAssertTrue(FileManager.default.fileExists(atPath: stage.file.path))
       XCTAssertFalse(FileManager.default.fileExists(atPath: finalURL(stage).path))
     }
@@ -1043,7 +1055,7 @@ final class ImportRecoveryPersistenceTests: XCTestCase {
     let id = identity()
     var record = try db.reserveJournaledImport(id, title: "Actual deletion command", confirmedInput: facts)
     if cause == "paperDeleting" {
-      let saga = try XCTUnwrap(db.beginDeletion(id.paperID))
+      let saga = try XCTUnwrap(db.beginDeletion(id.paperID)).saga
       return (root, db, id, try readDeleting(id, saga: saga, db: db))
     }
     let lineage = try record.journal.snapshot().current.lineage
@@ -1081,7 +1093,7 @@ final class ImportRecoveryPersistenceTests: XCTestCase {
       defer { try? FileManager.default.removeItem(at: root) }
       let before = try actualRows(db)
       let expected = try original.journal.recording(.revoke)
-      let saga = try XCTUnwrap(db.beginDeletion(id.paperID))
+      let saga = try XCTUnwrap(db.beginDeletion(id.paperID)).saga
       var record = try readDeleting(id, saga: saga, db: db)
       XCTAssertEqual(record.encoded, try expected.encoded(maximumBytes: bound))
       XCTAssertTrue(try record.journal.extends(original.journal, maximumBytes: bound))
@@ -1111,31 +1123,32 @@ final class ImportRecoveryPersistenceTests: XCTestCase {
       for failed in [false, true] {
         if failed { try db.deletionFailed(id.paperID, saga: saga, reason: "deletionIncomplete") }
         let prior = record
-        XCTAssertEqual(try db.beginDeletion(id.paperID), saga)
+        XCTAssertEqual(try db.beginDeletion(id.paperID)?.saga, saga)
         record = try readDeleting(id, saga: saga, db: ProductDatabase.open(at: root))
         XCTAssertEqual(record.encoded, try prior.journal.recording(.revoke).encoded(maximumBytes: bound))
         XCTAssertTrue(try record.journal.extends(prior.journal, maximumBytes: bound))
         XCTAssertEqual(try record.journal.snapshot(), try prior.journal.snapshot())
         XCTAssertNotEqual(record.encoded, prior.encoded)
       }
-      try db.finalizeDeletion(id.paperID, saga: saga)
+      let retained = try actualRows(db)
+      assertError(.invalidHistory) { try db.finalizeDeletion(id.paperID, saga: saga) }
       let reopened = try ProductDatabase.open(at: root)
-      XCTAssertEqual(try reopened.adapterRead { try Int.fetchOne($0, sql: "SELECT count(*) FROM importJob") }, 0)
-      let tombstone = try reopened.adapterRead { try XCTUnwrap(Row.fetchOne($0, sql: "SELECT * FROM paper")) }
-      XCTAssertEqual(String.fromDatabaseValue(tombstone["status"]), "tombstone")
-      XCTAssertEqual(String.fromDatabaseValue(tombstone["title"]), "")
-      XCTAssertTrue((tombstone["pdfReference"] as DatabaseValue).isNull)
-      XCTAssertTrue((tombstone["pdfSHA256"] as DatabaseValue).isNull)
-      XCTAssertTrue((tombstone["deletionFailure"] as DatabaseValue).isNull)
+      assertRows(retained, equal: try actualRows(reopened))
+      XCTAssertEqual(try readDeleting(id, saga: saga, db: reopened).encoded, record.encoded)
+      // Actual lifecycle tests separately prove physical cleanup admission and
+      // atomic namespace-completion/tombstone/history erasure.
     }
   }
 
   func testActualBeginDeletionLegacyNullRemainsIneligibleAcrossRetryAndReopen() throws {
     let (root, db, id, _) = try fixture()
     defer { try? FileManager.default.removeItem(at: root) }
-    let saga = try XCTUnwrap(db.beginDeletion(id.paperID))
+    let capture = try XCTUnwrap(db.beginDeletion(id.paperID))
+    XCTAssertEqual(capture.legacyJobCount, 1)
+    XCTAssertTrue(capture.histories.isEmpty)
+    let saga = capture.saga
     try db.deletionFailed(id.paperID, saga: saga, reason: "agentClosureUnproved")
-    XCTAssertEqual(try db.beginDeletion(id.paperID), saga)
+    XCTAssertEqual(try db.beginDeletion(id.paperID)?.saga, saga)
     let reopened = try ProductDatabase.open(at: root)
     XCTAssertTrue((try actualRows(reopened).1["recoveryJournal"] as DatabaseValue).isNull)
     assertError(.missingHistory) { _ = try readDeleting(id, saga: saga, db: reopened) }
@@ -1209,7 +1222,7 @@ final class ImportRecoveryPersistenceTests: XCTestCase {
 
     let (quotaRoot, quotaDB, quotaID, _) = try deletionCommandFixture()
     defer { try? FileManager.default.removeItem(at: quotaRoot) }
-    let saga = try XCTUnwrap(quotaDB.beginDeletion(quotaID.paperID))
+    let saga = try XCTUnwrap(quotaDB.beginDeletion(quotaID.paperID)).saga
     let record = try readDeleting(quotaID, saga: saga, db: quotaDB)
     let next = try record.journal.recording(.revoke).encoded(maximumBytes: bound)
     let increment = next.count - record.encoded.count
@@ -1651,7 +1664,7 @@ final class ImportRecoveryPersistenceTests: XCTestCase {
   private func lateAbortFixture() throws
     -> (URL, ProductDatabase, ImportIdentity, UUID, ImportRecoveryRecord) {
     let (root, db, id, _) = try deletionCommandFixture()
-    let saga = try XCTUnwrap(db.beginDeletion(id.paperID))
+    let saga = try XCTUnwrap(db.beginDeletion(id.paperID)).saga
     return (root, db, id, saga, try readDeleting(id, saga: saga, db: db))
   }
 
@@ -1727,7 +1740,7 @@ final class ImportRecoveryPersistenceTests: XCTestCase {
       "publicationRejected", "cancelled", "interrupted"] {
       let (root, db, id, _) = try deletionCommandFixture(cause: cause)
       defer { try? FileManager.default.removeItem(at: root) }
-      let saga = try XCTUnwrap(db.beginDeletion(id.paperID))
+      let saga = try XCTUnwrap(db.beginDeletion(id.paperID)).saga
       let expected = try readDeleting(id, saga: saga, db: db)
       let before = try actualRows(db)
       let replacement = try expected.journal.recording(.revoke)
@@ -1942,7 +1955,7 @@ final class ImportRecoveryPersistenceTests: XCTestCase {
   func testDeletingLateAbortLegacyNullNeverReconstructsAndPositiveBoundsPrecedeSQL() throws {
     let (root, db, id, claimed) = try fixture()
     defer { try? FileManager.default.removeItem(at: root) }
-    let saga = try XCTUnwrap(db.beginDeletion(id.paperID))
+    let saga = try XCTUnwrap(db.beginDeletion(id.paperID)).saga
     let revoked = try claimed.recording(.revoke)
     let expected = ImportRecoveryRecord(journal: revoked, encoded: try revoked.encoded(maximumBytes: bound))
     let replacement = try revoked.recording(.revoke)

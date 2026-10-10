@@ -86,11 +86,16 @@ private final class OwnedCopyEffects: @unchecked Sendable {
   }
 
   func physicallyTearDown(_ debt: ActualCopyDebt) throws {
-    // Only test-owned descriptors. Do not mutate or ACK the runtime's unknown registry.
-    if !debt.outputClosed { try XCTUnwrap(debt.output).close() }
-    if !debt.inputClosed { try XCTUnwrap(debt.input).close() }
-    if debt.scoped { effects.stopScope(debt.source) }
-    debt.lease.close()
+    // Numeric fixture teardown is not a second checked close, scope ACK or quota release.
+    for endpoint in [ActualCopyEndpoint.output, .input] {
+      let known = endpoint == .output ? debt.outputClosed : debt.inputClosed
+      if !known {
+        let fd = try XCTUnwrap(acquiredFD(endpoint))
+        guard Darwin.close(fd) == 0 else {
+          throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+      }
+    }
   }
 }
 
@@ -138,6 +143,7 @@ private actor SyntheticAgentPurge: AgentLibraryPurging {
 
 final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
   private var temporary: URL!
+  private var retainsUnknownFixture = false
   private var root: URL { temporary.appendingPathComponent("product", isDirectory: true) }
 
   override func setUpWithError() throws {
@@ -147,7 +153,7 @@ final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
   }
 
   override func tearDownWithError() throws {
-    if let temporary { try FileManager.default.removeItem(at: temporary) }
+    if let temporary, !retainsUnknownFixture { try FileManager.default.removeItem(at: temporary) }
     temporary = nil
   }
 
@@ -193,7 +199,7 @@ final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
   func testEveryImportMutationRejectsEachForeignExecutionIdentity() throws {
     let db = try ProductDatabase.open(at: root)
     let current = identity()
-    try db.reserveImport(current, title: "owned exact lineage")
+    try reserveLegacyImportFixture(in: db, identity: current, title: "owned exact lineage")
     try db.recordProgress(current, bytes: 7)
     let original = try observeImport(db, current)
     let owned = namespace(current.paperID)
@@ -235,7 +241,7 @@ final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
   func testOldImportFailureAndProgressCannotMutateReopenedNewerExecution() throws {
     var db: ProductDatabase? = try ProductDatabase.open(at: root)
     let old = identity()
-    try db!.reserveImport(old, title: "owned old execution")
+    try reserveLegacyImportFixture(in: db!, identity: old, title: "owned old execution")
     let next = ImportIdentity(paperID: old.paperID, generation: old.generation, jobID: old.jobID,
       attempt: UUID(), fence: UUID(), correlation: UUID(), input: UUID(), epoch: UUID(), writer: UUID(), publication: UUID())
     // Adversarial owned SQL fixture, not an implemented Retry or fabricated history API.
@@ -272,7 +278,7 @@ final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
   func testImportFailureRowRefusalRollsBackPaperAndDebtAtomically() throws {
     let db = try ProductDatabase.open(at: root)
     let current = identity()
-    try db.reserveImport(current, title: "owned rollback")
+    try reserveLegacyImportFixture(in: db, identity: current, title: "owned rollback")
     let before = try observeImport(db, current)
     try db.adapterWrite { sql in
       try sql.execute(sql: """
@@ -295,7 +301,7 @@ final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
   func testImportProgressCannotDecreaseOrCrossDeletionFence() throws {
     let db = try ProductDatabase.open(at: root)
     let current = identity()
-    try db.reserveImport(current, title: "owned progress")
+    try reserveLegacyImportFixture(in: db, identity: current, title: "owned progress")
     try db.recordProgress(current, bytes: 12)
     let before = try observeImport(db, current)
     for bytes in [Int64(-1), 0, 11] {
@@ -319,7 +325,7 @@ final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
   func testExactDeletingAbortPreservesSagaFailureAndOtherCleanupDebt() throws {
     let db = try ProductDatabase.open(at: root)
     let current = identity()
-    try db.reserveImport(current, title: "owned deleting abort")
+    try reserveLegacyImportFixture(in: db, identity: current, title: "owned deleting abort")
     _ = try db.beginDeletion(current.paperID)
     let before = try observeImport(db, current)
     try db.recordImportAbort(current, failure: "cancelled", cleanupDebt: false)
@@ -391,6 +397,21 @@ final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
       observation.identity.input.uuidString, observation.identity.epoch.uuidString,
       observation.identity.writer.uuidString, observation.identity.publication.uuidString])
     XCTAssertEqual(rows[1], observation.identity.generation.uuidString)
+    let history = try db.adapterRead { sql in
+      try ProductDatabase.readImportRecovery(observation.identity,
+        maximumBytes: ProductJobRecovery.maximumImportRecoveryJournalBytes, in: sql)
+    }
+    let capture = try history.journal.currentCapture()
+    XCTAssertEqual(capture.confirmedInput,
+      .init(expectedSHA256: sha, destinationFolderID: nil))
+    let published = try history.journal.snapshot()
+    XCTAssertEqual(published.current.state, .succeeded)
+    XCTAssertTrue(published.permits.isEmpty)
+    XCTAssertEqual(published.usedPermitIDs,
+      [observation.identity.writer.uuidString, observation.identity.publication.uuidString])
+    XCTAssertEqual(published.usableResult?.result.id, observation.identity.attempt.uuidString)
+    XCTAssertEqual(try history.journal.encoded(
+      maximumBytes: ProductJobRecovery.maximumImportRecoveryJournalBytes), history.encoded)
     let owned = namespace(id).appendingPathComponent("document.pdf")
     XCTAssertEqual(try Data(contentsOf: owned), bytes)
     let attributes = try FileManager.default.attributesOfItem(atPath: owned.path)
@@ -398,12 +419,50 @@ final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
     try Data("changed fixture source".utf8).write(to: original)
     let reopened = try ProductDatabase.open(at: root)
     XCTAssertEqual(try observeImport(reopened, observation.identity), rows)
+    XCTAssertEqual(try reopened.adapterRead { sql in
+      try ProductDatabase.readImportRecovery(observation.identity,
+        maximumBytes: ProductJobRecovery.maximumImportRecoveryJournalBytes, in: sql).encoded
+    }, history.encoded)
     XCTAssertEqual(try Data(contentsOf: owned), bytes)
     XCTAssertEqual(effects.census, [.output, .input])
     XCTAssertEqual(effects.scopeCensus, [1, 1])
     XCTAssertEqual(pool.active, baseline)
     XCTAssertFalse(LocalLibraryLifecycle.actualCopyDebts.contains { $0.identity.paperID == id })
     assertActualPoolDenial(pool, authority: authority)
+  }
+
+  func testJournalReservationRefusalHasNoActualScopeDescriptorOrNamespaceEffects() async throws {
+    let authority = try ProviderRequest()
+    let pool = try RequestResourcePool(authority: authority, kind: "import")
+    let baseline = pool.active
+    let db = try ProductDatabase.open(at: root)
+    try db.adapterWrite { sql in
+      try sql.execute(sql: """
+        CREATE TRIGGER rejectActualJournalReservation BEFORE UPDATE OF recoveryJournal ON importJob
+        BEGIN SELECT RAISE(IGNORE); END
+        """)
+    }
+    let effects = OwnedCopyEffects()
+    let lifecycle = try await LocalLibraryLifecycle.openForOwnedCopyFixtures(database: db, effects: effects.effects)
+    let original = try source()
+    let bytes = try Data(contentsOf: original)
+    do {
+      _ = try await lifecycle.importPDF(from: original)
+      XCTFail("Refused durable reservation admitted the actual producer")
+    } catch {
+      XCTAssertEqual(error as? ImportRecoveryPersistenceError, .staleHistory)
+    }
+    XCTAssertTrue(effects.census.isEmpty)
+    XCTAssertTrue(effects.observations.isEmpty)
+    XCTAssertEqual(effects.scopeCensus, [0, 0])
+    XCTAssertEqual(pool.active, baseline)
+    XCTAssertTrue(try db.libraryRecords().isEmpty)
+    XCTAssertEqual(try db.adapterRead { sql in
+      try Int.fetchOne(sql, sql: "SELECT COUNT(*) FROM importJob")
+    }, 0)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: db.root.appendingPathComponent("papers").path),
+      "Failed durable reservation must not create even the namespace parent")
+    XCTAssertEqual(try Data(contentsOf: original), bytes)
   }
 
   func testActualBodyClosureUnknownLabelDoesNotOverrideKnownPhysicalClosure() async throws {
@@ -435,8 +494,20 @@ final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
     XCTAssertEqual(rows[5], "failed")
     XCTAssertEqual(rows[6], "importFailed")
     XCTAssertEqual(rows[14], "0")
+    let history = try db.adapterRead { sql in
+      try ProductDatabase.readImportRecovery(observation.identity,
+        maximumBytes: ProductJobRecovery.maximumImportRecoveryJournalBytes, in: sql)
+    }
+    let failed = try history.journal.snapshot()
+    XCTAssertEqual(failed.current.state, .failed(.failed))
+    XCTAssertTrue(failed.permits.isEmpty, "Actual known closure and cleanup must be durably acknowledged")
+    XCTAssertEqual(failed.usedOperationIDs.count, 1)
     let reopened = try ProductDatabase.open(at: root)
     XCTAssertEqual(try observeImport(reopened, observation.identity), rows)
+    XCTAssertEqual(try reopened.adapterRead { sql in
+      try ProductDatabase.readImportRecovery(observation.identity,
+        maximumBytes: ProductJobRecovery.maximumImportRecoveryJournalBytes, in: sql).encoded
+    }, history.encoded)
     XCTAssertFalse(try XCTUnwrap(reopened.libraryRecords().first { $0.id == id }).cleanupDebt)
   }
 
@@ -474,8 +545,23 @@ final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
     XCTAssertEqual(rows[6], "sourceChanged")
     XCTAssertEqual(rows[14], "0")
     XCTAssertEqual(rows[15], String(bytes.count))
+    let history = try db.adapterRead { sql in
+      try ProductDatabase.readImportRecovery(observation.identity,
+        maximumBytes: ProductJobRecovery.maximumImportRecoveryJournalBytes, in: sql)
+    }
+    XCTAssertEqual(try history.journal.currentCapture().confirmedInput,
+      .init(expectedSHA256: String(repeating: "0", count: 64), destinationFolderID: nil))
+    let failed = try history.journal.snapshot()
+    XCTAssertEqual(failed.current.state, .failed(.failed))
+    XCTAssertTrue(failed.permits.isEmpty)
+    XCTAssertNil(failed.usableResult)
+    XCTAssertEqual(failed.usedOperationIDs.count, 1)
     let reopened = try ProductDatabase.open(at: root)
     XCTAssertEqual(try observeImport(reopened, observation.identity), rows)
+    XCTAssertEqual(try reopened.adapterRead { sql in
+      try ProductDatabase.readImportRecovery(observation.identity,
+        maximumBytes: ProductJobRecovery.maximumImportRecoveryJournalBytes, in: sql).encoded
+    }, history.encoded)
   }
 
   func testActualNonFileAndNULInputsFailBeforeScopeOrEndpoints() async throws {
@@ -600,68 +686,87 @@ final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
     }
   }
 
-  func testActualCloseUnknownRetainsRealFDsPoolScopeAndNamespaceAcrossFacadeLoss() async throws {
+  func testActualInputCloseUnknownRetainsRealFDPoolScopeAndNamespaceAcrossFacadeLoss() async throws {
+    try await assertActualCloseUnknown(failures: [.input])
+  }
+
+  func testActualOutputCloseUnknownRetainsRealFDPoolScopeAndNamespaceAcrossFacadeLoss() async throws {
+    try await assertActualCloseUnknown(failures: [.output])
+  }
+
+  func testActualBothClosesUnknownRetainRealFDsPoolScopeAndNamespaceAcrossFacadeLoss() async throws {
+    try await assertActualCloseUnknown(failures: [.input, .output])
+  }
+
+  private func assertActualCloseUnknown(failures: Set<ActualCopyEndpoint>) async throws {
+    retainsUnknownFixture = true
     let authority = try ProviderRequest()
     let pool = try RequestResourcePool(authority: authority, kind: "import")
     let baseline = pool.active
     let db = try ProductDatabase.open(at: root)
-    let faults: [Set<ActualCopyEndpoint>] = [[.input], [.output], [.input, .output]]
-    for (index, failures) in faults.enumerated() {
-      let original = try source("close-\(index).pdf")
-      let effects = OwnedCopyEffects(failures: failures)
-      var lifecycle: LocalLibraryLifecycle? = try await LocalLibraryLifecycle.openForOwnedCopyFixtures(
-        database: db, effects: effects.effects)
-      weak var facade = lifecycle
-      let id = try await XCTUnwrap(lifecycle).importPDF(from: original)
-      var tornDown = false
-      defer {
-        if !tornDown, let debt = LocalLibraryLifecycle.actualCopyDebts.first(where: { $0.identity.paperID == id }) {
-          do { try effects.physicallyTearDown(debt) }
-          catch { XCTFail("Owned physical teardown failed: \(error)") }
-        }
+    let original = try source("unknown-close.pdf")
+    let effects = OwnedCopyEffects(failures: failures)
+    var lifecycle: LocalLibraryLifecycle? = try await LocalLibraryLifecycle.openForOwnedCopyFixtures(
+      database: db, effects: effects.effects)
+    weak var facade = lifecycle
+    let id = try await XCTUnwrap(lifecycle).importPDF(from: original)
+    var tornDown = false
+    defer {
+      if !tornDown, let debt = LocalLibraryLifecycle.actualCopyDebts.first(where: { $0.identity.paperID == id }) {
+        do { try effects.physicallyTearDown(debt) }
+        catch { XCTFail("Owned numeric fixture teardown failed: \(error)") }
       }
-      lifecycle = nil
-      XCTAssertNil(facade)
-      for endpoint in failures {
-        XCTAssertTrue(effects.retained(endpoint))
-        XCTAssertNotEqual(Darwin.fcntl(try XCTUnwrap(effects.acquiredFD(endpoint)), F_GETFD), -1)
-      }
-      let record = try XCTUnwrap(db.libraryRecords().first { $0.id == id })
-      XCTAssertEqual(record.status, .importFailed)
-      XCTAssertTrue(record.cleanupDebt)
-      XCTAssertEqual(try db.libraryRecords().filter { $0.cleanupDebt }.count, index + 1)
-      XCTAssertEqual(effects.census, [.output, .input])
-      XCTAssertEqual(effects.scopeCensus, [1, 0])
-      XCTAssertEqual(pool.active, baseline + 1)
-      let debt = try XCTUnwrap(LocalLibraryLifecycle.actualCopyDebts.first { $0.identity.paperID == id })
-      XCTAssertEqual(effects.observations.count, 1)
-      let observation = try XCTUnwrap(effects.observations.first)
-      XCTAssertEqual(observation.status, .unknown)
-      XCTAssertEqual(observation.identity.paperID, id)
-      XCTAssertEqual(observation.identity.attempt, debt.identity.attempt)
-      XCTAssertNil(observation.sha256)
-      XCTAssertNil(observation.bytes)
-      XCTAssertEqual(effects.observedCloseCensus, [[.output, .input]])
-      XCTAssertEqual(effects.observedScopeCensus, [[1, 0]])
-      XCTAssertEqual(effects.observedClosedFDs, [false])
-      XCTAssertEqual(debt.source, original)
-      XCTAssertEqual(debt.inputClosed, !failures.contains(.input))
-      XCTAssertEqual(debt.outputClosed, !failures.contains(.output))
-      XCTAssertEqual(try Data(contentsOf: debt.stage), try Data(contentsOf: original))
-      XCTAssertFalse(FileManager.default.fileExists(atPath: namespace(id).appendingPathComponent("document.pdf").path))
-      assertActualPoolDenial(pool, authority: authority)
-      tornDown = true
-      try effects.physicallyTearDown(debt)
-      XCTAssertEqual(pool.active, baseline)
-      XCTAssertEqual(effects.scopeCensus, [1, 1])
-      XCTAssertEqual(effects.census, [.output, .input])
-      XCTAssertTrue(LocalLibraryLifecycle.actualCopyDebts.contains { $0.identity.attempt == debt.identity.attempt })
-      XCTAssertTrue(FileManager.default.fileExists(atPath: debt.stage.path))
-      XCTAssertTrue(try XCTUnwrap(db.libraryRecords().first { $0.id == id }).cleanupDebt)
     }
+    lifecycle = nil
+    XCTAssertNil(facade)
+    for endpoint in failures {
+      XCTAssertTrue(effects.retained(endpoint))
+      XCTAssertNotEqual(Darwin.fcntl(try XCTUnwrap(effects.acquiredFD(endpoint)), F_GETFD), -1)
+    }
+    let record = try XCTUnwrap(db.libraryRecords().first { $0.id == id })
+    XCTAssertEqual(record.status, .importFailed)
+    XCTAssertTrue(record.cleanupDebt)
+    XCTAssertEqual(try db.libraryRecords().filter { $0.cleanupDebt }.count, 1)
+    XCTAssertEqual(effects.census, [.output, .input])
+    XCTAssertEqual(effects.scopeCensus, [1, 0])
+    XCTAssertEqual(pool.active, baseline + 1)
+    let debt = try XCTUnwrap(LocalLibraryLifecycle.actualCopyDebts.first { $0.identity.paperID == id })
+    XCTAssertEqual(effects.observations.count, 1)
+    let observation = try XCTUnwrap(effects.observations.first)
+    XCTAssertEqual(observation.status, .unknown)
+    XCTAssertEqual(observation.identity.paperID, id)
+    XCTAssertEqual(observation.identity.attempt, debt.identity.attempt)
+    XCTAssertNil(observation.sha256)
+    XCTAssertNil(observation.bytes)
+    XCTAssertEqual(effects.observedCloseCensus, [[.output, .input]])
+    XCTAssertEqual(effects.observedScopeCensus, [[1, 0]])
+    XCTAssertEqual(effects.observedClosedFDs, [false])
+    XCTAssertEqual(debt.source, original)
+    XCTAssertEqual(debt.inputClosed, !failures.contains(.input))
+    XCTAssertEqual(debt.outputClosed, !failures.contains(.output))
+    XCTAssertEqual(try Data(contentsOf: debt.stage), try Data(contentsOf: original))
+    XCTAssertFalse(FileManager.default.fileExists(atPath: namespace(id).appendingPathComponent("document.pdf").path))
+    let history = try db.adapterRead { sql in
+      try ProductDatabase.readImportRecovery(observation.identity,
+        maximumBytes: ProductJobRecovery.maximumImportRecoveryJournalBytes, in: sql)
+    }
+    let failed = try history.journal.snapshot()
+    XCTAssertEqual(failed.current.state, .failed(.failed))
+    XCTAssertEqual(failed.permits.count, 1)
+    XCTAssertTrue(failed.usedOperationIDs.isEmpty, "Unknown producer cannot authorize cleanup")
+    assertActualPoolDenial(pool, authority: authority)
+    tornDown = true
+    try effects.physicallyTearDown(debt)
+    XCTAssertEqual(pool.active, baseline + 1, "Numeric teardown must not return runtime quota")
+    XCTAssertEqual(effects.scopeCensus, [1, 0], "Numeric teardown is not scope-close authority")
+    XCTAssertEqual(effects.census, [.output, .input])
+    XCTAssertTrue(LocalLibraryLifecycle.actualCopyDebts.contains { $0.identity.attempt == debt.identity.attempt })
+    XCTAssertTrue(FileManager.default.fileExists(atPath: debt.stage.path))
+    XCTAssertTrue(try XCTUnwrap(db.libraryRecords().first { $0.id == id }).cleanupDebt)
   }
 
   func testActualPartialOpenUnknownRetainsOnlyAcquiredInputAndPreservesCollision() async throws {
+    retainsUnknownFixture = true
     let authority = try ProviderRequest()
     let pool = try RequestResourcePool(authority: authority, kind: "import")
     let baseline = pool.active
@@ -708,8 +813,8 @@ final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
     assertActualPoolDenial(pool, authority: authority)
     tornDown = true
     try effects.physicallyTearDown(debt)
-    XCTAssertEqual(pool.active, baseline)
-    XCTAssertEqual(effects.scopeCensus, [1, 1])
+    XCTAssertEqual(pool.active, baseline + 1)
+    XCTAssertEqual(effects.scopeCensus, [1, 0])
     XCTAssertEqual(effects.census, [.input])
     XCTAssertTrue(LocalLibraryLifecycle.actualCopyDebts.contains { $0.identity.attempt == debt.identity.attempt })
   }
@@ -828,7 +933,23 @@ final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
   private func assertRetainedNamespaceFailure(_ db: ProductDatabase, _ id: UUID, before: [Row]) throws {
     let after = try deletionRows(db, id)
     assertDeletionRowsEqual(before, after,
-      paperExcept: ["status", "cleanupDebt", "deletionID", "deletionFailure", "pdfReference"])
+      paperExcept: ["status", "cleanupDebt", "deletionID", "deletionFailure", "pdfReference"],
+      jobExcept: ["recoveryJournal"])
+    for pair in zip(before.dropFirst(), after.dropFirst()) {
+      let previous = try ImportRecoveryJournal.decode(
+        XCTUnwrap(Data.fromDatabaseValue(pair.0["recoveryJournal"])),
+        maximumBytes: ProductJobRecovery.maximumImportRecoveryJournalBytes)
+      let current = try ImportRecoveryJournal.decode(
+        XCTUnwrap(Data.fromDatabaseValue(pair.1["recoveryJournal"])),
+        maximumBytes: ProductJobRecovery.maximumImportRecoveryJournalBytes)
+      XCTAssertTrue(try current.extends(previous,
+        maximumBytes: ProductJobRecovery.maximumImportRecoveryJournalBytes))
+      let oldState = try previous.snapshot(), state = try current.snapshot()
+      XCTAssertEqual(state.executions, oldState.executions)
+      XCTAssertEqual(state.usedPermitIDs, oldState.usedPermitIDs)
+      XCTAssertTrue(state.revoked)
+      XCTAssertFalse(state.namespaceRemoved)
+    }
     XCTAssertNil(String.fromDatabaseValue(after[0]["pdfReference"]))
     let record = try XCTUnwrap(db.libraryRecords().first { $0.id == id })
     XCTAssertEqual(record.status, .deletionFailed)
@@ -996,7 +1117,19 @@ final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
     XCTAssertEqual(records.first?.cleanupDebt, true)
     XCTAssertTrue(FileManager.default.fileExists(atPath: namespace(id).path))
     let after = try deletionRows(db, id)
-    assertDeletionRowsEqual([before[1]], [after[1]])
+    XCTAssertEqual(Array(before[1].columnNames), Array(after[1].columnNames))
+    for column in before[1].columnNames where column != "recoveryJournal" {
+      let prior: DatabaseValue = before[1][column]
+      let retained: DatabaseValue = after[1][column]
+      XCTAssertEqual(prior.storage, retained.storage, column)
+    }
+    let beforeJournal = try ImportRecoveryJournal.decode(try XCTUnwrap(Data.fromDatabaseValue(before[1]["recoveryJournal"])),
+      maximumBytes: ProductJobRecovery.maximumImportRecoveryJournalBytes)
+    let afterJournal = try ImportRecoveryJournal.decode(try XCTUnwrap(Data.fromDatabaseValue(after[1]["recoveryJournal"])),
+      maximumBytes: ProductJobRecovery.maximumImportRecoveryJournalBytes)
+    XCTAssertTrue(try afterJournal.extends(beforeJournal, maximumBytes: ProductJobRecovery.maximumImportRecoveryJournalBytes))
+    XCTAssertTrue(try afterJournal.snapshot().revoked)
+    XCTAssertFalse(try afterJournal.snapshot().namespaceRemoved)
     let restarted = try await LocalLibraryLifecycle.open(database: ProductDatabase.open(at: root))
     let reopened = try await restarted.list()
     XCTAssertEqual(reopened, records)
@@ -1054,7 +1187,7 @@ final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
   func testRestartInterruptsStageAndNeverPublishesOrphan() async throws {
     let db = try ProductDatabase.open(at: root)
     let pending = identity()
-    try db.reserveImport(pending, title: "synthetic interrupted")
+    try reserveLegacyImportFixture(in: db, identity: pending, title: "synthetic interrupted")
     let owned = namespace(pending.paperID)
     try FileManager.default.createDirectory(at: owned, withIntermediateDirectories: true)
     try Data("%PDF-1.7\npartial".utf8).write(to: owned.appendingPathComponent("\(pending.attempt.uuidString).stage"))
@@ -1096,13 +1229,13 @@ final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
     let interrupted = try extraction()
     try db.reserveExtraction(interrupted)
     let pending = identity()
-    try db.reserveImport(pending, title: "Interrupted owned import")
+    try reserveLegacyImportFixture(in: db, identity: pending, title: "Interrupted owned import")
     let marker = namespace(pending.paperID).appendingPathComponent("\(pending.attempt.uuidString).stage")
     try FileManager.default.createDirectory(at: marker.deletingLastPathComponent(), withIntermediateDirectories: true)
     let bytes = Data("%PDF-1.7\nuncertain closed-or-open stage".utf8)
     try bytes.write(to: marker)
     let deleting = try await original.importPDF(from: source("deleting.pdf"))
-    let saga = try XCTUnwrap(db.beginDeletion(deleting))
+    let saga = try XCTUnwrap(db.beginDeletion(deleting)).saga
     let deletingBytes = try Data(contentsOf: namespace(deleting).appendingPathComponent("document.pdf"))
 
     let reopened = try ProductDatabase.open(at: root)
@@ -1152,17 +1285,35 @@ final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
     let db = try ProductDatabase.open(at: root)
     let lifecycle = try await LocalLibraryLifecycle.open(database: db)
     let id = try await lifecycle.importPDF(from: source())
+    let before = try deletionRows(db, id)
     try FileManager.default.removeItem(at: namespace(id).appendingPathComponent("document.pdf"))
-    let restarted = try await LocalLibraryLifecycle.open(database: ProductDatabase.open(at: root))
+    let reopened = try ProductDatabase.open(at: root)
+    let restarted = try await LocalLibraryLifecycle.open(database: reopened)
     let records = try await restarted.list()
     XCTAssertEqual(records.first?.status, .importFailed)
     XCTAssertEqual(records.first?.failure, "missingPDF")
+    XCTAssertEqual(records.first?.cleanupDebt, true)
+    let unavailable = try deletionRows(reopened, id)
+    assertDeletionRowsEqual(before, unavailable, paperExcept: ["status", "pdfReference", "cleanupDebt"])
+    let capture = try XCTUnwrap(reopened.beginDeletion(id))
+    XCTAssertEqual(capture.legacyJobCount, 0)
+    XCTAssertEqual(capture.histories.count, 1)
+    XCTAssertEqual(try capture.histories[0].journal.snapshot().current.state, .succeeded)
+    try reopened.deletionFailed(id, saga: capture.saga, reason: "agentPurgeUnavailable")
+    let deleting = try await LocalLibraryLifecycle.open(database: reopened, agentPurge: makeAgent())
+    try await deleting.delete(paperID: id)
+    let remaining = try await deleting.list()
+    XCTAssertTrue(remaining.isEmpty)
+    let final = try deletionRows(reopened, id)
+    XCTAssertEqual(final.count, 1, "Finalization must erase importJob and full history")
+    XCTAssertEqual(String.fromDatabaseValue(final[0]["status"]), "tombstone")
+    XCTAssertFalse(FileManager.default.fileExists(atPath: namespace(id).path))
   }
 
   func testDurableRevocationRejectsLatePublicationWithoutRename() throws {
     let db = try ProductDatabase.open(at: root)
     let pending = identity()
-    try db.reserveImport(pending, title: "synthetic late")
+    try reserveLegacyImportFixture(in: db, identity: pending, title: "synthetic late")
     let owned = namespace(pending.paperID)
     try FileManager.default.createDirectory(at: owned, withIntermediateDirectories: true)
     let stage = owned.appendingPathComponent("\(pending.attempt.uuidString).stage")
@@ -1186,11 +1337,13 @@ final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
   }
 
   private func assertDeletionRowsEqual(_ before: [Row], _ after: [Row],
-    paperExcept ignored: Set<String> = [], file: StaticString = #filePath, line: UInt = #line) {
+    paperExcept ignored: Set<String> = [], jobExcept ignoredJob: Set<String> = [],
+    file: StaticString = #filePath, line: UInt = #line) {
     XCTAssertEqual(before.count, after.count, file: file, line: line)
     for (index, pair) in zip(before, after).enumerated() {
       XCTAssertEqual(Array(pair.0.columnNames), Array(pair.1.columnNames), file: file, line: line)
-      for name in pair.0.columnNames where index != 0 || !ignored.contains(name) {
+      let excluded = index == 0 ? ignored : ignoredJob
+      for name in pair.0.columnNames where !excluded.contains(name) {
         let old: DatabaseValue = pair.0[name]
         let new: DatabaseValue = pair.1[name]
         XCTAssertEqual(old.storage, new.storage, "row \(index) column \(name)", file: file, line: line)
@@ -1201,7 +1354,7 @@ final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
   func testActualAndReopenedLifecycleListSeparatesFailedImportAndDeletionCauses() async throws {
     let db = try ProductDatabase.open(at: root)
     let current = identity()
-    try db.reserveImport(current, title: "owned failed import deletion")
+    try reserveLegacyImportFixture(in: db, identity: current, title: "owned failed import deletion")
     try db.recordProgress(current, bytes: 9)
     try db.failImport(current, failure: "originalImportCause", cleanupDebt: false)
     let lifecycle = try await LocalLibraryLifecycle.open(database: db)
@@ -1226,7 +1379,7 @@ final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
     let db = try ProductDatabase.open(at: root)
     for (index, terminal) in ["succeeded", "failed", "running"].enumerated() {
       let current = identity()
-      try db.reserveImport(current, title: "owned diagnostic \(terminal)")
+      try reserveLegacyImportFixture(in: db, identity: current, title: "owned diagnostic \(terminal)")
       try db.recordProgress(current, bytes: 17)
       // An opaque owned sentinel is corruption, not an admitted recovery journal.
       let history = Data("owned retained history \(terminal)".utf8)
@@ -1257,7 +1410,7 @@ final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
         try sql.execute(sql: "UPDATE importJob SET recoveryJournal = NULL WHERE id = ?",
           arguments: [current.jobID.uuidString])
       }
-      let saga = try XCTUnwrap(db.beginDeletion(current.paperID))
+      let saga = try XCTUnwrap(db.beginDeletion(current.paperID)).saga
       let before = try deletionRows(db, current.paperID)
       // Deleting list must not fall back to an original import failure or paperDeleting.
       XCTAssertNil(try db.libraryRecords().first { $0.id == current.paperID }?.failure)
@@ -1283,7 +1436,7 @@ final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
         }
         assertDeletionRowsEqual(after, try deletionRows(db, current.paperID))
       }
-      XCTAssertEqual(try db.beginDeletion(current.paperID), saga)
+      XCTAssertEqual(try db.beginDeletion(current.paperID)?.saga, saga)
       let retry = try deletionRows(db, current.paperID)
       assertDeletionRowsEqual(after, retry, paperExcept: ["status", "deletionFailure"])
       XCTAssertNil(String.fromDatabaseValue(retry[0]["deletionFailure"]))
@@ -1301,8 +1454,8 @@ final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
     let cases = ["reason", "wrongSaga", "malformedSaga", "noncanonicalSaga", "missingSaga", "state", "unknownState", "generation"]
     for fault in cases {
       let current = identity()
-      try db.reserveImport(current, title: "owned invalid \(fault)")
-      let saga = try XCTUnwrap(db.beginDeletion(current.paperID))
+      try reserveLegacyImportFixture(in: db, identity: current, title: "owned invalid \(fault)")
+      let saga = try XCTUnwrap(db.beginDeletion(current.paperID)).saga
       try db.adapterWrite { sql in
         if fault == "malformedSaga" || fault == "noncanonicalSaga" {
           try sql.execute(sql: "UPDATE paper SET deletionID = ? WHERE id = ?",
@@ -1335,9 +1488,9 @@ final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
   func testDeletionDiagnosticTriggerRefusalAndFullRowCorruptionRollBack() throws {
     let db = try ProductDatabase.open(at: root)
     let current = identity()
-    try db.reserveImport(current, title: "owned diagnostic rollback")
+    try reserveLegacyImportFixture(in: db, identity: current, title: "owned diagnostic rollback")
     try db.recordProgress(current, bytes: 19)
-    let saga = try XCTUnwrap(db.beginDeletion(current.paperID))
+    let saga = try XCTUnwrap(db.beginDeletion(current.paperID)).saga
     let before = try deletionRows(db, current.paperID)
     let mutations = [
       "UPDATE paper SET deletionFailure = NULL WHERE id = NEW.id;",
@@ -1372,8 +1525,8 @@ final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
   func testDeletionRetryDiagnosticClearingIsCheckedAndAtomic() throws {
     let db = try ProductDatabase.open(at: root)
     let current = identity()
-    try db.reserveImport(current, title: "owned retry rollback")
-    let saga = try XCTUnwrap(db.beginDeletion(current.paperID))
+    try reserveLegacyImportFixture(in: db, identity: current, title: "owned retry rollback")
+    let saga = try XCTUnwrap(db.beginDeletion(current.paperID)).saga
     try db.deletionFailed(current.paperID, saga: saga, reason: "deletionIncomplete")
     let before = try deletionRows(db, current.paperID)
     for mutation in ["SELECT RAISE(IGNORE);",
@@ -1393,7 +1546,7 @@ final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
       assertDeletionRowsEqual(before, try deletionRows(db, current.paperID))
       try db.adapterWrite { try $0.execute(sql: "DROP TRIGGER corrupt_retry") }
     }
-    XCTAssertEqual(try db.beginDeletion(current.paperID), saga)
+    XCTAssertEqual(try db.beginDeletion(current.paperID)?.saga, saga)
     assertDeletionRowsEqual(before, try deletionRows(db, current.paperID), paperExcept: ["status", "deletionFailure"])
     XCTAssertNil(try db.libraryRecords().first?.failure)
   }
@@ -1401,8 +1554,8 @@ final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
   func testDeletionTombstoneClearsDiagnosticAndJobWithCheckedRollback() throws {
     let db = try ProductDatabase.open(at: root)
     let current = identity()
-    try db.reserveImport(current, title: "owned tombstone")
-    let saga = try XCTUnwrap(db.beginDeletion(current.paperID))
+    try reserveLegacyImportFixture(in: db, identity: current, title: "owned tombstone")
+    let saga = try XCTUnwrap(db.beginDeletion(current.paperID)).saga
     try db.adapterWrite { sql in
       try sql.execute(sql: """
         UPDATE paper SET deletionFailure = 'agentPurgeUnavailable', pdfSHA256 = ?, pdfReference = ? WHERE id = ?
@@ -1441,7 +1594,7 @@ final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
   func testDeletionAdmissionJobInterruptionRefusalRollsBackDiagnosticClearing() throws {
     let db = try ProductDatabase.open(at: root)
     let current = identity()
-    try db.reserveImport(current, title: "owned interruption rollback")
+    try reserveLegacyImportFixture(in: db, identity: current, title: "owned interruption rollback")
     try db.recordProgress(current, bytes: 11)
     try db.adapterWrite { sql in
       try sql.execute(sql: "UPDATE paper SET deletionFailure = 'deletionIncomplete' WHERE id = ?",
@@ -1470,7 +1623,7 @@ final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
   func testForeignFenceCannotPublishAndRenameFailureCannotCommitSuccess() throws {
     let db = try ProductDatabase.open(at: root)
     let pending = identity()
-    try db.reserveImport(pending, title: "synthetic guarded")
+    try reserveLegacyImportFixture(in: db, identity: pending, title: "synthetic guarded")
     let owned = namespace(pending.paperID)
     try FileManager.default.createDirectory(at: owned, withIntermediateDirectories: true)
     let stage = owned.appendingPathComponent("\(pending.attempt.uuidString).stage")

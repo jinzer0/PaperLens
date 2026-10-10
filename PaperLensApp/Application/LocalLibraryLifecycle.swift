@@ -70,6 +70,7 @@ private struct ActualCopyCompletion: Sendable {
   }
   let identity: ImportIdentity
   let outcome: Outcome
+  let namespaceOwned: Bool
 
   func matches(_ other: ImportIdentity) -> Bool {
     identity.paperID == other.paperID && identity.generation == other.generation &&
@@ -111,6 +112,7 @@ private final class ActualCopyOwner: @unchecked Sendable {
   var scoped = false
   var input: FileHandle?
   var output: FileHandle?
+  var namespaceOwned = false
 
   init(identity: ImportIdentity, source: URL, stage: URL, lease: RequestResourceLease,
     effects: ActualCopyEffects) {
@@ -134,11 +136,60 @@ struct ActualCopyDebt: Sendable {
   let outputClosed: Bool
 }
 
+private final class ActualNamespaceRemoval: @unchecked Sendable {
+  let namespace: URL
+  private let lock = NSLock()
+  private var outcome: Result<Void, any Error>?
+  init(namespace: URL) { self.namespace = namespace }
+  var result: Result<Void, any Error>? { lock.withLock { outcome } }
+  func perform(_ effect: () throws -> Void) {
+    let result = Result { try effect() }
+    lock.withLock { outcome = result }
+  }
+}
+
 private final class ActualCopyOwnership: @unchecked Sendable {
   static let shared = ActualCopyOwnership()
   private let lock = NSLock()
   private var owners: [UUID: ActualCopyOwner] = [:]
   private var debts: [UUID: ActualCopyDebt] = [:]
+  private var completions: [UUID: ActualCopyCompletion] = [:]
+  private var publications: [UUID: ImportPublicationReceipt] = [:]
+  private var removals: [String: ActualNamespaceRemoval] = [:]
+
+  func removal(_ id: String) -> ActualNamespaceRemoval? { lock.withLock { removals[id] } }
+  func retainRemoval(_ receipt: ActualNamespaceRemoval, id: String) {
+    lock.withLock { removals[id] = receipt }
+  }
+  func acknowledgeRemoval(_ id: String) {
+    let removed = lock.withLock { removals.removeValue(forKey: id) }
+    withExtendedLifetime(removed) {}
+  }
+
+  func retainCompletion(_ completion: ActualCopyCompletion) {
+    lock.withLock { completions[completion.identity.attempt] = completion }
+  }
+
+  func completion(_ identity: ImportIdentity) -> ActualCopyCompletion? {
+    lock.withLock { completions[identity.attempt] }
+  }
+
+  func retainPublication(_ receipt: ImportPublicationReceipt, identity: ImportIdentity) {
+    lock.withLock { publications[identity.attempt] = receipt }
+  }
+
+  func publication(_ identity: ImportIdentity) -> ImportPublicationReceipt? {
+    lock.withLock { publications[identity.attempt] }
+  }
+
+  func acknowledge(_ identity: ImportIdentity) {
+    let removed = lock.withLock { () -> (ActualCopyOwner?, ActualCopyCompletion?, ImportPublicationReceipt?) in
+      guard debts[identity.attempt] == nil else { return (nil, nil, nil) }
+      return (owners.removeValue(forKey: identity.attempt),
+        completions.removeValue(forKey: identity.attempt), publications.removeValue(forKey: identity.attempt))
+    }
+    withExtendedLifetime(removed) {}
+  }
 
   func retain(_ owner: ActualCopyOwner) {
     lock.withLock { owners[owner.identity.attempt] = owner }
@@ -155,7 +206,7 @@ private final class ActualCopyOwnership: @unchecked Sendable {
     // Physical releases are outside arbitration, after every endpoint is known closed.
     if owner.scoped { owner.effects.stopScope(owner.source) }
     owner.lease.close()
-    _ = lock.withLock { owners.removeValue(forKey: owner.identity.attempt) }
+    // Keep the actual completion/owner rooted until its exact durable acknowledgment.
   }
 
   func snapshots() -> [ActualCopyDebt] { lock.withLock { Array(debts.values) } }
@@ -171,7 +222,10 @@ public actor LocalLibraryLifecycle {
   private let copyEffects: ActualCopyEffects
   private let validationEffects: ActualURLStageValidationEffects
   nonisolated let epoch = UUID()
-  private var snapshots: [UUID: JobRecoveryPolicy.Snapshot] = [:]
+  private var records: [UUID: ImportRecoveryRecord] = [:]
+  private var deletionSagas: [UUID: UUID] = [:]
+  private var transitionOwners: Set<UUID> = []
+  private var transitionWaiters: [UUID: [CheckedContinuation<Void, Never>]] = [:]
   private var cancellations: [UUID: ImportCancellation] = [:]
   private var drains: [UUID: [CheckedContinuation<Void, Never>]] = [:]
   private var deletionInFlight: Set<UUID> = []
@@ -238,17 +292,6 @@ public actor LocalLibraryLifecycle {
     let identity = ImportIdentity(paperID: UUID(), generation: UUID(), jobID: UUID(),
       attempt: UUID(), fence: UUID(), correlation: UUID(), input: UUID(), epoch: epoch,
       writer: UUID(), publication: UUID())
-    let authority = JobRecoveryPolicy.Authority(input: .source(version: identity.input.uuidString),
-      config: .inapplicable,
-      paper: .init(id: identity.paperID.uuidString, generation: identity.generation.uuidString),
-      epoch: epoch.uuidString, prerequisitesAvailable: true)
-    snapshots[identity.paperID] = try JobRecoveryPolicy.create(job: identity.jobID.uuidString,
-      role: .import, authority: authority,
-      reservation: .init(attempt: identity.attempt.uuidString, fence: identity.fence.uuidString,
-        correlation: identity.correlation.uuidString))
-    let lineage = snapshots[identity.paperID]!.current.lineage
-    try apply(.claim(lineage), paperID: identity.paperID)
-    try apply(.acquireWriter(lineage, permit: identity.writer.uuidString), paperID: identity.paperID)
     let cancellation = ImportCancellation()
     cancellations[identity.paperID] = cancellation
     let database = database
@@ -259,14 +302,13 @@ public actor LocalLibraryLifecycle {
     do {
       // Only bounded, fixed provenance; never URL spelling, path, query or credentials.
       let title = confirmation.sourceKind == "arxivPDF" ? "arXiv PDF" : "HTTPS PDF"
-      try await Task.detached {
-        try database.reserveImport(identity, title: title,
-          destinationFolderID: confirmation.destinationFolderID)
-      }.value
+      try await reserve(identity, title: title,
+        facts: .init(expectedSHA256: nil, destinationFolderID: confirmation.destinationFolderID))
       reserved = true
-      try apply(.writerClosure(lineage, permit: identity.writer.uuidString, .open),
-        paperID: identity.paperID)
+      LibraryURLImportWriter.retain(writer)
+      try await writerOpened(identity)
       try await Task.detached {
+        try cancellation.check()
         let fm = FileManager.default
         try fm.createDirectory(at: namespace.deletingLastPathComponent(),
           withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
@@ -281,7 +323,6 @@ public actor LocalLibraryLifecycle {
     } catch {
       if reserved { try await writer.abort(reason: .rejected) }
       else {
-        snapshots.removeValue(forKey: identity.paperID)
         finishProducer(identity.paperID)
       }
       throw error
@@ -290,84 +331,75 @@ public actor LocalLibraryLifecycle {
 
   func publishURLImport(_ writer: LibraryURLImportWriter, stage: ClosedHTTPSPDFStage) async throws -> UUID {
     let identity = writer.identity
-    guard let snapshot = snapshots[identity.paperID] else { throw URLImportError.writerUnavailable }
-    let lineage = snapshot.current.lineage
     try writer.assertCurrent()
+    try writer.assertProducedStage(stage)
     let validationEffects = validationEffects
-    try await Task.detached {
+    let validation = try await Task.detached {
       try LibraryURLImportWriter.validate(stage, directory: writer.stagingDirectory,
         cancellation: writer.cancellation, effects: validationEffects)
     }.value
-    try writer.assertCurrent()
-    let result = JobRecoveryPolicy.Result(id: identity.attempt.uuidString)
-    try apply(.writerClosure(lineage, permit: identity.writer.uuidString,
-      .closed(.validated(result))), paperID: identity.paperID)
-    try apply(.acquirePublication(lineage, writer: identity.writer.uuidString,
-      permit: identity.publication.uuidString), paperID: identity.paperID)
-    try apply(.rename(lineage, permit: identity.publication.uuidString), paperID: identity.paperID)
-    let database = database
-    do {
-      try await Task.detached {
-        try writer.assertCurrent()
-        try database.recordProgress(identity, bytes: Int64(stage.byteCount))
-        try database.publish(identity, stage: stage.file,
-          final: writer.stagingDirectory.appendingPathComponent("document.pdf"),
-          sha256: stage.sha256, destinationFolderID: writer.destinationFolderID)
-      }.value
-    } catch {
-      try apply(.renameFinished(lineage, permit: identity.publication.uuidString, succeeded: false),
-        paperID: identity.paperID)
-      throw error
-    }
-    try apply(.renameFinished(lineage, permit: identity.publication.uuidString, succeeded: true),
-      paperID: identity.paperID)
-    try apply(.publish(lineage, permit: identity.publication.uuidString, result), paperID: identity.paperID)
-    try apply(.release(lineage, permit: identity.publication.uuidString), paperID: identity.paperID)
+    writer.retainValidation(validation)
+    let closed = ClosedImportStage(file: stage.file, sha256: stage.sha256, bytes: Int64(stage.byteCount))
+    try await publishClosed(identity, stage: closed, cancellation: writer.cancellation)
+    writer.acknowledgePhysicalCompletion()
+    LibraryURLImportWriter.release(writer)
     finishProducer(identity.paperID)
     return identity.paperID
   }
 
+  private func publishClosed(_ identity: ImportIdentity, stage: ClosedImportStage,
+    cancellation: ImportCancellation) async throws {
+    await enterTransition(identity.paperID)
+    defer { leaveTransition(identity.paperID) }
+    var record = try currentRecord(identity.paperID)
+    let lineage = try record.journal.snapshot().current.lineage
+    let result = JobRecoveryPolicy.Result(id: identity.attempt.uuidString)
+    try cancellation.check()
+    let database = database
+    try await Task.detached { try database.recordProgress(identity, bytes: stage.bytes) }.value
+    var journal = try record.journal.recording(.writerClosure(lineage,
+      permit: identity.writer.uuidString, .closed(.validated(result))))
+    journal = try journal.recording(.acquirePublication(lineage, writer: identity.writer.uuidString,
+      permit: identity.publication.uuidString))
+    journal = try journal.recording(.rename(lineage, permit: identity.publication.uuidString))
+    try Self.preflight(journal)
+    record = try await store(record, replacement: journal, paperID: identity.paperID)
+    let receipt = ImportPublicationReceipt(stage: stage)
+    ActualCopyOwnership.shared.retainPublication(receipt, identity: identity)
+    do {
+      try cancellation.check()
+      let admitted = record
+      let committed = try await Task.detached {
+        try database.publishJournaledImport(expected: admitted, closedStage: stage, receipt: receipt)
+      }.value
+      records[identity.paperID] = committed
+    } catch {
+      let admitted = record
+      // Reconcile even when move did not occur: a failure is not an acknowledgment.
+      if let committed = try await Task.detached(operation: {
+        try database.reconcileJournaledPublication(expected: admitted, closedStage: stage)
+      }).value {
+        records[identity.paperID] = committed
+        ActualCopyOwnership.shared.acknowledge(identity)
+        return
+      }
+      let failed = try record.journal.recording(.renameFinished(lineage,
+        permit: identity.publication.uuidString, succeeded: receipt.moved))
+      _ = try await store(record, replacement: failed, paperID: identity.paperID)
+      throw error
+    }
+    ActualCopyOwnership.shared.acknowledge(identity)
+  }
+
   func abortURLImport(_ writer: LibraryURLImportWriter, reason: URLImportError) async throws {
     let identity = writer.identity
-    guard let snapshot = snapshots[identity.paperID] else { throw URLImportError.writerUnavailable }
     defer { finishProducer(identity.paperID) }
-    let lineage = snapshot.current.lineage
-    let closureKnown = reason != .closureUnknown
-    var cleanupError: (any Error)?
-    do {
-      if closureKnown, let permit = snapshot.permits.first, permit.kind == .writer {
-        if case .closed = permit.closure {} else {
-          try apply(.writerClosure(lineage, permit: permit.id, .closed(.unvalidated)), paperID: identity.paperID)
-        }
-      }
-    } catch { cleanupError = error }
-    try? apply(.terminate(lineage, .failed), paperID: identity.paperID)
-    var clean = false
-    do {
-      if closureKnown, cleanupError == nil, let permit = snapshots[identity.paperID]?.permits.first {
-        let operation = UUID().uuidString
-        try apply(.requestCleanup(permit.owner, permit: permit.id, operation: operation),
-          paperID: identity.paperID)
-        guard let pending = snapshots[identity.paperID]?.permits.first?.cleanupOperation else {
-          throw URLImportError.cleanupFailed
-        }
-        clean = await Task.detached {
-          guard writer.namespaceOwned else { return true }
-          do { try Self.removeNamespace(writer.stagingDirectory); return true } catch { return false }
-        }.value
-        try apply(.cleanupFinished(permit.owner, permit: permit.id, operation: pending, succeeded: clean),
-          paperID: identity.paperID)
-        if clean { try apply(.release(permit.owner, permit: permit.id), paperID: identity.paperID) }
-      }
-    } catch { cleanupError = error; clean = false }
-    let database = database
-    let cleanupDebt = !clean
-    try await Task.detached {
-      try database.recordImportAbort(identity, failure: reason == .cancelled ? "cancelled" : "urlImportFailed",
-        cleanupDebt: cleanupDebt)
-    }.value
-    if let cleanupError { throw cleanupError }
-    if closureKnown && !clean { throw URLImportError.cleanupFailed }
+    try await abortClosed(identity, closureKnown: writer.actualClosureKnown,
+      failure: reason == .cancelled ? .cancelled : .urlImportFailed)
+    if writer.actualClosureKnown {
+      writer.acknowledgePhysicalCompletion()
+      LibraryURLImportWriter.release(writer)
+    }
   }
 
   /// Call only after explicit user confirmation. Selecting/cancelling creates nothing.
@@ -378,37 +410,22 @@ public actor LocalLibraryLifecycle {
     let identity = ImportIdentity(paperID: UUID(), generation: UUID(), jobID: UUID(),
       attempt: UUID(), fence: UUID(), correlation: UUID(), input: UUID(), epoch: epoch,
       writer: UUID(), publication: UUID())
-    let authority = JobRecoveryPolicy.Authority(input: .source(version: identity.input.uuidString),
-      config: .inapplicable,
-      paper: .init(id: identity.paperID.uuidString, generation: identity.generation.uuidString),
-      epoch: identity.epoch.uuidString, prerequisitesAvailable: true)
-    let reservation = JobRecoveryPolicy.Reservation(attempt: identity.attempt.uuidString,
-      fence: identity.fence.uuidString, correlation: identity.correlation.uuidString)
-    snapshots[identity.paperID] = try JobRecoveryPolicy.create(job: identity.jobID.uuidString,
-      role: .import, authority: authority, reservation: reservation)
-    let lineage = snapshots[identity.paperID]!.current.lineage
-    try apply(.claim(lineage), paperID: identity.paperID)
-    try apply(.acquireWriter(lineage, permit: identity.writer.uuidString), paperID: identity.paperID)
     let cancellation = ImportCancellation()
     cancellations[identity.paperID] = cancellation
     let database = database
     let namespace = Self.namespace(database.root, identity.paperID)
     let stage = namespace.appendingPathComponent("\(identity.attempt.uuidString).stage")
-    let final = namespace.appendingPathComponent("document.pdf")
     let copyEffects = copyEffects
     var reserved = false
-    var renamed = false
     var producerStarted = false
     var completion: ActualCopyCompletion?
     do {
       // Source title metadata is not accessed here; only the picker-supplied URL spelling.
       let title = String(source.deletingPathExtension().lastPathComponent.prefix(240))
-      try await Task.detached {
-        try database.reserveImport(identity, title: title, destinationFolderID: destinationFolderID)
-      }.value
+      try await reserve(identity, title: title,
+        facts: .init(expectedSHA256: expectedSHA256, destinationFolderID: destinationFolderID))
       reserved = true
-      try apply(.writerClosure(lineage, permit: identity.writer.uuidString, .open),
-        paperID: identity.paperID)
+      try await writerOpened(identity)
       producerStarted = true
       let actualCompletion = await withTaskCancellationHandler {
         let producerTask = Task.detached {
@@ -426,77 +443,22 @@ public actor LocalLibraryLifecycle {
       case .unknown: throw LocalLibraryError.producerClosureUnknown
       case .closedValidated(let stage): closedStage = stage
       }
-      let result = JobRecoveryPolicy.Result(id: identity.attempt.uuidString)
-      try apply(.writerClosure(lineage, permit: identity.writer.uuidString,
-        .closed(.validated(result))), paperID: identity.paperID)
-      try cancellation.check()
-      try apply(.acquirePublication(lineage, writer: identity.writer.uuidString,
-        permit: identity.publication.uuidString), paperID: identity.paperID)
-      try apply(.rename(lineage, permit: identity.publication.uuidString), paperID: identity.paperID)
-      do {
-        try await Task.detached {
-          try database.publish(identity, stage: closedStage.file, final: final, sha256: closedStage.sha256,
-            destinationFolderID: destinationFolderID)
-        }.value
-        renamed = true
-      } catch {
-        try apply(.renameFinished(lineage, permit: identity.publication.uuidString, succeeded: false),
-          paperID: identity.paperID)
-        throw error
-      }
-      try apply(.renameFinished(lineage, permit: identity.publication.uuidString, succeeded: true),
-        paperID: identity.paperID)
-      try apply(.publish(lineage, permit: identity.publication.uuidString, result),
-        paperID: identity.paperID)
-      try apply(.release(lineage, permit: identity.publication.uuidString), paperID: identity.paperID)
+      try await publishClosed(identity,
+        stage: .init(file: closedStage.file, sha256: closedStage.sha256, bytes: closedStage.bytes),
+        cancellation: cancellation)
       finishProducer(identity.paperID)
       return identity.paperID
     } catch {
-      // Actual closure precedes cleanup/release. A failed guard after rename removes bytes
-      // while its publication permit still prevents namespace deletion.
-      // A body error's label says nothing about physical endpoint closure. Only the
-      // correlated copier completion (or no producer invocation) authorizes cleanup.
       let closureKnown = !producerStarted || (completion?.matches(identity) == true &&
         completion?.closureKnown == true)
-      if closureKnown, let snapshot = snapshots[identity.paperID],
-        let permit = snapshot.permits.first, case .unknown = permit.closure {
-        try? apply(.writerClosure(lineage, permit: permit.id, .closed(.unvalidated)),
-          paperID: identity.paperID)
-      } else if closureKnown, let snapshot = snapshots[identity.paperID],
-        let permit = snapshot.permits.first, case .open = permit.closure {
-        try? apply(.writerClosure(lineage, permit: permit.id, .closed(.unvalidated)),
-          paperID: identity.paperID)
-      }
-      try? apply(.terminate(lineage, .failed), paperID: identity.paperID)
-      let clean: Bool = await Task.detached {
-        guard closureKnown else { return false }
-        do { try Self.removeNamespace(namespace); return true } catch { return false }
-      }.value
-      if let permit = snapshots[identity.paperID]?.permits.first {
-        let operationID = UUID().uuidString
-        try? apply(.requestCleanup(lineage, permit: permit.id, operation: operationID),
-          paperID: identity.paperID)
-        if let operation = snapshots[identity.paperID]?.permits.first?.cleanupOperation {
-          try? apply(.cleanupFinished(lineage, permit: permit.id, operation: operation, succeeded: clean),
-            paperID: identity.paperID)
-        }
-        if clean { try? apply(.release(lineage, permit: permit.id), paperID: identity.paperID) }
-      }
+      defer { finishProducer(identity.paperID) }
       if reserved {
-        let failure: String
-        if (error as? FolderImportError) == .sourceChanged { failure = "sourceChanged" }
-        else if (error as? LocalLibraryError) == .cancelled { failure = "cancelled" }
-        else { failure = renamed ? "publicationRejected" : "importFailed" }
-        do {
-          try await Task.detached {
-            try database.recordImportAbort(identity, failure: failure, cleanupDebt: !clean)
-          }.value
-        } catch {
-          finishProducer(identity.paperID)
-          throw error // Do not conceal inability to record the failure.
-        }
+        let failure: ImportAbortFailure
+        if (error as? FolderImportError) == .sourceChanged { failure = .sourceChanged }
+        else if (error as? LocalLibraryError) == .cancelled { failure = .cancelled }
+        else { failure = ActualCopyOwnership.shared.publication(identity) != nil ? .publicationRejected : .importFailed }
+        try await abortClosed(identity, closureKnown: closureKnown, failure: failure)
       }
-      finishProducer(identity.paperID)
       if !reserved { throw error }
       return identity.paperID
     }
@@ -508,60 +470,116 @@ public actor LocalLibraryLifecycle {
     let database = database
     // Shared admission closes before durable visibility changes; callbacks never run under lock.
     let callbacks = readLeaseRegistry.revoke(paperID)
-    await MainActor.run { for callback in callbacks { callback() } }
-    guard let saga = try await Task.detached(operation: { try database.beginDeletion(paperID) }).value
-    else { return } // Already finalized contentless tombstone: idempotent, not reactivated.
-    if snapshots[paperID] != nil { try apply(.revoke, paperID: paperID) }
     cancellations[paperID]?.cancel()
+    await MainActor.run { for callback in callbacks { callback() } }
+    await enterTransition(paperID)
+    let capture: ImportDeletionCapture
+    do {
+      guard let acknowledged = try await Task.detached(operation: {
+        try database.beginDeletion(paperID)
+      }).value else { leaveTransition(paperID); return }
+      capture = acknowledged
+      deletionSagas[paperID] = capture.saga
+      if let record = capture.histories.first { records[paperID] = record }
+      leaveTransition(paperID)
+    } catch { leaveTransition(paperID); throw error }
+    let saga = capture.saga
     if cancellations[paperID] != nil {
       await withCheckedContinuation { drains[paperID, default: []].append($0) }
     }
     do {
       readLeaseRegistry.retryClosures(paperID)
       try await readLeaseRegistry.drain(paperID)
+      var histories = capture.histories
+      await enterTransition(paperID)
+      do {
+        for index in histories.indices {
+          let identity = try histories[index].journal.currentCapture().identity
+          if let installed = records[paperID],
+            try installed.journal.currentCapture().identity.jobID == identity.jobID {
+            histories[index] = installed
+          }
+          histories[index] = try await closeRetainedPhysical(histories[index], identity: identity, paperID: paperID)
+          try Self.preflight(histories[index].journal)
+        }
+        leaveTransition(paperID)
+      } catch { leaveTransition(paperID); throw error }
       guard let agentPurge else { throw LocalLibraryError.agentPurgeUnavailable }
       let receipt = try await agentPurge.purgeLibraryPaper(paperID: paperID, deletionID: saga)
       guard receipt.paperID == paperID, receipt.deletionID == saga else {
         throw LocalLibraryError.invalidPurgeReceipt
       }
-      // A failed producer cleanup remains a permit debt. Retrying the same deletion repairs
-      // its physically closed permits before the policy admits namespace removal.
-      if let snapshot = snapshots[paperID] {
-        for permit in snapshot.permits {
-          let operation = UUID().uuidString
-          try apply(.requestCleanup(permit.owner, permit: permit.id, operation: operation), paperID: paperID)
-          let namespace = Self.namespace(database.root, paperID)
-          guard let pending = snapshots[paperID]?.permits.first(where: { $0.id == permit.id })?.cleanupOperation
-          else { throw LocalLibraryError.cleanupFailed }
-          do {
-            try await Task.detached { try Self.removeNamespace(namespace) }.value
-          } catch {
-            try? apply(.cleanupFinished(permit.owner, permit: permit.id, operation: pending, succeeded: false),
-              paperID: paperID)
-            throw error
-          }
-          try apply(.cleanupFinished(permit.owner, permit: permit.id, operation: pending, succeeded: true),
-            paperID: paperID)
-          try apply(.release(permit.owner, permit: permit.id), paperID: paperID)
-        }
-        if !snapshot.namespaceRemoved {
-          try apply(.removeNamespace(operation: UUID().uuidString), paperID: paperID)
-        }
-      }
-      let namespace = Self.namespace(database.root, paperID)
+      await enterTransition(paperID)
       do {
-        try await Task.detached { try Self.removeNamespace(namespace) }.value
-      } catch {
-        if let pending = snapshots[paperID]?.pendingRemoval {
-          try? apply(.namespaceRemovalFinished(operation: pending, succeeded: false), paperID: paperID)
+        // No history is reconstructed for explicit NULL legacy jobs. Genuine
+        // histories come from beginDeletion's acknowledged full capture.
+        var finalRecords: [ImportRecoveryRecord] = []
+        for history in histories {
+          let identity = try history.journal.currentCapture().identity
+          var record = history
+          if let installed = records[paperID],
+            try installed.journal.currentCapture().identity.jobID == identity.jobID { record = installed }
+          record = try await closeRetainedPhysical(record, identity: identity, paperID: paperID)
+          record = try await cleanupPermits(record, paperID: paperID, strictLateAbort: false)
+          if let pending = try record.journal.snapshot().pendingRemoval {
+            guard ActualCopyOwnership.shared.removal(pending.id)?.result != nil else {
+              throw LocalLibraryError.cleanupFailed
+            }
+          } else {
+            let journal = try record.journal.recording(.removeNamespace(operation: UUID().uuidString))
+            try Self.preflight(journal)
+            record = try await store(record, replacement: journal, paperID: paperID)
+          }
+          finalRecords.append(record)
         }
-        throw error
-      }
-      if let pending = snapshots[paperID]?.pendingRemoval {
-        try apply(.namespaceRemovalFinished(operation: pending, succeeded: true), paperID: paperID)
-      }
-      try await Task.detached { try database.finalizeDeletion(paperID, saga: saga) }.value
-      snapshots.removeValue(forKey: paperID)
+        let namespace = Self.namespace(database.root, paperID)
+        let admitted = finalRecords
+        let operationIDs = try admitted.map { record -> String in
+          guard let operation = try record.journal.snapshot().pendingRemoval else {
+            throw ImportRecoveryPersistenceError.invalidHistory
+          }
+          return operation.id
+        }
+        let receiptIDs = operationIDs.isEmpty ? [saga.uuidString] : operationIDs
+        let retained = receiptIDs.compactMap { ActualCopyOwnership.shared.removal($0) }
+        let removal: ActualNamespaceRemoval
+        if let existing = retained.first {
+          guard retained.allSatisfy({ $0.namespace == namespace && $0.result != nil }) else {
+            throw LocalLibraryError.cleanupFailed
+          }
+          removal = existing
+        } else { removal = ActualNamespaceRemoval(namespace: namespace) }
+        for id in receiptIDs where ActualCopyOwnership.shared.removal(id) == nil {
+          ActualCopyOwnership.shared.retainRemoval(removal, id: id)
+        }
+        if removal.result == nil {
+          await Task.detached { removal.perform { try Self.removeNamespace(namespace) } }.value
+        }
+        guard let outcome = removal.result else { throw LocalLibraryError.cleanupFailed }
+        if case .failure(let error) = outcome {
+          for record in admitted {
+            guard let pending = try record.journal.snapshot().pendingRemoval else {
+              throw ImportRecoveryPersistenceError.invalidHistory
+            }
+            _ = try await store(record, replacement: record.journal.recording(
+              .namespaceRemovalFinished(operation: pending, succeeded: false)), paperID: paperID)
+          }
+          for id in receiptIDs { ActualCopyOwnership.shared.acknowledgeRemoval(id) }
+          throw error
+        }
+        try await Task.detached {
+          try database.finalizeJournaledDeletion(paperID, saga: saga, expected: admitted)
+        }.value
+        for id in receiptIDs { ActualCopyOwnership.shared.acknowledgeRemoval(id) }
+        for record in admitted {
+          let identity = try record.journal.currentCapture().identity
+          ActualCopyOwnership.shared.acknowledge(identity)
+          LibraryURLImportWriter.acknowledge(identity)
+        }
+        records.removeValue(forKey: paperID)
+        deletionSagas.removeValue(forKey: paperID)
+        leaveTransition(paperID)
+      } catch { leaveTransition(paperID); throw error }
     } catch {
       let reason: String
       switch error {
@@ -569,18 +587,315 @@ public actor LocalLibraryLifecycle {
       case LocalLibraryError.invalidPurgeReceipt: reason = "agentClosureUnproved"
       default: reason = "deletionIncomplete"
       }
-      try await Task.detached { try database.deletionFailed(paperID, saga: saga, reason: reason) }.value
+      await enterTransition(paperID)
+      do {
+        try await Task.detached { try database.deletionFailed(paperID, saga: saga, reason: reason) }.value
+        leaveTransition(paperID)
+      } catch { leaveTransition(paperID); throw error }
       throw error
     }
   }
 
   public func retryDeletion(paperID: UUID) async throws { try await delete(paperID: paperID) }
 
-  private func apply(_ event: JobRecoveryPolicy.Event, paperID: UUID) throws {
-    guard let snapshot = snapshots[paperID] else { throw ProductDatabaseError.invalidRecord }
-    let decision = JobRecoveryPolicy.apply(event, to: snapshot)
-    snapshots[paperID] = decision.snapshot
-    if let rejection = decision.rejection { throw rejection }
+  private func enterTransition(_ paperID: UUID) async {
+    if transitionOwners.insert(paperID).inserted { return }
+    await withCheckedContinuation { transitionWaiters[paperID, default: []].append($0) }
+  }
+
+  private func leaveTransition(_ paperID: UUID) {
+    if var waiting = transitionWaiters[paperID], !waiting.isEmpty {
+      let next = waiting.removeFirst()
+      transitionWaiters[paperID] = waiting
+      next.resume() // Ownership transfers directly; newcomers cannot overtake.
+    } else {
+      transitionWaiters.removeValue(forKey: paperID)
+      transitionOwners.remove(paperID)
+    }
+  }
+
+  private func currentRecord(_ paperID: UUID) throws -> ImportRecoveryRecord {
+    guard let record = records[paperID] else { throw ImportRecoveryPersistenceError.missingHistory }
+    return record
+  }
+
+  /// Caller owns the FIFO gate across database await and installation.
+  private func store(_ expected: ImportRecoveryRecord, replacement: ImportRecoveryJournal,
+    paperID: UUID) async throws -> ImportRecoveryRecord {
+    let database = database
+    let saga = deletionSagas[paperID]
+    let acknowledged = try await Task.detached {
+      if let saga {
+        return try database.appendDeletingImport(expected: expected, replacement: replacement, saga: saga)
+      }
+      return try database.appendJournaledImport(expected: expected, replacement: replacement)
+    }.value
+    records[paperID] = acknowledged
+    return acknowledged
+  }
+
+  private func reserve(_ identity: ImportIdentity, title: String,
+    facts: ImportRecoveryJournal.ConfirmedInput) async throws {
+    await enterTransition(identity.paperID)
+    defer { leaveTransition(identity.paperID) }
+    let database = database
+    let acknowledged = try await Task.detached {
+      try database.reserveJournaledImport(identity, title: title, confirmedInput: facts)
+    }.value
+    records[identity.paperID] = acknowledged
+  }
+
+  private func writerOpened(_ identity: ImportIdentity) async throws {
+    await enterTransition(identity.paperID)
+    defer { leaveTransition(identity.paperID) }
+    let record = try currentRecord(identity.paperID)
+    let lineage = try record.journal.snapshot().current.lineage
+    guard !(try record.journal.snapshot().revoked) else { throw LocalLibraryError.cancelled }
+    let opened = try record.journal.recording(.writerClosure(lineage, permit: identity.writer.uuidString, .open))
+    try Self.preflight(opened)
+    _ = try await store(record, replacement: opened, paperID: identity.paperID)
+  }
+
+  private func closeRetainedPhysical(_ record: ImportRecoveryRecord, identity: ImportIdentity,
+    paperID: UUID) async throws -> ImportRecoveryRecord {
+    let snapshot = try record.journal.snapshot()
+    guard let permit = snapshot.permits.first else { return record }
+    if permit.kind == .publication, permit.phase == .renaming {
+      guard let receipt = ActualCopyOwnership.shared.publication(identity) else {
+        throw LocalLibraryError.producerClosureUnknown
+      }
+      // Under Delete, the acknowledged revoke fences publication. Only the actual
+      // mover can settle its closure; retain prior execution state unchanged.
+      return try await store(record, replacement: record.journal.recording(
+        .renameFinished(permit.owner, permit: permit.id, succeeded: receipt.moved)), paperID: paperID)
+    }
+    let local = ActualCopyOwnership.shared.completion(identity)
+    let url = LibraryURLImportWriter.retained(identity)
+    let known = local?.matches(identity) == true && local?.closureKnown == true || url?.actualClosureKnown == true
+    guard known else { throw LocalLibraryError.producerClosureUnknown }
+    if permit.kind == .writer {
+      if case .closed = permit.closure { return record }
+      return try await store(record, replacement: record.journal.recording(
+        .writerClosure(permit.owner, permit: permit.id, .closed(.unvalidated))), paperID: paperID)
+    }
+    guard ActualCopyOwnership.shared.publication(identity) != nil else {
+      throw LocalLibraryError.producerClosureUnknown
+    }
+    return record
+  }
+
+  private func abortClosed(_ identity: ImportIdentity, closureKnown: Bool,
+    failure: ImportAbortFailure) async throws {
+    await enterTransition(identity.paperID)
+    defer { leaveTransition(identity.paperID) }
+    var record = try currentRecord(identity.paperID)
+    var snapshot = try record.journal.snapshot()
+    if snapshot.current.state == .succeeded { return } // Late cancel cannot undo success.
+    if let permit = snapshot.permits.first, permit.kind == .publication, permit.phase == .renaming {
+      guard let receipt = ActualCopyOwnership.shared.publication(identity) else {
+        throw LocalLibraryError.producerClosureUnknown
+      }
+      if deletionSagas[identity.paperID] == nil {
+        let database = database
+        let admitted = record
+        if let committed = try await Task.detached(operation: {
+          try database.reconcileJournaledPublication(expected: admitted, closedStage: receipt.stage)
+        }).value {
+          records[identity.paperID] = committed
+          ActualCopyOwnership.shared.acknowledge(identity)
+          return
+        }
+      }
+      record = try await store(record, replacement: record.journal.recording(
+        .renameFinished(permit.owner, permit: permit.id, succeeded: receipt.moved)), paperID: identity.paperID)
+      snapshot = try record.journal.snapshot()
+    }
+    var journal = record.journal
+    if closureKnown, let permit = snapshot.permits.first, permit.kind == .writer {
+      if case .closed = permit.closure {} else {
+        journal = try journal.recording(.writerClosure(permit.owner, permit: permit.id, .closed(.unvalidated)))
+      }
+    }
+    let database = database
+    if snapshot.current.state == .running {
+      journal = try journal.recording(.terminate(snapshot.current.lineage, .failed))
+      let admitted = record
+      let replacement = journal
+      record = try await Task.detached {
+        try database.recordJournaledImportFailure(expected: admitted, replacement: replacement,
+          failure: failure, cleanupDebt: true)
+      }.value
+      records[identity.paperID] = record
+    } else if try journal.encoded(maximumBytes: ProductJobRecovery.maximumImportRecoveryJournalBytes) != record.encoded {
+      if snapshot.current.state == .failed(.paperDeleting), let saga = deletionSagas[identity.paperID] {
+        let admitted = record
+        let replacement = journal
+        record = try await Task.detached {
+          try database.recordJournaledDeletingImportAbort(expected: admitted,
+            replacement: replacement, saga: saga, cleanupDebt: true)
+        }.value
+        records[identity.paperID] = record
+      } else {
+        record = try await store(record, replacement: journal, paperID: identity.paperID)
+      }
+    }
+    guard closureKnown else { return } // Unknown roots are never repaired by cancellation.
+    record = try await cleanupPermits(record, paperID: identity.paperID,
+      strictLateAbort: snapshot.current.state == .failed(.paperDeleting))
+    if deletionSagas[identity.paperID] == nil {
+      let acknowledged = record
+      try await Task.detached { try database.completeFailedImportCleanup(expected: acknowledged) }.value
+    }
+    ActualCopyOwnership.shared.acknowledge(identity)
+  }
+
+  private func cleanupPermits(_ initial: ImportRecoveryRecord, paperID: UUID,
+    strictLateAbort: Bool) async throws -> ImportRecoveryRecord {
+    var record = initial
+    for original in try initial.journal.snapshot().permits {
+      guard case .closed = original.closure else { throw LocalLibraryError.producerClosureUnknown }
+      var permit = original
+      if permit.cleanup != .requested && permit.cleanup != .cleaned {
+        let requested = try record.journal.recording(.requestCleanup(permit.owner,
+          permit: permit.id, operation: UUID().uuidString))
+        try Self.preflight(requested)
+        record = try await store(record, replacement: requested, paperID: paperID)
+        guard let admitted = try record.journal.snapshot().permits.first(where: { $0.id == permit.id }) else {
+          throw ImportRecoveryPersistenceError.invalidHistory
+        }
+        permit = admitted
+      }
+      if permit.cleanup == .cleaned {
+        let released = try record.journal.recording(.release(permit.owner, permit: permit.id))
+        if strictLateAbort, let saga = deletionSagas[paperID] {
+          let database = database
+          let admitted = record
+          record = try await Task.detached {
+            try database.recordJournaledDeletingImportAbort(expected: admitted,
+              replacement: released, saga: saga, cleanupDebt: false)
+          }.value
+          records[paperID] = record
+        } else {
+          record = try await store(record, replacement: released, paperID: paperID)
+        }
+        continue
+      }
+      guard let operation = permit.cleanupOperation else { throw LocalLibraryError.cleanupFailed }
+      let namespace = Self.namespace(database.root, paperID)
+      let identity = try record.journal.currentCapture().identity
+      let namespaceOwned = ActualCopyOwnership.shared.completion(identity)?.namespaceOwned == true ||
+        LibraryURLImportWriter.retained(identity)?.namespaceOwned == true
+      let receipt: ActualNamespaceRemoval
+      if let retained = ActualCopyOwnership.shared.removal(operation.id) {
+        guard retained.namespace == namespace, retained.result != nil else { throw LocalLibraryError.cleanupFailed }
+        receipt = retained
+      } else {
+        // This owner just admitted the operation. Replayed requested operations
+        // without independently rooted physical authority may not start effects.
+        guard original.cleanup != .requested else { throw LocalLibraryError.cleanupFailed }
+        receipt = ActualNamespaceRemoval(namespace: namespace)
+        ActualCopyOwnership.shared.retainRemoval(receipt, id: operation.id)
+        await Task.detached {
+          receipt.perform {
+            if namespaceOwned { try Self.removeNamespace(namespace) }
+            else if try Self.checkedNamespace(namespace) != nil { throw LocalLibraryError.cleanupFailed }
+          }
+        }.value
+      }
+      guard let outcome = receipt.result else { throw LocalLibraryError.cleanupFailed }
+      let succeeded: Bool
+      switch outcome { case .success: succeeded = true; case .failure: succeeded = false }
+      var completed = try record.journal.recording(.cleanupFinished(permit.owner,
+        permit: permit.id, operation: operation, succeeded: succeeded))
+      if succeeded { completed = try completed.recording(.release(permit.owner, permit: permit.id)) }
+      if strictLateAbort, let saga = deletionSagas[paperID] {
+        let database = database
+        let admitted = record
+        let replacement = completed
+        record = try await Task.detached {
+          try database.recordJournaledDeletingImportAbort(expected: admitted,
+            replacement: replacement, saga: saga, cleanupDebt: !succeeded)
+        }.value
+        records[paperID] = record
+      } else {
+        record = try await store(record, replacement: completed, paperID: paperID)
+      }
+      ActualCopyOwnership.shared.acknowledgeRemoval(operation.id)
+      try outcome.get()
+    }
+    return record
+  }
+
+  /// Preview only: never installed and never treated as physical closure proof.
+  nonisolated static func preflight(_ journal: ImportRecoveryJournal) throws {
+    let maximum = ProductJobRecovery.maximumImportRecoveryJournalBytes
+    let capture = try journal.currentCapture()
+    let snapshot = try journal.snapshot()
+    var closed = journal
+    if let permit = snapshot.permits.first {
+      if permit.kind == .writer {
+        if permit.closure == .open {
+          closed = try closed.recording(.writerClosure(permit.owner, permit: permit.id,
+            .closed(.validated(.init(id: capture.identity.attempt.uuidString)))))
+        }
+      } else if permit.phase == .renaming {
+        closed = try closed.recording(.renameFinished(permit.owner, permit: permit.id, succeeded: true))
+      }
+    }
+    var branches = [journal, closed]
+    if snapshot.current.state == .running && !snapshot.revoked {
+      branches.append(try closed.recording(.terminate(snapshot.current.lineage, .failed)))
+      var success = closed
+      if let writer = try success.snapshot().permits.first, writer.kind == .writer {
+        success = try success.recording(.acquirePublication(writer.owner, writer: writer.id,
+          permit: capture.identity.publication.uuidString))
+        success = try success.recording(.rename(writer.owner, permit: capture.identity.publication.uuidString))
+        success = try success.recording(.renameFinished(writer.owner,
+          permit: capture.identity.publication.uuidString, succeeded: true))
+      }
+      if let publication = try success.snapshot().permits.first, publication.kind == .publication {
+        success = try success.recording(.publish(publication.owner, permit: publication.id,
+          .init(id: capture.identity.attempt.uuidString)))
+        success = try success.recording(.release(publication.owner, permit: publication.id))
+        branches.append(success)
+      }
+    }
+    for branch in branches {
+      var terminal = try branch.recording(.revoke)
+      for permit in try terminal.snapshot().permits {
+        guard case .closed = permit.closure else { continue }
+        if permit.kind == .publication && permit.phase == .committed {
+          terminal = try terminal.recording(.release(permit.owner, permit: permit.id))
+          continue
+        }
+        var current = permit
+        if current.cleanup != .requested && current.cleanup != .cleaned {
+          terminal = try terminal.recording(.requestCleanup(current.owner,
+            permit: current.id, operation: UUID().uuidString))
+          guard let admitted = try terminal.snapshot().permits.first(where: { $0.id == current.id }) else {
+            throw ImportRecoveryPersistenceError.invalidHistory
+          }
+          current = admitted
+        }
+        if let operation = current.cleanupOperation, current.cleanup == .requested {
+          terminal = try terminal.recording(.cleanupFinished(current.owner,
+            permit: current.id, operation: operation, succeeded: true))
+        }
+        terminal = try terminal.recording(.release(current.owner, permit: current.id))
+      }
+      if try terminal.snapshot().permits.isEmpty {
+        if try terminal.snapshot().pendingRemoval == nil {
+          terminal = try terminal.recording(.removeNamespace(operation: UUID().uuidString))
+        }
+        if let operation = try terminal.snapshot().pendingRemoval {
+          terminal = try terminal.recording(.namespaceRemovalFinished(operation: operation, succeeded: true))
+        }
+      }
+      let bytes = try terminal.encoded(maximumBytes: maximum)
+      // Preserve bounded headroom for failed completions and one fresh repair
+      // admission. No pruning or quota enlargement is permitted.
+      guard bytes.count <= maximum - 8192 else { throw ImportRecoveryJournal.JournalError.byteLimitExceeded }
+    }
   }
 
   private func finishProducer(_ paperID: UUID) {
@@ -589,7 +904,8 @@ public actor LocalLibraryLifecycle {
   }
 
   private nonisolated static func namespace(_ root: URL, _ paperID: UUID) -> URL {
-    root.appendingPathComponent("papers", isDirectory: true)
+    root.standardizedFileURL.resolvingSymlinksInPath()
+      .appendingPathComponent("papers", isDirectory: true)
       .appendingPathComponent(paperID.uuidString, isDirectory: true)
   }
 
@@ -627,6 +943,7 @@ public actor LocalLibraryLifecycle {
   ) -> ActualCopyCompletion {
     // The only completion factory runs on the actual producer, after physical facts
     // and retained obligations are settled. Observers never supply authority.
+    var actualOwner: ActualCopyOwner?
     func completed(_ outcome: ActualCopyCompletion.Outcome) -> ActualCopyCompletion {
       let observation: ActualCopyCompletionObservation
       switch outcome {
@@ -642,7 +959,10 @@ public actor LocalLibraryLifecycle {
           error: LocalLibraryError.producerClosureUnknown, sha256: nil, bytes: nil)
       }
       effects.completed(observation)
-      return ActualCopyCompletion(identity: identity, outcome: outcome)
+      let completion = ActualCopyCompletion(identity: identity, outcome: outcome,
+        namespaceOwned: actualOwner?.namespaceOwned ?? false)
+      ActualCopyOwnership.shared.retainCompletion(completion)
+      return completion
     }
     let authority: ProviderRequest
     let lease: RequestResourceLease
@@ -658,6 +978,7 @@ public actor LocalLibraryLifecycle {
     } catch { return completed(.neverStarted(error)) }
     let owner = ActualCopyOwner(identity: identity, source: source, stage: stage, lease: lease,
       effects: effects)
+    actualOwner = owner
     ActualCopyOwnership.shared.retain(owner)
     owner.scoped = effects.startScope(source)
     let fm = FileManager.default
@@ -691,8 +1012,14 @@ public actor LocalLibraryLifecycle {
         actual.st_size > 0, actual.st_size <= Int64(authority.limit("pdfBytes")) else {
         throw LocalLibraryError.invalidPDF
       }
-      try fm.createDirectory(at: stage.deletingLastPathComponent(), withIntermediateDirectories: true,
+      let namespace = stage.deletingLastPathComponent()
+      try fm.createDirectory(at: namespace.deletingLastPathComponent(), withIntermediateDirectories: true,
         attributes: [.posixPermissions: 0o700])
+      guard namespace.withUnsafeFileSystemRepresentation({ path in
+        guard let path else { return false }
+        return Darwin.mkdir(path, mode_t(0o700)) == 0
+      }) else { throw LocalLibraryError.cleanupFailed }
+      owner.namespaceOwned = true
       try effects.beforeOpen(.output, stage)
       let outputFD = stage.withUnsafeFileSystemRepresentation { path in
         guard let path else { return Int32(-1) }

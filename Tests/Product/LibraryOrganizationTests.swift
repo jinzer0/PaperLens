@@ -61,7 +61,7 @@ final class LibraryOrganizationTests: XCTestCase {
     XCTAssertThrowsError(try database.updatePaperOrganization(paperID: a.0, generation: a.1,
       expected: value, value: .init(tags: ["Résumé", "resume"])))
     XCTAssertEqual(try database.organizationSnapshot(filter: .init()).papers.first(where: { $0.id == a.0 })?.organization, value)
-    let saga = try XCTUnwrap(database.beginDeletion(a.0))
+    let saga = try XCTUnwrap(database.beginDeletion(a.0)).saga
     XCTAssertThrowsError(try database.updatePaperOrganization(paperID: a.0, generation: a.1, expected: value, value: .init()))
     XCTAssertThrowsError(try database.admitOrganizationOpen(paperID: a.0, generation: a.1))
     try database.deletionFailed(a.0, saga: saga, reason: "deletionIncomplete")
@@ -69,7 +69,7 @@ final class LibraryOrganizationTests: XCTestCase {
     XCTAssertEqual(failed.status, .deletionFailed); XCTAssertFalse(failed.readable)
     let restarted = try ProductDatabase.open(at: database.root)
     XCTAssertEqual(try restarted.organizationSnapshot(filter: .init()).papers.first(where: { $0.id == a.0 })?.status, .deletionFailed)
-    XCTAssertEqual(try database.beginDeletion(a.0), saga)
+    XCTAssertEqual(try database.beginDeletion(a.0)?.saga, saga)
     try database.finalizeDeletion(a.0, saga: saga)
     try database.adapterRead { db in
       XCTAssertEqual(try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM paperOrganization WHERE paperID = ?", arguments: [a.0.uuidString]), 0)
@@ -368,7 +368,7 @@ final class LibraryOrganizationTests: XCTestCase {
     let first = try XCTUnwrap(old.papers.first(where: { $0.id == a.0 }))
     let second = try XCTUnwrap(old.papers.first(where: { $0.id == b.0 }))
     query.invalidate() // Existing owner invalidates synchronously before deletion admission.
-    let saga = try XCTUnwrap(database.beginDeletion(a.0))
+    let saga = try XCTUnwrap(database.beginDeletion(a.0)).saga
     do { try await service.save(.init(favorite: true), for: first); XCTFail("Deleting Paper must reject late save") }
     catch { XCTAssertEqual(error as? OrganizationError, .unavailablePDF) }
     try database.finalizeDeletion(a.0, saga: saga)
@@ -376,7 +376,7 @@ final class LibraryOrganizationTests: XCTestCase {
     catch { XCTAssertEqual(error as? OrganizationError, .stalePaper) }
     XCTAssertFalse(query.accept(old, request: oldRequest, currentFilter: .init()))
     try await service.save(.init(readingStatus: .read, favorite: true, tags: ["Saved"]), for: second)
-    let secondSaga = try XCTUnwrap(database.beginDeletion(b.0))
+    let secondSaga = try XCTUnwrap(database.beginDeletion(b.0)).saga
     try database.finalizeDeletion(b.0, saga: secondSaga)
     let currentRequest = query.begin(filter: .init())
     let current = try await service.snapshot(filter: .init(), facts: [])

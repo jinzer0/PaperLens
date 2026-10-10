@@ -200,7 +200,7 @@ final class ParsingRecoveryCoordinatorTests: XCTestCase {
     let context = try XCTUnwrap(captured)
     let first = Task { try await coordinator.retry(context) }
     await producer.waitForStart()
-    let saga = try XCTUnwrap(database.beginDeletion(old.paperID))
+    let saga = try XCTUnwrap(database.beginDeletion(old.paperID)).saga
     let deletedContext = try await coordinator.context(paperID: old.paperID)
     XCTAssertNil(deletedContext)
     let identities = await producer.identities

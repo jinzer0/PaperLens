@@ -160,6 +160,7 @@ public final class ProductDatabase: @unchecked Sendable {
     try queue.read { db in
       try Row.fetchAll(db, sql: """
         SELECT paper.id, title, status, cleanupDebt, bytesCopied,
+          importJob.id AS importJobID, importJob.state AS importJobState,
           CASE WHEN status IN ('deleting', 'deletionFailed') THEN paper.deletionFailure
             ELSE importJob.failure END AS failure
         FROM paper LEFT JOIN importJob ON importJob.paperID = paper.id
@@ -169,17 +170,18 @@ public final class ProductDatabase: @unchecked Sendable {
           let status: String = row["status"]
           guard let uuid = UUID(uuidString: id), let state = LibraryStatus(rawValue: status)
           else { throw ProductDatabaseError.invalidRecord }
+          var failure: String? = row["failure"]
+          if state == .importFailed, String.fromDatabaseValue(row["importJobState"]) == "succeeded" {
+            guard let jobID = String.fromDatabaseValue(row["importJobID"]) else {
+              throw ProductDatabaseError.invalidRecord
+            }
+            _ = try Self.readUnavailableSucceededImport(jobID: jobID, in: db)
+            failure = "missingPDF"
+          }
           return LibraryRecord(id: uuid, title: row["title"], status: state,
-            bytesCopied: row["bytesCopied"] ?? 0, failure: row["failure"],
+            bytesCopied: row["bytesCopied"] ?? 0, failure: failure,
             cleanupDebt: row["cleanupDebt"])
         }
-    }
-  }
-
-  func reserveImport(_ identity: ImportIdentity, title: String, destinationFolderID: UUID? = nil) throws {
-    try queue.write { db in
-      try Self.validateImportDestination(destinationFolderID, in: db)
-      try Self.insertImport(identity, title: title, createdAt: Date().timeIntervalSince1970, in: db)
     }
   }
 
@@ -307,7 +309,7 @@ public final class ProductDatabase: @unchecked Sendable {
     }
   }
 
-  func beginDeletion(_ paperID: UUID) throws -> UUID? {
+  func beginDeletion(_ paperID: UUID) throws -> ImportDeletionCapture? {
     try queue.write { db in
       guard let row = try Row.fetchOne(db, sql: "SELECT * FROM paper WHERE id = ?",
         arguments: [paperID.uuidString]) else { throw ProductDatabaseError.invalidRecord }
@@ -331,7 +333,7 @@ public final class ProductDatabase: @unchecked Sendable {
       let jobs = try Self.boundedDeletionJobs(paperID, in: db)
       let histories = try jobs.map { job -> ImportRecoveryRecord? in
         guard let id = String.fromDatabaseValue(job["id"]) else { throw ProductDatabaseError.invalidRecord }
-        return try Self.readImportRecoveryBeforeDeletion(jobID: id, saga: saga, in: db)
+        return try Self.readImportRecoveryForAdmission(jobID: id, saga: saga, in: db)
       }
       try db.execute(sql: """
         UPDATE paper SET status = 'deleting', deletionID = ?, pdfReference = NULL,
@@ -375,7 +377,8 @@ public final class ProductDatabase: @unchecked Sendable {
           }
         } else if !Self.sameDeletionRow(before, after, except: ignored) { throw ProductDatabaseError.invalidRecord }
       }
-      return saga
+      return ImportDeletionCapture(saga: saga, histories: acknowledgments.compactMap { $0 },
+        legacyJobCount: acknowledgments.filter { $0 == nil }.count)
     }
   }
 
@@ -405,6 +408,13 @@ public final class ProductDatabase: @unchecked Sendable {
 
   func finalizeDeletion(_ paperID: UUID, saga: UUID) throws {
     try queue.write { db in
+      guard try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM importJob WHERE paperID = ? AND recoveryJournal IS NOT NULL",
+        arguments: [paperID.uuidString]) == 0 else { throw ImportRecoveryPersistenceError.invalidHistory }
+      try Self.finalizeDeletionRows(paperID, saga: saga, in: db)
+    }
+  }
+
+  static func finalizeDeletionRows(_ paperID: UUID, saga: UUID, in db: Database) throws {
       let before = try Self.deletingPaper(paperID, saga: saga, in: db)
       let jobs = try Self.deletionJobs(paperID, in: db)
       try db.execute(sql: """
@@ -425,7 +435,6 @@ public final class ProductDatabase: @unchecked Sendable {
         Int64.fromDatabaseValue(after["cleanupDebt"]) == 0,
         after["pdfReference"] == DatabaseValue.null, after["pdfSHA256"] == DatabaseValue.null,
         after["deletionFailure"] == DatabaseValue.null else { throw ProductDatabaseError.invalidRecord }
-    }
   }
 
   private static func deletingPaper(_ paperID: UUID, saga: UUID, in db: Database) throws -> Row {
@@ -439,7 +448,7 @@ public final class ProductDatabase: @unchecked Sendable {
     return row
   }
 
-  private static func boundedDeletionJobs(_ paperID: UUID, in db: Database) throws -> [Row] {
+  static func boundedDeletionJobs(_ paperID: UUID, in db: Database) throws -> [Row] {
     let maximum = ProductJobRecovery.maximumImportRecoveryJournalBytes
     // Admit type/size before any full-row capture, including trigger readbacks.
     let payloads = try Row.fetchAll(db, sql: """

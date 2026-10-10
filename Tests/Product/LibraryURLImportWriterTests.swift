@@ -6,10 +6,10 @@ import XCTest
 @testable import PaperLensProduct
 
 final class LibraryURLImportWriterTests: XCTestCase, @unchecked Sendable {
-  private func database() throws -> ProductDatabase {
+  private func database(retainUnknownNamespace: Bool = false) throws -> ProductDatabase {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     let database = try ProductDatabase.open(at: root)
-    addTeardownBlock { try FileManager.default.removeItem(at: root) }
+    if !retainUnknownNamespace { addTeardownBlock { try FileManager.default.removeItem(at: root) } }
     return database
   }
 
@@ -27,26 +27,28 @@ final class LibraryURLImportWriterTests: XCTestCase, @unchecked Sendable {
     return try XCTUnwrap(box.value)
   }
 
-  private func stage(_ writer: any URLImportWriter, stall: Bool = false) async throws -> ClosedHTTPSPDFStage {
+  private func stage(_ writer: any URLImportWriter, stall: Bool = false,
+    effects: HTTPSPDFFileEffects = .actual) async throws -> ClosedHTTPSPDFStage {
     let adapter = HTTPSPDFImportAdapter(authority: try ProviderRequest())
     let configuration = URLSessionConfiguration.ephemeral
     configuration.protocolClasses = [URLWriterFixture.self]
     return try await adapter.download(route: adapter.route("https://writer.invalid/" + (stall ? "stall" : "pdf")),
       stagingDirectory: writer.stagingDirectory, assertCurrent: { try writer.assertCurrent() },
-      configuration: configuration, effects: .actual)
+      configuration: configuration, effects: effects)
   }
 
   func testActualValidationClosesOnceReleasesQuotaAndCanPublishReopen() async throws {
     let db = try database()
-    let lifecycle = try await LocalLibraryLifecycle.open(database: db)
-    let writer = try await lifecycle.grantURLImportWriter(for: continued())
-    let closed = try await stage(writer)
     let pool = try RequestResourcePool(authority: ProviderRequest(), kind: "import")
     let before = pool.active
     let roots = LibraryURLImportWriter.rootedValidationIDs
     let observation = URLValidationObservation(pool: pool)
-    try LibraryURLImportWriter.validate(closed, directory: writer.stagingDirectory,
-      cancellation: ImportCancellation(), effects: observation.effects())
+    let lifecycle = try await LocalLibraryLifecycle.openForOwnedURLValidationFixtures(
+      database: db, effects: observation.effects())
+    let writer = try await lifecycle.grantURLImportWriter(for: continued())
+    let closed = try await stage(writer)
+    XCTAssertEqual(pool.active, before, "Actual network closure returns capacity before validation")
+    _ = try await writer.publish(closed)
     XCTAssertEqual(observation.snapshot.acquisitions, 1)
     XCTAssertEqual(observation.snapshot.closeAttempts, 1)
     XCTAssertEqual(observation.snapshot.activeAtOpen, before + 1)
@@ -55,9 +57,8 @@ final class LibraryURLImportWriterTests: XCTestCase, @unchecked Sendable {
     XCTAssertEqual(observation.snapshot.permissions, 0o400)
     XCTAssertEqual(pool.active, before)
     XCTAssertEqual(LibraryURLImportWriter.rootedValidationIDs, roots)
-    // Never ask FileHandle for its descriptor after known close; publication
-    // independently reopens and validates the same real sealed stage.
-    _ = try await writer.publish(closed)
+    // Never ask FileHandle for its descriptor after known close. The real
+    // publisher validates once, then acknowledges the independently rooted receipt.
     XCTAssertEqual(try db.libraryRecords().map(\.status), [.ready])
     XCTAssertEqual(try Data(contentsOf: writer.stagingDirectory.appendingPathComponent("document.pdf")),
       URLWriterFixture.bytes)
@@ -96,8 +97,10 @@ final class LibraryURLImportWriterTests: XCTestCase, @unchecked Sendable {
       XCTAssertEqual(observation.snapshot.closeAttempts, mutation == "missing" ? 0 : 1)
       XCTAssertEqual(observation.snapshot.acquisitions, mutation == "missing" ? 0 : 1)
       XCTAssertEqual(pool.active, before)
-      XCTAssertEqual(LibraryURLImportWriter.rootedValidationIDs, roots)
+      XCTAssertEqual(LibraryURLImportWriter.rootedValidationIDs.subtracting(roots).count,
+        mutation == "missing" ? 0 : 1, "Known close returns quota without fabricating durable ACK")
       try await writer.abort(reason: .rejected)
+      XCTAssertEqual(LibraryURLImportWriter.rootedValidationIDs, roots)
     }
   }
 
@@ -118,8 +121,9 @@ final class LibraryURLImportWriterTests: XCTestCase, @unchecked Sendable {
     XCTAssertEqual(observation.snapshot.acquisitions, 1)
     XCTAssertEqual(observation.snapshot.closeAttempts, 1)
     XCTAssertEqual(pool.active, before)
-    XCTAssertEqual(LibraryURLImportWriter.rootedValidationIDs, roots)
+    XCTAssertEqual(LibraryURLImportWriter.rootedValidationIDs.subtracting(roots).count, 1)
     try await writer.abort(reason: .cancelled)
+    XCTAssertEqual(LibraryURLImportWriter.rootedValidationIDs, roots)
   }
 
   func testActualValidationInvalidPathsCancellationAndCapacityHaveNoFDEffects() async throws {
@@ -265,7 +269,7 @@ final class LibraryURLImportWriterTests: XCTestCase, @unchecked Sendable {
     XCTAssertFalse(FileManager.default.fileExists(atPath: directory.appendingPathComponent("document.pdf").path))
     XCTAssertEqual(try Data(contentsOf: closed.file), URLWriterFixture.bytes)
     do { try await XCTUnwrap(lifecycle).delete(paperID: record.id); XCTFail("uncertain namespace erased") }
-    catch { XCTAssertEqual(error as? LocalLibraryError, .agentPurgeUnavailable) }
+    catch { XCTAssertEqual(error as? LocalLibraryError, .producerClosureUnknown) }
     XCTAssertEqual(try db.libraryRecords().map(\.status), [.deletionFailed])
     XCTAssertEqual(try Data(contentsOf: closed.file), URLWriterFixture.bytes)
     writer = nil
@@ -284,6 +288,14 @@ final class LibraryURLImportWriterTests: XCTestCase, @unchecked Sendable {
     let lifecycle = try await LocalLibraryLifecycle.open(database: db)
     let intent = try await continued(folder: folder.id)
     let writer = try await lifecycle.grantURLImportWriter(for: intent)
+    let actual = try XCTUnwrap(writer as? LibraryURLImportWriter)
+    let historyBeforeEffects = try db.adapterRead { sql in
+      try ProductDatabase.readImportRecovery(actual.identity,
+        maximumBytes: ProductJobRecovery.maximumImportRecoveryJournalBytes, in: sql)
+    }
+    XCTAssertEqual(try historyBeforeEffects.journal.currentCapture().confirmedInput,
+      .init(expectedSHA256: nil, destinationFolderID: folder.id))
+    XCTAssertEqual(try historyBeforeEffects.journal.snapshot().current.state, .running)
     let reserved = try XCTUnwrap(db.libraryRecords().first)
     let job = try db.adapterRead { try Row.fetchOne($0, sql: "SELECT * FROM importJob") }
     XCTAssertEqual(try db.adapterRead { try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM importJob") }, 1)
@@ -300,6 +312,16 @@ final class LibraryURLImportWriterTests: XCTestCase, @unchecked Sendable {
     }, closed.sha256)
     XCTAssertEqual(try db.libraryRecords().first?.title, "HTTPS PDF")
     let published = try db.adapterRead { try Row.fetchOne($0, sql: "SELECT * FROM importJob") }
+    let publishedHistory = try db.adapterRead { sql in
+      try ProductDatabase.readImportRecovery(actual.identity,
+        maximumBytes: ProductJobRecovery.maximumImportRecoveryJournalBytes, in: sql)
+    }
+    XCTAssertTrue(try publishedHistory.journal.extends(historyBeforeEffects.journal,
+      maximumBytes: ProductJobRecovery.maximumImportRecoveryJournalBytes))
+    let publishedState = try publishedHistory.journal.snapshot()
+    XCTAssertEqual(publishedState.current.state, .succeeded)
+    XCTAssertTrue(publishedState.permits.isEmpty)
+    XCTAssertEqual(publishedState.usableResult?.result.id, actual.identity.attempt.uuidString)
     for key in ["id", "paperID", "attempt", "fence", "correlation", "input", "epoch", "writer", "publication"] {
       let before: String? = job?[key], after: String? = published?[key]
       XCTAssertEqual(before, after, key)
@@ -314,6 +336,11 @@ final class LibraryURLImportWriterTests: XCTestCase, @unchecked Sendable {
     writer.revoke()
     try await writer.abort(reason: .cancelled)
     XCTAssertEqual(try Data(contentsOf: final), URLWriterFixture.bytes)
+    let reopened = try ProductDatabase.open(at: db.root)
+    XCTAssertEqual(try reopened.adapterRead { sql in
+      try ProductDatabase.readImportRecovery(actual.identity,
+        maximumBytes: ProductJobRecovery.maximumImportRecoveryJournalBytes, in: sql).encoded
+    }, publishedHistory.encoded, "Late cancellation must not rewrite committed publication history")
   }
 
   func testChangedOwnedBytesRejectedAndClosedCleanupDoesNotCreateSecondJob() async throws {
@@ -341,7 +368,7 @@ final class LibraryURLImportWriterTests: XCTestCase, @unchecked Sendable {
     let second = try await lifecycle.grantURLImportWriter(for: continued())
     let closed = try await stage(first)
     do { _ = try await second.publish(closed); XCTFail("foreign stage accepted") }
-    catch { XCTAssertEqual(error as? URLImportError, .rejected) }
+    catch { XCTAssertEqual(error as? URLImportError, .writerUnavailable) }
     try await second.abort(reason: .rejected)
     XCTAssertTrue(FileManager.default.fileExists(atPath: closed.file.path))
     _ = try await first.publish(closed)
@@ -362,24 +389,109 @@ final class LibraryURLImportWriterTests: XCTestCase, @unchecked Sendable {
   }
 
   func testUnknownClosureRetainsDebtAndRetryDeletionUsesSameSaga() async throws {
+    let db = try database(retainUnknownNamespace: true)
+    let agent = URLWriterAgent(root: db.root.appendingPathComponent("agent"))
+    let lifecycle = try await LocalLibraryLifecycle.open(database: db, agentPurge: agent)
+    let writer = try await lifecycle.grantURLImportWriter(for: continued())
+    let pool = try RequestResourcePool(authority: ProviderRequest(), kind: "import")
+    let baseline = pool.active
+    let roots = HTTPSPDFImportAdapter.rootedProducerIDs
+    let observation = URLValidationObservation(pool: pool)
+    let effects = observation.networkEffects(failClose: true)
+    do { _ = try await stage(writer, effects: effects); XCTFail("Actual unknown close returned a stage") }
+    catch { XCTAssertEqual(error as? URLImportError, .closureUnknown) }
+    let descriptor = try XCTUnwrap(observation.snapshot.descriptor)
+    defer {
+      XCTAssertEqual(Darwin.close(descriptor), 0, "Numeric fixture teardown is not a checked close or ACK")
+      XCTAssertEqual(pool.active, baseline + 1)
+      XCTAssertEqual(HTTPSPDFImportAdapter.rootedProducerIDs.subtracting(roots).count, 1)
+    }
+    let id = try XCTUnwrap(db.libraryRecords().first).id
+    let files = try FileManager.default.contentsOfDirectory(at: writer.stagingDirectory,
+      includingPropertiesForKeys: nil)
+    let retained = try XCTUnwrap(files.first)
+    XCTAssertEqual(files.count, 1)
+    XCTAssertEqual(try Data(contentsOf: retained), URLWriterFixture.bytes)
+    try await writer.abort(reason: .cancelled)
+    XCTAssertTrue(try XCTUnwrap(db.libraryRecords().first).cleanupDebt)
+    let independent = try await lifecycle.grantURLImportWriter(for: continued())
+    let independentStage = try await stage(independent)
+    XCTAssertEqual(pool.active, baseline + 1, "Known download returns its slot while preserving original unknown debt")
+    let independentID = try await independent.publish(independentStage)
+    XCTAssertEqual(try db.libraryRecords().first { $0.id == independentID }?.status, .ready)
+    XCTAssertEqual(pool.active, baseline + 1)
+    XCTAssertEqual(HTTPSPDFImportAdapter.rootedProducerIDs.subtracting(roots).count, 1)
+    var saga: String?
+    for _ in 0..<2 {
+      do { try await lifecycle.delete(paperID: id); XCTFail("unknown closure purged") }
+      catch { XCTAssertEqual(error as? LocalLibraryError, .producerClosureUnknown) }
+      let current = try db.adapterRead { sql in
+        try XCTUnwrap(String.fetchOne(sql, sql: "SELECT deletionID FROM paper WHERE id = ?",
+          arguments: [id.uuidString]))
+      }
+      if let saga { XCTAssertEqual(current, saga) } else { saga = current }
+      XCTAssertEqual(try Data(contentsOf: retained), URLWriterFixture.bytes)
+    }
+    let sagas = await agent.sagas()
+    XCTAssertTrue(sagas.isEmpty, "Unknown physical closure must deny admission before Agent effects")
+    XCTAssertEqual(observation.snapshot.closeAttempts, 1)
+    XCTAssertEqual(pool.active, baseline + 1)
+    XCTAssertEqual(try db.libraryRecords().first { $0.id == id }?.status, .deletionFailed)
+  }
+
+  func testUnknownFailureLabelDoesNotFabricatePhysicalDebt() async throws {
+    let db = try database()
+    let lifecycle = try await LocalLibraryLifecycle.open(database: db)
+    let writer = try await lifecycle.grantURLImportWriter(for: continued())
+    _ = try await stage(writer)
+    try await writer.abort(reason: .closureUnknown)
+    XCTAssertFalse(try XCTUnwrap(db.libraryRecords().first).cleanupDebt)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: writer.stagingDirectory.path))
+  }
+
+  func testDeletionHeadroomRefusalPrecedesOwnedAgentPurge() async throws {
     let db = try database()
     let agent = URLWriterAgent(root: db.root.appendingPathComponent("agent"))
     let lifecycle = try await LocalLibraryLifecycle.open(database: db, agentPurge: agent)
     let writer = try await lifecycle.grantURLImportWriter(for: continued())
-    let closed = try await stage(writer)
-    let id = try XCTUnwrap(db.libraryRecords().first).id
-    // A conservative typed unknown report must not be upgraded merely because a
-    // terminal failure was received. No synthetic successful stage is constructed.
-    try await writer.abort(reason: .closureUnknown)
-    XCTAssertTrue(try XCTUnwrap(db.libraryRecords().first).cleanupDebt)
-    for _ in 0..<2 {
-      do { try await lifecycle.delete(paperID: id); XCTFail("unknown closure purged") } catch {}
-      XCTAssertTrue(FileManager.default.fileExists(atPath: closed.file.path))
+    let identity = try XCTUnwrap(writer as? LibraryURLImportWriter).identity
+    let stage = try await stage(writer)
+    _ = try await writer.publish(stage)
+    let maximum = ProductJobRecovery.maximumImportRecoveryJournalBytes
+    let original = try db.adapterRead { sql in
+      try ProductDatabase.readImportRecovery(identity, maximumBytes: maximum, in: sql)
     }
-    let sagas = await agent.sagas()
-    XCTAssertEqual(sagas.count, 2)
-    XCTAssertEqual(sagas.first, sagas.last)
-    XCTAssertEqual(try db.libraryRecords().map(\.status), [.deletionFailed])
+    let observed = try original.journal.recording(.authorityChanged(original.journal.snapshot().authority))
+      .encoded(maximumBytes: maximum)
+    let increment = observed.count - original.encoded.count
+    XCTAssertGreaterThan(increment, 0)
+    var document = try XCTUnwrap(JSONSerialization.jsonObject(with: original.encoded) as? [String: Any])
+    var events = try XCTUnwrap(document["events"] as? [Any])
+    let extended = try XCTUnwrap(JSONSerialization.jsonObject(with: observed) as? [String: Any])
+    let observation = try XCTUnwrap((extended["events"] as? [Any])?.last)
+    events += Array(repeating: observation, count: (maximum - original.encoded.count) / increment)
+    document["events"] = events
+    let bytes = try JSONSerialization.data(withJSONObject: document, options: [.sortedKeys])
+    let padded = try ImportRecoveryJournal.decode(bytes, maximumBytes: maximum)
+    XCTAssertEqual(try padded.encoded(maximumBytes: maximum), bytes)
+    XCTAssertGreaterThan(bytes.count, maximum - 8192)
+    _ = try db.appendJournaledImport(expected: original, replacement: padded)
+    func rows() throws -> [Row] {
+      try db.adapterRead { sql in
+        [try XCTUnwrap(Row.fetchOne(sql, sql: "SELECT * FROM paper WHERE id = ?",
+          arguments: [identity.paperID.uuidString])),
+         try XCTUnwrap(Row.fetchOne(sql, sql: "SELECT * FROM importJob WHERE id = ?",
+          arguments: [identity.jobID.uuidString]))]
+      }
+    }
+    let before = try rows()
+    do { try await lifecycle.delete(paperID: identity.paperID); XCTFail("Insufficient terminal headroom admitted deletion") }
+    catch { XCTAssertEqual(error as? ImportRecoveryJournal.JournalError, .byteLimitExceeded) }
+    let purges = await agent.sagas()
+    XCTAssertTrue(purges.isEmpty)
+    XCTAssertEqual(try rows(), before)
+    XCTAssertEqual(try Data(contentsOf: writer.stagingDirectory.appendingPathComponent("document.pdf")),
+      URLWriterFixture.bytes)
   }
 
   @MainActor
@@ -449,6 +561,26 @@ private final class URLValidationObservation: @unchecked Sendable {
   private var value = Snapshot()
   init(pool: RequestResourcePool) { self.pool = pool }
   var snapshot: Snapshot { lock.withLock { value } }
+  func networkEffects(failClose: Bool) -> HTTPSPDFFileEffects {
+    HTTPSPDFFileEffects(acquired: { fd in
+      XCTAssertNotEqual(Darwin.fcntl(fd, F_GETFD), -1)
+      let active = self.pool.active
+      self.lock.withLock {
+        self.value.descriptor = fd
+        self.value.acquisitions += 1
+        self.value.activeAtOpen = active
+      }
+    }, checkedClose: { handle in
+      XCTAssertEqual(handle.fileDescriptor, self.snapshot.descriptor)
+      let active = self.pool.active
+      self.lock.withLock {
+        self.value.closeAttempts += 1
+        self.value.activeAtClose = active
+      }
+      if failClose { throw URLImportError.cleanupFailed }
+      try handle.close()
+    }, sessionStarted: { _ in }, finalNetworkDrain: {})
+  }
   func effects(failClose: Bool = false, cancelOnOpen: ImportCancellation? = nil)
     -> ActualURLStageValidationEffects {
     ActualURLStageValidationEffects(acquired: { fd in

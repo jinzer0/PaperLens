@@ -21,6 +21,41 @@ public struct ClosedHTTPSPDFStage: Sendable {
   }
 }
 
+/// Start/close/drain facts are written only by this adapter and its actual delegate.
+final class ActualHTTPSCompletion: @unchecked Sendable {
+  private let lock = NSLock()
+  private enum State { case neverStarted, producing, known, unknown }
+  private var state = State.neverStarted
+  private var release: (@Sendable () -> Void)?
+  private var closedStage: ClosedHTTPSPDFStage?
+  fileprivate init() {}
+  var closureKnown: Bool { lock.withLock { state == .neverStarted || state == .known } }
+  fileprivate func started(release: @escaping @Sendable () -> Void) {
+    lock.withLock { state = .producing; self.release = release }
+  }
+  fileprivate func finished(fileClosed: Bool, networkDrained: Bool, stage: ClosedHTTPSPDFStage?) {
+    lock.withLock {
+      state = fileClosed && networkDrained ? .known : .unknown
+      if state == .known { closedStage = stage }
+    }
+  }
+  func matches(_ stage: ClosedHTTPSPDFStage) -> Bool {
+    lock.withLock {
+      state == .known && closedStage?.file == stage.file && closedStage?.sha256 == stage.sha256 &&
+        closedStage?.byteCount == stage.byteCount
+    }
+  }
+  func acknowledge() {
+    let action = lock.withLock { () -> (@Sendable () -> Void)? in
+      guard state == .known else { return nil }
+      let action = release
+      release = nil
+      return action
+    }
+    action?()
+  }
+}
+
 struct HTTPSPDFFileEffects: Sendable {
   let acquired: @Sendable (Int32) -> Void
   let checkedClose: @Sendable (FileHandle) throws -> Void
@@ -73,6 +108,18 @@ public final class HTTPSPDFImportAdapter: Sendable {
     assertCurrent: @escaping @Sendable () throws -> Void,
     configuration: URLSessionConfiguration, effects: HTTPSPDFFileEffects
   ) async throws -> ClosedHTTPSPDFStage {
+    let completion = ActualHTTPSCompletion()
+    let writer = LibraryURLImportWriter.retained(directory: stagingDirectory)
+    try writer?.beginProducer(completion)
+    return try await performDownload(route: route, stagingDirectory: stagingDirectory,
+      assertCurrent: assertCurrent, configuration: configuration, effects: effects,
+      completion: completion, journalOwned: writer != nil)
+  }
+
+  private func performDownload(route: ValidatedRequestURL, stagingDirectory: URL,
+    assertCurrent: @escaping @Sendable () throws -> Void,
+    configuration: URLSessionConfiguration, effects: HTTPSPDFFileEffects,
+    completion: ActualHTTPSCompletion, journalOwned: Bool) async throws -> ClosedHTTPSPDFStage {
     try Task.checkCancellation()
     try assertCurrent()
     let validated = try authority.validateImportURL(route.value, sourceKind: route.sourceKind)
@@ -93,8 +140,9 @@ public final class HTTPSPDFImportAdapter: Sendable {
     guard let lease = pool.acquire() else { throw URLImportError.capacity }
     let producer = HTTPSPDFProducer(authority: authority, route: validated,
       directory: stagingDirectory, assertCurrent: assertCurrent, budget: budget,
-      lease: lease, effects: effects)
+      lease: lease, effects: effects, completion: completion, journalOwned: journalOwned)
     HTTPSPDFProducerRoots.shared.retain(producer)
+    completion.started { producer.acknowledgeKnown() }
     return try await withTaskCancellationHandler {
       try await withCheckedThrowingContinuation { continuation in
         producer.start(configuration: configuration, continuation: continuation)
@@ -107,6 +155,9 @@ private final class HTTPSPDFProducer: NSObject, URLSessionDataDelegate, @uncheck
   let id = UUID()
   private let lease: RequestResourceLease
   private let effects: HTTPSPDFFileEffects
+  private let completion: ActualHTTPSCompletion
+  private let journalOwned: Bool
+  private var networkDrained = false
   private var closeAttempted = false
   private var fileClosed = false
   private var finished = false
@@ -137,13 +188,16 @@ private final class HTTPSPDFProducer: NSObject, URLSessionDataDelegate, @uncheck
 
   init(authority: ProviderRequest, route: ValidatedRequestURL, directory: URL,
     assertCurrent: @escaping @Sendable () throws -> Void, budget: RequestResourceBudget,
-    lease: RequestResourceLease, effects: HTTPSPDFFileEffects) {
+    lease: RequestResourceLease, effects: HTTPSPDFFileEffects,
+    completion: ActualHTTPSCompletion, journalOwned: Bool) {
     self.authority = authority
     self.route = route
     self.assertCurrent = assertCurrent
     self.budget = budget
     self.lease = lease
     self.effects = effects
+    self.completion = completion
+    self.journalOwned = journalOwned
     started = clock.now
     lastActivity = started
     stage = directory.appendingPathComponent(UUID().uuidString + ".pdf")
@@ -161,6 +215,7 @@ private final class HTTPSPDFProducer: NSObject, URLSessionDataDelegate, @uncheck
       }
       guard descriptor >= 0 else {
         self.fileClosed = true // No descriptor was ever acquired.
+        self.networkDrained = true // No session was ever created.
         self.failure = .writerUnavailable
         self.finish(removeStage: false)
         return
@@ -338,6 +393,7 @@ private final class HTTPSPDFProducer: NSObject, URLSessionDataDelegate, @uncheck
     // Invalidation is the final network producer drain, not merely task cancellation.
     closeFileOnce()
     effects.finalNetworkDrain()
+    networkDrained = true
     if error != nil, failure == nil { failure = .rejected }
     finish(removeStage: true)
   }
@@ -356,26 +412,34 @@ private final class HTTPSPDFProducer: NSObject, URLSessionDataDelegate, @uncheck
   private func finish(removeStage: Bool) {
     finished = true
     if !fileClosed { failure = .closureUnknown }
-    if failure != nil || !bodyComplete {
-      if removeStage, fileClosed {
+    if !journalOwned, failure != nil || !bodyComplete {
+      if removeStage, fileClosed, networkDrained {
         do { try FileManager.default.removeItem(at: stage) }
         catch { failure = .cleanupFailed }
       }
     }
     // Known file close plus final session drain, or setup without acquiring an FD.
     // Unknown output and quota remain rooted even after the continuation returns.
-    if fileClosed {
-      lease.close()
-      HTTPSPDFProducerRoots.shared.release(id)
-    }
+    let result: ClosedHTTPSPDFStage?
+    if failure == nil && bodyComplete && fileClosed && networkDrained {
+      result = ClosedHTTPSPDFStage(file: stage,
+        sha256: digest.finalize().map { String(format: "%02x", $0) }.joined(), byteCount: bytes)
+    } else { result = nil }
+    if fileClosed && networkDrained { lease.close() }
+    completion.finished(fileClosed: fileClosed, networkDrained: networkDrained, stage: result)
+    if !journalOwned { completion.acknowledge() }
     if failure != nil || !bodyComplete {
       continuation?.resume(throwing: failure ?? URLImportError.rejected)
-    } else {
-      let result = ClosedHTTPSPDFStage(file: stage,
-        sha256: digest.finalize().map { String(format: "%02x", $0) }.joined(), byteCount: bytes)
+    } else if let result {
       continuation?.resume(returning: result)
+    } else {
+      continuation?.resume(throwing: URLImportError.closureUnknown)
     }
     continuation = nil
     self.session = nil
+  }
+
+  fileprivate func acknowledgeKnown() {
+    HTTPSPDFProducerRoots.shared.release(id)
   }
 }
