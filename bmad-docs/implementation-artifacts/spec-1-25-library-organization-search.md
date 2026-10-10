@@ -153,3 +153,25 @@ existing guarded save/restart and combined-filter scenarios under implementation
 new UI/branch tests, broad/native gates, formatter and independent review stay deferred.
 Actual sidebar resize/keyboard/VoiceOver, direct native actions/focus and real app restart
 remain unproved; this source phase cannot establish Story/Epic acceptance or renew trials.
+
+### Sidebar/direct controls local delivery
+
+Preimplementation Spec87f4f4757b117fa0f32caa0e8599ba0ad03e039f committed before
+single LibraryBrowserView source change. HSplitView mounts native labeled sidebar
+filters with shared toolbar search and list/card projection; explicit reset clears
+combined conditions, not saved presentation/sort. Native Favorite Toggle and Reading
+Status menu display current committed values and issue existing whole-record guarded
+save with observed Paper/generation/organization. Tags/other fields retained; same-value,
+busy/loading/failed/nonreadable actions deny synchronously. No optimistic mutation or
+automatic retry/rebase. After actual requery, authored keyboard focus returns to the
+same exact Paper-generation control, or search if removed by filters/unavailable; an
+already-focused different tracked control is not overwritten. Existing tag editor,
+folder movement/deletion, Summary, persistence and query arbitration unchanged.
+One-source binary diff against Spec87f4f47 SHA256:
+`ce35f875c7fa4f87e504fa0b5ae971dcc7bb8171b4c1fe16ced23f449e282f28`.
+Parent minimum existing owned GRDB restart/combined-filter/independent-identity case
+and actual service stale-editor/duplicate/reopened CAS case both pass artifact1537;
+changed source/UI compiled in6.62 seconds. These are storage/service checks, not
+native Toggle/Menu/sidebar interaction, focus/resize/VoiceOver or app restart proof.
+Implementation-first keeps new/regression tests, broad/native gate, formatter and
+independent review deferred. No protected execution/remote operation; Story/Epic false.

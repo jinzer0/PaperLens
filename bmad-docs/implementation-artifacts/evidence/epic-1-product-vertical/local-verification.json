@@ -37,6 +37,20 @@
     "Existing Library list/grid/detail consume same-snapshot validated saved Summary records with exact Paper/generation and full ordered source quotes; source compiled, not observed rendered UI",
     "Library Summary observation separates actual recent attempt from valid prior result and validation availability; semantic Summary failures do not reject the Library query, SQL/storage errors still throw, insufficient saved evidence is explicit. New error/runtime/UI branches unverified"
   ],
+  "nativeLibrarySidebarAndDirectOrganizationControls": {
+    "baselineCommit": "3c4bcda04c0ea0e30f5db9bd47b1dcb40f460bec",
+    "preImplementationSpecificationCommit": "87f4f4757b117fa0f32caa0e8599ba0ad03e039f",
+    "sourceScope": ["PaperLensApp/Features/Library/LibraryBrowserView.swift"],
+    "sourceDiffSHA256": "ce35f875c7fa4f87e504fa0b5ae971dcc7bb8171b4c1fe16ced23f449e282f28",
+    "behavior": "Native HSplitView/sidebar status/Favorite/exact user-tag filters share existing bound filter and toolbar search/list/card projection; explicit combined reset retains saved presentation/sort. Direct native Favorite Toggle and Reading Status menu copy observed organization, change one field, and use existing whole-record service.save and requery; no optimistic persistence/automatic rebase. Authored focus restores exact Paper-generation control or search if filtered/unavailable without replacing a different tracked focus.",
+    "minimumExistingScenarios": {"output": "artifact://1537", "exitCode": 0, "tests": ["testRestartPreferencesAndOrganizationWithIdenticalBytesSeparateIdentities", "testSameGenerationEditorsDuplicateAndReopenedServiceCannotOverwriteNewerFields"], "changedProductAndUISourceCompiled": true, "newNativeUIBranchCoverage": false},
+    "sidebarDirectToggleMenuFocusResizeAccessibilityVerified": false,
+    "actualApplicationRestartVerified": false,
+    "newTestsBroadNativeGateFormatterAndIndependentReview": "Deferred per user implementation-first; existing storage/service checks do not prove native control delivery",
+    "newSchemaServiceSelectorProviderOrPolicy": false,
+    "protectedTrialsOrRemoteOperationsExecuted": false,
+    "storyAccepted": false
+  },
   "readerDirectSelectionAndLibraryDropInput": {
     "baselineCommit": "22bb9df401203678d4cd39529c612c460d41febc",
     "sourceDiffSHA256": "925183e894530dce1c5067d1cc618eb09d8680106d916bb3054b865e175a0e1d",

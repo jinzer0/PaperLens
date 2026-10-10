@@ -19,6 +19,8 @@ public struct LibraryBrowserView: View {
   @State private var moving: LibraryMovement?
   @State private var movementFocusToRestore: OrganizedPaper?
   @State private var identification: LibraryIdentification?
+  @State private var organizationFocusToRestore: (paperID: UUID, generation: UUID, control: OrganizationControlFocus)?
+  @FocusState private var organizationFocus: OrganizationControlFocus?
   @FocusState private var focusedPaper: UUID?
   @FocusState private var focusedIdentification: UUID?
   @FocusState private var focusedMovement: UUID?
@@ -38,7 +40,7 @@ public struct LibraryBrowserView: View {
     self.retryImportPDF = retryImportPDF
   }
 
-  public var body: some View {
+  private var libraryContent: some View {
     VStack(alignment: .leading, spacing: 12) {
       HStack {
         Text("Library").font(.largeTitle)
@@ -48,17 +50,8 @@ public struct LibraryBrowserView: View {
       }
       TextField("제목 또는 사용자 태그 검색", text: $filter.search)
         .textFieldStyle(.roundedBorder)
-      HStack {
-        Toggle("즐겨찾기만", isOn: $filter.favoritesOnly)
-        Picker("읽기 상태", selection: $filter.readingStatus) {
-          Text("전체").tag(Optional<PaperReadingStatus>.none)
-          ForEach(PaperReadingStatus.allCases, id: \.self) { status in
-            Text(readingLabel(status)).tag(Optional(status))
-          }
-        }
-        TextField("태그 필터 (정확한 이름)", text: Binding(
-          get: { filter.tag ?? "" }, set: { filter.tag = $0.isEmpty ? nil : $0 }))
-      }
+        .accessibilityLabel("라이브러리 제목 또는 사용자 태그 검색")
+        .focused($organizationFocus, equals: .search)
       if let snapshot {
         HStack {
           Picker("표시", selection: Binding(get: { snapshot.preferences.presentation }, set: { value in
@@ -108,6 +101,39 @@ public struct LibraryBrowserView: View {
         }
       }
     }
+  }
+
+  private var filterSidebar: some View {
+    VStack(alignment: .leading, spacing: 16) {
+      Text("필터").font(.headline)
+      Toggle("즐겨찾기만", isOn: $filter.favoritesOnly)
+      Picker("읽기 상태", selection: $filter.readingStatus) {
+        Text("전체").tag(Optional<PaperReadingStatus>.none)
+        ForEach(PaperReadingStatus.allCases, id: \.self) { status in
+          Text(readingLabel(status)).tag(Optional(status))
+        }
+      }.pickerStyle(.radioGroup)
+      TextField("태그 필터 (정확한 이름)", text: Binding(
+        get: { filter.tag ?? "" }, set: { filter.tag = $0.isEmpty ? nil : $0 }))
+        .textFieldStyle(.roundedBorder)
+        .accessibilityLabel("정확한 사용자 태그로 필터")
+      Text("제목·태그 검색과 함께 적용됩니다. 출처 주제는 사용자 태그가 아닙니다.")
+        .font(.caption).foregroundStyle(.secondary)
+      Button("검색·필터 모두 지우기") { filter = OrganizationFilter() }
+        .disabled(filter == OrganizationFilter())
+      Spacer()
+    }
+    .padding(12)
+    .frame(minWidth: 180, idealWidth: 220, maxWidth: 300, maxHeight: .infinity, alignment: .topLeading)
+    .accessibilityElement(children: .contain)
+    .accessibilityLabel("라이브러리 필터 사이드바")
+  }
+
+  public var body: some View {
+    HSplitView {
+      filterSidebar
+      libraryContent.frame(minWidth: 360, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
     .padding()
     .task(id: refreshRevision) { refresh() }
     .onDisappear { invalidateObservation() }
@@ -118,6 +144,14 @@ public struct LibraryBrowserView: View {
           focusedMovement = opener.id
         }
         movementFocusToRestore = nil
+      }
+      if !value, let opener = organizationFocusToRestore {
+        if organizationFocus == nil || organizationFocus == opener.control {
+          organizationFocus = !loadFailed && snapshot?.papers.contains(where: {
+            $0.id == opener.paperID && $0.generation == opener.generation
+          }) == true ? opener.control : .search
+        }
+        organizationFocusToRestore = nil
       }
     }
     .alert("논문을 영구 삭제하시겠습니까?",
@@ -163,6 +197,33 @@ public struct LibraryBrowserView: View {
       Text(paper.title).font(.headline).textSelection(.enabled)
       Text(statusLabel(paper)).font(.caption)
       Text("\(readingLabel(paper.organization.readingStatus)) · \(paper.organization.favorite ? "즐겨찾기" : "즐겨찾기 아님")")
+      HStack {
+        Toggle("즐겨찾기", isOn: Binding(get: { paper.organization.favorite }, set: { selected in
+          var value = paper.organization
+          value.favorite = selected
+          saveOrganization(value, for: paper, origin: .favorite(paper.id))
+        }))
+        .toggleStyle(.button)
+        .focused($organizationFocus, equals: .favorite(paper.id))
+        .accessibilityLabel("\(paper.title) 즐겨찾기")
+        .accessibilityValue(paper.organization.favorite ? "설정됨" : "설정되지 않음")
+        Menu("읽기 상태 · \(readingLabel(paper.organization.readingStatus))") {
+          ForEach(PaperReadingStatus.allCases, id: \.self) { status in
+            Button {
+              var value = paper.organization
+              value.readingStatus = status
+              saveOrganization(value, for: paper, origin: .reading(paper.id))
+            } label: {
+              if status == paper.organization.readingStatus {
+                Label(readingLabel(status), systemImage: "checkmark")
+              } else { Text(readingLabel(status)) }
+            }
+          }
+        }
+        .focused($organizationFocus, equals: .reading(paper.id))
+        .accessibilityLabel("\(paper.title) 읽기 상태 변경")
+        .accessibilityValue(readingLabel(paper.organization.readingStatus))
+      }.disabled(!paper.readable || busy || loading || loadFailed)
       if !paper.organization.tags.isEmpty { Text(paper.organization.tags.joined(separator: " · ")).font(.caption) }
       if let year = fact?.publicationYear { Text("발행연도 \(String(year))").font(.caption) }
       else { Text("발행연도 정보 없음").font(.caption).foregroundStyle(.secondary) }
@@ -209,6 +270,12 @@ public struct LibraryBrowserView: View {
   }
   private func savePreferences(_ preference: OrganizationPreferences) {
     perform { try await service.savePreferences(preference) }
+  }
+  private func saveOrganization(_ value: PaperOrganization, for paper: OrganizedPaper,
+    origin: OrganizationControlFocus) {
+    guard paper.readable, !busy, !loading, !loadFailed, value != paper.organization else { return }
+    organizationFocusToRestore = (paper.id, paper.generation, origin)
+    perform { try await service.save(value, for: paper) }
   }
   private func requestImport() {
     invalidateObservation()
@@ -265,6 +332,10 @@ public struct LibraryBrowserView: View {
     case .tombstone: return "삭제됨"
     }
   }
+}
+
+private enum OrganizationControlFocus: Hashable {
+  case search, favorite(UUID), reading(UUID)
 }
 
 private struct LibraryMovement: Identifiable {
