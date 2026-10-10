@@ -1474,3 +1474,32 @@ Two-source binary diff against Spec1e94cc4 SHA256:
 GRDB/journal/policy/URL writer/adapter/schema/membership/paired contracts remain
 unchanged. Actual completion is not serialized read/cleanup/publication authority;
 whole journaled actor cutover and same-Job Retry/Story acceptance remain unfinished.
+
+## Next actual cleanup slice: checked namespace absence
+
+Verified96906de supplies correlated physical copier completion. The actual shared
+removeNamespace helper still equates FileManager.fileExists=false with absence,
+which conflates ENOENT with inaccessible/malformed paths and can manufacture
+successful cleanup/deletion. Replace the boolean probe with checked Darwin.lstat
+before and after actual removal. Validate file URL/absolute fully decoded path/no
+NUL/nonNULL representation; capture errno immediately. Only exact ENOENT is absence.
+EACCES/EPERM/ENOTDIR and other errors deny with cleanupFailed; do not repair runtime
+permissions, follow an unexpected symlink or erase a foreign non-directory entry.
+Existing directory removal remains real owned FileManager removal; afterwards
+require checked ENOENT, never suppress a removal error or use ARC/descriptor probes
+as cleanup ACK. Preserve original producer/reader/Agent drain and policy admission.
+
+This is pathname absence evidence for the existing private namespace, not same-UID
+race/ABA/isolation or Agent-purge proof. Do not add a guessed profile, new owner/store,
+clock/pool/protocol or fake-success default. Tests use actual owned temporary PDFs
+and namespaces: normal removal/contentless finalization, already-absent idempotence,
+inaccessible ancestor (positive lstat EACCES/EPERM before command), unexpected
+namespace symlink preserving target bytes, and non-directory obstruction. A denied
+command must retain deleting failure/cleanup obligation and actual bytes across
+reopen, never finalize a tombstone. Restoring permissions only for the owned fixture
+in teardown is not runtime permission repair or closure ACK. Skip no cases/reset.
+Writable scope: LocalLibraryLifecycle.swift, LocalLibraryLifecycleTests.swift and
+this existing Spec. Parent all gates/review/evidence/commits; all Product cases
+remain isolated per test. No URL/DB/journal/policy/schema/membership/contract change,
+full actor cutover/Retry/Story acceptance, live/SDK/helper/renderer/paid/protected
+trial/user document/credential/remote/release execution is admitted.
