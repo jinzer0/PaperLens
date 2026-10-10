@@ -502,3 +502,40 @@ journal/storage primitives, Package/project and actual copier/lifecycle sources 
 No warnings suppressed, formatter added, remote/release/trial execution performed.
 Production import reservation/event writers and same-Job Retry UI remain unfinished;
 this startup integration does not admit synthetic legacy history or complete the Story.
+
+### Next safe bridge slice: ordinary reservation and publication transactions
+
+Bounded contract92 requires coordinated local/URL owner cutover after abort/deletion and
+physical receipt acknowledgment are available. Do not activate partially wired production
+journaling or Retry. First implement genuine ordinary transaction primitives in the sole
+database: reserveJournaledImport(identity:title:confirmedInput:), ordinary append of an
+immutable replacement against exact expected record, and publishJournaledImport against
+an independently admitted closed-stage observation. All use the declared Application
+serialized-record quota explicitly, not a new profile/gauge/root or codec default.
+
+Reservation inserts real Paper/Job, initial+claim and acquireWriter in one transaction with
+exact readback before producer effects. Confirmed hash/folder facts remain immutable; nil
+is not replaced by discovered output. Ordinary append rejects identity/fact/prefix drift,
+deletion or stale bytes. Publication requires previously acknowledged rename intent and
+the actual owner's validated result/stage, exact full lineage and confirmed hash/folder.
+Pre-encode the complete renameFinished(true)/publish/release suffix BEFORE filesystem or
+visibility effects. Rename actual owned closed stage, atomically publish reference/hash/
+folder/success and full journal, then check exact whole-row/journal readback. No success
+suffix is persisted before actual rename succeeds. Checked row refusal/corruption rolls
+back SQL/history; an already performed rename is not rolled back by SQLite. Preserve those
+bytes and throw for later receipt reconciliation, never delete or fabricate committed
+success from this helper. Existing working import APIs remain unchanged until owner cutover.
+
+Typed closed-stage fields are memory-only observations from independently admitted producer
+closure/validation, not new read or physical closure authority. Validate lowercase SHA,
+positive bytes and exact owned Paper namespace before effects; reject symlink/nonregular
+or foreign stage, final overwrite and destination/hash mismatch. No same-UID path-isolation
+claim. Actual owned-file/GRDB tests establish rename/publication/reopen, denial before
+effects, stale/full-lineage fences, bounded suffix refusal and trigger/readback rollback.
+
+Exact worker writable files: ProductDatabase.swift, ProductDatabase+ImportRecovery.swift,
+ImportRecoveryPersistenceTests.swift and this integration Spec. No new membership/schema,
+no policy/copier/lifecycle/startup edits, no launcher-root Spec. Parent gates/reviews/commits;
+worker skips all gates/formatters/commits/SDK/helper/renderer/paid/remote/trial actions.
+Deletion diagnostic schema and full physical-receipt/actor gate bridge are deferred, not
+assumed approved or invented. Ordinary transaction tests do not complete owner cutover.
