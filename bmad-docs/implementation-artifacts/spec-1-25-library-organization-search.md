@@ -132,3 +132,24 @@ Existing pending-label receipt retained; busy/failed now derived from one phase 
 than duplicate State. Tests do not mount OrganizationEditor or prove native event/VoiceOver/
 focus, physical restart/P6. Service/CAS remains write authority; no actual app/helper/
 SDK/provider/renderer trial or remote action. Full objective/0-of-26/Story/Epic false.
+
+## Native sidebar and direct organization controls
+
+Baseline3c4bcda04c0ea0e30f5db9bd47b1dcb40f460bec keeps filters in a horizontal
+header and organization actions behind the editor. Implement the canonical sidebar
+filters and directly accessible Favorite/Reading Status controls in existing
+LibraryBrowserView.swift only. Native HSplitView separates labeled status/Favorite/
+exact user-tag filters from toolbar title/tag search and the shared list/card result.
+Keep the same bound OrganizationFilter/query/preferences; reset is explicit and
+presentation changes retain conditions. This is an existing acceptance implementation,
+not a new product/architecture/numeric-policy contract or permission change.
+Direct actions copy the observed whole PaperOrganization, change only the selected
+field, and call existing service.save with exact observed Paper/generation/organization.
+Synchronous busy/loading/failure/readability checks precede existing perform/Task;
+no optimistic row mutation, stale rebase, automatic retry, SQL/schema/new owner.
+Existing failure/requery path displays committed values. Tag editor, move/deletion,
+stored Summary and current query fences remain unchanged. Parent runs only minimum
+existing guarded save/restart and combined-filter scenarios under implementation-first;
+new UI/branch tests, broad/native gates, formatter and independent review stay deferred.
+Actual sidebar resize/keyboard/VoiceOver, direct native actions/focus and real app restart
+remain unproved; this source phase cannot establish Story/Epic acceptance or renew trials.
