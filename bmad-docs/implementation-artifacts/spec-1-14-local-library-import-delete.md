@@ -205,3 +205,22 @@ current failure succeeds atomically, deletion/terminal/current-epoch/reopen fenc
 Parent focused/union/native and independent changed-source review/evidence/local commit;
 no SDK/helper/renderer/userdocs/paid/trial/remote actions or Story certification. Missing
 durable input/history ledger is STILL separate development, not inferred from current rows.
+
+### Actual deletion-abort caller reconciliation
+
+Focused27/zero1089; initial union317/one1094 revealed the real affected URL abort caller:
+beginDeletion has already recorded exact failed/paperDeleting, so ordinary strict failImport
+correctly rejects its importing-state guard. Do NOT restore an unguarded/no-op failure path.
+Add explicit recordImportAbort for completed producer abort, deciding inside the same queue
+transaction: exact current running/importing uses strict failure recording; exact current
+deleting/non-nil valid saga/failed-paperDeleting records ONLY monotonic cleanupDebt when
+needed. Preserve deletion status/saga/failure/generation/reference and unrelated debt; clean
+producer never clears existing Reader/Agent/deletion debt. Other terminal/rebound lineages
+reject, including stale failures after newer execution. Both actual local-copy and URL abort
+callers use this explicit semantic; ordinary failImport remains strict. No closure is inferred
+from state or debt; caller supplies actual physical result under existing retained permits.
+Correction extends EXACT source/test scope to ProductDatabase.swift, LocalLibraryLifecycle.swift,
+LocalLibraryLifecycleTests.swift, LibraryURLImportWriterTests.swift and this Spec. Parent
+retains failed1094, tests real deleting-phase receipt and malformed/stale/debt-preservation,
+then reruns affected/full and fresh native. No false deletion/Agent-purge success or Retry
+implementation; source85 review must include actual changed callers before final approval.
