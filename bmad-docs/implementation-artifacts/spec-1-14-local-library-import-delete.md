@@ -242,3 +242,55 @@ against66d0ebe:9c6119eefba37ac52cff587f4ca18bd3ba864a03e70c3b771f5c4fc2c97f6772.
 No schema/policy/epoch/root/selector/counter or actual-copy effects change. Ordinary same-Job
 Retry/history ledger remains separate unfinished development. No SDK/paid/user-PDF/helper/
 renderer/private API/remote/consumed trial execution; UI/Agent/P1/P2/P3/Story uncertified.
+
+## Durable local-import recovery — ordered implementation layers
+
+Independent82's existing-fields-only rejection remains valid. Copier279ab14 and exact
+mutationb5779a9 fix two concrete prerequisites, not the missing history/input ledger.
+Implement that existing canonical1.13/1.14 contract, preserving stable Paper/generation/Job,
+historical captured input/lineage/outcomes/used permit and cleanup operation IDs, and fresh
+confirmed Retry identities. Main/sole GRDB remains authority; no policy/shared-contract,
+credential/profile/purge/epoch waiver or fresh-Paper-as-Retry substitution.
+
+FIRST complete typed ImportRecoveryJournal in Application and existing-policy fixture tests.
+It records an immutable initial ImportIdentity plus explicitly supplied confirmed input facts
+(optional expected SHA and optional destination UUID, neither inferred), and an immutable
+ordered log of fully typed import-policy events. Full identity also retains reserved writer/
+publication IDs even if not yet consumed. Replay uses ONLY JobRecoveryPolicy.create/apply;
+any event rejection/corrupt/rebound/applicability/version/UUID/expected-hash error rejects.
+No second state machine or direct synthetic Snapshot initializer. Initial create is pending;
+claim/writer acquisition/physical result/cleanup/startup/revoke/removal/publication remain
+explicit recorded events. Decode/encode/replay are serialization, NEVER physical closure,
+publication/input or fresh-action authority. Codec runs after owner's independent admission.
+No paths/URLs/bookmarks/documents/credential/model payload. Import roles/source/inapplicable
+configuration only; no generic provider recovery codec or ignored unsupported event.
+
+Required API: ImportRecoveryJournal(identity:confirmedInput:) throws;
+snapshot() throws -> JobRecoveryPolicy.Snapshot; recording(_ event: JobRecoveryPolicy.Event)
+throws -> ImportRecoveryJournal; retrying(identity:confirmedInput:) throws -> journal;
+encoded(maximumBytes:) throws -> Data; decode(_:maximumBytes:) throws -> journal.
+ConfirmedInput is Sendable with explicit optional expectedSHA256/destinationFolderID fields.
+Ordinary recording rejects policy.retry: retrying captures the FULL newly reserved identity
+and input facts, retains prior captures, then applies the real retry event. Neither API
+allocates/renews UUIDs or performs SQL/effects. All reserved execution/permit IDs must be
+fresh; current/used histories stay immutable. Correct startup may advance observed authority
+epoch while captured epochs remain old; permits/debt must stay outstanding until actual
+recorded checked cleanup, not silently omitted. Revocation/permanent removal deny Retry.
+Use an explicit positive caller byte bound before JSON decode and after encode; no default
+limit or invented profile/allocator. This bounds codec bytes only, not combined RSS. Reject
+unknown JSON keys/version/variants/types rather than compatibility fallback. Pure fixtures
+supply declared synthetic bounds; production owner binding belongs to the next layer.
+
+EXACT worker3 writable files: NEW Application/ImportRecoveryJournal.swift, NEW
+Tests/Product/ImportRecoveryJournalTests.swift, this Spec. Read-only existing policy and
+ImportIdentity declarations. Skip ALL tests/builds/lint/format/gates/commits/remotes/runtime/
+SDK/workflows/.gjc/delegation. Parent registers Package/Xcode, verifies faithful normal and
+failed/cleanup-unknown/Retry/startup/deletion event histories, then integrates storage and
+actual callers sequentially (large evolving contract, no concurrent DB/UI implementation).
+Next layer extends existing importJob through the sole migrator; records lacking real
+history remain explicitly ineligible, never fabricate old capture or empty debt. Exact CAS
+and whole transaction readback bind journal to actual columns. Final native UI uses fresh
+reselection/confirmation against the captured failed Job; Cancel no reservation, consumed
+intent never replayed, old callbacks fenced. No whole namespace cleanup of usable results.
+Each layer stays truthful: journal-only source/fixtures are NOT durable activation or Retry.
+Same-Job completion and canonical0/26/P1/P2/P3/UI/Story remain unclaimed until actual gates.
