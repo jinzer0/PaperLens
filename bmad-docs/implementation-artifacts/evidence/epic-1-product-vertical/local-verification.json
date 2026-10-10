@@ -28,9 +28,9 @@
   "verification": {
     "productUnion": {
       "command": "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --filter ProductTests",
-      "tests": 318,
+      "tests": 329,
       "failures": 0,
-      "output": "artifact://1099",
+      "output": "artifact://1114",
       "evidence": "Real GRDB transactions, owned synthetic files and actual local FIFO IO/close/peer metadata/EPIPE; mocked provider/HTTP transport and synthetic windowless PDFKit conversions. Not authenticated provider, app UI, SDK producer or PDFium execution."
     },
     "nativeCompilation": {
@@ -38,11 +38,11 @@
       "configuration": "Release",
       "architecture": "arm64",
       "minimumOS": "15.0",
-      "derivedData": ".build/product-native-compile-20261010-ac",
+      "derivedData": ".build/product-native-compile-20261010-ae",
       "codeSigningAllowed": false,
       "result": "BUILD SUCCEEDED",
-      "rawOutput": "artifact://1100",
-      "output": "artifact://1100",
+      "rawOutput": "artifact://1115",
+      "output": "artifact://1115",
       "applicationAndHelperBinariesExecuted": false,
       "warnings": "AppIntents metadata skipped, PDFium debug-map duplicate/missing-symbol warnings and an unnecessary-await Swift warning remain; no warning suppression or debug-symbol repair claimed."
     },
@@ -295,6 +295,25 @@
     "visibleUIOrAccessibilityVerified": false,
     "runtimeParsingOrCalibrationVerified": false,
     "helperExecuted": false,
+    "storyAccepted": false
+  },
+  "immutableImportRecoveryJournal": {
+    "initialSpecificationCommit": "93b8219",
+    "canonicalFormatCorrectionSpecificationCommit": "f6547cf",
+    "sourceDiffAgainstCorrectionSpecificationSha256": "f94667df663d8aeef613a35f9bbab5c4a1465c1bfd2e9b47d17f11ad12117138",
+    "sourceScope": ["Package.swift", "PaperLens.xcodeproj/project.pbxproj", "PaperLensApp/Application/ImportRecoveryJournal.swift", "Tests/Product/ImportRecoveryJournalTests.swift"],
+    "focusedTests": {"tests": 11, "failures": 0, "output": "artifact://1113"},
+    "productUnion": {"tests": 329, "failures": 0, "output": "artifact://1114"},
+    "nativeCompilation": {"result": "BUILD SUCCEEDED", "output": "artifact://1115", "derivedData": ".build/product-native-compile-20261010-ae", "codeSigningAllowed": false, "applicationAndHelperBinariesExecuted": false},
+    "preservedPreCorrectionVerification": {"focusedTests": 10, "focusedOutput": "artifact://1103", "productUnionTests": 328, "productUnionOutput": "artifact://1108", "nativeOutput": "artifact://1110"},
+    "review": "agent://87-ImportRecoveryJournalIntegrity: final SOURCE-ONLY CLEAR / APPROVE; duplicate-member MEDIUM resolved by exact canonical byte admission before replay",
+    "evidence": "Immutable full initial and Retry captures, explicit confirmed input facts, ordered typed events and faithful existing-policy create/apply replay. Synthetic attestations exercise closure/debt/startup/revocation/removal/history retention; codec rejects ambiguous or noncanonical bytes. Main source registration appends only journal B00000000000000000000057.",
+    "existingPolicyChanged": false,
+    "durableSQLJournalActivated": false,
+    "productionByteBudgetBound": false,
+    "sameJobRetryUIActivated": false,
+    "physicalClosurePublicationOrInputAuthorityEstablished": false,
+    "helperOrRendererExecuted": false,
     "storyAccepted": false
   },
   "exactImportMutationFencing": {

@@ -338,3 +338,19 @@ escaped duplicate spellings, reordered keys and added whitespace reject; no alte
 representation or compatibility decoder is promised. This avoids introducing a second
 JSON parser. Raw-byte fixtures cover root and nested duplicate keys and hidden events.
 This narrows serialization only; it grants no attestation or execution authority.
+
+### Parent first-layer verification and independent review
+
+After Spec93b8219 and canonical correction Specf6547cf, parent registered the journal
+in the existing SwiftPM Product target/tests and appended only B00000000000000000000057
+to Main native sources. Four-source binary diff against f6547cf SHA256:
+f94667df663d8aeef613a35f9bbab5c4a1465c1bfd2e9b47d17f11ad12117138.
+Final journal fixtures11/0 artifact1113; Product329/0 artifact1114; fresh unsigned native
+Release arm64/macOS15 BUILD SUCCEEDED artifact1115, namespace product-native-compile-20261010-ae.
+Pre-correction focused10/1103, Product328/1108 and native-ad/1110 remain historical evidence.
+Review87 final SOURCE-ONLY CLEAR / APPROVE resolves duplicate-member MEDIUM; no repeated
+unchanged policy review. Existing policy, sole database, lifecycle and physical owners
+remain unchanged. No formatter is configured; none added or run. Compiler/debug-map
+warnings remain unsuppressed. No app/helper/SDK/renderer/provider/remote/trial execution.
+This layer is the tested immutable replay/codec component, NOT persisted recovery,
+production byte-budget binding, native same-Job Retry or Story acceptance.
