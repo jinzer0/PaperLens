@@ -1000,3 +1000,44 @@ Package/project, policy/journal codec, lifecycle actor/physical roots, diagnosti
 schema, paired resource contracts and contentless finalization stay unchanged.
 This proves actual durable admission revocation, not producer receipt/actor
 cutover, physical closure/purge, same-Job Retry or Story/Epic acceptance.
+
+## Next bounded slice: atomic ordinary import failure acknowledgment
+
+After verified7edb828, reservation/publication/deletion primitives acknowledge
+genuine history, but ordinary import failure still lacks an atomic history/row
+transition for the future actual producer bridge. Add internal
+`recordJournaledImportFailure(expected:replacement:failure:cleanupDebt:)` on the
+sole ProductDatabase owner. Fixed ImportAbortFailure cases are cancelled,
+sourceChanged, importFailed, urlImportFailed and publicationRejected; each maps
+to existing policy .failed, including current cancelled SQL cause mapping.
+Startup interruption and paperDeleting stay separate owners, not abort cases.
+
+In one existing adapterWrite transaction, bound and canonically validate expected
+and replacement before effects, require exact current nondeleting running capture
+and genuine BLOB, strict immutable event prefix, unchanged captured facts/ten IDs,
+unchanged usedPermitIDs and retained prior executions/current lineage. Replacement
+must terminate the current execution as .failed(.failed); no Retry/new permits or
+retrospective legacy admission. A false cleanupDebt input is inadmissible while
+replacement still retains permits or namespace-removal debt. Existing Paper debt
+must not be cleared. Failure/uncertainty remains deny authority, not physical ACK.
+
+Reuse the existing exact running failure SQL hook (make its private visibility
+internal solely for the extension), atomic journal CAS, exact typed bounded
+readback and whole-row invariants. Only Paper status/reference/conservative debt,
+Job state/fixed failure and recoveryJournal may change; scalar progress/folder/
+immutable identities/configuration and unrelated columns remain untouched.
+Ignore/corruption/column mutation triggers throw and roll back the whole writer
+transaction. Stale expected, NULL, bound/capture/facts/state/permit drift all deny
+without effects. Ordinary and deleting APIs remain distinct; deleting late abort
+retains its stricter failed/paperDeleting contract and is not expanded here.
+
+This is an independently verified long-term transaction boundary, not production
+actor cutover or synthetic physical receipt authority. Actual owner observation,
+cleanup acknowledgment and fresh same-Job Retry remain unfinished. Writable scope:
+ProductDatabase.swift, its ImportRecovery extension, ImportRecoveryPersistenceTests
+and this existing Spec. Parent owns all gates/review/evidence/commits. Test real
+owned-GRDB five causes, unknown/retained and synthetic known-clean observations,
+existing debt preservation/reopen, stale and all full-lineage/state/payload/quota
+denials, and whole-row ignore/corrupt/marker rollback. All Product tests execute
+in isolated per-test processes; no skip/reset/ACK, live/SDK/helper/renderer/trial,
+user document/credential access, remote or release action is admitted.
