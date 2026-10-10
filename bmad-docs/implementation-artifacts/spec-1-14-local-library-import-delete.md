@@ -354,3 +354,30 @@ remain unchanged. No formatter is configured; none added or run. Compiler/debug-
 warnings remain unsuppressed. No app/helper/SDK/renderer/provider/remote/trial execution.
 This layer is the tested immutable replay/codec component, NOT persisted recovery,
 production byte-budget binding, native same-Job Retry or Story acceptance.
+
+### Next sequenced layer: sole-GRDB recovery transaction primitives
+
+Add nullable recoveryJournal BLOB to the existing importJob through the sole migrator.
+Existing rows remain NULL and explicitly ineligible; never synthesize their old history.
+The parent adds migration registration and Package/Xcode membership. The immutable journal
+exposes a throwing typed current-capture accessor (full ImportIdentity plus ConfirmedInput),
+derived from the initial or last Retry capture after replay, not reconstructed from rows.
+
+Implement transaction-local initialization for a newly reserved execution, bounded restore,
+and exact old-byte CAS replacement using the same Database supplied by the existing queue.
+Each operation requires an explicit positive maximumBytes supplied by its caller; no default
+or production profile constant is introduced. Validate all ten duplicated identity columns,
+the actual Paper ownership/generation, and nondeleting state before writes. Read bounded
+payload length before materialization; NULL, corrupt, rebound or oversized history rejects.
+CAS checks affected row count and exact readback inside that transaction; a trigger refusal,
+readback corruption or stale prior payload rolls back. A successful codec is not authority.
+Initialization is only a hook for the parent's new-reservation transaction, not an API for
+retroactively admitting legacy rows. No independent queue/database/selector/counter.
+
+Worker writable files: NEW Infrastructure/ProductDatabase+ImportRecovery.swift, NEW
+Tests/Product/ImportRecoveryPersistenceTests.swift, this Spec. Read existing database,
+journal and policy only. Worker skips all gates/formatters/commits/runtime/delegation.
+Parent owns typed accessor, schema registration, callers, membership, tests and review.
+This stage tests genuine owned GRDB persistence and transactional refusal/rollback; it does
+not yet wire lifecycle attestations or admit same-Job Retry. Those require the actual owner
+events, explicit production byte-bound admission and fresh captured UI confirmation.
