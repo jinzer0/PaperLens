@@ -106,3 +106,37 @@ After prerequisites map≤5exactsource+testpaths per same-Spec phase: Applicatio
 Actualroutes/foursurfaces/defaultduplicate/cancelzeroJob/singleconfirmation/stayLibrary/explicitReader+Retry; exact/oneover streaming+redirect budgets/redaction. Realindependentcopy/writerclose/failedcommitcleanup/delete/Retry/late/restart/crashbarriers, not mockedpermit/terminalACK. Then actualP6 events/profile/disposition separately.
 
 Architect50 COMMENT/WATCH, five-source read-only only, no tests/gates/formatter/build/GUI/SDK/auth/network/commits. Done needs realowners/gates/physicalUIverification/independentreview; planning passes none.
+
+## Actual HTTPS FD and quota closure prerequisite
+
+Forward lifetime-bridge inspection found a concrete ownership defect in the current real
+HTTPS adapter: download unconditionally defers lease.close(), producer uses an ARC-closing
+FileHandle, and completion/invalidation nils output even after checked close throws.
+closureUnknown therefore retains namespace metadata but loses actual FD/quota ownership;
+invalidation can also retry close. Repair this actual production path, not an audit or new
+SDK/renderer trial. Reuse the existing ProviderRequest import pool and true URLSession drain.
+
+Transfer the acquired lease into an independently rooted actual producer owner before
+effects; stage handle uses closeOnDealloc:false. Single checked close is attempted once
+across completion/invalidation/cancel/setup-failure paths. Known closure plus final actual
+session invalidation releases the original lease outside registry locks. Unknown close
+retains the exact FileHandle/lease/producer beyond stack, task and façade loss; no nil,
+ARC, numeric FD probe, retry, cancellation, timeout or manual fixture teardown is ACK.
+Do not return a ClosedHTTPSPDFStage on uncertainty or remove its namespace/stage. All
+callbacks after closure are fenced from writes/new success; actual network invalidation
+does not certify file closure. Preserve fixed response/body/redirect/budget policies and
+known-close failure cleanup. Seal successful output through its actual descriptor before
+checked close; no same-UID isolation or hard-RSS/resource-profile claim.
+
+Internal explicit fixture effects observe actual FD and inject checked-close failure;
+production binding calls the real FileHandle.close(). Owned URLProtocol tests only, no
+external requests: once-close, unknown retained FD/actual pool capacity/stage across final
+drain/façade loss, known-success/failed-body/cancel cleanup/release, no synthetic closure.
+Manual fixture FD cleanup is explicitly not acknowledgment. Reject decoded NUL/invalid
+filesystem representations before stage/lease effects, remove force-unwrapped path access.
+
+Exact writable scope: Adapters/HTTPSPDFImportAdapter.swift, Tests/Product/URLImportTests.swift,
+Tests/Product/LibraryURLImportWriterTests.swift and this integration Spec. Parent owns gates,
+review and commits; worker skips all tests/builds/format/commits/SDK/helper/renderer/live/
+paid/remote/trial execution. No new Package/schema/selector/pool/gauge/history or actual
+journal-owner cutover; this closes a physical ownership prerequisite without Story proof.
