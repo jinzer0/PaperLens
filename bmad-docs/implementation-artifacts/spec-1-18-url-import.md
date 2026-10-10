@@ -60,6 +60,44 @@ Package/project/policy/DB/lifecycle/journal sources unchanged. Warnings unsuppre
 no formatter, remote/release/renderer/live/paid/protected trial execution. Actual durable
 owner receipts, coordinated journaled lifecycle cutover and same-Job Retry still pending.
 
+## Actual closed-stage validator read ownership prerequisite
+
+Forward producer-receipt wiring inspected the actual separate stage revalidation in
+LibraryURLImportWriter.validate: its readonly FileHandle still uses ARC closure and has
+no real import-pool lease. A throwing checked close returns closureUnknown but loses the
+actual validation FD at stack exit. Repair this concrete dependency before owner cutover;
+do not re-audit the already verified HTTP producer, selected input or local copier.
+
+Reuse the existing import resource pool for this distinct actual read operation, admit
+before opening, and transfer the lease into an independently rooted actual validation
+owner. Retain its original readonly nofollow/nonblocking/CLOEXEC FD and FileHandle with
+closeOnDealloc:false before read/fstat effects. Single checked close on every work result;
+known closure releases exact lease outside registry locks, unknown retains FD/lease/stage
+obligation indefinitely and outranks work failure. No ARC/probe/manual cleanup/retry ACK.
+Failed pre-open admission performs no read; pre-open failure can release never-owned-FD
+admission. All post-open errors route through the same checked close. No second pool or
+guessed budget/profile; preserve current type/mode/link/size/magic/hash/cancel/elapsed/
+read-buffer/body bounds and before/after descriptor/path identity checks. Reject decoded
+NUL/invalid filesystem representation before lease/FD and remove forced C-pointer unwrap.
+No same-UID isolation or hard-RSS guarantee.
+
+Internal validation requires explicit ActualURLStageValidationEffects(acquired:checkedClose:)
+or equivalently named immutable Sendable binding; production calls actual FileHandle.close.
+Parent supplies this real binding at the single lifecycle caller. No compatibility overload
+or inferred closed flag. Worker writes only LibraryURLImportWriter.swift,
+LibraryURLImportWriterTests.swift and this integration Spec; parent owns lifecycle caller,
+gates/review/evidence/commit. No schema/Package/HTTP producer/history changes.
+
+Owned closed stages come from the actual URLProtocol downloader; fixture injection is
+only at checked validation close. Prove once-close success/cancel/work failure, retained
+actual validation FD/stage/capacity after throwing close and facade loss, and no namespace
+removal/ready publication on uncertainty. The existing HTTP unknown test already permanently
+holds one of two process-global admissions: run distinct unknown scenarios in separate
+test processes when needed; never reset pools or manufacture ACK to make gates pass.
+Manual OS fixture cleanup is not receipt. Worker skips tests/build/format/commit/live/SDK/
+helper/renderer/paid/remote/trial actions. This is a physical prerequisite, not durable
+actor/journal/Retry activation or Story certification.
+
 ## Previous source phase (2026-10-09 explicit human order)
 
 The actual-owner binding phase mutates exactly this Spec,
