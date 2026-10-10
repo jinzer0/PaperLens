@@ -98,3 +98,23 @@ quarantine. The integrated Product union passed 221 tests/zero failures (`artifa
 Full unsigned Release arm64/macOS15 native compilation succeeded in fresh native-h
 (`artifact://901`). Review57 is CLEAR / APPROVE for this concrete bounded source fix.
 No helper/app execution, signing, native UI/timing/P1/P2/P3 or Story acceptance is claimed.
+
+## Bounded native search discard reentry
+
+ReaderPresentation.search clears a prior native selection inside the existing real
+ReaderSession pin. PDFKit selection notifications may synchronously close/revoke that
+session; discard invalidates search generation and restores idle. The interrupted
+search must not subsequently set searching, queue fresh work or replace the discard
+failure/state. Validate opened/current request after native selection clearing and
+before accepting results/errors. Request identity is a stale-result fence, not read
+authority; retain the actual session pin and original document ownership.
+Exact source scope: NativeReaderView.swift and existing ReaderAnnotationBindingTests.swift,
+which already generates actual owned selectable multi-page PDFs and real GRDB/lifecycle
+sessions. Parent adds actual ReaderPresentation search matches/no-results/empty-query,
+latest-query and discard-before-delayed-work regressions, plus synchronous public
+PDFViewSelectionChanged close during clearing of a real preceding match. No factory
+hook or fake search owner is required. Parent runs isolated focused/full tests, unsigned
+native compile and independent review. Windowless PDFKit/application tests do not prove
+rendered visibility, keyboard/VoiceOver/focus, physical runtime restart or P6 timing.
+No user document, credential, helper/SDK/provider/renderer trial, remote operation or
+acceptance promotion is admitted. This preserves the full Epic objective and gate limits.
