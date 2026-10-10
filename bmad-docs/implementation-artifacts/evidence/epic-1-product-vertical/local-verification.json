@@ -28,9 +28,9 @@
   "verification": {
     "productUnion": {
       "command": "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --filter ProductTests",
-      "tests": 373,
+      "tests": 378,
       "failures": 0,
-      "output": "artifact://1206",
+      "output": "artifact://1220",
       "evidence": "Real GRDB transactions, owned synthetic files and actual local FIFO IO/close/peer metadata/EPIPE; mocked provider/HTTP transport and synthetic windowless PDFKit conversions. Not authenticated provider, app UI, SDK producer or PDFium execution."
     },
     "nativeCompilation": {
@@ -38,11 +38,11 @@
       "configuration": "Release",
       "architecture": "arm64",
       "minimumOS": "15.0",
-      "derivedData": ".build/product-native-compile-20261010-aj",
+      "derivedData": ".build/product-native-compile-20261010-ak",
       "codeSigningAllowed": false,
       "result": "BUILD SUCCEEDED",
-      "rawOutput": "artifact://1207",
-      "output": "artifact://1207",
+      "rawOutput": "artifact://1221",
+      "output": "artifact://1221",
       "applicationAndHelperBinariesExecuted": false,
       "warnings": "AppIntents metadata skipped, PDFium debug-map duplicate/missing-symbol warnings and an unnecessary-await Swift warning remain; no warning suppression or debug-symbol repair claimed."
     },
@@ -295,6 +295,26 @@
     "visibleUIOrAccessibilityVerified": false,
     "runtimeParsingOrCalibrationVerified": false,
     "helperExecuted": false,
+    "storyAccepted": false
+  },
+  "exactSagaBoundDeletingImportHistory": {
+    "specificationCommit": "aa27603",
+    "sourceDiffAgainstSpecificationSha256": "a7a5f0b9ce6b927ef59c1833d7fe15a31568c164080862dfa22c046d43e6db06",
+    "sourceScope": ["PaperLensApp/Infrastructure/ProductDatabase+ImportRecovery.swift", "Tests/Product/ImportRecoveryPersistenceTests.swift"],
+    "focusedTests": {"tests": 47, "failures": 0, "persistenceTests": 28, "newTestMethods": 5, "startupTests": 19, "output": "artifact://1214"},
+    "preservedInitialBoundFailure": {"tests": 47, "failures": 1, "output": "artifact://1213", "repair": "Wrapped replacement encoding now checks bounds before prefix validation, preserving invalidHistory error semantics without weakening quota rejection."},
+    "productUnion": {"tests": 378, "failures": 0, "output": "artifact://1220"},
+    "nativeCompilation": {"result": "BUILD SUCCEEDED", "output": "artifact://1221", "derivedData": ".build/product-native-compile-20261010-ak", "codeSigningAllowed": false, "applicationAndHelperBinariesExecuted": false},
+    "review": "agent://100-SagaBoundHistoryIntegrity: SOURCE-ONLY CLEAR / APPROVE; exact two-file delta with unchanged journal/policy/lifecycle failure-mapping references",
+    "evidence": "Separate explicit-bound deleting restore/CAS requires actual canonical saga, complete captured lineage and genuine revoked history; retained successful/failed executions match original Job cause, not Paper diagnostics. Immutable-prefix metadata update, exact BLOB/whole-row readback and actual owned-GRDB caller-marker/trigger rollback verified. Ordinary helpers still deny deletion. No synthetic legacy history or terminal rewrite.",
+    "genuineSagaBoundMetadataTransactionsVerified": true,
+    "allDeletingRowsForcedToPaperDeleting": false,
+    "lateProducerAbortAdmissionChanged": false,
+    "journalRetainedAfterContentlessTombstone": false,
+    "serializationGrantsPhysicalClosureOrProducerAuthority": false,
+    "productionJournaledActorCutoverActivated": false,
+    "sameJobRetryUIActivated": false,
+    "helperOrRendererExecuted": false,
     "storyAccepted": false
   },
   "actualHTTPSImportPhysicalOwnership": {

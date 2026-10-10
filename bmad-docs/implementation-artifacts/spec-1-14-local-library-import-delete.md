@@ -779,3 +779,116 @@ no-op/divergent/Retry denial, ignored/corrupt triggers and caller marker rollbac
 closure events are synthetic attestations, not real physical ACK. Parent gates/reviews/
 commits; worker skips tests/builds/formatters/commits/SDK/helper/renderer/remote/trials.
 No new migration/membership, actor cutover, physical receipt authority or Retry UI claim.
+
+### Saga-bound deleting history implementation (worker99, parent verification pending)
+
+Traceability: baseline 90b7189; existing committed Spec aa27603 (no leading `c`).
+Contract92 remains consumed; this is its requested separate metadata implementation,
+not a repeat assessment or completed durable producer/lifetime bridge.
+Only the three assigned integration files changed; no root documentation changed.
+
+Authored internal static APIs on the sole ProductDatabase extension:
+`readImportRecoveryForDeletion(_ identity: ImportIdentity, saga: UUID,
+maximumBytes: Int, in db: Database) throws -> ImportRecoveryRecord` and
+`compareAndSwapImportRecoveryForDeletion(expected: Data,
+replacement: ImportRecoveryJournal, saga: UUID, maximumBytes: Int,
+in db: Database) throws -> ImportRecoveryRecord`.
+They use only the supplied database context, do not open a transaction or queue,
+and propagate failure so the caller must roll back its complete transaction.
+The positive bound is checked before SQL. Shared ordinary/deletion identity parsing
+and the existing canonical codec retain the bounded BLOB-only CASE materialization
+gate; ordinary reads/CAS still require NULL deletionID and non-deleting Paper status.
+
+Deleting restore requires actual status `deleting`, exact canonical supplied saga text,
+all ten canonical captured UUIDs (including actual owner/generation), and genuine
+non-NULL revoked import replay. It checks the entire current captured lineage and
+actual Job state/cause. Retained succeeded execution requires actual `succeeded` and
+NULL failure. Retained failed execution requires actual `failed` with this closed
+source-derived code mapping, not an arbitrary-reason or generic failed-row fallback:
+
+| Actual importJob.failure | Required journal policy failure | Existing source |
+| --- | --- | --- |
+| importFailed | failed | LocalLibraryLifecycle local abort |
+| publicationRejected | failed | LocalLibraryLifecycle post-rename abort |
+| sourceChanged | failed | LocalLibraryLifecycle selected-source abort |
+| urlImportFailed | failed | LocalLibraryLifecycle URL abort |
+| cancelled | failed | Both lifecycle abort paths terminate with `.failed`, not `.cancelled` |
+| interrupted | interrupted | ProductJobRecovery startup replay |
+| paperDeleting | paperDeleting | beginDeletion active execution interruption / journal revoke |
+
+Unknown codes, policy `.cancelled`/`.timeout` without a matching existing actual code,
+pending/running/unknown actual states, unrevoked replay and mismatched state/cause are
+ineligible. `paper.deletionFailure` is an independent diagnostic, never Job cause.
+The fixed `deletionIncomplete` fixture diagnostic deliberately coexists with all
+accepted retained Job causes to exercise this separation.
+
+Deleting CAS decodes canonical bounded expected bytes and validates genuine revoked
+previous/replacement snapshots, unchanged capture/facts/execution history and used
+permit IDs, plus strict codec immutable-prefix extension (no zero-event/no-op,
+truncation, divergent history, Retry/new grant/capture or revocation clearing).
+Parent clarified no-op means identical/no-added-event history, as in `extends`;
+valid added same-authority or repeated-revoke observations are not denied solely
+because their final snapshot is unchanged.
+Cleanup may update/release existing permits and reserve fresh cleanup operation IDs;
+committed successful publication bytes are not treated as failed-stage cleanup.
+UPDATE matches exact old BLOB, all ten lineage fields, actual Paper owner/generation,
+exact saga and `deleting`. Affected count must be one. Typed bounded canonical
+readback must equal replacement bytes. All actual Paper columns and all current
+importJob columns other than recoveryJournal are compared exactly, including progress,
+diagnostic, state/cause, deletionID, result-file pointers and immutable metadata.
+The comparison's job query also CASE-gates the journal rather than using unbounded
+SELECT-star materialization. Ignore/corruption/unrelated mutations throw; no marker,
+automatic transaction or error swallowing is added. recordImportAbort is unchanged.
+
+Five authored owned-GRDB test methods extend ImportRecoveryPersistenceTests:
+
+- `testDeletingHistoryRetainsExactTerminalCauseResultAndCleanupAcrossReopen`:
+  genuine journaled reservation/claim/writer, synthetic publication or termination,
+  revoke persisted before marking actual saga in the same controlled transaction;
+  all seven fixed failed codes plus succeeded result/pointer, failed/fresh successful
+  cleanup operations, permit release, used IDs, namespace observation and reopened
+  exact snapshot/bytes. Ordinary helpers deny deleting history before and after cleanup.
+- `testDeletingReadRejectsWrongSagaAndEveryCapturedIdentityDrift`:
+  wrong/malformed/lowercase/renamed saga, supplied full-ten identity drift, actual Job
+  ID and owner drift, generation and remaining captured field drift.
+- `testDeletingReadRejectsStatesCausesAndIneligiblePayloadWithoutFallback`:
+  invalid Paper/Job states, wrong causes, NULL/unrevoked/corrupt/truncated/noncanonical/
+  text/integer/oversized history, exact byte limit and one-byte-short denial. Stored
+  invalid payloads are exercised against both deleting APIs.
+- `testDeletingBoundsAreValidatedBeforeAnySQLAndCASRejectsNonExtensionsAndRetry`:
+  renamed-away table proves nonpositive bounds precede SQL; canonical expected-data
+  validation, replacement byte bound, no-op/truncation/divergence, facts/capture/Retry
+  mismatch, wrong saga, stale expected data and reopened successful append.
+- `testDeletingCASIgnoredCorruptAndEveryUnrelatedColumnTriggerRollsBackCallerAndReopens`:
+  ignored/corrupt/oversized/text payload and independent column triggers; caller's
+  initialized providerConfig generation/model marker changes before CAS, thrown error
+  escapes adapterWrite, then reopen compares prior exact payload and entire Paper/Job/
+  providerConfig rows. Each trigger operates only on its synthetic fixture database.
+
+Worker evidence is source inspection and authored fixtures only; no tests, build,
+gate, lint, formatter, commit, SDK/app/helper/renderer/network/remote/paid trial ran.
+Parent must run the focused persistence suite, ordinary/startup regression coverage,
+review exact three-file diff and own any authorized gate/review/evidence/commit.
+Production callsites intentionally remain unchanged: these internal transaction
+metadata helpers are not production actor integration, physical closure ACKs,
+producer-owner event authority, same-Job Retry, lifetime cutover or UI proof.
+Original FD/root/lease debt and actual HTTPS unknown-close permanent fixture debt
+remain untouched and are not acknowledged by serialized history.
+
+### Parent saga-bound metadata verification and independent review
+
+Two-source binary diff against aa27603 SHA256:
+a7a5f0b9ce6b927ef59c1833d7fe15a31568c164080862dfa22c046d43e6db06.
+Initial focused47/1 artifact1213 preserved: replacement prefix validation leaked a codec
+byte-limit error before normalized encoding. Parent moved wrapped replacement encoding
+before prefix validation, preserving both quota denial and invalidHistory contract.
+Final focused47/0 artifact1214 (28 persistence including5 new,19 startup), Product378/0
+artifact1220, fresh unsigned native Release arm64/macOS15 BUILD SUCCEEDED artifact1221,
+namespace product-native-compile-20261010-ak. Review100 SOURCE-ONLY CLEAR / APPROVE,
+no actionable finding. Actual owned-GRDB saga/history/reopen/trigger rollback proof is
+metadata only; fixture closures/results are synthetic attestations, not physical ACK.
+Ordinary deletion denial and stricter late producer abort remain unchanged; terminal
+history is preserved and final deletion still erases Job/journal under existing privacy
+contract. No schema/Package/project/policy/lifecycle/copier/profile/selector changes.
+No app/helper/SDK/renderer/live/paid/remote/protected trial execution or warning suppression.
+Coordinated producer receipt/actor journaling and same-Job Retry remain unfinished.

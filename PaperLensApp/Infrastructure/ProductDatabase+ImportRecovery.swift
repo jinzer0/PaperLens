@@ -250,6 +250,11 @@ extension ProductDatabase {
     try recoveryBound(maximumBytes)
     let row = try recoveryRow(identity, maximumBytes: maximumBytes, in: db)
     try validateRecoveryRow(row, identity: identity)
+    return try recoveryRecord(row, identity: identity, maximumBytes: maximumBytes)
+  }
+
+  private static func recoveryRecord(_ row: Row, identity: ImportIdentity,
+    maximumBytes: Int) throws -> ImportRecoveryRecord {
     if recoveryString(row, "payloadType") == "null" {
       throw ImportRecoveryPersistenceError.missingHistory
     }
@@ -289,6 +294,121 @@ extension ProductDatabase {
     return readback
   }
 
+  /// Deletion metadata only, inside the caller's transaction. Revocation is not
+  /// physical producer closure, and retained success/failure is not a new grant.
+  static func readImportRecoveryForDeletion(_ identity: ImportIdentity, saga: UUID,
+    maximumBytes: Int, in db: Database) throws -> ImportRecoveryRecord {
+    try recoveryBound(maximumBytes)
+    let row = try recoveryRow(identity, maximumBytes: maximumBytes, in: db)
+    try validateRecoveryIdentity(row, identity: identity)
+    guard recoveryString(row, "paperStatus") == "deleting",
+      recoveryString(row, "deletionID") == saga.uuidString else {
+      throw ImportRecoveryPersistenceError.invalidHistory
+    }
+    let record = try recoveryRecord(row, identity: identity, maximumBytes: maximumBytes)
+    try validateDeletingExecution(record.journal, row: row, identity: identity)
+    return record
+  }
+
+  static func compareAndSwapImportRecoveryForDeletion(expected: Data,
+    replacement: ImportRecoveryJournal, saga: UUID, maximumBytes: Int,
+    in db: Database) throws -> ImportRecoveryRecord {
+    try recoveryBound(maximumBytes)
+    let previous = try recoveryDecode(expected, maximumBytes: maximumBytes)
+    let oldCapture = try previous.currentCapture()
+    let newCapture = try replacement.currentCapture()
+    let oldSnapshot = try previous.snapshot()
+    let newSnapshot = try replacement.snapshot()
+    let bytes = try recoveryEncode(replacement, maximumBytes: maximumBytes)
+    guard recoveryIDs(oldCapture.identity) == recoveryIDs(newCapture.identity),
+      oldCapture.confirmedInput == newCapture.confirmedInput,
+      oldSnapshot.revoked, newSnapshot.revoked,
+      oldSnapshot.executions == newSnapshot.executions,
+      oldSnapshot.usedPermitIDs == newSnapshot.usedPermitIDs,
+      try replacement.extends(previous, maximumBytes: maximumBytes) else {
+      throw ImportRecoveryPersistenceError.invalidHistory
+    }
+    let identity = oldCapture.identity
+    let stored = try readImportRecoveryForDeletion(identity, saga: saga,
+      maximumBytes: maximumBytes, in: db)
+    guard stored.encoded == expected else { throw ImportRecoveryPersistenceError.staleHistory }
+    let before = try deletionRecoveryRows(identity, maximumBytes: maximumBytes, in: db)
+    let ids = recoveryIDs(identity)
+    try db.execute(sql: """
+      UPDATE importJob SET recoveryJournal = ?
+      WHERE recoveryJournal IS ? AND id = ? AND paperID = ? AND attempt = ? AND fence = ?
+        AND correlation = ? AND input = ? AND epoch = ? AND writer = ? AND publication = ?
+        AND EXISTS (SELECT 1 FROM paper p WHERE p.id = importJob.paperID AND p.generation = ?
+          AND p.status = 'deleting' AND p.deletionID = ?)
+      """, arguments: [bytes, expected, ids[2], ids[0], ids[3], ids[4], ids[5], ids[6],
+        ids[7], ids[8], ids[9], ids[1], saga.uuidString])
+    guard db.changesCount == 1 else { throw ImportRecoveryPersistenceError.staleHistory }
+    let readback = try readImportRecoveryForDeletion(identity, saga: saga,
+      maximumBytes: maximumBytes, in: db)
+    let after = try deletionRecoveryRows(identity, maximumBytes: maximumBytes, in: db)
+    guard readback.encoded == bytes, sameRow(before.0, after.0),
+      sameRow(before.1, after.1, except: ["recoveryJournal"]) else {
+      throw ImportRecoveryPersistenceError.invalidHistory
+    }
+    return readback
+  }
+
+  private static func validateDeletingExecution(_ journal: ImportRecoveryJournal,
+    row: Row, identity: ImportIdentity) throws {
+    let snapshot = try journal.snapshot()
+    let captured = JobRecoveryPolicy.Authority(input: .source(version: identity.input.uuidString),
+      config: .inapplicable, paper: .init(id: identity.paperID.uuidString,
+        generation: identity.generation.uuidString), epoch: identity.epoch.uuidString,
+      prerequisitesAvailable: true)
+    let lineage = JobRecoveryPolicy.Lineage(job: identity.jobID.uuidString,
+      reservation: .init(attempt: identity.attempt.uuidString, fence: identity.fence.uuidString,
+        correlation: identity.correlation.uuidString), captured: captured)
+    guard snapshot.role == .import, snapshot.job == identity.jobID.uuidString,
+      snapshot.revoked, snapshot.current.lineage == lineage else {
+      throw ImportRecoveryPersistenceError.invalidHistory
+    }
+    switch snapshot.current.state {
+    case .succeeded:
+      guard recoveryString(row, "jobState") == "succeeded", nullColumns(row, ["jobFailure"]) else {
+        throw ImportRecoveryPersistenceError.invalidHistory
+      }
+    case .failed(let failure):
+      guard recoveryString(row, "jobState") == "failed",
+        let code = recoveryString(row, "jobFailure"), deletionRecoveryFailure(code) == failure else {
+        throw ImportRecoveryPersistenceError.invalidHistory
+      }
+    case .pending, .running: throw ImportRecoveryPersistenceError.invalidHistory
+    }
+  }
+
+  // LocalLibraryLifecycle terminates with .failed for each of these fixed abort
+  // codes, including cancellation. Startup uses .interrupted; beginDeletion uses
+  // .paperDeleting only for an active execution. Never parse arbitrary row reasons.
+  private static func deletionRecoveryFailure(_ code: String) -> JobRecoveryPolicy.Failure? {
+    switch code {
+    case "importFailed", "urlImportFailed", "sourceChanged", "publicationRejected", "cancelled": return .failed
+    case "interrupted": return .interrupted
+    case "paperDeleting": return .paperDeleting
+    default: return nil
+    }
+  }
+
+  private static func deletionRecoveryRows(_ identity: ImportIdentity, maximumBytes: Int,
+    in db: Database) throws -> (Row, Row) {
+    guard let paper = try Row.fetchOne(db, sql: "SELECT * FROM paper WHERE id = ?",
+      arguments: [identity.paperID.uuidString]),
+      let job = try Row.fetchOne(db, sql: """
+        SELECT id, paperID, attempt, fence, correlation, input, epoch, writer, publication,
+          state, bytesCopied, failure,
+          CASE WHEN typeof(recoveryJournal) = 'blob' AND length(recoveryJournal) <= ?
+            THEN recoveryJournal ELSE NULL END AS recoveryJournal
+        FROM importJob WHERE id = ?
+        """, arguments: [maximumBytes, identity.jobID.uuidString]) else {
+      throw ImportRecoveryPersistenceError.missingHistory
+    }
+    return (paper, job)
+  }
+
   private static func recoveryBound(_ maximumBytes: Int) throws {
     guard maximumBytes > 0 else { throw ImportRecoveryPersistenceError.invalidHistory }
   }
@@ -321,7 +441,7 @@ extension ProductDatabase {
     guard let row = try Row.fetchOne(db, sql: """
       SELECT p.id AS paperID, p.generation, j.id AS jobID, j.attempt, j.fence,
         j.correlation, j.input, j.epoch, j.writer, j.publication,
-        p.status AS paperStatus, p.deletionID, j.state AS jobState,
+        p.status AS paperStatus, p.deletionID, j.state AS jobState, j.failure AS jobFailure,
         typeof(j.recoveryJournal) AS payloadType,
         CASE WHEN typeof(j.recoveryJournal) = 'blob' AND length(j.recoveryJournal) <= ?
           THEN j.recoveryJournal ELSE NULL END AS payload
@@ -333,6 +453,18 @@ extension ProductDatabase {
   }
 
   private static func validateRecoveryRow(_ row: Row, identity: ImportIdentity) throws {
+    try validateRecoveryIdentity(row, identity: identity)
+    let deletion: DatabaseValue = row["deletionID"]
+    guard deletion.isNull,
+      let status = recoveryString(row, "paperStatus"),
+      ["importing", "ready", "importFailed"].contains(status),
+      let state = recoveryString(row, "jobState"),
+      ["pending", "running", "succeeded", "failed"].contains(state) else {
+      throw ImportRecoveryPersistenceError.invalidHistory
+    }
+  }
+
+  private static func validateRecoveryIdentity(_ row: Row, identity: ImportIdentity) throws {
     let names = ["paperID", "generation", "jobID", "attempt", "fence", "correlation",
       "input", "epoch", "writer", "publication"]
     var actual: [String] = []
@@ -343,14 +475,6 @@ extension ProductDatabase {
       actual.append(value)
     }
     guard actual == recoveryIDs(identity) else { throw ImportRecoveryPersistenceError.staleHistory }
-    let deletion: DatabaseValue = row["deletionID"]
-    guard deletion.isNull,
-      let status = recoveryString(row, "paperStatus"),
-      ["importing", "ready", "importFailed"].contains(status),
-      let state = recoveryString(row, "jobState"),
-      ["pending", "running", "succeeded", "failed"].contains(state) else {
-      throw ImportRecoveryPersistenceError.invalidHistory
-    }
   }
 
   private static func recoveryUpdate(_ identity: ImportIdentity, expected: Data?,
