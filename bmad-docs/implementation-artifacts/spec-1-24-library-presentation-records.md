@@ -218,3 +218,32 @@ archive reconstruction. Six-source digest and deferred proof are in Spec1.23/sha
 No new/correction tests, broad/full native build or independent review; rendered interaction,
 accessibility, missing/corrupt archive, physical restart, genuine creator/profile and Story
 acceptance remain unverified. Historical455/native-bf receipts belong to03ee2f5 only.
+
+## Independent Summary availability and retained reading
+
+Baseline64d0ea7 source restores saved Summary inside the existing Library facts read.
+Canonical Story1.23 requires actual preparation/unavailable/failure/evidence states and
+Summary failures must not prevent PDF reading. A semantic saved-Summary validation error
+currently escapes into the whole Library query; correct that concrete integration gap
+in LibraryOrganizationService.swift, ProductDatabase+LibraryFacts.swift and LibraryBrowserView.swift.
+Replace the mutually exclusive observation with one immutable passive snapshot containing
+optional fully validated prior record, actual recent attempt activity and explicit validation
+availability/failure. Preserve usable saved results while a later real attempt runs/fails.
+Read latest inserted Summary Job on the same SQLite snapshot, scoped by actual Paper UUID,
+generation and immutable PDF SHA. Its rowid insertion ordering is a display observation,
+not claim/retry/publication/fresh-action authority. Decode existing typed identity; malformed
+or foreign facts become explicit Summary verification failure, never current-job success.
+Only validated saved record proves a usable summary. Missing owner remains unavailable;
+semantic codec/Domain/result/identity errors remain throws at restore service boundary but
+are exposed as safe Summary verification-failure state in this feature projection. SQL
+DatabaseError/schema/storage failures still propagate; do not silently treat them as absence.
+Do not alter immutable storage, original owner/precision, Provider/policy, Reader admission,
+filter/editor/refresh fences or actual retained metadata. Projection error isolation may not
+invent records, raw diagnostics, fallback quotes, current Input/Provider availability or Retry
+authority. Display preparing/failed from actual Job facts, and missing/unverified from actual
+observation; full original saved text/evidence remain when valid. Explicitly label insufficient
+claim evidence (including zero saved claimAnchors), not a false complete-paper/evidence success.
+No fake Retry button: genuine dispatch/closure/Input/profile prerequisites remain absent.
+User implementation-first: no new/correction tests, broad/native gate or independent review;
+parent minimum existing confirmation only. Real new branch/rendering/Provider/profile/Story
+proof remains deferred; canonical completion0/26 unchanged.
