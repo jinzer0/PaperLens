@@ -285,6 +285,17 @@ import SwiftUI
     }
   }
 
+  func navigate(toPage: Int) {
+    guard opened, toPage >= 1, toPage <= pageCount else { return }
+    let target = toPage - 1
+    perform {
+      guard opened else { throw ReaderError.notOpen }
+      guard let document = pdfView.document, toPage <= document.pageCount,
+        let page = document.page(at: target) else { throw ReaderError.invalidDocument }
+      pdfView.go(to: page)
+    }
+  }
+
   func changeZoom(factor: Double) {
     perform { pdfView.scaleFactor = min(10, max(0.1, pdfView.scaleFactor * CGFloat(factor))) }
   }
@@ -379,9 +390,11 @@ import SwiftUI
 /// Parent supplies the Application session bound to the real shared lifecycle.
 @MainActor public struct NativeReaderView: View {
   @StateObject private var presentation: ReaderPresentation
-  private enum AnnotationOpener: Hashable { case browse, highlight, note, copy, search }
+  private enum AnnotationOpener: Hashable { case browse, highlight, note, copy, search, page }
   @FocusState private var annotationFocus: AnnotationOpener?
   @State private var annotationOrigin: AnnotationOpener = .browse
+  @State private var pageDraft = ""
+  @State private var pageInputFailure: String?
   private let paperID: UUID
   private let metadataIdentity: ReaderMetadataIdentity?
   private let parsingStatus: ParsingStatusView
@@ -518,17 +531,50 @@ import SwiftUI
   }
 
   private var pageNavigation: some View {
-    HStack {
-      Button("이전 페이지") { presentation.navigate(delta: -1) }
-        .disabled(!presentation.opened || presentation.pageIndex == 0)
-        .keyboardShortcut(.leftArrow, modifiers: [.command])
-      Text(presentation.pageCount == 0 ? "페이지 없음" :
-        "\(presentation.pageIndex + 1) / \(presentation.pageCount)쪽")
-        .accessibilityLabel("현재 PDF 페이지")
-      Button("다음 페이지") { presentation.navigate(delta: 1) }
-        .disabled(!presentation.opened || presentation.pageIndex + 1 >= presentation.pageCount)
-        .keyboardShortcut(.rightArrow, modifiers: [.command])
+    VStack(alignment: .leading, spacing: 4) {
+      HStack {
+        Button("이전 페이지") { presentation.navigate(delta: -1) }
+          .disabled(!presentation.opened || presentation.pageIndex == 0)
+          .keyboardShortcut(.leftArrow, modifiers: [.command])
+        Text(presentation.pageCount == 0 ? "페이지 없음" :
+          "\(presentation.pageIndex + 1) / \(presentation.pageCount)쪽")
+          .accessibilityLabel("현재 PDF 페이지")
+        Button("다음 페이지") { presentation.navigate(delta: 1) }
+          .disabled(!presentation.opened || presentation.pageIndex + 1 >= presentation.pageCount)
+          .keyboardShortcut(.rightArrow, modifiers: [.command])
+      }
+      HStack {
+        TextField("페이지 번호", text: $pageDraft)
+          .frame(width: 90)
+          .focused($annotationFocus, equals: .page)
+          .onSubmit { navigateToDraftPage() }
+          .onChange(of: pageDraft) { pageInputFailure = nil }
+          .accessibilityLabel("이동할 원본 PDF 페이지 번호")
+          .accessibilityHint("1부터 \(presentation.pageCount)까지 정수를 입력하고 이동 또는 Return을 누르세요")
+        Button("페이지로 이동") { navigateToDraftPage() }
+        Button("페이지 번호 입력으로 이동") { annotationFocus = .page }
+          .keyboardShortcut("l", modifiers: [.command])
+          .accessibilityHint("페이지를 이동하지 않고 페이지 번호 입력에 초점을 맞춥니다")
+      }.disabled(!presentation.opened || presentation.pageCount == 0)
+      if let instruction = pageInputFailure {
+        Text(instruction).font(.caption).foregroundStyle(.secondary)
+          .accessibilityLabel("페이지 번호 입력 안내: \(instruction)")
+      }
     }
+  }
+
+  private func navigateToDraftPage() {
+    guard presentation.opened, presentation.pageCount > 0 else {
+      pageInputFailure = "이동할 수 있는 원본 PDF 페이지가 없습니다."
+      return
+    }
+    guard let page = Int(pageDraft.trimmingCharacters(in: .whitespacesAndNewlines)),
+      page >= 1, page <= presentation.pageCount else {
+      pageInputFailure = "1부터 \(presentation.pageCount)까지의 페이지 번호를 정수로 입력하세요."
+      return
+    }
+    pageInputFailure = nil
+    presentation.navigate(toPage: page)
   }
 
   private var zoomControls: some View {

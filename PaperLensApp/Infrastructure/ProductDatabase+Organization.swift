@@ -102,6 +102,18 @@ extension ProductDatabase {
     }
   }
 
+  public func organizationTags() throws -> [String] {
+    try adapterRead { db in
+      try String.fetchAll(db, sql: """
+        SELECT MIN(t.label) FROM paperUserTag t
+        JOIN paperOrganization o ON o.paperID = t.paperID
+        JOIN paper p ON p.id = o.paperID AND p.generation = o.generation
+        WHERE p.status != 'tombstone'
+        GROUP BY t.normalized ORDER BY t.normalized, MIN(t.label)
+        """)
+    }
+  }
+
   public func updatePaperOrganization(paperID: UUID, generation: UUID,
     expected: PaperOrganization, value: PaperOrganization) throws {
     var normalized: Set<String> = []

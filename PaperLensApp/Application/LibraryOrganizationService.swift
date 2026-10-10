@@ -168,6 +168,11 @@ public actor LibraryOrganizationService {
     return OrganizationSnapshot(preferences: result.preferences, totalCount: result.totalCount, papers: papers)
   }
 
+  public func tags() async throws -> [String] {
+    let database = database
+    return try await Task.detached { try database.organizationTags() }.value
+  }
+
   public func savePreferences(_ preferences: OrganizationPreferences) async throws {
     let database = database
     try await Task.detached { try database.setOrganizationPreferences(preferences) }.value

@@ -14,6 +14,8 @@ public struct LibraryBrowserView: View {
   @State private var currentFacts: [UUID: OrganizationSortFacts] = [:]
   @State private var folders: [LibraryFolder] = []
   @State private var folderLoadFailed = false
+  @State private var tags: [String] = []
+  @State private var tagLoadFailed = false
   @Binding private var filter: OrganizationFilter
   @State private var operationFailed = false
   @State private var busy = false
@@ -166,6 +168,29 @@ public struct LibraryBrowserView: View {
           Text(readingLabel(status)).tag(Optional(status))
         }
       }.pickerStyle(.radioGroup)
+      Divider()
+      Text("사용자 태그").font(.headline)
+      tagControl("전체 태그", selection: nil)
+      if loading {
+        ProgressView("저장된 태그 불러오는 중")
+      } else if tagLoadFailed || loadFailed {
+        Text("저장된 태그를 불러오지 못했습니다. 선택은 유지됩니다.").font(.caption)
+        Button("태그 다시 불러오기") { refresh() }.disabled(busy)
+      } else if tags.isEmpty {
+        Text("저장된 사용자 태그가 없습니다.").font(.caption).foregroundStyle(.secondary)
+      } else {
+        ForEach(tags, id: \.self) { tag in
+          tagControl(tag, selection: tag)
+        }
+      }
+      if let selectedTag = filter.tag {
+        Text("현재 태그 · \(selectedTag)").font(.caption).textSelection(.enabled)
+        if !loading, !loadFailed, !tagLoadFailed,
+          !tags.contains(where: { tagIsSelected($0) }) {
+          Text("현재 저장된 태그 목록에 없는 선택입니다. 조건은 유지됩니다.")
+            .font(.caption).foregroundStyle(.secondary)
+        }
+      }
       TextField("태그 필터 (정확한 이름)", text: Binding(
         get: { filter.tag ?? "" }, set: { filter.tag = $0.isEmpty ? nil : $0 }))
         .textFieldStyle(.roundedBorder)
@@ -193,6 +218,23 @@ public struct LibraryBrowserView: View {
     }
     .disabled(busy)
     .accessibilityValue(filter.folder == selection ? "선택됨" : "선택되지 않음")
+  }
+
+  private func tagIsSelected(_ tag: String?) -> Bool {
+    guard let tag, let selected = filter.tag else { return tag == nil && filter.tag == nil }
+    return LibraryOrganizationService.normalized(tag) == LibraryOrganizationService.normalized(selected)
+  }
+
+  private func tagControl(_ title: String, selection: String?) -> some View {
+    Button { filter.tag = selection } label: {
+      HStack {
+        Text(title).multilineTextAlignment(.leading)
+        Spacer()
+        if tagIsSelected(selection) { Image(systemName: "checkmark") }
+      }.frame(maxWidth: .infinity, alignment: .leading)
+    }
+    .disabled(busy)
+    .accessibilityValue(tagIsSelected(selection) ? "선택됨" : "선택되지 않음")
   }
 
   public var body: some View {
@@ -382,6 +424,8 @@ public struct LibraryBrowserView: View {
     currentFacts = [:]
     folders = []
     folderLoadFailed = false
+    tags = []
+    tagLoadFailed = false
     query.invalidate()
   }
   private func load(_ request: OrganizationQueryState.Request) async {
@@ -394,12 +438,23 @@ public struct LibraryBrowserView: View {
       observedFolders = []
       foldersFailed = true
     }
+    let observedTags: [String]
+    let tagsFailed: Bool
+    do {
+      observedTags = try await service.tags()
+      tagsFailed = false
+    } catch {
+      observedTags = []
+      tagsFailed = true
+    }
     do {
       let facts = try await sortFacts()
       let value = try await service.snapshot(filter: request.filter, facts: facts)
       guard query.accept(value, request: request, currentFilter: filter) else { return }
       folders = observedFolders
       folderLoadFailed = foldersFailed
+      tags = observedTags
+      tagLoadFailed = tagsFailed
       let generations = Dictionary(uniqueKeysWithValues: value.papers.map { ($0.id, $0.generation) })
       currentFacts = Dictionary(uniqueKeysWithValues: facts.filter { generations[$0.paperID] == $0.generation }.map { ($0.paperID, $0) })
     } catch {
