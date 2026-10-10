@@ -750,3 +750,32 @@ proved; no actual Agent purge, app/helper/SDK/renderer/remote/trial or profile c
 No policy/copier/late-abort guard relaxation; no Package/project or new database/owner.
 Serialized history and opaque fixture bytes are not physical closure or Retry authority.
 Full durable actor/producer receipt bridge and same-Job Retry UI remain unfinished.
+
+### Next bridge slice: exact saga-bound deleting history transactions
+
+Contract92 is already consumed: ordinary transaction primitives, diagnostic ownership
+and actual HTTPS uncertain-close retention are delivered. Do not repeat that assessment.
+Add separate internal static readImportRecoveryForDeletion(identity:saga:maximumBytes:in:)
+and compareAndSwapImportRecoveryForDeletion(expected:replacement:saga:maximumBytes:in:)
+on the sole existing database extension. Ordinary restore/CAS continue denying deletion.
+Caller supplies the existing GRDB transaction and explicit positive serialized byte bound;
+no queue, selector, physical effect, closure command or production cutover is introduced.
+
+Require actual Paper status deleting, exact canonical non-NULL saga, full ten captured
+UUIDs and generation/ownership, bounded canonical existing BLOB, genuine revoked import
+history and matching retained execution state. Preserve succeeded/previously failed
+executions; interrupted active execution requires failed/paperDeleting. Paper diagnostic
+must not replace execution cause. NULL legacy remains ineligible. Strict immutable-prefix
+CAS keeps current capture/facts and revocation, rejects Retry/new permits/history renewal,
+checks exact old bytes/affected rows/bounded exact readback and unrelated whole-row facts.
+Failure propagates for caller transaction rollback. No generic failed-row fallback and
+no change to recordImportAbort's stricter late-producer admission.
+
+Write only ProductDatabase+ImportRecovery.swift, ImportRecoveryPersistenceTests.swift
+and this integration Spec. Actual owned-GRDB fixtures prove retained successful/failed/
+paperDeleting histories, genuine cleanup observations, reopen, wrong/malformed saga,
+full-lineage drift, NULL/non-BLOB/oversize/noncanonical/unrevoked/state mismatch rejection,
+no-op/divergent/Retry denial, ignored/corrupt triggers and caller marker rollback. Fixture
+closure events are synthetic attestations, not real physical ACK. Parent gates/reviews/
+commits; worker skips tests/builds/formatters/commits/SDK/helper/renderer/remote/trials.
+No new migration/membership, actor cutover, physical receipt authority or Retry UI claim.
