@@ -892,3 +892,41 @@ history is preserved and final deletion still erases Job/journal under existing 
 contract. No schema/Package/project/policy/lifecycle/copier/profile/selector changes.
 No app/helper/SDK/renderer/live/paid/remote/protected trial execution or warning suppression.
 Coordinated producer receipt/actor journaling and same-Job Retry remain unfinished.
+
+## Next bounded slice: actual deletion-command history acknowledgment
+
+Baseline e8bf535 preserves real local/HTTPS/validator physical debts; saga metadata
+transactions5436b8f remain separate from actual command acknowledgment. Existing
+ProductDatabase.beginDeletion changes Paper/saga and active Job rows but does not
+append genuine journal revocation. Connect this actual deletion command to genuine
+nonNULL history in its existing sole-GRDB transaction, not a second actor/store.
+
+Before changing rows, restore every nonNULL import history using bounded canonical
+existing ordinary or exact-existing-saga admission and full captured lineage. NULL
+legacy history stays NULL and is not reconstructed. Malformed/type/oversize/stale
+history fails the complete command transaction before visibility/saga changes.
+After operational deleting/saga and only-running failed/paperDeleting updates,
+append .revoke from the restored exact journal under the same writer transaction.
+Require exact prior bytes, canonical saga, unchanged capture/facts/used IDs and
+typed bounded readback. Revocation preserves already succeeded/failed executions
+and original cause; never force every deleting Job to paperDeleting. Valid added
+same-snapshot observations are permitted by extends; identical/no-added-event
+payloads remain denied. Repeated deletion commands retain the same saga and may
+append genuine repeated revocation observations, not Retry or new permits.
+
+Whole-row readbacks permit only existing command changes plus recoveryJournal;
+unexpected trigger changes, refused updates or malformed readbacks roll back the
+entire transaction. Existing contentless tombstone/final Job erasure, diagnostics,
+late producer-abort strict guard and NULL legacy handling remain unchanged.
+This command's actual revocation is authority to deny admission, not physical
+closure/purge/removal ACK. Actor installation, receipt retention/cleanup and
+same-Job Retry remain separately unfinished; do not activate partial cutover.
+
+Writable scope: Infrastructure/ProductDatabase.swift, its ImportRecovery extension,
+Tests/Product/ImportRecoveryPersistenceTests.swift and this existing Spec. Parent
+owns integration, all gates/review/evidence/commits. Verify real owned-GRDB running,
+succeeded and each supported failed cause, repeated saga/reopen, NULL preservation,
+canonical bound/full-lineage rejection and ignore/corruption/unrelated-column
+trigger whole-command rollback. Run focused persistence/lifecycle/startup coverage
+and all Product tests in per-test isolated processes, then fresh unsigned native
+compilation; no app/helper/SDK/renderer/live/paid/protected trial or remote action.
