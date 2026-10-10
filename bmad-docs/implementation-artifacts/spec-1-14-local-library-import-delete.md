@@ -381,3 +381,30 @@ Parent owns typed accessor, schema registration, callers, membership, tests and 
 This stage tests genuine owned GRDB persistence and transactional refusal/rollback; it does
 not yet wire lifecycle attestations or admit same-Job Retry. Those require the actual owner
 events, explicit production byte-bound admission and fresh captured UI confirmation.
+
+### Parent sole-store primitive integration and verification
+
+Worker88 delivered the existing-queue extension and eleven actual-GRDB tests. Parent
+registered importRecoveryJournalV1 on the sole migrator, nullable importJob.recoveryJournal
+without backfill, SwiftPM source/tests and only B00000000000000000000058 in Main sources.
+Internal APIs initializeImportRecovery(_:maximumBytes:in:), readImportRecovery(_:maximumBytes:in:)
+and compareAndSwapImportRecovery(expected:replacement:maximumBytes:in:) enforce current
+full capture, explicit byte bound, exact prior BLOB, affected rows and exact readback.
+Initialization is a new-reservation transaction hook, not retrospective legacy authority.
+Ordinary CAS excludes Retry capture transitions; atomic execution-column replacement remains
+the next actual owner layer. Capture and extends(_:maximumBytes:) APIs expose immutable typed
+facts and reject equal/truncated/divergent/altered-initial histories, never JSON string hacks.
+
+Seven-source binary diff against a8c58cb SHA256:
+f853c38ecec7e473c9d6fa64bfce525073ac44be1a72abc3db1e9c30d78ffefa.
+Focused24/0 artifact1121 (13 journal,11 persistence); Product342/0 artifact1127; fresh
+unsigned native Release arm64/macOS15 BUILD SUCCEEDED artifact1128, namespace
+product-native-compile-20261010-af. Review89 SOURCE-ONLY CLEAR / APPROVE, exact five-source
+scope; no actionable finding. Actual SQL reopen/rollback proved, not physical closure or
+product lifecycle events. Parent corrected the worker's prefix API spelling to the stable
+extends contract. Worker accidentally appended its receipt to the launcher-root Spec;
+only that exact worker-only added block was removed, preserving the unchanged root body.
+The authoritative receipt is here in the integration worktree, not the launcher checkout.
+Legacy NULL histories remain ineligible; production reservation/lifecycle journal wiring,
+explicit production codec-byte binding, fresh same-Job Retry UI and Story acceptance remain
+unimplemented by this primitive-only receipt. No app/helper/SDK/renderer/remote/trial action.

@@ -105,6 +105,7 @@ public final class ProductDatabase: @unchecked Sendable {
     Self.registerLibrarySummaryMigrations(in: &migrator)
     Self.registerReaderMetadataMigrations(in: &migrator)
     Self.registerOrganizationMigrations(in: &migrator)
+    Self.registerImportRecoveryMigrations(in: &migrator)
     try migrator.migrate(queue)
     try fm.setAttributes([.posixPermissions: 0o600],
       ofItemAtPath: root.appendingPathComponent("library.sqlite").path)

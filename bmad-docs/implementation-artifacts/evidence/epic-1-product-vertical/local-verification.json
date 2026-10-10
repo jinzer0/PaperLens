@@ -28,9 +28,9 @@
   "verification": {
     "productUnion": {
       "command": "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --filter ProductTests",
-      "tests": 329,
+      "tests": 342,
       "failures": 0,
-      "output": "artifact://1114",
+      "output": "artifact://1127",
       "evidence": "Real GRDB transactions, owned synthetic files and actual local FIFO IO/close/peer metadata/EPIPE; mocked provider/HTTP transport and synthetic windowless PDFKit conversions. Not authenticated provider, app UI, SDK producer or PDFium execution."
     },
     "nativeCompilation": {
@@ -38,11 +38,11 @@
       "configuration": "Release",
       "architecture": "arm64",
       "minimumOS": "15.0",
-      "derivedData": ".build/product-native-compile-20261010-ae",
+      "derivedData": ".build/product-native-compile-20261010-af",
       "codeSigningAllowed": false,
       "result": "BUILD SUCCEEDED",
-      "rawOutput": "artifact://1115",
-      "output": "artifact://1115",
+      "rawOutput": "artifact://1128",
+      "output": "artifact://1128",
       "applicationAndHelperBinariesExecuted": false,
       "warnings": "AppIntents metadata skipped, PDFium debug-map duplicate/missing-symbol warnings and an unnecessary-await Swift warning remain; no warning suppression or debug-symbol repair claimed."
     },
@@ -295,6 +295,24 @@
     "visibleUIOrAccessibilityVerified": false,
     "runtimeParsingOrCalibrationVerified": false,
     "helperExecuted": false,
+    "storyAccepted": false
+  },
+  "soleImportRecoveryPersistencePrimitives": {
+    "specificationCommit": "a8c58cb",
+    "sourceDiffAgainstSpecificationSha256": "f853c38ecec7e473c9d6fa64bfce525073ac44be1a72abc3db1e9c30d78ffefa",
+    "sourceScope": ["Package.swift", "PaperLens.xcodeproj/project.pbxproj", "PaperLensApp/Application/ImportRecoveryJournal.swift", "PaperLensApp/Infrastructure/ProductDatabase.swift", "PaperLensApp/Infrastructure/ProductDatabase+ImportRecovery.swift", "Tests/Product/ImportRecoveryJournalTests.swift", "Tests/Product/ImportRecoveryPersistenceTests.swift"],
+    "focusedTests": {"tests": 24, "failures": 0, "journalTests": 13, "persistenceTests": 11, "output": "artifact://1121"},
+    "productUnion": {"tests": 342, "failures": 0, "output": "artifact://1127"},
+    "nativeCompilation": {"result": "BUILD SUCCEEDED", "output": "artifact://1128", "derivedData": ".build/product-native-compile-20261010-af", "codeSigningAllowed": false, "applicationAndHelperBinariesExecuted": false},
+    "review": "agent://89-ImportRecoveryPersistenceIntegrity: SOURCE-ONLY CLEAR / APPROVE; five-source scope includes typed capture/prefix seams, actual sole migrator, real SQL rollback fixtures",
+    "evidence": "Nullable existing-importJob BLOB with no backfill; bounded restore; full-ten-identity and Paper generation/deletion fencing; exact initial or initial+claim hook; ordinary immutable-prefix CAS with changed-row and exact readback checks. Real owned GRDB reopen and SQLite ignore/corruption triggers verify whole caller transaction rollback. Capture accessor preserves old captured epoch under newer startup observation. Prefix comparison prevents valid but divergent histories.",
+    "existingLegacyRowsRemainNullAndIneligible": true,
+    "realGRDBPersistenceReopenAndRollbackVerified": true,
+    "productionReservationAndLifecycleJournalWired": false,
+    "productionByteBudgetBound": false,
+    "sameJobRetryUIActivated": false,
+    "physicalClosurePublicationOrInputAuthorityEstablishedByStorage": false,
+    "helperOrRendererExecuted": false,
     "storyAccepted": false
   },
   "immutableImportRecoveryJournal": {

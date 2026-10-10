@@ -319,6 +319,53 @@ final class ImportRecoveryJournalTests: XCTestCase {
     XCTAssertThrowsError(try pending.recording(.authorityChanged(wrongPaper)))
   }
 
+  func testExtensionRequiresExactImmutablePrefixAndAnAdditionalEvent() throws {
+    let first = identity()
+    let pending = try initial(first)
+    let claimed = try pending.recording(.claim(pending.snapshot().current.lineage))
+    XCTAssertTrue(try claimed.extends(pending, maximumBytes: bound))
+    XCTAssertFalse(try pending.extends(pending, maximumBytes: bound))
+    XCTAssertFalse(try pending.extends(claimed, maximumBytes: bound))
+    let revoked = try pending.recording(.revoke)
+    XCTAssertFalse(try revoked.extends(claimed, maximumBytes: bound))
+    let observed = try pending.recording(.authorityChanged(pending.snapshot().authority))
+    let divergent = try observed.recording(.claim(observed.snapshot().current.lineage))
+    XCTAssertFalse(try divergent.extends(claimed, maximumBytes: bound))
+    let altered = try ImportRecoveryJournal(identity: first, confirmedInput:
+      .init(expectedSHA256: nil, destinationFolderID: UUID()))
+    let alteredClaimed = try altered.recording(.claim(altered.snapshot().current.lineage))
+    XCTAssertFalse(try alteredClaimed.extends(pending, maximumBytes: bound))
+    XCTAssertThrowsError(try claimed.extends(pending, maximumBytes: 0))
+    let pendingBytes = try pending.encoded(maximumBytes: bound)
+    XCTAssertThrowsError(try claimed.extends(pending, maximumBytes: pendingBytes.count))
+    XCTAssertEqual(try pending.encoded(maximumBytes: bound), pendingBytes)
+  }
+
+  func testCurrentCaptureRetainsAllReservedIDsFactsAndCapturedEpoch() throws {
+    func ids(_ value: ImportIdentity) -> [UUID] {
+      [value.paperID, value.generation, value.jobID, value.attempt, value.fence,
+        value.correlation, value.input, value.epoch, value.writer, value.publication]
+    }
+    let first = identity()
+    let pending = try initial(first)
+    XCTAssertEqual(ids(try pending.currentCapture().identity), ids(first))
+    XCTAssertEqual(try pending.currentCapture().confirmedInput, facts)
+    let failed = try append([.claim(pending.snapshot().current.lineage),
+      .terminate(pending.snapshot().current.lineage, .timeout)], to: pending)
+    let next = retryIdentity(first)
+    let newFacts = ImportRecoveryJournal.ConfirmedInput(expectedSHA256: nil, destinationFolderID: UUID())
+    let retried = try failed.retrying(identity: next, confirmedInput: newFacts)
+    let observedEpoch = UUID()
+    let observed = try retried.recording(.startup(currentEpoch: observedEpoch.uuidString))
+    XCTAssertEqual(try observed.snapshot().authority.epoch, observedEpoch.uuidString)
+    XCTAssertEqual(ids(try observed.currentCapture().identity), ids(next))
+    XCTAssertEqual(try observed.currentCapture().confirmedInput, newFacts)
+    XCTAssertEqual(ids(try pending.currentCapture().identity), ids(first))
+    let decoded = try ImportRecoveryJournal.decode(observed.encoded(maximumBytes: bound), maximumBytes: bound)
+    XCTAssertEqual(ids(try decoded.currentCapture().identity), ids(next))
+    XCTAssertEqual(try decoded.currentCapture().confirmedInput, newFacts)
+  }
+
   func testCanonicalBytesRejectHiddenDuplicateEventsAndNestedEscapedKeys() throws {
     let pending = try initial(identity())
     let bytes = try pending.encoded(maximumBytes: bound)

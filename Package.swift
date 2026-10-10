@@ -28,6 +28,7 @@ let package = Package(
         "Application/AgentConnectionLifecycle.swift",
         "Application/LocalLibraryLifecycle.swift",
         "Application/ImportRecoveryJournal.swift",
+        "Infrastructure/ProductDatabase+ImportRecovery.swift",
         "Application/LibraryReadLeaseProvider.swift",
         "Application/LibraryExtractionReadPin.swift",
         "Application/PDFiumExtractionResourceOwner.swift",
@@ -92,7 +93,7 @@ let package = Package(
         "ExtractionFixtureBudget.swift", "LibraryExtractionReadPinTests.swift",
         "PDFiumExtractionResourceOwnerTests.swift", "LibraryPDFiumInputAcquirerTests.swift",
         "OwnedPipeAgentRPCChannelTests.swift", "MainPDFiumParsingCompositionTests.swift",
-        "ImportRecoveryJournalTests.swift"]
+        "ImportRecoveryJournalTests.swift", "ImportRecoveryPersistenceTests.swift"]
     ),
     .target(
       name: "PDFReadiness",

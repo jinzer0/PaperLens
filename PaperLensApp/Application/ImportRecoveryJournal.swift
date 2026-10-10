@@ -271,6 +271,34 @@ struct ImportRecoveryJournal: Sendable {
     UUID(uuidString: text)?.uuidString == text
   }
 
+  struct CapturedExecution: Sendable {
+    let identity: ImportIdentity
+    let confirmedInput: ConfirmedInput
+  }
+
+  func currentCapture() throws -> CapturedExecution {
+    _ = try snapshot()
+    var capture = document.initial
+    for event in document.events {
+      if case .retryCapture(let replacement) = event { capture = replacement }
+    }
+    guard let paperID = UUID(uuidString: capture.paperID),
+      let generation = UUID(uuidString: capture.generation),
+      let jobID = UUID(uuidString: capture.jobID),
+      let attempt = UUID(uuidString: capture.attempt),
+      let fence = UUID(uuidString: capture.fence),
+      let correlation = UUID(uuidString: capture.correlation),
+      let input = UUID(uuidString: capture.input),
+      let epoch = UUID(uuidString: capture.epoch),
+      let writer = UUID(uuidString: capture.writer),
+      let publication = UUID(uuidString: capture.publication) else {
+      throw JournalError.invalidData
+    }
+    return CapturedExecution(identity: ImportIdentity(paperID: paperID, generation: generation,
+      jobID: jobID, attempt: attempt, fence: fence, correlation: correlation, input: input,
+      epoch: epoch, writer: writer, publication: publication), confirmedInput: capture.confirmedInput)
+  }
+
   func snapshot() throws -> JobRecoveryPolicy.Snapshot {
     guard document.version == 1 else { throw JournalError.invalidData }
     try document.initial.validate()
@@ -353,6 +381,15 @@ struct ImportRecoveryJournal: Sendable {
       events: document.events + [.retryCapture(Capture(identity, confirmedInput))]))
     _ = try journal.snapshot()
     return journal
+  }
+
+  func extends(_ previous: ImportRecoveryJournal, maximumBytes: Int) throws -> Bool {
+    let previousBytes = try previous.encoded(maximumBytes: maximumBytes)
+    _ = try encoded(maximumBytes: maximumBytes)
+    guard document.events.count > previous.document.events.count else { return false }
+    let prefix = Self(document: Document(version: document.version, initial: document.initial,
+      events: Array(document.events.prefix(previous.document.events.count))))
+    return try prefix.encoded(maximumBytes: maximumBytes) == previousBytes
   }
 
   func encoded(maximumBytes: Int) throws -> Data {
