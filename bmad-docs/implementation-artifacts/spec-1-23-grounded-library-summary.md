@@ -109,3 +109,34 @@ Correlated frozen/text/geometry forgery is directly exercised at reservation; ev
 boundary checks unranked full geometry through the same core. Production saved-revision
 owner recovery/precision/injection, Library presentation, calibration/live Provider/
 Agent purge/visible UI/Story acceptance remain unproved. No binary/trial/remote execution.
+
+## Original independent-owner archive
+
+Implement the existing restart-owner prerequisite in exactly CanonicalExtractionGeometry.swift,
+LibrarySummaryService.swift and ProductDatabase+LibrarySummary.swift. No new resource owner,
+pool/database/cache or geometry codec: archive passive original owner facts in sole GRDB.
+Only the existing CanonicalExtractionGeometryValidator can capture its private original
+owningAnchors and actual explicit precision; never derive owner records from candidate
+extractionSentence.geometry, summary/frozen bytes or decoded result geometry. Capture every
+full frozen sentence including unranked tails, using the existing canonical encoder for
+original complete anchors. No guessed/default precision, generation or calibration.
+Internal bounded capture/recovery values retain encoded original anchors and explicit
+PDFGeometryPrecision.maximumErrorPDFPoints. Positive maximumBytes262144 is a storage
+metadata quota, not physical/profile admission. Bound counts/quote/quad encoding before
+allocation and reject over-quota storage before Provider effects.
+Add ordered GRDB migration with immutable owner header/anchor rows keyed by existing
+librarySummaryJob; delete through its FK cascade at actual tombstone. Reserve validates
+full current grounding then atomically stores job and original canonical owner facts;
+noncanonical validators cannot manufacture archived ownership and deny new reservation.
+Failed/old retained summary jobs retain their original data; no legacy backfill/reconstruction.
+Restore with no externally injected owner loads that job's original rows, checks bounded
+length/count/identity/full membership and reconstructs Domain anchors through the SAME
+canonical decoder and captured precision, then runs existing complete summary validation.
+Explicit fresh independently supplied geometry remains a valid authority input; it is
+not obtained from candidate bytes. No missing-record fallback or automatic parse/Provider
+request. Stored facts grant no fresh read/publication/action permission.
+This implements recovery for originally registered genuine owners, not production creator
+injection/calibration or generated UI. Those require genuine upstream complete anchors.
+User implementation-first applies to workers: no new/correction tests, broad suites,
+native builds or review lanes. Parent minimum required confirmation only; all deferred
+proof and genuine producer/profile/UI/Story limits stay explicit and false.
