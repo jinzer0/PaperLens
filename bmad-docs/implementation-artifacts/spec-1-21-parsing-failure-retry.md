@@ -119,3 +119,21 @@ preimplementation8eaca03: 653a333fcedb3726f833545a33129a78cde99f16ef006e160f2055
 No UI/app/helper binary or protected renderer trial ran; visible layout, immediate notice,
 keyboard/VoiceOver/focus and real Retry/relaunch remain unverified. Neither compilation
 nor source review establishes Story acceptance, and durable Epic/Story status stays false.
+
+## Current accepted-failure floating presentation — bounded source correction
+
+Architect124 found the mounted status header has no distinct floating failure notice.
+Add a nonmodal, pointer-pass-through overlay below that existing header, using only
+its accepted persisted failed status and the existing safe Korean mapping. A small
+production-used stateless projection returns no notice for nil/running/success/
+unavailable or a failed status read. Retained usable revisions do not hide a current
+failure; subsequent failures replace the message without history/count/time/diagnostics.
+No coordinator, dispatch, timer, persisted mirror, inferred attempt or resource owner.
+Preserve refresh request/Paper/cancellation fences and native Reader/session identity.
+Exact writable sources: Features/Reader/ParsingStatusView.swift and existing
+Tests/Product/ParsingRecoveryCoordinatorTests.swift; parent owns this Spec and evidence.
+Test actual GRDB failure/running/repeated failure/reopen/deletion projections, usable
+revision retention, read-unavailable suppression and unsafe diagnostic rejection.
+Focused/union tests, unsigned compile and independent source review are required.
+Polling remains unchanged: this does not prove immediate producer delivery, rendered
+visibility, VoiceOver/focus, process relaunch, genuine parsing/Retry or Story acceptance.
