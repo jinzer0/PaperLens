@@ -1,5 +1,27 @@
 # Story 1.18 Build Spec — URL Import and shared Library entry
 
+## URL start-publication cancellation fence
+
+Baseline d82abc85135af4b7860b5a46284990a65bcec64b: continueImport consumes
+the confirmation then publishes confirmation=nil/downloading before installing its
+Task. A synchronous Combine callback can call cancelDownload while both writer and
+operation are nil: the cancellation disappears, allowing the later grant/download.
+The same callback can prepare another intent because operation is still nil. This is
+a concrete source ordering gap, separate from actual producer closure/Retry authority.
+Exact source scope: Application/URLImportService.swift. Fence the synchronous start
+interval before any publication. Deny prepare/recursive Continue and stale confirmation
+Cancel during this consumed-start interval; actual download Cancel instead records a
+pending cancellation and still immediately revokes/cancels any existing owner/task.
+Transfer that cancellation into the just-installed exact Task before Main returns;
+existing Task.checkCancellation before grant remains the no-effect admission barrier.
+Do not infer physical closure from the flag; unchanged real capability handles grant,
+postgrant revocation, download registration/drain, publication and abort/cleanup debt.
+No grant API, admission phase, DB/history/SameJobRetry/resource/producer/UI change or
+new capability. Missing writer still fails synchronously with zero grant effects.
+Parent minimum existing Cancel/once-Continue/fresh-confirmation and lifecycle no-effect
+admission cases/source compilation only. New publisher-callback regressions, independent
+review/full/native/visible/protected trials remain deferred, not waived or accepted.
+
 ## Current source phase — actual HTTPS physical ownership repair
 
 Explicit assigned source-only order reuses Spec 46711a8 and baseline 28a43e1
