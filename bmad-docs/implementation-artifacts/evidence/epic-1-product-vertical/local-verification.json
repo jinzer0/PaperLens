@@ -6,7 +6,7 @@
   "integratedCapabilities": [
     "Sole GRDB Paper/ImportJob and atomic slot/model/generation selector",
     "Private API-key slots, model-bound native probe owner, permanent retired-owner fencing and explicit Continue",
-    "Owned immutable local PDF copy with copied-digest revalidation and transactional confirmed folder association",
+    "Owned immutable local PDF copy with actual nonblocking nofollow source pin, exclusive output and retained unknown input/output FD/import-lease/security-scope obligations, copied-digest revalidation and transactional confirmed folder association",
     "Persistent Library list/grid, ordering, tags, favorites and reading status",
     "Actual Reader navigation/search/selection/position persistence with lifecycle-owned read leases and synchronous revoke/drain",
     "Whole-observed-organization GRDB CAS, reverse query result arbitration and workspace-owned session filters across Reader/import refresh",
@@ -28,9 +28,9 @@
   "verification": {
     "productUnion": {
       "command": "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --filter ProductTests",
-      "tests": 305,
+      "tests": 313,
       "failures": 0,
-      "output": "artifact://1045",
+      "output": "artifact://1085",
       "evidence": "Real GRDB transactions, owned synthetic files and actual local FIFO IO/close/peer metadata/EPIPE; mocked provider/HTTP transport and synthetic windowless PDFKit conversions. Not authenticated provider, app UI, SDK producer or PDFium execution."
     },
     "nativeCompilation": {
@@ -38,11 +38,11 @@
       "configuration": "Release",
       "architecture": "arm64",
       "minimumOS": "15.0",
-      "derivedData": ".build/product-native-compile-20261010-z",
+      "derivedData": ".build/product-native-compile-20261010-aa",
       "codeSigningAllowed": false,
       "result": "BUILD SUCCEEDED",
-      "rawOutput": "artifact://1047",
-      "output": "artifact://1047",
+      "rawOutput": "artifact://1086",
+      "output": "artifact://1086",
       "applicationAndHelperBinariesExecuted": false,
       "warnings": "AppIntents metadata skipped, PDFium debug-map duplicate/missing-symbol warnings and an unnecessary-await Swift warning remain; no warning suppression or debug-symbol repair claimed."
     },
@@ -295,6 +295,26 @@
     "visibleUIOrAccessibilityVerified": false,
     "runtimeParsingOrCalibrationVerified": false,
     "helperExecuted": false,
+    "storyAccepted": false
+  },
+  "actualImportCopyOwnership": {
+    "preImplementationSpecificationCommit": "76aa97b",
+    "sourceDiffAgainstSpecificationSha256": "8ff8e4a94101c7c22c6819a11820ad7f2e9b12e64458b7ea41645393384efcb9",
+    "sourceScope": ["PaperLensApp/Application/LocalLibraryLifecycle.swift", "Tests/Product/LocalLibraryLifecycleTests.swift"],
+    "evidence": "Actual separate copier now owns both acquired nofollow/nonblocking FDs with closeOnDealloc:false, original import lease and source security-scope acquisition across stack/facade loss. Checked close once per acquired endpoint; other close attempted after failure. Only both known closed/never acquired permits release. Actual input lstat/open/fstat identity and size; exclusive regular UID/mode/single-link empty output, copied count/synchronize/descriptor chmod0400 before closure. Unknown retains real obligations and unchanged writer/cleanupDebt/no-namespace-removal path.",
+    "focusedTests": {"tests": 23, "failures": 0, "newTests": 8, "output": "artifact://1083"},
+    "preservedFailedFocusedReceipt": {"tests": 23, "failures": 2, "output": "artifact://1079", "finding": "New parent NUL fixture and guard incorrectly used legacy URL.path, which hides encoded NUL; actual Foundation observation confirmed path(percentEncoded:false) retains it. Repaired guard and assertion; non-file/NUL now reject before scope/FD, no C-representation force unwrap."},
+    "productUnion": {"tests": 313, "failures": 0, "output": "artifact://1085"},
+    "nativeCompilation": {"derivedData": ".build/product-native-compile-20261010-aa", "result": "BUILD SUCCEEDED", "output": "artifact://1086", "codeSigningAllowed": false, "applicationAndHelperBinariesExecuted": false},
+    "review": "agent://84-ActualCopyOwnershipIntegrity: SOURCE-ONLY CLEAR / APPROVE; final decoded-NUL revision included, no concrete blocking defect",
+    "realFDPoolNamespaceDebtBehaviorVerified": true,
+    "actualSandboxExtensionAcquisitionReleaseVerified": false,
+    "readWriteBodyGrowthSynchronizeChmodFaultBranchesVerified": false,
+    "sameUIDPathOrInPlaceContentIsolationProved": false,
+    "runtimeUnknownClosureAcknowledgedByManualFixtureTeardown": false,
+    "jobSchemaPolicyEpochProfileOrCounterChanged": false,
+    "sameFailedJobRetryLedgerImplemented": false,
+    "helperOrRendererExecuted": false,
     "storyAccepted": false
   },
   "actualLocalGRDBProbe": {

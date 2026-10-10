@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import GRDB
 import ProviderRequest
@@ -6,6 +7,60 @@ import XCTest
 @testable import PaperLensProduct
 
 private enum SyntheticPurgeError: Error { case failed, stillPresent }
+
+private enum OwnedCopyFault: Error { case close, open }
+
+/// Effects operate only on this test's real private files/handles. Scope counters model a
+/// granted scope; they are not evidence of a sandbox extension on ordinary temporary URLs.
+private final class OwnedCopyEffects: @unchecked Sendable {
+  private let lock = NSLock()
+  private var closeAttempts: [ActualCopyEndpoint] = []
+  private var starts = 0
+  private var stops = 0
+  private weak var input: FileHandle?
+  private weak var output: FileHandle?
+  private var inputFD: Int32?
+  private var outputFD: Int32?
+  let failures: Set<ActualCopyEndpoint>
+  let beforeOpen: @Sendable (ActualCopyEndpoint, URL) throws -> Void
+
+  init(failures: Set<ActualCopyEndpoint> = [],
+    beforeOpen: @escaping @Sendable (ActualCopyEndpoint, URL) throws -> Void = { _, _ in }) {
+    self.failures = failures
+    self.beforeOpen = beforeOpen
+  }
+
+  var effects: ActualCopyEffects {
+    ActualCopyEffects(beforeOpen: beforeOpen, checkedClose: { endpoint, handle in
+      self.lock.withLock {
+        self.closeAttempts.append(endpoint)
+        // Capture before attempting close. Runtime never uses descriptor-number probes.
+        if endpoint == .input { self.input = handle; self.inputFD = handle.fileDescriptor }
+        else { self.output = handle; self.outputFD = handle.fileDescriptor }
+      }
+      if self.failures.contains(endpoint) { throw OwnedCopyFault.close }
+      try handle.close()
+    }, startScope: { _ in self.lock.withLock { self.starts += 1 }; return true },
+      stopScope: { _ in self.lock.withLock { self.stops += 1 } })
+  }
+
+  var census: [ActualCopyEndpoint] { lock.withLock { closeAttempts } }
+  var scopeCensus: [Int] { lock.withLock { [starts, stops] } }
+  func retained(_ endpoint: ActualCopyEndpoint) -> Bool {
+    lock.withLock { endpoint == .input ? input != nil : output != nil }
+  }
+  func acquiredFD(_ endpoint: ActualCopyEndpoint) -> Int32? {
+    lock.withLock { endpoint == .input ? inputFD : outputFD }
+  }
+
+  func physicallyTearDown(_ debt: ActualCopyDebt) throws {
+    // Only test-owned descriptors. Do not mutate or ACK the runtime's unknown registry.
+    if !debt.outputClosed { try XCTUnwrap(debt.output).close() }
+    if !debt.inputClosed { try XCTUnwrap(debt.input).close() }
+    if debt.scoped { effects.stopScope(debt.source) }
+    debt.lease.close()
+  }
+}
 
 /// Test-only peer owns and actually removes a separate synthetic Agent namespace.
 private actor SyntheticAgentPurge: AgentLibraryPurging {
@@ -81,6 +136,245 @@ final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
 
   private func makeAgent() -> SyntheticAgentPurge {
     SyntheticAgentPurge(root: temporary.appendingPathComponent("agent"))
+  }
+
+  private func assertActualPoolDenial(_ pool: RequestResourcePool, authority: ProviderRequest,
+    file: StaticString = #filePath, line: UInt = #line) {
+    let occupied = pool.active
+    var acquired: [RequestResourceLease] = []
+    while let lease = pool.acquire() { acquired.append(lease) }
+    XCTAssertEqual(occupied + acquired.count, authority.limit("importConcurrency"), file: file, line: line)
+    XCTAssertNil(pool.acquire(), file: file, line: line)
+    for lease in acquired { lease.close() }
+    XCTAssertEqual(pool.active, occupied, file: file, line: line)
+  }
+
+  func testActualCopyCheckedEndpointCensusAndScopePoolRelease() async throws {
+    let authority = try ProviderRequest()
+    let pool = try RequestResourcePool(authority: authority, kind: "import")
+    let baseline = pool.active
+    let db = try ProductDatabase.open(at: root)
+    let effects = OwnedCopyEffects()
+    let lifecycle = try await LocalLibraryLifecycle.openForOwnedCopyFixtures(database: db, effects: effects.effects)
+    let id = try await lifecycle.importPDF(from: source())
+    XCTAssertEqual(try db.libraryRecords().first?.status, .ready)
+    XCTAssertEqual(effects.census, [.output, .input])
+    XCTAssertEqual(effects.scopeCensus, [1, 1])
+    XCTAssertEqual(pool.active, baseline)
+    XCTAssertFalse(LocalLibraryLifecycle.actualCopyDebts.contains { $0.identity.paperID == id })
+    assertActualPoolDenial(pool, authority: authority)
+  }
+
+  func testActualNonFileAndNULInputsFailBeforeScopeOrEndpoints() async throws {
+    let db = try ProductDatabase.open(at: root)
+    let effects = OwnedCopyEffects()
+    let lifecycle = try await LocalLibraryLifecycle.openForOwnedCopyFixtures(database: db, effects: effects.effects)
+    let nul = URL(filePath: try source().path + "\0tail")
+    XCTAssertTrue(nul.path(percentEncoded: false).utf8.contains(0))
+    let remote = try XCTUnwrap(URL(string: "https://fixture.invalid/paper.pdf"))
+    for candidate in [remote, nul] {
+      let id = try await lifecycle.importPDF(from: candidate)
+      let record = try XCTUnwrap(db.libraryRecords().first { $0.id == id })
+      XCTAssertEqual(record.status, .importFailed)
+      XCTAssertFalse(record.cleanupDebt)
+      XCTAssertFalse(FileManager.default.fileExists(atPath: namespace(id).path))
+    }
+    XCTAssertTrue(effects.census.isEmpty)
+    XCTAssertEqual(effects.scopeCensus, [0, 0])
+  }
+
+  func testActualSourceFIFOAndSymlinkRejectBeforeAcquisition() async throws {
+    let db = try ProductDatabase.open(at: root)
+    let effects = OwnedCopyEffects()
+    let lifecycle = try await LocalLibraryLifecycle.openForOwnedCopyFixtures(database: db, effects: effects.effects)
+    let fifo = temporary.appendingPathComponent("fifo.pdf")
+    XCTAssertEqual(fifo.withUnsafeFileSystemRepresentation { Darwin.mkfifo($0!, mode_t(0o600)) }, 0)
+    let link = temporary.appendingPathComponent("link.pdf")
+    try FileManager.default.createSymbolicLink(at: link, withDestinationURL: source())
+    for candidate in [fifo, link] {
+      let id = try await lifecycle.importPDF(from: candidate)
+      let record = try XCTUnwrap(db.libraryRecords().first { $0.id == id })
+      XCTAssertEqual(record.status, .importFailed)
+      XCTAssertFalse(record.cleanupDebt)
+      XCTAssertFalse(FileManager.default.fileExists(atPath: namespace(id).path))
+    }
+    XCTAssertTrue(effects.census.isEmpty)
+    XCTAssertEqual(effects.scopeCensus, [2, 2])
+  }
+
+  func testActualCopyAdmissionAtFullContractPoolHasNoEndpointsOrScope() async throws {
+    let authority = try ProviderRequest()
+    let pool = try RequestResourcePool(authority: authority, kind: "import")
+    let baseline = pool.active
+    var held: [RequestResourceLease] = []
+    while let lease = pool.acquire() { held.append(lease) }
+    defer { for lease in held { lease.close() } }
+    XCTAssertEqual(baseline + held.count, authority.limit("importConcurrency"))
+    XCTAssertNil(pool.acquire())
+    let db = try ProductDatabase.open(at: root)
+    let effects = OwnedCopyEffects()
+    let lifecycle = try await LocalLibraryLifecycle.openForOwnedCopyFixtures(database: db, effects: effects.effects)
+    let id = try await lifecycle.importPDF(from: source())
+    let record = try XCTUnwrap(db.libraryRecords().first { $0.id == id })
+    XCTAssertEqual(record.status, .importFailed)
+    XCTAssertFalse(record.cleanupDebt)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: namespace(id).path))
+    XCTAssertTrue(effects.census.isEmpty)
+    XCTAssertEqual(effects.scopeCensus, [0, 0])
+    XCTAssertEqual(pool.active, baseline + held.count)
+  }
+
+  func testActualSourceSwapToFIFOOrSymlinkOrOtherRegularRejectsPinnedObject() async throws {
+    let authority = try ProviderRequest()
+    let pool = try RequestResourcePool(authority: authority, kind: "import")
+    let baseline = pool.active
+    let db = try ProductDatabase.open(at: root)
+    for kind in 0..<3 {
+      let original = try source("swap-\(kind).pdf")
+      let replacement = try source("replacement-\(kind).pdf")
+      let parked = temporary.appendingPathComponent("parked-\(kind).pdf")
+      let effects = OwnedCopyEffects(beforeOpen: { endpoint, url in
+        guard endpoint == .input else { return }
+        // Preserve the selected inode under another name: replacement cannot reuse it.
+        try FileManager.default.moveItem(at: url, to: parked)
+        if kind == 0 {
+          guard url.withUnsafeFileSystemRepresentation({ Darwin.mkfifo($0!, mode_t(0o600)) }) == 0
+          else { throw OwnedCopyFault.open }
+        } else if kind == 1 {
+          try FileManager.default.createSymbolicLink(at: url, withDestinationURL: replacement)
+        } else { try FileManager.default.moveItem(at: replacement, to: url) }
+      })
+      let lifecycle = try await LocalLibraryLifecycle.openForOwnedCopyFixtures(database: db, effects: effects.effects)
+      let id = try await lifecycle.importPDF(from: original)
+      let record = try XCTUnwrap(db.libraryRecords().first { $0.id == id })
+      XCTAssertEqual(record.status, .importFailed)
+      XCTAssertFalse(record.cleanupDebt)
+      XCTAssertEqual(effects.census, kind == 1 ? [] : [.input])
+      XCTAssertEqual(effects.scopeCensus, [1, 1])
+      XCTAssertEqual(pool.active, baseline)
+      XCTAssertFalse(FileManager.default.fileExists(atPath: namespace(id).path))
+    }
+  }
+
+  func testActualOutputOpenFailureClosesAcquiredInputAndReleases() async throws {
+    let authority = try ProviderRequest()
+    let pool = try RequestResourcePool(authority: authority, kind: "import")
+    let baseline = pool.active
+    let db = try ProductDatabase.open(at: root)
+    let untouched = try source("collision-target.pdf")
+    let originalBytes = try Data(contentsOf: untouched)
+    for collision in 0..<3 {
+      let effects = OwnedCopyEffects(beforeOpen: { endpoint, stage in
+        guard endpoint == .output else { return }
+        if collision == 0 { throw OwnedCopyFault.open }
+        if collision == 1 { try Data("owned fixture collision".utf8).write(to: stage) }
+        else { try FileManager.default.createSymbolicLink(at: stage, withDestinationURL: untouched) }
+      })
+      let lifecycle = try await LocalLibraryLifecycle.openForOwnedCopyFixtures(database: db, effects: effects.effects)
+      let id = try await lifecycle.importPDF(from: source("open-\(collision).pdf"))
+      let record = try XCTUnwrap(db.libraryRecords().first { $0.id == id })
+      XCTAssertEqual(record.status, .importFailed)
+      XCTAssertFalse(record.cleanupDebt)
+      XCTAssertEqual(effects.census, [.input])
+      XCTAssertEqual(effects.scopeCensus, [1, 1])
+      XCTAssertEqual(pool.active, baseline)
+      XCTAssertFalse(FileManager.default.fileExists(atPath: namespace(id).path))
+      XCTAssertEqual(try Data(contentsOf: untouched), originalBytes)
+    }
+  }
+
+  func testActualCloseUnknownRetainsRealFDsPoolScopeAndNamespaceAcrossFacadeLoss() async throws {
+    let authority = try ProviderRequest()
+    let pool = try RequestResourcePool(authority: authority, kind: "import")
+    let baseline = pool.active
+    let db = try ProductDatabase.open(at: root)
+    let faults: [Set<ActualCopyEndpoint>] = [[.input], [.output], [.input, .output]]
+    for (index, failures) in faults.enumerated() {
+      let original = try source("close-\(index).pdf")
+      let effects = OwnedCopyEffects(failures: failures)
+      var lifecycle: LocalLibraryLifecycle? = try await LocalLibraryLifecycle.openForOwnedCopyFixtures(
+        database: db, effects: effects.effects)
+      weak var facade = lifecycle
+      let id = try await XCTUnwrap(lifecycle).importPDF(from: original)
+      var tornDown = false
+      defer {
+        if !tornDown, let debt = LocalLibraryLifecycle.actualCopyDebts.first(where: { $0.identity.paperID == id }) {
+          do { try effects.physicallyTearDown(debt) }
+          catch { XCTFail("Owned physical teardown failed: \(error)") }
+        }
+      }
+      lifecycle = nil
+      XCTAssertNil(facade)
+      for endpoint in failures {
+        XCTAssertTrue(effects.retained(endpoint))
+        XCTAssertNotEqual(Darwin.fcntl(try XCTUnwrap(effects.acquiredFD(endpoint)), F_GETFD), -1)
+      }
+      let record = try XCTUnwrap(db.libraryRecords().first { $0.id == id })
+      XCTAssertEqual(record.status, .importFailed)
+      XCTAssertTrue(record.cleanupDebt)
+      XCTAssertEqual(try db.libraryRecords().filter { $0.cleanupDebt }.count, index + 1)
+      XCTAssertEqual(effects.census, [.output, .input])
+      XCTAssertEqual(effects.scopeCensus, [1, 0])
+      XCTAssertEqual(pool.active, baseline + 1)
+      let debt = try XCTUnwrap(LocalLibraryLifecycle.actualCopyDebts.first { $0.identity.paperID == id })
+      XCTAssertEqual(debt.source, original)
+      XCTAssertEqual(debt.inputClosed, !failures.contains(.input))
+      XCTAssertEqual(debt.outputClosed, !failures.contains(.output))
+      XCTAssertEqual(try Data(contentsOf: debt.stage), try Data(contentsOf: original))
+      XCTAssertFalse(FileManager.default.fileExists(atPath: namespace(id).appendingPathComponent("document.pdf").path))
+      assertActualPoolDenial(pool, authority: authority)
+      tornDown = true
+      try effects.physicallyTearDown(debt)
+      XCTAssertEqual(pool.active, baseline)
+      XCTAssertEqual(effects.scopeCensus, [1, 1])
+      XCTAssertEqual(effects.census, [.output, .input])
+      XCTAssertTrue(LocalLibraryLifecycle.actualCopyDebts.contains { $0.identity.attempt == debt.identity.attempt })
+      XCTAssertTrue(FileManager.default.fileExists(atPath: debt.stage.path))
+      XCTAssertTrue(try XCTUnwrap(db.libraryRecords().first { $0.id == id }).cleanupDebt)
+    }
+  }
+
+  func testActualPartialOpenUnknownRetainsOnlyAcquiredInputAndPreservesCollision() async throws {
+    let authority = try ProviderRequest()
+    let pool = try RequestResourcePool(authority: authority, kind: "import")
+    let baseline = pool.active
+    let db = try ProductDatabase.open(at: root)
+    let effects = OwnedCopyEffects(failures: [.input], beforeOpen: { endpoint, stage in
+      if endpoint == .output { try Data("owned collision never adopted".utf8).write(to: stage) }
+    })
+    var lifecycle: LocalLibraryLifecycle? = try await LocalLibraryLifecycle.openForOwnedCopyFixtures(
+      database: db, effects: effects.effects)
+    weak var facade = lifecycle
+    let id = try await XCTUnwrap(lifecycle).importPDF(from: source())
+    var tornDown = false
+    defer {
+      if !tornDown, let debt = LocalLibraryLifecycle.actualCopyDebts.first(where: { $0.identity.paperID == id }) {
+        do { try effects.physicallyTearDown(debt) }
+        catch { XCTFail("Owned physical teardown failed: \(error)") }
+      }
+    }
+    lifecycle = nil
+    XCTAssertNil(facade)
+    XCTAssertTrue(effects.retained(.input))
+    XCTAssertNotEqual(Darwin.fcntl(try XCTUnwrap(effects.acquiredFD(.input)), F_GETFD), -1)
+    let debt = try XCTUnwrap(LocalLibraryLifecycle.actualCopyDebts.first { $0.identity.paperID == id })
+    XCTAssertNil(debt.output)
+    XCTAssertTrue(debt.outputClosed)
+    XCTAssertFalse(debt.inputClosed)
+    XCTAssertEqual(effects.census, [.input])
+    XCTAssertEqual(effects.scopeCensus, [1, 0])
+    XCTAssertEqual(try Data(contentsOf: debt.stage), Data("owned collision never adopted".utf8))
+    XCTAssertFalse(FileManager.default.fileExists(atPath: namespace(id).appendingPathComponent("document.pdf").path))
+    XCTAssertEqual(try db.libraryRecords().first?.status, .importFailed)
+    XCTAssertEqual(try db.libraryRecords().filter { $0.cleanupDebt }.count, 1)
+    XCTAssertEqual(pool.active, baseline + 1)
+    assertActualPoolDenial(pool, authority: authority)
+    tornDown = true
+    try effects.physicallyTearDown(debt)
+    XCTAssertEqual(pool.active, baseline)
+    XCTAssertEqual(effects.scopeCensus, [1, 1])
+    XCTAssertEqual(effects.census, [.input])
+    XCTAssertTrue(LocalLibraryLifecycle.actualCopyDebts.contains { $0.identity.attempt == debt.identity.attempt })
   }
 
   func testActualCopyIsIndependentAndPersistsAcrossRestart() async throws {

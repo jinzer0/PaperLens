@@ -116,3 +116,71 @@ behavior and native compilation, then concrete independent review/evidence/local
 Workers skip every test/build/gate/lint/formatter/commit/remote/workflow/delegation/runtime.
 No new Job/schema/root/profile/store/resource counter; untouched canonical retry/deletion/
 SDK/paid/trial/calibration/remote/Story limits remain. Prior305/native-z are prior evidence.
+
+### Worker83 source delivery against committed76aa97b (not verification)
+
+The separate actual copier now lstat-checks the selected source, opens readonly with
+O_NOFOLLOW/O_CLOEXEC/O_NONBLOCK, and fstat-checks regular type, device/inode and positive
+bounded size before any read. Stage open uses O_CREAT/O_EXCL/O_NOFOLLOW; actual output
+must be regular, current-UID, mode0600, single-link and empty. Descriptor fchmod0400
+precedes checked closure and publication. Declared PDF type, actual signature/hash,
+cumulative bytes, bounded chunks, elapsed budget, cancellation and actual GRDB progress
+remain; final copied bytes must equal admitted actual input size. No same-UID path-stability
+or in-place content-mutation isolation claim is added.
+
+Process-rooted immutable copy identity/source/stage and the existing import lease own
+closeOnDealloc:false real handles and acquired-scope flag beyond stack/facade loss.
+Exactly one checked close is attempted per acquired endpoint, output then input, including
+when the first fails. All endpoints closed/never acquired permits outside-lock scope/lease
+release and root removal. Any unknown retains all actual owners indefinitely and returns
+producerClosureUnknown into unchanged namespace-preserving cleanupDebt/not-ready handling.
+There is no runtime FD probe, ARC closure proof, retry, acknowledgement or debt mutation.
+
+Public open/import signatures are unchanged. Internal
+openForOwnedCopyFixtures(database:effects:) requires ActualCopyEffects with beforeOpen,
+checkedClose, startScope and stopScope; production open selects actual FileHandle.close
+and actual URL scope effects. actualCopyDebts is a read-only terminal snapshot, including
+identity, source/stage, lease, handles, scoped and per-endpoint known-close flags. Fixture
+teardown closes only owned unknown real descriptors before releasing fixture scope/lease;
+runtime unknown registry entries remain unchanged.
+
+Seven new existing-file tests are authored: checked endpoint/scope/pool release; direct
+FIFO/symlink rejection; full actual-contract pool denial before scope/FD acquisition;
+before-open FIFO/symlink/different-inode swaps; throwing output-open/file/symlink collision;
+input/output/both close failures across facade loss; and partial-open input-close unknown
+with unchanged collision bytes. They use actual private files/FDs and the sole GRDB DB,
+exact close-attempt census, durable cleanupDebt, absent final PDF and preserved stage,
+plus capacity fill through actual denial. Scope counters model granted fixture scope,
+not sandbox-extension evidence for ordinary temporary URLs.
+
+No tests/builds/gates/lint/format/commit/runtime were run by this worker. Parent owns the
+focused LocalLibraryLifecycleTests run, existing metadata/deletion/Reader regressions,
+native compile, independent review, evidence and exact commit. Read/write/body-growth,
+elapsed-budget, synchronize/fchmod failures, real sandbox grants and in-place mutation
+remain unobserved branches; no beforeRead/fake writer was added. SelectedSource74/75,
+FolderService, outer policy/deletion/publication and schema remain unchanged. Genuine
+same-Job Import Retry still requires separate future HIGH durable history/input-ledger
+scope; canonical0/26, StoryDone=false and EpicDone=false are unchanged.
+
+### Parent actual copier verification and independent review
+
+Parent added non-file/fully-decoded NUL source rejection BEFORE import lease/scope/FD
+effects, plus typed nil-filesystem-representation handling rather than C-pointer unwrap.
+One new actual-pipeline fixture joins the seven authored cases. Preserved focused1079:
+23tests/two assertions showed legacy Foundation URL.path hides encoded NUL, so both source
+and fixture were corrected to path(percentEncoded:false). The actual Foundation observation
+was bounded and used a synthetic URL only, no file/request/runtime SDK. Final focused1083:
+23/zero; complete Product1085:313/zero, eight new cases relative to prior305. Owned real
+GRDB/FD/pool/namespace outcomes establish the tested copier obligations, not real sandbox
+extension acquisition/release (fixture grant counters modeled). Fresh unsigned Release
+arm64/macOS15 native .build/product-native-compile-20261010-aa BUILD SUCCEEDED1086;
+no app/helper execution. Existing compiler/PDFium debug-map warnings not suppressed.
+Independent84 SOURCE-ONLY CLEAR / APPROVE includes final decoded-NUL guard and fixture;
+no concrete blocking delta defect. Two-source binary diff SHA against76aa97b:
+8ff8e4a94101c7c22c6819a11820ad7f2e9b12e64458b7ea41645393384efcb9.
+No Package/Xcode/ProviderRequest/Job-policy/schema/epoch/counter/selected-recognition/
+FolderService/startup/publication/deletion contract changed. Read/write/body-growth,
+synchronize/chmod/elapsed faults and hostile same-UID/in-place isolation remain unproved;
+manual physical fixture teardown never acknowledges runtime unknown closure. No SDK,
+auth/paid/renderer/helper/live/remote/protected retry ran. Same-Job Retry ledger remains
+unwritten and unapproved by this receipt. Canonical0/26/Epicfalse/Storyfalse unchanged.

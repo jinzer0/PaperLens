@@ -43,6 +43,81 @@ final class ImportCancellation: @unchecked Sendable {
   }
 }
 
+enum ActualCopyEndpoint: Hashable, Sendable { case input, output }
+
+struct ActualCopyEffects: Sendable {
+  let beforeOpen: @Sendable (ActualCopyEndpoint, URL) throws -> Void
+  let checkedClose: @Sendable (ActualCopyEndpoint, FileHandle) throws -> Void
+  let startScope: @Sendable (URL) -> Bool
+  let stopScope: @Sendable (URL) -> Void
+
+  static let actual = ActualCopyEffects(beforeOpen: { _, _ in },
+    checkedClose: { _, handle in try handle.close() },
+    startScope: { $0.startAccessingSecurityScopedResource() },
+    stopScope: { $0.stopAccessingSecurityScopedResource() })
+}
+
+/// A rooted operation owns physical obligations independently of the lifecycle facade.
+/// Only the copying thread mutates it; registry readers see immutable terminal debts.
+private final class ActualCopyOwner: @unchecked Sendable {
+  let identity: ImportIdentity
+  let source: URL
+  let stage: URL
+  let lease: RequestResourceLease
+  let effects: ActualCopyEffects
+  var scoped = false
+  var input: FileHandle?
+  var output: FileHandle?
+
+  init(identity: ImportIdentity, source: URL, stage: URL, lease: RequestResourceLease,
+    effects: ActualCopyEffects) {
+    self.identity = identity
+    self.source = source
+    self.stage = stage
+    self.lease = lease
+    self.effects = effects
+  }
+}
+
+struct ActualCopyDebt: Sendable {
+  let identity: ImportIdentity
+  let source: URL
+  let stage: URL
+  let lease: RequestResourceLease
+  let scoped: Bool
+  let input: FileHandle?
+  let output: FileHandle?
+  let inputClosed: Bool
+  let outputClosed: Bool
+}
+
+private final class ActualCopyOwnership: @unchecked Sendable {
+  static let shared = ActualCopyOwnership()
+  private let lock = NSLock()
+  private var owners: [UUID: ActualCopyOwner] = [:]
+  private var debts: [UUID: ActualCopyDebt] = [:]
+
+  func retain(_ owner: ActualCopyOwner) {
+    lock.withLock { owners[owner.identity.attempt] = owner }
+  }
+
+  func retainUnknown(_ owner: ActualCopyOwner, inputClosed: Bool, outputClosed: Bool) {
+    let debt = ActualCopyDebt(identity: owner.identity, source: owner.source, stage: owner.stage,
+      lease: owner.lease, scoped: owner.scoped, input: owner.input, output: owner.output,
+      inputClosed: inputClosed, outputClosed: outputClosed)
+    lock.withLock { debts[owner.identity.attempt] = debt }
+  }
+
+  func releaseKnown(_ owner: ActualCopyOwner) {
+    // Physical releases are outside arbitration, after every endpoint is known closed.
+    if owner.scoped { owner.effects.stopScope(owner.source) }
+    owner.lease.close()
+    _ = lock.withLock { owners.removeValue(forKey: owner.identity.attempt) }
+  }
+
+  func snapshots() -> [ActualCopyDebt] { lock.withLock { Array(debts.values) } }
+}
+
 /// Application arbitration contains policy and accounting only. Every database/file effect
 /// runs off this actor; deletion waits for actual producer closure, never terminal status.
 public actor LocalLibraryLifecycle {
@@ -50,6 +125,7 @@ public actor LocalLibraryLifecycle {
   nonisolated let readLeaseRegistry = LibraryReadLeaseRegistry()
   nonisolated var readLeaseDatabase: ProductDatabase { database }
   private let agentPurge: (any AgentLibraryPurging)?
+  private let copyEffects: ActualCopyEffects
   nonisolated let epoch = UUID()
   private var snapshots: [UUID: JobRecoveryPolicy.Snapshot] = [:]
   private var cancellations: [UUID: ImportCancellation] = [:]
@@ -59,9 +135,24 @@ public actor LocalLibraryLifecycle {
   public static func open(
     database: ProductDatabase, agentPurge: (any AgentLibraryPurging)? = nil
   ) async throws -> LocalLibraryLifecycle {
+    try await open(database: database, agentPurge: agentPurge, copyEffects: .actual)
+  }
+
+  static func openForOwnedCopyFixtures(database: ProductDatabase, effects: ActualCopyEffects)
+    async throws -> LocalLibraryLifecycle {
+    try await open(database: database, agentPurge: nil, copyEffects: effects)
+  }
+
+  nonisolated static var actualCopyDebts: [ActualCopyDebt] {
+    ActualCopyOwnership.shared.snapshots()
+  }
+
+  private static func open(database: ProductDatabase, agentPurge: (any AgentLibraryPurging)?,
+    copyEffects: ActualCopyEffects) async throws -> LocalLibraryLifecycle {
     // Allocate Main's lifetime epoch once, before recovery, and expose no owner until
     // all registered job kinds and library validation have completed successfully.
-    let lifecycle = LocalLibraryLifecycle(database: database, agentPurge: agentPurge)
+    let lifecycle = LocalLibraryLifecycle(database: database, agentPurge: agentPurge,
+      copyEffects: copyEffects)
     let epoch = lifecycle.epoch
     try await Task.detached {
       let recovery = ProductJobRecovery(database: database)
@@ -71,9 +162,11 @@ public actor LocalLibraryLifecycle {
     return lifecycle
   }
 
-  private init(database: ProductDatabase, agentPurge: (any AgentLibraryPurging)?) {
+  private init(database: ProductDatabase, agentPurge: (any AgentLibraryPurging)?,
+    copyEffects: ActualCopyEffects) {
     self.database = database
     self.agentPurge = agentPurge
+    self.copyEffects = copyEffects
   }
 
   public func list() async throws -> [LibraryRecord] {
@@ -247,6 +340,7 @@ public actor LocalLibraryLifecycle {
     let namespace = Self.namespace(database.root, identity.paperID)
     let stage = namespace.appendingPathComponent("\(identity.attempt.uuidString).stage")
     let final = namespace.appendingPathComponent("document.pdf")
+    let copyEffects = copyEffects
     var reserved = false
     var renamed = false
     do {
@@ -261,7 +355,7 @@ public actor LocalLibraryLifecycle {
       let digest = try await withTaskCancellationHandler {
         try await Task.detached {
           try Self.copyValidatedPDF(source: source, stage: stage, identity: identity,
-            database: database, cancellation: cancellation)
+            database: database, cancellation: cancellation, effects: copyEffects)
         }.value
       } onCancel: { cancellation.cancel() }
       let result = JobRecoveryPolicy.Result(id: identity.attempt.uuidString)
@@ -437,42 +531,68 @@ public actor LocalLibraryLifecycle {
 
   private nonisolated static func copyValidatedPDF(
     source: URL, stage: URL, identity: ImportIdentity, database: ProductDatabase,
-    cancellation: ImportCancellation
+    cancellation: ImportCancellation, effects: ActualCopyEffects
   ) throws -> String {
     try cancellation.check()
+    guard source.isFileURL, !source.path(percentEncoded: false).utf8.contains(0) else {
+      throw LocalLibraryError.invalidPDF
+    }
     let authority = try ProviderRequest()
     let pool = try RequestResourcePool(authority: authority, kind: "import")
     guard let lease = pool.acquire() else { throw LocalLibraryError.importCapacity }
-    defer { lease.close() }
-    let scoped = source.startAccessingSecurityScopedResource()
-    defer { if scoped { source.stopAccessingSecurityScopedResource() } }
-    let values = try source.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey,
-      .contentTypeKey, .fileSizeKey])
-    guard values.isRegularFile == true, values.isSymbolicLink != true,
-      values.contentType?.conforms(to: .pdf) == true else { throw LocalLibraryError.invalidPDF }
-    let budget = try RequestResourceBudget(authority: authority, kind: "import")
-    guard let size = values.fileSize, size > 0, size <= authority.limit("pdfBytes") else {
-      throw LocalLibraryError.invalidPDF
-    }
+    let owner = ActualCopyOwner(identity: identity, source: source, stage: stage, lease: lease,
+      effects: effects)
+    ActualCopyOwnership.shared.retain(owner)
+    owner.scoped = effects.startScope(source)
     let fm = FileManager.default
-    try fm.createDirectory(at: stage.deletingLastPathComponent(), withIntermediateDirectories: true,
-      attributes: [.posixPermissions: 0o700])
-    guard fm.createFile(atPath: stage.path, contents: nil, attributes: [.posixPermissions: 0o600])
-    else { throw LocalLibraryError.invalidPDF }
-    let input = try FileHandle(forReadingFrom: source)
-    let output: FileHandle
-    do { output = try FileHandle(forWritingTo: stage) }
-    catch {
-      do { try input.close() } catch { throw LocalLibraryError.producerClosureUnknown }
-      throw error
-    }
-    var first = true
-    var copied: Int64 = 0
     var hash = SHA256()
-    let clock = ContinuousClock()
-    let started = clock.now
     var workError: (any Error)?
     do {
+      var selected = stat()
+      guard source.withUnsafeFileSystemRepresentation({ path in
+        guard let path else { return Int32(-1) }
+        return Darwin.lstat(path, &selected)
+      }) == 0,
+        selected.st_mode & S_IFMT == S_IFREG, selected.st_size > 0,
+        selected.st_size <= Int64(authority.limit("pdfBytes")) else {
+        throw LocalLibraryError.invalidPDF
+      }
+      let values = try source.resourceValues(forKeys: [.contentTypeKey])
+      guard values.contentType?.conforms(to: .pdf) == true else { throw LocalLibraryError.invalidPDF }
+      let budget = try RequestResourceBudget(authority: authority, kind: "import")
+      try effects.beforeOpen(.input, source)
+      let inputFD = source.withUnsafeFileSystemRepresentation { path in
+        guard let path else { return Int32(-1) }
+        return Darwin.open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)
+      }
+      guard inputFD >= 0 else { throw LocalLibraryError.invalidPDF }
+      let input = FileHandle(fileDescriptor: inputFD, closeOnDealloc: false)
+      owner.input = input
+      var actual = stat()
+      guard Darwin.fstat(inputFD, &actual) == 0, actual.st_mode & S_IFMT == S_IFREG,
+        actual.st_dev == selected.st_dev, actual.st_ino == selected.st_ino,
+        actual.st_size > 0, actual.st_size <= Int64(authority.limit("pdfBytes")) else {
+        throw LocalLibraryError.invalidPDF
+      }
+      try fm.createDirectory(at: stage.deletingLastPathComponent(), withIntermediateDirectories: true,
+        attributes: [.posixPermissions: 0o700])
+      try effects.beforeOpen(.output, stage)
+      let outputFD = stage.withUnsafeFileSystemRepresentation { path in
+        guard let path else { return Int32(-1) }
+        return Darwin.open(path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK,
+          mode_t(0o600))
+      }
+      guard outputFD >= 0 else { throw LocalLibraryError.invalidPDF }
+      let output = FileHandle(fileDescriptor: outputFD, closeOnDealloc: false)
+      owner.output = output
+      var created = stat()
+      guard Darwin.fstat(outputFD, &created) == 0, created.st_mode & S_IFMT == S_IFREG,
+        created.st_uid == Darwin.getuid(), created.st_mode & 0o7777 == 0o600,
+        created.st_nlink == 1, created.st_size == 0 else { throw LocalLibraryError.invalidPDF }
+      var first = true
+      var copied: Int64 = 0
+      let clock = ContinuousClock()
+      let started = clock.now
       while true {
         try cancellation.check()
         let elapsed = started.duration(to: clock.now).components
@@ -491,15 +611,27 @@ public actor LocalLibraryLifecycle {
         copied += Int64(chunk.count)
         try database.recordProgress(identity, bytes: copied)
       }
-      guard !first else { throw LocalLibraryError.invalidPDF }
+      guard !first, copied == actual.st_size else { throw LocalLibraryError.invalidPDF }
       try output.synchronize()
+      guard Darwin.fchmod(outputFD, mode_t(0o400)) == 0 else { throw LocalLibraryError.invalidPDF }
     } catch { workError = error }
-    var closed = true
-    do { try output.close() } catch { closed = false }
-    do { try input.close() } catch { closed = false }
-    guard closed else { throw LocalLibraryError.producerClosureUnknown }
+    var inputClosed = owner.input == nil
+    var outputClosed = owner.output == nil
+    var closureUnknown = false
+    if let output = owner.output {
+      do { try effects.checkedClose(.output, output); outputClosed = true }
+      catch { closureUnknown = true }
+    }
+    if let input = owner.input {
+      do { try effects.checkedClose(.input, input); inputClosed = true }
+      catch { closureUnknown = true }
+    }
+    guard !closureUnknown && inputClosed && outputClosed else {
+      ActualCopyOwnership.shared.retainUnknown(owner, inputClosed: inputClosed, outputClosed: outputClosed)
+      throw LocalLibraryError.producerClosureUnknown
+    }
+    ActualCopyOwnership.shared.releaseKnown(owner)
     if let workError { throw workError }
-    try fm.setAttributes([.posixPermissions: 0o400], ofItemAtPath: stage.path)
     try cancellation.check()
     return hash.finalize().map { String(format: "%02x", $0) }.joined()
   }
