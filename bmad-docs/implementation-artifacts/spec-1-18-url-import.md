@@ -336,3 +336,28 @@ Three-source binary diff against committed Specffedb34 has SHA256
 Package/project, HTTP adapter, DB/journal/policy and paired resource contracts
 remain unchanged. Full physical-receipt journal cutover, same-Job Retry, profile,
 helper/runtime, physical UI and Story acceptance remain unproved.
+
+## Library async input interruption — implementation-first delivery
+
+At22bb9df, accepted NSItemProvider drop completion lacked mounted/current-interaction
+checks even though hover observation had a UUID fence. URLImportService.prepare can
+replace an existing confirmation while no operation runs; a delayed old drop could
+therefore install after Library disappearance or a newer input/confirmation. Correct
+the concrete UI path in existing Features/Library/URLImportView.swift only; backend,
+HTTP, writer/resource ownership, journals and Reader remain unchanged.
+Worker146 extends the existing drag observation with mount/interaction/pending-drop
+fences. Actual provider/mount/interaction captured on drop, consumed before routing;
+old callbacks cannot retint or accept after unmount/new hover/new direct input/folder
+interaction/sheet cancellation/Continue/Retry/explicit Reader opening. Existing URL
+confirmation identity is checked at dismissal; UI prepare refuses to replace it.
+Folder reload also rejects interrupted observations. These UUIDs are display/action
+interruption fences, not physical/input/writer/publication authority. Genuine current
+PDF/HTTPS still routes to existing confirmation; disappearance does not cancel an
+actually admitted download. Library content and pass-through tint remain in place.
+Combined three-source digest and parent minimum cases are recorded in Spec1.16 and
+artifact1535: two existing nominal cases passed, changed source/UI compiled. Neither
+case exercises NSItemProvider callbacks, mount/newer-interaction/sheet cases or visible
+tint/focus. User implementation-first defers new/correction tests, broad/native gate,
+formatter and independent review. Current/stale drops and native sheet interactions
+remain runtime-unverified. No network/provider/helper/renderer/clipboard/remote trial;
+canonical completion0/26 and Epic acceptance remain false.

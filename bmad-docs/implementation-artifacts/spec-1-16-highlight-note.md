@@ -83,3 +83,30 @@ CLEAR / APPROVE, no actionable delta findings. Two-source binary diff SHA256:
 Windowless tests and source review do not establish visible native interaction,
 VoiceOver/focus, clipboard success, application restart or calibrated AI geometry.
 No protected execution/remote action; Story/Epic false, canonical completion0/26.
+
+## Direct admitted selection controls — implementation-first delivery
+
+At22bb9df, Highlight/Add Note/Copy were available only inside an already-open inspector.
+Canonical1.16 selection actions and Add Note drawer entry require direct Reader controls.
+Routine scoped implementation used existing NativeReaderView.swift and AnnotationInspector.swift;
+no acceptance/architecture/privacy/authority change or separate approval was inferred.
+Worker145 authored direct accessible controls while admitted, with genuine bounded native
+capture on action (no selection Boolean/observer used as authority). Private lazy context
+uses actual ReaderSession pins/PDF/document/identity. Add Note freezes original selection
+and opens/focuses the existing editor; pending drafts/edits are retained, not retargeted.
+Copy uses actual existing guarded original-text clipboard method; a temporary weak-PDF
+context is invalidated afterward without opening the drawer or writing annotations.
+Highlight and Note Save require actual guarded commit and durable readback before saved
+feedback. Shared editor helpers retain pre/post identity checks across publication;
+context/presentation interruption fences prevent closed contexts from remounting. Focus
+return to the originating annotation control is authored without moving the PDF. Existing
+search/restoration/metadata/reveal, original PDF bytes, Provider and sole database unchanged.
+Two-source scope delivered with independent URLImportView correction under Spec1.18.
+Combined three-source diff versus22bb9df401203678d4cd39529c612c460d41febc SHA256:
+`925183e894530dce1c5067d1cc618eb09d8680106d916bb3054b865e175a0e1d`.
+Minimum existing Reader nominal search/no-results/latest-request and URL pre-Continue
+cancel/no-grant cases both pass artifact1535; changed UI/source compiled in5.30 seconds.
+These cases do NOT verify the new direct controls, pending draft/readback/reentrancy,
+focus/accessibility or successful clipboard. User implementation-first defers new/correction
+tests, broad/native gates, formatter and independent review in all lanes. Actual UI, restart,
+physical profile and canonical Story proof stay false; no protected trial or remote action.

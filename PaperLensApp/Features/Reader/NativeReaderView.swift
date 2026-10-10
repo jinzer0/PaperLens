@@ -15,6 +15,8 @@ import SwiftUI
   @Published var title = "Reader"
   @Published var opened = false
   @Published private(set) var annotationContext: ReaderAnnotationContext?
+  @Published private(set) var annotationFeedback = ""
+  private var annotationGeneration = UUID()
   @Published private(set) var metadataBinding: ReaderMetadataBinding?
   @Published private(set) var metadataFailure: String?
   private var metadataIdentity: ReaderMetadataIdentity?
@@ -180,21 +182,79 @@ import SwiftUI
 
   func toggleAnnotations() {
     if annotationContext != nil { closeAnnotations(); return }
-    guard opened else { return }
-    do {
-      let context = try session.withReadAccess {
-        guard let document = pdfView.document else { throw ReaderError.notOpen }
-        return try ReaderAnnotationContext(session: session, service: annotationService,
-          identity: annotationIdentity, view: pdfView, document: document)
+    annotationAction { _ in () }
+  }
+
+  func highlightSelection() {
+    annotationAction { _ = try $0.highlightSelection() }
+  }
+
+  func addNote() {
+    annotationAction { try $0.beginNote() }
+  }
+
+  func copySelection() {
+    annotationAction(mountDrawer: false) { try $0.copyOriginalSelection() }
+  }
+
+  // Construct lazily from the actual admitted PDF, never from selection heuristics.
+  private func actualAnnotationContext() throws -> ReaderAnnotationContext {
+    try session.withReadAccess {
+      guard opened else { throw ReaderError.notOpen }
+      if let context = annotationContext {
+        _ = try context.records()
+        guard opened, context.isActive else { throw AnnotationError.stalePaper }
+        return context
       }
-      guard opened, context.isActive else { context.invalidate(); return }
-      annotationContext = context
-    } catch { failure = "Annotations unavailable: \(error)" }
+      guard let document = pdfView.document else { throw ReaderError.notOpen }
+      let context = try ReaderAnnotationContext(session: session, service: annotationService,
+        identity: annotationIdentity, view: pdfView, document: document)
+      guard opened, context.isActive else {
+        context.invalidate(); throw AnnotationError.stalePaper
+      }
+      return context
+    }
+  }
+
+  private func annotationAction(mountDrawer: Bool = true,
+    _ action: (ReaderAnnotationContext) throws -> Void) {
+    guard opened else { return }
+    let generation = annotationGeneration
+    var candidate: ReaderAnnotationContext?
+    defer {
+      if let candidate, annotationContext !== candidate { candidate.invalidate() }
+    }
+    do {
+      let context = try actualAnnotationContext()
+      candidate = context
+      guard opened, annotationGeneration == generation, context.isActive else { return }
+      let succeeded = context.performEditorAction { try action(context) }
+      guard opened, annotationGeneration == generation, context.isActive else { return }
+      if mountDrawer && succeeded && annotationContext == nil {
+        annotationContext = context
+        // A Published subscriber can close the drawer before the setter completes.
+        guard opened, annotationGeneration == generation, context.isActive else {
+          context.invalidate()
+          if annotationContext === context { annotationContext = nil }
+          return
+        }
+      }
+      annotationFeedback = context.editor.feedback
+      if !opened || annotationGeneration != generation || !context.isActive {
+        annotationFeedback = ""
+      }
+    } catch {
+      guard opened, annotationGeneration == generation else { return }
+      annotationFeedback = ReaderAnnotationContext.message(for: error)
+      if !opened || annotationGeneration != generation { annotationFeedback = "" }
+    }
   }
 
   func closeAnnotations() {
+    annotationGeneration = UUID()
     annotationContext?.invalidate()
     annotationContext = nil
+    annotationFeedback = ""
   }
 
   @objc private func positionChanged(_ notification: Notification) {
@@ -319,6 +379,9 @@ import SwiftUI
 /// Parent supplies the Application session bound to the real shared lifecycle.
 @MainActor public struct NativeReaderView: View {
   @StateObject private var presentation: ReaderPresentation
+  private enum AnnotationOpener: Hashable { case browse, highlight, note, copy }
+  @FocusState private var annotationFocus: AnnotationOpener?
+  @State private var annotationOrigin: AnnotationOpener = .browse
   private let paperID: UUID
   private let metadataIdentity: ReaderMetadataIdentity?
   private let onReturn: () -> Void
@@ -345,8 +408,13 @@ import SwiftUI
         Text(presentation.title).font(.headline)
         if presentation.opened {
           Button(presentation.annotationContext == nil ? "Highlights & Notes" : "Close annotations") {
+            if presentation.annotationContext == nil { annotationOrigin = .browse }
             presentation.toggleAnnotations()
           }
+          .focused($annotationFocus, equals: .browse)
+          .accessibilityLabel(presentation.annotationContext == nil ?
+            "Browse saved highlights and notes" : "Close highlights and notes")
+          .accessibilityHint("Keep the current PDF reading position")
         }
         Spacer()
         Button("Previous page") { presentation.navigate(delta: -1) }
@@ -381,6 +449,34 @@ import SwiftUI
           Button("Next match") { presentation.showMatch(delta: 1) }
         }
       }.disabled(!presentation.opened)
+      if presentation.opened {
+        HStack {
+          Button("Highlight") {
+            annotationOrigin = .highlight
+            presentation.highlightSelection()
+          }
+          .focused($annotationFocus, equals: .highlight)
+          .accessibilityLabel("Highlight selected original PDF text")
+          .accessibilityHint("Save a highlight and show saved annotations")
+          Button("Add Note") {
+            annotationOrigin = .note
+            presentation.addNote()
+          }
+          .focused($annotationFocus, equals: .note)
+          .accessibilityLabel("Add a personal note to selected original PDF text")
+          .accessibilityHint("Open the note editor with the original selection; preserve any unfinished note")
+          Button("Copy") {
+            if presentation.annotationContext != nil { annotationOrigin = .copy }
+            presentation.copySelection()
+          }
+          .focused($annotationFocus, equals: .copy)
+          .accessibilityLabel("Copy selected original PDF text")
+          .accessibilityHint("Copy only original text without saving an annotation or opening notes")
+          Text(presentation.annotationFeedback).font(.caption)
+            .accessibilityLabel("Annotation status: \(presentation.annotationFeedback)")
+          Spacer()
+        }.accessibilityElement(children: .contain)
+      }
       if let failure = presentation.failure {
         HStack {
           Text(failure).foregroundStyle(.red).textSelection(.enabled)
@@ -409,6 +505,11 @@ import SwiftUI
     .padding()
     .onAppear { presentation.open(paperID: paperID) }
     .onChange(of: metadataIdentity) { presentation.replaceMetadataIdentity(metadataIdentity) }
+    .onChange(of: presentation.annotationContext != nil) {
+      if presentation.annotationContext == nil && presentation.opened {
+        annotationFocus = annotationOrigin
+      }
+    }
     .onDisappear { presentation.disappear(reportFailure: onSaveFailure) }
   }
 }

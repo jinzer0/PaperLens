@@ -9,9 +9,10 @@ import SwiftUI
   @Published var editing: AnnotationRecord?
   @Published var text = ""
   @Published var feedback = ""
+  @Published var noteFocusRequest: UUID?
 
   func cancel() { draft = nil; editing = nil; text = "" }
-  func reset() { cancel(); records = []; feedback = "" }
+  func reset() { cancel(); records = []; feedback = ""; noteFocusRequest = nil }
 }
 
 /// The presentation owns admission. This capability neither retains a PDF nor acquires a lease.
@@ -116,6 +117,58 @@ import SwiftUI
     }
   }
 
+  // Each publication is a reentrancy boundary: subscribers may close the Reader.
+  func publishEditor(_ change: () -> Void) throws {
+    do { try access { _, _ in change() } }
+    catch { if !isActive { editor.reset() }; throw error }
+  }
+
+  @discardableResult func performEditorAction(_ action: () throws -> Void) -> Bool {
+    do { try action(); return true }
+    catch {
+      guard isActive else { editor.reset(); return false }
+      try? publishEditor { editor.feedback = Self.message(for: error) }
+      return false
+    }
+  }
+
+  static func message(for error: Error) -> String {
+    switch error as? AnnotationError {
+    case .invalidNote: return "Enter a nonempty note of at most 16384 UTF-8 bytes. Nothing was saved."
+    case .invalidSelection: return "Select supported original PDF text before this action."
+    case .stalePaper: return "This Paper is no longer available for annotation."
+    case .staleRecord: return "This record changed or was removed. Refresh before editing."
+    default: return "Annotation action failed. Refresh to check saved records before retrying."
+    }
+  }
+
+  func beginNote() throws {
+    if editor.draft == nil && editor.editing == nil {
+      let selection = try capture()
+      try publishEditor { editor.text = "" }
+      try publishEditor { editor.editing = nil }
+      try publishEditor { editor.draft = selection }
+      try publishEditor { editor.feedback = "" }
+    } else {
+      try publishEditor { editor.feedback = "Continue or cancel the current note before starting another." }
+    }
+    try publishEditor { editor.noteFocusRequest = UUID() }
+  }
+
+  @discardableResult func highlightSelection() throws -> AnnotationRecord {
+    let saved = try createHighlight()
+    let records = try records()
+    guard records.contains(saved) else { throw AnnotationError.staleRecord }
+    try publishEditor { editor.records = records }
+    try publishEditor { editor.feedback = "Highlight saved" }
+    return saved
+  }
+
+  func copyOriginalSelection() throws {
+    try copySelection()
+    try publishEditor { editor.feedback = "Original selected text copied" }
+  }
+
   public func reveal(_ record: AnnotationRecord) throws {
     try access { view, document in
       guard try service.records(for: identity).contains(record),
@@ -201,43 +254,45 @@ import SwiftUI
       HStack {
         Button("Highlight") {
           perform {
-            let saved = try context.createHighlight()
-            records = try context.records()
-            feedback = "Highlight saved"
+            let saved = try context.highlightSelection()
             try context.reveal(saved)
           }
         }
         Button("Add Note") {
-          perform {
-            draft = try context.capture(); editing = nil; text = ""
-            noteFocused = true; feedback = ""
-          }
+          perform { try context.beginNote() }
         }
         Button("Copy") {
-          perform {
-            try context.copySelection()
-            feedback = "Original selected text copied"
-          }
+          perform { try context.copyOriginalSelection() }
         }
       }.accessibilityElement(children: .contain)
       if let selected = editing?.selection ?? draft {
         Text("Selected original text").font(.caption)
         ScrollView { Text(selected.originalText).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }
           .frame(maxHeight: 100)
-        TextEditor(text: $editor.text).focused($noteFocused).frame(minHeight: 100)
+        TextEditor(text: Binding(get: { text }, set: { value in
+          perform { try context.publishEditor { text = value } }
+        })).focused($noteFocused).frame(minHeight: 100)
           .accessibilityLabel("Personal note")
         Text("\(text.utf8.count) / 16384 UTF-8 bytes").font(.caption)
         HStack {
           Button("Save Note") {
             perform {
-              if let editing { _ = try context.updateNote(editing, text: text) }
-              else { _ = try context.createNote(selected, text: text) }
-              draft = nil; editing = nil; text = ""
-              feedback = "Note saved"
-              records = try context.records()
+              let saved: AnnotationRecord
+              if let editing { saved = try context.updateNote(editing, text: text) }
+              else { saved = try context.createNote(selected, text: text) }
+              let refreshed = try context.records()
+              guard refreshed.contains(saved) else { throw AnnotationError.staleRecord }
+              try context.publishEditor { draft = nil }
+              try context.publishEditor { editing = nil }
+              try context.publishEditor { text = "" }
+              try context.publishEditor { records = refreshed }
+              try context.publishEditor { feedback = "Note saved" }
             }
           }
-          Button("Cancel") { resetEditor(); feedback = "Draft discarded" }
+          Button("Cancel") { perform {
+            resetEditor()
+            try context.publishEditor { feedback = "Draft discarded" }
+          } }
         }
       }
       if records.isEmpty { Text("No saved highlights or notes").foregroundStyle(.secondary) }
@@ -254,7 +309,12 @@ import SwiftUI
               Button("Edit") {
                 perform {
                   guard try context.records().contains(record) else { throw AnnotationError.staleRecord }
-                  editing = record; draft = nil; text = record.note ?? ""; noteFocused = true
+                  guard draft == nil && editing == nil else {
+                    try context.beginNote(); return
+                  }
+                  try context.publishEditor { text = record.note ?? "" }
+                  try context.publishEditor { editing = record }
+                  try context.publishEditor { editor.noteFocusRequest = UUID() }
                 }
               }
             }
@@ -262,16 +322,31 @@ import SwiftUI
               perform {
                 try context.delete(record)
                 if editing?.id == record.id { resetEditor() }
-                records = try context.records(); feedback = "Record deleted"
+                let refreshed = try context.records()
+                try context.publishEditor { records = refreshed }
+                try context.publishEditor { feedback = "Record deleted" }
               }
             }
           }
         }.padding(.vertical, 4)
       }
       Text(feedback).font(.caption).accessibilityLabel("Annotation status: \(feedback)")
-      Button("Refresh") { perform { records = try context.records(); feedback = "" } }
+      Button("Refresh") { perform {
+        let refreshed = try context.records()
+        try context.publishEditor { records = refreshed }
+        try context.publishEditor { feedback = "" }
+      } }
     }.padding().frame(minWidth: 280)
-      .onAppear { perform { records = try context.records() } }
+      .onAppear {
+        perform {
+          let refreshed = try context.records()
+          try context.publishEditor { records = refreshed }
+        }
+        noteFocused = context.isActive && editor.noteFocusRequest != nil
+      }
+      .onChange(of: editor.noteFocusRequest) {
+        noteFocused = context.isActive && editor.noteFocusRequest != nil
+      }
       .onDisappear { reset() }
       .onChange(of: context.isActive) { if !context.isActive { reset() } }
   }
@@ -285,17 +360,7 @@ import SwiftUI
   }
 
   private func perform(_ action: () throws -> Void) {
-    do { try action() }
-    catch {
-      guard context.isActive else { reset(); return }
-      switch error as? AnnotationError {
-      case .invalidNote: feedback = "Enter a nonempty note of at most 16384 UTF-8 bytes. Nothing was saved."
-      case .invalidSelection: feedback = "Select supported original PDF text before this action."
-      case .stalePaper:
-        reset(); feedback = "This Paper is no longer available for annotation."
-      case .staleRecord: feedback = "This record changed or was removed. Refresh before editing."
-      default: feedback = "Annotation action failed. Refresh to check saved records before retrying."
-      }
-    }
+    context.performEditorAction(action)
+    if !context.isActive { reset() }
   }
 }

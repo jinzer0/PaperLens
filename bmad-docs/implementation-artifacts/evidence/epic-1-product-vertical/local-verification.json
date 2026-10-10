@@ -37,6 +37,21 @@
     "Existing Library list/grid/detail consume same-snapshot validated saved Summary records with exact Paper/generation and full ordered source quotes; source compiled, not observed rendered UI",
     "Library Summary observation separates actual recent attempt from valid prior result and validation availability; semantic Summary failures do not reject the Library query, SQL/storage errors still throw, insufficient saved evidence is explicit. New error/runtime/UI branches unverified"
   ],
+  "readerDirectSelectionAndLibraryDropInput": {
+    "baselineCommit": "22bb9df401203678d4cd39529c612c460d41febc",
+    "sourceDiffSHA256": "925183e894530dce1c5067d1cc618eb09d8680106d916bb3054b865e175a0e1d",
+    "sourceScope": ["PaperLensApp/Features/Reader/NativeReaderView.swift", "PaperLensApp/Features/Reader/AnnotationInspector.swift", "PaperLensApp/Features/Library/URLImportView.swift"],
+    "implementers": ["agent://145-ReaderDirectSelectionActions", "agent://146-LibraryDropInteractionFence"],
+    "readerBehavior": "Direct Highlight/Add Note/Copy use lazy actual pinned Reader context. Genuine captured Note draft preserved/refocused, transient Copy does not open drawer/save, Highlight and Note use guarded commit/readback. Published editor changes and mounting interrupted by closed context; authored focus return. No selection Boolean authority or Provider payload.",
+    "libraryBehavior": "Existing UI drag state captures mount/interaction/provider and consumes pending drop before existing confirmation routing. Unmount/newer input/hover/folder/sheet/Retry/Reader interactions reject old callbacks; guarded folder observations and identity-bound cancellation; UI prepare cannot replace current confirmation. Tokens are interruption fences only; actual download lifetime unchanged.",
+    "minimumExistingScenarios": {"output": "artifact://1535", "exitCode": 0, "tests": ["testActualPresentationSearchMatchesNoResultsEmptyQueryAndLatestRequest", "testCancelBeforeContinueAndMissingCapabilityHaveZeroGrantEffects"], "changedProductAndUISourceCompiled": true, "newBranchCoverage": false},
+    "newCorrectionTestsBroadNativeGateFormatterAndReview": "Deferred per user implementation-first on every lane",
+    "directSelectionPendingDraftReadbackAndCallbackBranchesVerified": false,
+    "asyncDropUnmountNewerInputAndSheetBranchesVerified": false,
+    "visibleUIFocusAccessibilityClipboardSuccessVerified": false,
+    "protectedTrialsOrRemoteOperationsExecuted": false,
+    "storyAccepted": false
+  },
   "summaryAvailabilityIsolation": {
     "preImplementationSpecificationCommit": "7264014",
     "sourceDiffSHA256": "f85ffda7469318e85877faef1e29aff4cac128377c5353e42bd82f5f4336298d",

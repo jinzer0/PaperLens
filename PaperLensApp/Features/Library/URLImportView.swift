@@ -35,23 +35,47 @@ public struct URLImportView<LibraryContent: View>: View {
   }
 
   public var body: some View {
+    let mount = drag.mount
+    let interaction = drag.interaction
+    let confirmationID = service.confirmation?.id
     VStack {
       HStack {
-        Button("URL 추가") { inputSheet = true }
+        Button("URL 추가") {
+          guard drag.isCurrent(mount, interaction) else { return }
+          drag.interrupt()
+          inputSheet = true
+        }
         Button("URL 붙여넣기") {
+          guard drag.isCurrent(mount, interaction) else { return }
+          drag.interrupt()
           if let text = NSPasteboard.general.string(forType: .string) { prepare(text) }
           else { invalidInput = true }
         }
-        Button("PDF 선택", action: chooseLocalPDF)
+        Button("PDF 선택") {
+          guard drag.isCurrent(mount, interaction) else { return }
+          drag.interrupt()
+          chooseLocalPDF()
+        }
         Spacer()
       }
       HStack {
-        Picker("URL 저장 폴더", selection: $destinationFolderID) {
+        Picker("URL 저장 폴더", selection: Binding(get: { destinationFolderID }, set: { value in
+          guard drag.isCurrent(mount, interaction),
+            service.state != .confirming, service.state != .downloading else { return }
+          drag.interrupt()
+          destinationFolderID = value
+        })) {
           Text("Unfiled").tag(Optional<UUID>.none)
           ForEach(folders) { folder in Text(folder.name).tag(Optional(folder.id)) }
         }
         .disabled(service.state == .confirming || service.state == .downloading)
-        Button("폴더 새로고침") { Task { await reloadFolders() } }
+        Button("폴더 새로고침") {
+          guard drag.isCurrent(mount, interaction) else { return }
+          drag.interrupt()
+          let loadMount = drag.mount
+          let loadInteraction = drag.interaction
+          Task { await reloadFolders(mount: loadMount, interaction: loadInteraction) }
+        }
         if folderLoadFailed { Text("폴더를 불러오지 못했습니다.").foregroundStyle(.red) }
       }
       library
@@ -69,24 +93,52 @@ public struct URLImportView<LibraryContent: View>: View {
         .onDrop(of: [UTType.url.identifier, UTType.fileURL.identifier],
           delegate: URLImportDropDelegate(state: drag,
             supportsURL: { service.supports($0) },
+            canAccept: {
+              !inputSheet && !invalidInput && service.confirmation == nil
+                && service.state != .confirming && service.state != .downloading
+            },
             accept: { url in
               if url.isFileURL { confirmLocalPDF(url) } else { prepare(url.absoluteString) }
             }))
       status
     }
-    .sheet(isPresented: $inputSheet) {
+    .sheet(isPresented: Binding(get: { inputSheet }, set: { value in
+      guard drag.isCurrent(mount, interaction) else { return }
+      drag.interrupt()
+      inputSheet = value
+    })) {
       VStack(alignment: .leading, spacing: 16) {
         Text("HTTPS PDF 또는 arXiv URL").font(.headline)
-        TextField("URL", text: $input).accessibilityLabel("가져올 HTTPS URL")
-          .onSubmit { inputSheet = false; prepare(input) }
+        TextField("URL", text: Binding(get: { input }, set: { value in
+          guard drag.isCurrent(mount, interaction), inputSheet else { return }
+          input = value
+        })).accessibilityLabel("가져올 HTTPS URL")
+          .onSubmit {
+            guard drag.isCurrent(mount, interaction) else { return }
+            drag.interrupt()
+            inputSheet = false
+            prepare(input)
+          }
         HStack {
-          Button("취소") { inputSheet = false }.keyboardShortcut(.cancelAction)
-          Button("확인") { inputSheet = false; prepare(input) }.keyboardShortcut(.defaultAction)
+          Button("취소") {
+            guard drag.isCurrent(mount, interaction) else { return }
+            drag.interrupt()
+            inputSheet = false
+          }.keyboardShortcut(.cancelAction)
+          Button("확인") {
+            guard drag.isCurrent(mount, interaction) else { return }
+            drag.interrupt()
+            inputSheet = false
+            prepare(input)
+          }.keyboardShortcut(.defaultAction)
         }
       }.padding().frame(minWidth: 420)
     }
     .sheet(item: Binding(get: { service.confirmation }, set: { value in
-      if value == nil { service.cancelConfirmation() }
+      guard value == nil, drag.isCurrent(mount, interaction),
+        let confirmationID, service.confirmation?.id == confirmationID else { return }
+      drag.interrupt()
+      service.cancelConfirmation()
     })) { intent in
       VStack(alignment: .leading, spacing: 16) {
         Text("Library에 논문 추가").font(.headline)
@@ -97,8 +149,16 @@ public struct URLImportView<LibraryContent: View>: View {
         }
         Text("다운로드 후 Library에 머무릅니다.")
         HStack {
-          Button("취소") { service.cancelConfirmation() }.keyboardShortcut(.cancelAction)
-          Button("계속") { service.continueImport(confirmationID: intent.id) }
+          Button("취소") {
+            guard drag.isCurrent(mount, interaction), service.confirmation?.id == intent.id else { return }
+            drag.interrupt()
+            service.cancelConfirmation()
+          }.keyboardShortcut(.cancelAction)
+          Button("계속") {
+            guard drag.isCurrent(mount, interaction), service.confirmation?.id == intent.id else { return }
+            drag.interrupt()
+            service.continueImport(confirmationID: intent.id)
+          }
             .keyboardShortcut(.defaultAction)
         }
       }.padding().frame(minWidth: 420)
@@ -106,27 +166,47 @@ public struct URLImportView<LibraryContent: View>: View {
     .alert("지원하지 않는 URL", isPresented: $invalidInput) {
       Button("확인", role: .cancel) {}
     } message: { Text("인증 정보가 없는 HTTPS PDF 또는 올바른 arXiv URL을 입력하세요.") }
-    .task { await reloadFolders() }
+    .onAppear {
+      drag.appear()
+      let loadMount = drag.mount
+      let loadInteraction = drag.interaction
+      Task { await reloadFolders(mount: loadMount, interaction: loadInteraction) }
+    }
+    .onDisappear { drag.disappear() }
+    .onChange(of: service.confirmation?.id) { _ in drag.interrupt() }
+    .onChange(of: service.state) { _ in drag.interrupt() }
   }
 
   @ViewBuilder private var status: some View {
+    let mount = drag.mount
+    let interaction = drag.interaction
     switch service.state {
     case .idle, .confirming: EmptyView()
     case .downloading:
       HStack {
         ProgressView().accessibilityLabel("PDF 다운로드 중")
         Text("PDF 다운로드 중")
-        Button("취소") { service.cancelDownload() }
+        Button("취소") {
+          guard drag.isCurrent(mount, interaction), service.state == .downloading else { return }
+          drag.interrupt()
+          service.cancelDownload()
+        }
       }
     case .ready(let paper):
       HStack {
         Label("Library에 추가됨", systemImage: "checkmark.circle")
-        Button("Reader 열기") { openReader(paper) }
+        Button("Reader 열기") {
+          guard drag.isCurrent(mount, interaction), service.state == .ready(paper) else { return }
+          drag.interrupt()
+          openReader(paper)
+        }
       }
     case .failed(let reason):
       HStack {
         Label(safeMessage(reason), systemImage: "exclamationmark.triangle")
         Button("다시 시도") {
+          guard drag.isCurrent(mount, interaction), service.state == .failed(reason) else { return }
+          drag.interrupt()
           do { try service.retry() } catch { invalidInput = true }
         }
       }
@@ -135,6 +215,8 @@ public struct URLImportView<LibraryContent: View>: View {
 
   private func prepare(_ text: String) {
     do {
+      guard drag.mount != nil, service.confirmation == nil,
+        service.state != .confirming, service.state != .downloading else { throw URLImportError.rejected }
       let folder = folders.first { $0.id == destinationFolderID }
       guard destinationFolderID == nil || folder != nil else { throw URLImportError.rejected }
       try service.prepare(text, destination: folder?.name ?? "Unfiled",
@@ -143,14 +225,20 @@ public struct URLImportView<LibraryContent: View>: View {
     catch { invalidInput = true }
   }
 
-  private func reloadFolders() async {
+  private func reloadFolders(mount: UUID?, interaction: UUID) async {
+    guard drag.isCurrent(mount, interaction) else { return }
     do {
-      folders = try await folderService.folders()
+      let loaded = try await folderService.folders()
+      guard drag.isCurrent(mount, interaction) else { return }
+      folders = loaded
       if let id = destinationFolderID, !folders.contains(where: { $0.id == id }) {
         destinationFolderID = nil
       }
       folderLoadFailed = false
-    } catch { folderLoadFailed = true }
+    } catch {
+      guard drag.isCurrent(mount, interaction) else { return }
+      folderLoadFailed = true
+    }
   }
 
   private func safeMessage(_ reason: URLImportError) -> String {
@@ -167,13 +255,52 @@ public struct URLImportView<LibraryContent: View>: View {
 @MainActor
 private final class URLImportDragState: ObservableObject {
   @Published var supported = false
+  @Published private(set) var mount: UUID?
+  @Published private(set) var interaction = UUID()
   var hover: UUID?
+  private(set) var pendingDrop: UUID?
+
+  // UI interruption fences only; writer/input admission remains with the existing owners.
+  func isCurrent(_ mount: UUID?, _ interaction: UUID) -> Bool {
+    mount != nil && self.mount == mount && self.interaction == interaction
+  }
+
+  func interrupt() {
+    interaction = UUID()
+    hover = nil
+    pendingDrop = nil
+    supported = false
+  }
+
+  func appear() {
+    interrupt()
+    mount = UUID()
+  }
+
+  func disappear() {
+    interrupt()
+    mount = nil
+  }
+
+  func beginDrop() -> UUID {
+    interrupt()
+    let token = UUID()
+    pendingDrop = token
+    return token
+  }
+
+  func consumeDrop(_ token: UUID, mount: UUID?, interaction: UUID) -> Bool {
+    guard isCurrent(mount, interaction), pendingDrop == token else { return false }
+    pendingDrop = nil
+    return true
+  }
 }
 
 @MainActor
 private struct URLImportDropDelegate: DropDelegate {
   let state: URLImportDragState
   let supportsURL: (String) -> Bool
+  let canAccept: () -> Bool
   let accept: (URL) -> Void
 
   func validateDrop(info: DropInfo) -> Bool {
@@ -181,12 +308,16 @@ private struct URLImportDropDelegate: DropDelegate {
   }
 
   func dropEntered(info: DropInfo) {
+    state.interrupt()
+    guard state.mount != nil, canAccept(), let item = item(info) else { return }
+    let mount = state.mount
+    let interaction = state.interaction
     let hover = UUID()
     state.hover = hover
     state.supported = false
-    load(info) { url in
-      guard state.hover == hover else { return }
-      state.supported = supported(url)
+    load(item) { url in
+      guard state.isCurrent(mount, interaction), state.hover == hover, canAccept() else { return }
+      state.supported = url.map { supported($0) } ?? false
     }
   }
 
@@ -200,10 +331,16 @@ private struct URLImportDropDelegate: DropDelegate {
   }
 
   func performDrop(info: DropInfo) -> Bool {
-    guard state.supported else { return false }
-    state.hover = nil
-    state.supported = false
-    load(info) { url in if supported(url) { accept(url) } }
+    guard state.mount != nil, state.supported, state.hover != nil,
+      canAccept(), let item = item(info) else { return false }
+    let token = state.beginDrop()
+    let mount = state.mount
+    let interaction = state.interaction
+    load(item) { url in
+      guard state.consumeDrop(token, mount: mount, interaction: interaction),
+        canAccept(), let url, supported(url) else { return }
+      accept(url)
+    }
     return true
   }
 
@@ -211,10 +348,13 @@ private struct URLImportDropDelegate: DropDelegate {
     url.isFileURL ? url.pathExtension.lowercased() == "pdf" : supportsURL(url.absoluteString)
   }
 
-  private func load(_ info: DropInfo, completion: @escaping @MainActor (URL) -> Void) {
-    guard let item = info.itemProviders(for: [UTType.url.identifier, UTType.fileURL.identifier]).first else { return }
+  private func item(_ info: DropInfo) -> NSItemProvider? {
+    info.itemProviders(for: [UTType.url.identifier, UTType.fileURL.identifier]).first
+  }
+
+  private func load(_ item: NSItemProvider, completion: @escaping @MainActor (URL?) -> Void) {
     item.loadObject(ofClass: NSURL.self) { value, _ in
-      guard let url = value as? URL else { return }
+      let url = value as? URL
       Task { @MainActor in completion(url) }
     }
   }
