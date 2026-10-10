@@ -67,3 +67,30 @@ Prohibitedinput/exact-oneoverUTF8/order/provenance/citations/empty-multiline fai
 NativeCanvassemantic/Koreanstateaction/noncolorcues/actualcontrast/scaling/resize/keyboardVoiceOverlabel-role-state/dialogfocusreturn/accessibleRetryCancelDelete. CurrentallPaperfailure-restart-delete races inthisStory/no deferredpolish/futureAI-successscreens.
 
 Architect55 COMMENT/WATCH/read-only fivefiles/no tests/gates/formatter/build/GUI/SDK/auth/network/credentials/commits. Done actualprereqs/realgroundedgeneration/durablelifecycle/UI/parentverification/independentreview. Planningpassesnone.
+
+## Canonical independent-owner geometry binding (after411fb01)
+
+Bounded121 source assessment identifies a real reusable decoder, not a missing wire
+format: CanonicalExtractionGeometryValidator already compares independent owning
+anchors, entire original UTF-8 quote, page geometry, every quad and explicit precision.
+Implement its LibrarySummaryGeometryValidating conformance in the existing
+`PaperLensApp/Application/CanonicalExtractionGeometry.swift` only. Share the existing
+decoder/version/domain reconstruction and owner-validation core; retain extraction
+callers' identity projection and every existing denial. Summary resolution must first
+match hit revision/page/sentence to the requested PDFSentenceIdentity, then validate
+the full canonical anchor against independent owners and require exact hit-text UTF-8.
+No second codec/store, default precision, inferred numeric Paper generation, persisted
+bytes reused as their own authority, latest-revision substitution or provider call.
+
+Parent owns `Tests/Product/CanonicalExtractionGeometryTests.swift` and
+`Tests/Product/LibrarySummaryServiceTests.swift`: direct valid/mismatched hit tests,
+full-extent/truncated-quad/normalization/page/precision/membership denials, and actual
+sole-GRDB summary reserve/publish/reopen/restore using canonical bytes plus independently
+constructed owned-fixture anchors. Include full frozen tails and retained older revision;
+no fixture/profile/calibration or successful fake production binding claim. Run isolated
+focused/full Product tests, fresh unsigned native compilation and independent source
+review before the exact local source/evidence commit. Worker skips all gates/formatters/
+commits/remotes/workflows/trials. Production Library injection remains a separate owner
+integration requiring genuine complete anchors and explicit precision for saved revisions
+after restart; neither this conformance nor its tests establishes that owner, visible UI,
+calibration, certified Provider enforcement, Agent purge, StoryDone or Epic acceptance.
