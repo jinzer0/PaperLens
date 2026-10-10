@@ -37,6 +37,24 @@
     "Existing Library list/grid/detail consume same-snapshot validated saved Summary records with exact Paper/generation and full ordered source quotes; source compiled, not observed rendered UI",
     "Library Summary observation separates actual recent attempt from valid prior result and validation availability; semantic Summary failures do not reject the Library query, SQL/storage errors still throw, insufficient saved evidence is explicit. New error/runtime/UI branches unverified"
   ],
+  "adaptableReaderAndCompactSummaryPresentation": {
+    "baselineCommit": "e50a60f2f2d015a0e0365e6d3a175d44330b96fe",
+    "preImplementationSpecificationCommit": "96396028cc32cb2b8a1f278ef9b0a9f7ce5e31c4",
+    "sourceScope": ["PaperLensApp/Features/Reader/NativeReaderView.swift", "PaperLensApp/Features/Library/LibraryBrowserView.swift"],
+    "sourceDiffSHA256": "810471d884fa2f3339984af3948401625e6dca1de589782ab6759f4c8ec7b470",
+    "readerSourceDiffSHA256": "a14b979bf1cb234b0d4a80ff4291174a85541ebefedcec10d9c119462a589e02",
+    "summarySourceDiffSHA256": "bd680187b03aabe22345cc7ebdc00d924066681d3bbea7021f6eb7cab6967b28",
+    "implementers": ["parent: NativeReaderView", "agent://147-CompactSummaryPreview: LibraryStoredSummary only"],
+    "readerBehavior": "Korean native controls and accessibility; separated document/navigation/search state rows, ViewThatFits page/zoom groups and HSplitView original PDF/metadata/annotation panes. No blank metadata pane when absent. Warning icons retain genuine existing errors; actual PDFView/session/context/actions/pins/search/restoration/revocation unchanged. UI widths are not resource/calibration profiles.",
+    "summaryBehavior": "Same validated stored record renders one native line with trailing truncation in cards/list, full original selectable text plus every ordered complete source quote/page in detail. Existing identity/availability/attempt/insufficiency and organization/sidebar/query/focus unchanged; no persisted byte truncation or replacement Summary.",
+    "minimumExistingScenarios": {"command": "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --parallel --num-workers 1 --filter 'testActualPresentationSearchMatchesNoResultsEmptyQueryAndLatestRequest|testCanonicalSummarySaveReopenRestoresRetainedRevisionWithoutGenerationOrProvider'", "exitCode": 0, "tests": 2, "changedProductAndUISourceCompiled": true, "buildSeconds": 5.46, "scope": "Windowless native Reader search/latest/no-results and retained saved Summary with injected independent fixture geometry; no native view rendering"},
+    "readerPaneResizeKeyboardFocusVoiceOverAndPreviewDetailRenderingVerified": false,
+    "newRestorationAndGeometryFreeArchiveBranchesVerified": false,
+    "newTestsBroadNativeGateFormatterAndIndependentReview": "Deferred under implementation-first instruction; worker skips all gates, parent only minimum existing scenarios",
+    "newSchemaOwnerProviderCapabilityOrTimingProfile": false,
+    "protectedTrialsOrRemoteOperationsExecuted": false,
+    "storyAccepted": false
+  },
   "nativeLibrarySidebarAndDirectOrganizationControls": {
     "baselineCommit": "3c4bcda04c0ea0e30f5db9bd47b1dcb40f460bec",
     "preImplementationSpecificationCommit": "87f4f4757b117fa0f32caa0e8599ba0ad03e039f",

@@ -13,6 +13,21 @@ organization/focus/actions/queries/SQL. Same validated record feeds both surface
 Parent minimum existing stored-summary case/source compilation only; new UI tests,
 independent review/full/native/accessibility gates remain deferred; Story/Epic false.
 
+### Compact preview delivery receipt
+
+Worker147/agent://147-CompactSummaryPreview read applicable integration Spec9639602
+then edited only LibraryStoredSummary. Preview title explicitly labels one-line native
+Text with trailing truncation; detail keeps complete original selectable text and
+every ordered full quote/one-based page. No substring/replacement model/storage,
+identity/availability/attempt/insufficiency or sidebar/action/focus/query change.
+Source diff SHA256 against96396028cc32cb2b8a1f278ef9b0a9f7ce5e31c4:
+`bd680187b03aabe22345cc7ebdc00d924066681d3bbea7021f6eb7cab6967b28`.
+Parent existing canonical saved Summary retained-revision reopen and actual Reader
+search cases both pass exit0 with changed source compilation5.46 seconds. Reopen
+fixture injects independent geometry; it is not geometry-free archive restart or
+compact/full-detail rendered behavior/accessibility proof. No new tests/review/full/
+native/formatter/protected trial; Story/Epic acceptance remains false.
+
 ## Authority and admission
 
 Issue#26 / `issue/26-story-1-24`; base `f14f15f3f1c1fed02657ebf0c7ecdcb23721bfa8`. PRODUCT `5eac3bb9424ad893eca7d63bc319b71f580838ed`; ARCHITECTURE `1195c92227cc628e325f5ff24d70cc93639bf7a9`; Whole-Epic https://github.com/jinzer0/PaperLens/issues/3#issuecomment-6049004229. Commit own Spec before source; no repeated unchanged-scope SHA approval. No gate certification or credential/live/paid/remote/distribution permission follows.

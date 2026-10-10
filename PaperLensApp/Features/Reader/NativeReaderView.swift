@@ -43,7 +43,7 @@ import SwiftUI
     pdfView.minScaleFactor = 0.1
     pdfView.maxScaleFactor = 10
     pdfView.autoScales = false
-    pdfView.setAccessibilityLabel("Original PDF. Select text using the pointer or keyboard.")
+    pdfView.setAccessibilityLabel("원본 PDF. 포인터 또는 키보드로 텍스트를 선택할 수 있습니다.")
     NotificationCenter.default.addObserver(self, selector: #selector(positionChanged),
       name: .PDFViewPageChanged, object: pdfView)
     NotificationCenter.default.addObserver(self, selector: #selector(positionChanged),
@@ -403,102 +403,97 @@ import SwiftUI
   public var body: some View {
     VStack(spacing: 8) {
       HStack {
-        Button("Library") { presentation.leave(onReturn: onReturn) }
-          .accessibilityLabel("Save reading position and return to Library")
-        Text(presentation.title).font(.headline)
+        Button("Library로 돌아가기") { presentation.leave(onReturn: onReturn) }
+          .accessibilityLabel("읽기 위치를 저장하고 Library로 돌아가기")
+        Text(presentation.title).font(.headline).lineLimit(1).help(presentation.title)
         if presentation.opened {
-          Button(presentation.annotationContext == nil ? "Highlights & Notes" : "Close annotations") {
+          Button(presentation.annotationContext == nil ? "하이라이트·노트" : "주석 닫기") {
             if presentation.annotationContext == nil { annotationOrigin = .browse }
             presentation.toggleAnnotations()
           }
           .focused($annotationFocus, equals: .browse)
           .accessibilityLabel(presentation.annotationContext == nil ?
-            "Browse saved highlights and notes" : "Close highlights and notes")
-          .accessibilityHint("Keep the current PDF reading position")
+            "저장된 하이라이트와 노트 보기" : "하이라이트와 노트 닫기")
+          .accessibilityHint("현재 PDF 읽기 위치를 유지합니다")
         }
         Spacer()
-        Button("Previous page") { presentation.navigate(delta: -1) }
-          .disabled(!presentation.opened || presentation.pageIndex == 0)
-          .keyboardShortcut(.leftArrow, modifiers: [.command])
-        Text(presentation.pageCount == 0 ? "No page" :
-          "Page \(presentation.pageIndex + 1) of \(presentation.pageCount)")
-          .accessibilityLabel("Current PDF page")
-        Button("Next page") { presentation.navigate(delta: 1) }
-          .disabled(!presentation.opened || presentation.pageIndex + 1 >= presentation.pageCount)
-          .keyboardShortcut(.rightArrow, modifiers: [.command])
-        Button("Zoom out") { presentation.changeZoom(factor: 1 / 1.2) }
-          .disabled(!presentation.opened || presentation.zoom <= 0.1)
-          .keyboardShortcut("-", modifiers: [.command])
-        Text("\(Int(presentation.zoom * 100))%")
-        Button("Zoom in") { presentation.changeZoom(factor: 1.2) }
-          .disabled(!presentation.opened || presentation.zoom >= 10)
-          .keyboardShortcut("+", modifiers: [.command])
       }
-      HStack {
-        TextField("Search original PDF text", text: $presentation.query)
-          .onSubmit { presentation.search() }
-          .accessibilityLabel("Search PDF text")
-        Button("Search") { presentation.search() }.disabled(!presentation.opened)
-        switch presentation.searchState {
-        case .idle: EmptyView()
-        case .searching: ProgressView("Searching")
-        case .noResults: Text("No results").accessibilityLabel("No PDF text search results")
-        case .matches(let count):
-          Text("\(count) matches")
-          Button("Previous match") { presentation.showMatch(delta: -1) }
-          Button("Next match") { presentation.showMatch(delta: 1) }
+      ViewThatFits(in: .horizontal) {
+        HStack { pageNavigation; Spacer(); zoomControls }
+        VStack(alignment: .leading, spacing: 8) { pageNavigation; zoomControls }
+      }
+      VStack(alignment: .leading, spacing: 8) {
+        HStack {
+          TextField("원본 PDF 텍스트 검색", text: $presentation.query)
+            .onSubmit { presentation.search() }
+            .accessibilityLabel("원본 PDF 텍스트 검색")
+          Button("검색") { presentation.search() }.disabled(!presentation.opened)
+        }
+        HStack {
+          switch presentation.searchState {
+          case .idle: EmptyView()
+          case .searching: ProgressView("PDF 검색 중")
+          case .noResults: Text("검색 결과 없음").accessibilityLabel("원본 PDF 텍스트 검색 결과 없음")
+          case .matches(let count):
+            Text("검색 결과 \(count)개")
+            Button("이전 결과") { presentation.showMatch(delta: -1) }
+            Button("다음 결과") { presentation.showMatch(delta: 1) }
+          }
         }
       }.disabled(!presentation.opened)
       if presentation.opened {
         HStack {
-          Button("Highlight") {
+          Button("하이라이트") {
             annotationOrigin = .highlight
             presentation.highlightSelection()
           }
           .focused($annotationFocus, equals: .highlight)
-          .accessibilityLabel("Highlight selected original PDF text")
-          .accessibilityHint("Save a highlight and show saved annotations")
-          Button("Add Note") {
+          .accessibilityLabel("선택한 원본 PDF 텍스트에 하이라이트 추가")
+          .accessibilityHint("하이라이트를 저장하고 저장된 주석을 표시합니다")
+          Button("노트 추가") {
             annotationOrigin = .note
             presentation.addNote()
           }
           .focused($annotationFocus, equals: .note)
-          .accessibilityLabel("Add a personal note to selected original PDF text")
-          .accessibilityHint("Open the note editor with the original selection; preserve any unfinished note")
-          Button("Copy") {
+          .accessibilityLabel("선택한 원본 PDF 텍스트에 개인 노트 추가")
+          .accessibilityHint("원본 선택으로 노트 편집기를 열고 작성 중인 노트를 유지합니다")
+          Button("복사") {
             if presentation.annotationContext != nil { annotationOrigin = .copy }
             presentation.copySelection()
           }
           .focused($annotationFocus, equals: .copy)
-          .accessibilityLabel("Copy selected original PDF text")
-          .accessibilityHint("Copy only original text without saving an annotation or opening notes")
+          .accessibilityLabel("선택한 원본 PDF 텍스트 복사")
+          .accessibilityHint("주석을 저장하거나 노트를 열지 않고 원본 텍스트만 복사합니다")
           Text(presentation.annotationFeedback).font(.caption)
-            .accessibilityLabel("Annotation status: \(presentation.annotationFeedback)")
+            .accessibilityLabel("주석 상태: \(presentation.annotationFeedback)")
           Spacer()
         }.accessibilityElement(children: .contain)
       }
       if let failure = presentation.failure {
         HStack {
-          Text(failure).foregroundStyle(.red).textSelection(.enabled)
-          Button("Discard and return") { presentation.session.close(); onReturn() }
+          Label(failure, systemImage: "exclamationmark.triangle")
+            .foregroundStyle(.red).textSelection(.enabled)
+          Button("저장하지 않고 돌아가기") { presentation.session.close(); onReturn() }
         }
       }
-      HStack(spacing: 0) {
+      HSplitView {
         NativePDFSurface(pdfView: presentation.pdfView)
-          .frame(maxWidth: .infinity, maxHeight: .infinity)
-        Divider()
-        VStack(alignment: .leading) {
-          if let binding = presentation.metadataBinding {
-            MetadataOutlineView(binding: binding)
+          .frame(minWidth: 240, maxWidth: .infinity, maxHeight: .infinity)
+        if presentation.metadataBinding != nil || presentation.metadataFailure != nil {
+          VStack(alignment: .leading) {
+            if let binding = presentation.metadataBinding {
+              MetadataOutlineView(binding: binding)
+            }
+            if let failure = presentation.metadataFailure {
+              Label(failure, systemImage: "exclamationmark.triangle")
+                .foregroundStyle(.secondary).padding().textSelection(.enabled)
+            }
           }
-          if let failure = presentation.metadataFailure {
-            Text(failure).foregroundStyle(.secondary).padding().textSelection(.enabled)
-          }
-        }.frame(width: 300)
+          .frame(minWidth: 200, idealWidth: 300, maxWidth: 420, maxHeight: .infinity, alignment: .topLeading)
+        }
         if let context = presentation.annotationContext {
-          Divider()
           AnnotationInspector(context: context, onClose: { presentation.closeAnnotations() })
-            .frame(width: 340)
+            .frame(minWidth: 240, idealWidth: 340, maxWidth: 480, maxHeight: .infinity)
         }
       }
     }
@@ -511,5 +506,32 @@ import SwiftUI
       }
     }
     .onDisappear { presentation.disappear(reportFailure: onSaveFailure) }
+  }
+
+  private var pageNavigation: some View {
+    HStack {
+      Button("이전 페이지") { presentation.navigate(delta: -1) }
+        .disabled(!presentation.opened || presentation.pageIndex == 0)
+        .keyboardShortcut(.leftArrow, modifiers: [.command])
+      Text(presentation.pageCount == 0 ? "페이지 없음" :
+        "\(presentation.pageIndex + 1) / \(presentation.pageCount)쪽")
+        .accessibilityLabel("현재 PDF 페이지")
+      Button("다음 페이지") { presentation.navigate(delta: 1) }
+        .disabled(!presentation.opened || presentation.pageIndex + 1 >= presentation.pageCount)
+        .keyboardShortcut(.rightArrow, modifiers: [.command])
+    }
+  }
+
+  private var zoomControls: some View {
+    HStack {
+      Button("축소") { presentation.changeZoom(factor: 1 / 1.2) }
+        .disabled(!presentation.opened || presentation.zoom <= 0.1)
+        .keyboardShortcut("-", modifiers: [.command])
+      Text("\(Int(presentation.zoom * 100))%")
+        .accessibilityLabel("PDF 확대 비율")
+      Button("확대") { presentation.changeZoom(factor: 1.2) }
+        .disabled(!presentation.opened || presentation.zoom >= 10)
+        .keyboardShortcut("+", modifiers: [.command])
+    }
   }
 }

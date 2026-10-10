@@ -16,6 +16,23 @@ full/native/visible resizing/focus/VoiceOver gates and trials remain deferred un
 implementation-first. Source/compile checks cannot certify rendered native behavior,
 P6 or Story/Epic completion. Annotation editor content is unchanged in this slice.
 
+### Local implementation receipt
+
+Spec96396028cc32cb2b8a1f278ef9b0a9f7ce5e31c4 preceded source. NativeReaderView
+now separates document controls and adapts existing page/zoom groups through
+ViewThatFits; search input/result state have separate rows and Korean native labels.
+Existing actual PDFView and optional metadata/annotation contexts mount in HSplitView
+with adjustable bounded UI widths; absent metadata/failure reserves no blank pane.
+Failure banners add non-color warning icons without replacing genuine error values.
+PDFKit accessibility label localized; original PDF/action methods/pins/session/search/
+restoration/revocation and annotation editor untouched. Source diff SHA256 against Spec:
+`a14b979bf1cb234b0d4a80ff4291174a85541ebefedcec10d9c119462a589e02`.
+Parent existing actual windowless PDFKit search/latest/no-results and canonical saved
+Summary reopen case both passed exit0; changed source compiled in5.46 seconds.
+These do not prove HSplitView/ViewThatFits rendering, resize/keyboard/focus/VoiceOver,
+annotation mounting, new restoration branches or archive geometry-free restart.
+New tests/review/full/native/formatter/trials remain deferred; Story/Epic false.
+
 ## Authority and admission
 
 Issue#17 / issue/17-story-1-15, base119a28aa9cc941b2bf88851228a67c0bfec88f5a. PRODUCT5eac3bb9424ad893eca7d63bc319b71f580838ed; ARCHITECTURE1195c92227cc628e325f5ff24d70cc93639bf7a9; Whole-Epic https://github.com/jinzer0/PaperLens/issues/3#issuecomment-6049004229. Own Spec before source; no repeated unchanged-scope SHA approval. Authority does not pass gates or permit live/paid/credential/remote/distribution.

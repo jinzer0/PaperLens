@@ -451,7 +451,7 @@ private struct LibraryIdentification: Identifiable {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
-      Text("저장된 요약").font(.headline)
+      Text(showEvidence ? "저장된 요약" : "저장된 요약 · 한 줄 미리보기").font(.headline)
       if let observation {
         if let attempt = observation.recentAttempt,
           attempt.identity.paperID == paper.id, attempt.identity.generation == paper.generation {
@@ -471,7 +471,11 @@ private struct LibraryIdentification: Identifiable {
         if let record = observation.record,
           record.identity.paperID == paper.id, record.identity.generation == paper.generation,
           case .librarySummary(let summary, _) = record.result.result {
-          Text(summary.text).textSelection(.enabled)
+          if showEvidence {
+            Text(summary.text).textSelection(.enabled)
+          } else {
+            Text(summary.text).lineLimit(1).truncationMode(.tail)
+          }
           if record.claimAnchors.isEmpty {
             Text("근거 부족 · 근거 위치 없음")
           } else if showEvidence {
