@@ -298,6 +298,18 @@
     "helperExecuted": false,
     "storyAccepted": false
   },
+  "koreanLocalImportConfirmation": {
+    "baselineCommit": "2014434b0354c37a2efd5ad2452e77a666bbf821",
+    "sourceScope": "PaperLensApp/Features/Library/ImportConfirmationView.swift; strings only",
+    "sourceDiffSha256": "b6280f7b9a48410308c040d626f144f4f4f0407536b40da05577c619d69fee4c",
+    "change": "Actual ordinary/Retry confirmation title, provenance/unextracted metadata, destination/Unfiled, evaluated hash versus unevaluated duplicate signals, same-Job versus independent new Paper disclosure, Cancel/Continue and fresh-reselection failure messages now use Korean consistent with surrounding native controls. No authority/state/CAS/IO/focus or cancellation logic changed.",
+    "focusedTests": {"tests": 25, "failures": 0, "output": "artifact://1412", "processMode": "SwiftPM --parallel --num-workers 1; every selected case invoked"},
+    "nativeCompilation": {"result": "BUILD SUCCEEDED", "output": "artifact://1413", "derivedData": ".build/product-native-compile-20261010-aw", "codeSigningAllowed": false, "applicationAndHelperBinariesExecuted": false},
+    "priorFullProductUnion": {"commit": "2014434", "tests": 433, "failures": 0, "output": "artifact://1409", "rerunForStringsOnlyChange": false},
+    "visibleUIVoiceOverFocusLayoutVerified": false,
+    "storyAccepted": false,
+    "epicAccepted": false
+  },
   "freshConfirmedSameJobLocalRetry": {
     "preImplementationSpecificationCommits": ["6d26eb6ac871b8a20210c9c3e4e96d8ba191a841", "12e1d24cd2f2013958a3b879497b395f4eb8c402"],
     "sourceDiffAgainstFinalSpecificationSha256": "d7b595ccf18b0a66c5163b61e8c9ffe225139c17632e26181fdaa705465e4f54",

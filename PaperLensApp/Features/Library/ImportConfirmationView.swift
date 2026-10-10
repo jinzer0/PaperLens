@@ -42,38 +42,38 @@ public struct ImportConfirmationView: View {
   public var body: some View {
     VStack(alignment: .leading, spacing: 16) {
       Text(confirmation.retryPaperID == nil
-        ? "Confirm local PDF import" : "Confirm failed local PDF Retry").font(.headline)
+        ? "PDF 가져오기 확인" : "PDF 가져오기 다시 시도 확인").font(.headline)
       if let paperID = confirmation.retryPaperID {
-        Text("Retry the same failed Paper and import Job using this freshly selected PDF and the confirmed destination. No separate Paper is created.")
-        LabeledContent("Failed Paper", value: paperID.uuidString)
+        Text("새로 선택한 PDF와 확인한 저장 폴더로 같은 논문의 실패한 가져오기 작업을 다시 시도합니다. 별도 논문을 추가하지 않습니다.")
+        LabeledContent("재시도할 논문", value: paperID.uuidString)
       }
-      LabeledContent("Selected filename", value: confirmation.filename)
-      Text("Title, author and identifiers: not extracted").foregroundStyle(.secondary)
+      LabeledContent("선택한 파일 이름", value: confirmation.filename)
+      Text("논문 제목·저자·식별자: 아직 추출하지 않음").foregroundStyle(.secondary)
       if destinationsLoaded {
-        Picker("Destination", selection: $destination) {
-          Text("Unfiled (default)").tag(nil as UUID?)
+        Picker("저장 폴더", selection: $destination) {
+          Text("미분류 (기본값)").tag(nil as UUID?)
           ForEach(folders) { folder in Text(folder.name).tag(Optional(folder.id)) }
         }
       } else {
-        Text("Loading selected destination…")
+        Text("저장 폴더를 불러오는 중…")
       }
       if confirmation.matchingPaperIDs.isEmpty {
-        Text("Content hash checked: no matching ready PDF. Other duplicate signals are unavailable.")
+        Text("내용 해시 확인 결과, 같은 내용의 준비된 PDF가 없습니다. 다른 중복 단서는 확인하지 못했습니다.")
       } else {
         Text(confirmation.retryPaperID == nil
-          ? "Possible duplicate: \(confirmation.matchingPaperIDs.count) ready PDF(s) have the same content hash. Continue creates a separate Paper and PDF copy."
-          : "Possible duplicate: \(confirmation.matchingPaperIDs.count) ready PDF(s) have the same content hash. Continue retries only the captured failed Paper and Job; matching Papers are not replaced.")
+          ? "중복 가능성: 준비된 PDF \(confirmation.matchingPaperIDs.count)개와 내용 해시가 같습니다. 계속하면 별도 논문과 독립 PDF 복사본을 추가합니다."
+          : "중복 가능성: 준비된 PDF \(confirmation.matchingPaperIDs.count)개와 내용 해시가 같습니다. 계속하면 선택한 논문의 실패한 작업만 다시 시도하며, 같은 내용의 기존 논문은 교체하지 않습니다.")
       }
       if let errorMessage { Text(errorMessage).foregroundStyle(.red) }
       HStack {
-        Button("Cancel") {
+        Button("취소") {
           guard action.beginCancel(working: working) else { return }
           working = true
           Task { await service.cancel(confirmation.id); dismiss() }
         }.disabled(working)
         Spacer()
-        Button(confirmation.retryPaperID != nil ? "Continue Retry"
-          : (confirmation.matchingPaperIDs.isEmpty ? "Import" : "Continue importing")) {
+        Button(confirmation.retryPaperID != nil ? "다시 시도"
+          : (confirmation.matchingPaperIDs.isEmpty ? "가져오기" : "계속 가져오기")) {
           guard action.beginContinue(destinationsLoaded: destinationsLoaded, working: working) else { return }
           working = true
           Task {
@@ -83,7 +83,7 @@ public struct ImportConfirmationView: View {
               imported(id)
               dismiss()
             } catch {
-              errorMessage = "Import was not confirmed successfully. Select the PDF again to retry."
+              errorMessage = "가져오기를 완료하지 못했습니다. 다시 시도하려면 PDF를 새로 선택하고 확인하세요."
             }
             working = false
           }
@@ -97,13 +97,13 @@ public struct ImportConfirmationView: View {
       do {
         folders = try await service.folders()
         if let destination, !folders.contains(where: { $0.id == destination }) {
-          errorMessage = "The selected destination no longer exists. Select the PDF again."
+          errorMessage = "선택한 저장 폴더가 더 이상 없습니다. PDF를 새로 선택하고 저장 폴더를 다시 확인하세요."
           action.invalidate()
         } else {
           destinationsLoaded = true
         }
       }
-      catch { errorMessage = "Unable to load destinations."; action.invalidate() }
+      catch { errorMessage = "저장 폴더를 불러오지 못했습니다."; action.invalidate() }
     }
     .onDisappear {
       action.invalidate()

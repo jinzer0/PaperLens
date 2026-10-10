@@ -218,3 +218,16 @@ bytes/inode/namespace; rejected observations preserve the post-fault placement/r
 Physical sheet scheduling/Cancel/Save/focus/accessibility are NOT those fixture proofs.
 No user PDF, provider/SDK/app/helper/renderer execution, paid/trial renewal or remote action;
 observed-value CAS is not ABA/read authority. Canonical0/26/Epicfalse/StoryDone=false unchanged.
+
+### Parent Korean import-confirmation presentation correction
+
+After2014434, the existing ImportConfirmationView ordinary/Retry sheet text is
+aligned with its surrounding Korean native controls. Preserve selected filename
+versus unextracted metadata, evaluated content-hash/no-match versus unavailable
+duplicate signals, explicit independent-copy versus same-Job Retry disclosure,
+fresh PDF reselection on failure and chosen folder/미분류. Labels only; the reviewed
+synchronous Cancel/Continue and post-await Workspace fences are unchanged.
+Focused25 isolated Folder/Workspace/confirmation cases pass1412; fresh unsigned
+native-aw compiles1413. Prior433/full1409 belongs to2014434 and was not rerun for
+these strings. No visible UI/VoiceOver/focus/layout/runtime or Story acceptance
+is inferred; no application/helper/protected trial or remote operation occurred.
