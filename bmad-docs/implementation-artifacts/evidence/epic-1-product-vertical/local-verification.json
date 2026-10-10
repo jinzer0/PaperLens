@@ -28,9 +28,9 @@
   "verification": {
     "productUnion": {
       "command": "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --parallel --num-workers 1 --filter ProductTests",
-      "tests": 399,
+      "tests": 407,
       "failures": 0,
-      "output": "artifact://1285",
+      "output": "artifact://1300",
       "evidence": "Real GRDB transactions, owned synthetic files and actual local FIFO IO/close/peer metadata/EPIPE; mocked provider/HTTP transport and synthetic windowless PDFKit conversions. Not authenticated provider, app UI, SDK producer or PDFium execution."
     },
     "nativeCompilation": {
@@ -38,11 +38,11 @@
       "configuration": "Release",
       "architecture": "arm64",
       "minimumOS": "15.0",
-      "derivedData": ".build/product-native-compile-20261010-ap",
+      "derivedData": ".build/product-native-compile-20261010-aq",
       "codeSigningAllowed": false,
       "result": "BUILD SUCCEEDED",
-      "rawOutput": "artifact://1286",
-      "output": "artifact://1286",
+      "rawOutput": "artifact://1302",
+      "output": "artifact://1302",
       "applicationAndHelperBinariesExecuted": false,
       "warnings": "AppIntents metadata skipped, PDFium debug-map duplicate/missing-symbol warnings and an unnecessary-await Swift warning remain; no warning suppression or debug-symbol repair claimed."
     },
@@ -295,6 +295,27 @@
     "visibleUIOrAccessibilityVerified": false,
     "runtimeParsingOrCalibrationVerified": false,
     "helperExecuted": false,
+    "storyAccepted": false
+  },
+  "strictDeletingLateProducerAbortHistory": {
+    "specificationCommit": "0605dc0",
+    "sourceDiffAgainstSpecificationSha256": "524308ffcfd3663d3f9ff241f2a71f858f0a6211a2325bb55c1253177a222b3c",
+    "sourceScope": ["PaperLensApp/Infrastructure/ProductDatabase+ImportRecovery.swift", "Tests/Product/ImportRecoveryPersistenceTests.swift"],
+    "focusedTests": {"tests": 105, "failures": 0, "persistenceTests": 51, "newTestMethods": 8, "lifecycleTests": 35, "startupTests": 19, "output": "artifact://1291"},
+    "productUnion": {"tests": 407, "failures": 0, "output": "artifact://1300", "processMode": "SwiftPM --parallel --num-workers 1; every Product case invoked", "testsSkipped": 0},
+    "nativeCompilation": {"result": "BUILD SUCCEEDED", "output": "artifact://1302", "derivedData": ".build/product-native-compile-20261010-aq", "codeSigningAllowed": false, "applicationAndHelperBinariesExecuted": false},
+    "preservedIncompleteVerification": {"plannedTests": 105, "status": "timed_out", "timeoutSeconds": 300, "lastReportedProgress": 15, "output": "artifact://1290", "repair": "Replace growing replay/encode loop with finite canonical typed revoke fixture construction and one complete decode/encode; unchanged quota and codec, no skipped case or timeout increase."},
+    "review": "agent://108-DeletingAbortHistoryIntegrity: SOURCE-ONLY CLEAR / APPROVE; strict paperDeleting-only late abort, existing-operation acknowledgment, monotonic debt, exact-saga/full-capture transaction and defense reuse; findings empty",
+    "evidence": "Actual reserveJournaledImport and beginDeletion produce genuine revoked failed/paperDeleting baseline. Separate late-abort transaction preserves complete execution history, all captures/facts, used permit/operation IDs, retained causes, rows/folder and existing debt. It commits strict typed prefix and optional exact-saga 0->1 debt together; stale/corrupt/ignored/foreign writes and invalid schema reject with owned rollback/reopen.",
+    "strictPaperDeletingLateProducerAdmissionVerified": true,
+    "earlierSuccessOrOtherFailuresAdmittedAsLateProducer": false,
+    "existingCleanupDebtClearedOrLegacyHistoryFabricated": false,
+    "newCleanupOrRemovalOperationAdmitted": false,
+    "contentlessDeletionFinalizationChanged": false,
+    "actualPhysicalReceiptAuthorityCertified": false,
+    "productionJournaledActorCutoverActivated": false,
+    "sameJobRetryUIActivated": false,
+    "helperOrRendererExecuted": false,
     "storyAccepted": false
   },
   "atomicOrdinaryImportFailureHistory": {

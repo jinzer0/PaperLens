@@ -1648,6 +1648,318 @@ final class ImportRecoveryPersistenceTests: XCTestCase {
     }
   }
 
+  private func lateAbortFixture() throws
+    -> (URL, ProductDatabase, ImportIdentity, UUID, ImportRecoveryRecord) {
+    let (root, db, id, _) = try deletionCommandFixture()
+    let saga = try XCTUnwrap(db.beginDeletion(id.paperID))
+    return (root, db, id, saga, try readDeleting(id, saga: saga, db: db))
+  }
+
+  func testDeletingLateAbortUnknownPermitDebtAndRepeatedObservationsReopenExactHistory() throws {
+    let (root, db, id, saga, initial) = try lateAbortFixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let before = try actualRows(db)
+    let observation = try initial.journal.recording(.writerClosure(initial.journal.snapshot().current.lineage,
+      permit: id.writer.uuidString, .unknown))
+    XCTAssertThrowsError(try db.recordJournaledDeletingImportAbort(expected: initial,
+      replacement: observation, saga: saga, cleanupDebt: false))
+    assertRows(before, equal: try actualRows(db))
+    var record = try db.recordJournaledDeletingImportAbort(expected: initial,
+      replacement: observation, saga: saga, cleanupDebt: true)
+    for _ in 0..<2 {
+      let previous = record
+      let replacement = try previous.journal.recording(.writerClosure(previous.journal.snapshot().current.lineage,
+        permit: id.writer.uuidString, .unknown))
+      record = try db.recordJournaledDeletingImportAbort(expected: previous,
+        replacement: replacement, saga: saga, cleanupDebt: true)
+      XCTAssertNotEqual(previous.encoded, record.encoded)
+      XCTAssertEqual(try previous.journal.snapshot(), try record.journal.snapshot())
+      XCTAssertTrue(try record.journal.extends(previous.journal, maximumBytes: bound))
+    }
+    let reopened = try ProductDatabase.open(at: root)
+    XCTAssertEqual(try readDeleting(id, saga: saga, db: reopened).encoded, record.encoded)
+    let after = try actualRows(reopened)
+    for column in before.0.columnNames where column != "cleanupDebt" {
+      XCTAssertEqual(before.0[column] as DatabaseValue, after.0[column] as DatabaseValue, column)
+    }
+    assertRows((after.0, before.1, before.2), equal: after, exceptJournal: true)
+    XCTAssertEqual(Int64.fromDatabaseValue(after.0["cleanupDebt"]), 1)
+    XCTAssertEqual(String.fromDatabaseValue(after.1["failure"]), "paperDeleting")
+    XCTAssertThrowsError(try db.recordJournaledDeletingImportAbort(expected: record,
+      replacement: record.journal, saga: saga, cleanupDebt: true))
+    XCTAssertThrowsError(try db.recordJournaledDeletingImportAbort(expected: initial,
+      replacement: observation, saga: saga, cleanupDebt: true))
+    XCTAssertEqual(try readDeleting(id, saga: saga, db: db).encoded, record.encoded)
+  }
+
+  func testDeletingLateAbortExistingCleanupCompletionAllowsFalseAndNeverClearsDebt() throws {
+    for oldDebt in [0, 1] {
+      let (root, db, id, saga, initial) = try lateAbortFixture()
+      defer { try? FileManager.default.removeItem(at: root) }
+      let l = try initial.journal.snapshot().current.lineage
+      // Synthetic METADATA only: no physical producer closure or purge ACK.
+      let requested = try initial.journal.recording(.writerClosure(l, permit: id.writer.uuidString,
+        .closed(.unvalidated))).recording(.requestCleanup(l, permit: id.writer.uuidString,
+          operation: UUID().uuidString))
+      let expected = try casDeleting(initial.encoded, requested, saga: saga, db: db)
+      try db.adapterWrite { sql in
+        try sql.execute(sql: "UPDATE paper SET cleanupDebt = ?", arguments: [oldDebt])
+        // An unnecessary debt UPDATE would fail even when the value is unchanged.
+        try sql.execute(sql: "CREATE TRIGGER forbidUnneededDebt BEFORE UPDATE OF cleanupDebt ON paper BEGIN SELECT RAISE(ABORT, 'unneeded debt write'); END")
+      }
+      let before = try actualRows(db)
+      let operation = try XCTUnwrap(expected.journal.snapshot().permits.first?.cleanupOperation)
+      let replacement = try expected.journal.recording(.cleanupFinished(l, permit: id.writer.uuidString,
+        operation: operation, succeeded: true)).recording(.release(l, permit: id.writer.uuidString))
+      let record = try db.recordJournaledDeletingImportAbort(expected: expected,
+        replacement: replacement, saga: saga, cleanupDebt: false)
+      let reopened = try ProductDatabase.open(at: root)
+      assertRows(before, equal: try actualRows(reopened), exceptJournal: true)
+      XCTAssertEqual(try readDeleting(id, saga: saga, db: reopened).encoded, record.encoded)
+      XCTAssertTrue(try record.journal.snapshot().permits.isEmpty)
+      XCTAssertEqual(try record.journal.snapshot().usedOperationIDs, try expected.journal.snapshot().usedOperationIDs)
+      XCTAssertEqual(Int64.fromDatabaseValue(try actualRows(reopened).0["cleanupDebt"]), Int64(oldDebt))
+    }
+  }
+
+  func testDeletingLateAbortRejectsEarlierSuccessAndFailureEvenWithValidRevokedMetadata() throws {
+    for cause in ["succeeded", "importFailed", "urlImportFailed", "sourceChanged",
+      "publicationRejected", "cancelled", "interrupted"] {
+      let (root, db, id, _) = try deletionCommandFixture(cause: cause)
+      defer { try? FileManager.default.removeItem(at: root) }
+      let saga = try XCTUnwrap(db.beginDeletion(id.paperID))
+      let expected = try readDeleting(id, saga: saga, db: db)
+      let before = try actualRows(db)
+      let replacement = try expected.journal.recording(.revoke)
+      XCTAssertThrowsError(try db.recordJournaledDeletingImportAbort(expected: expected,
+        replacement: replacement, saga: saga, cleanupDebt: true), cause)
+      assertRows(before, equal: try actualRows(ProductDatabase.open(at: root)))
+      // Existing metadata helper remains valid; the new API is strictly narrower.
+      _ = try casDeleting(expected.encoded, replacement, saga: saga, db: db)
+    }
+  }
+
+  func testDeletingLateAbortRejectsExpectedEncodingCaptureDivergenceRetryNewOperationsAndQuota() throws {
+    let (root, db, id, saga, expected) = try lateAbortFixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let before = try actualRows(db)
+    let l = try expected.journal.snapshot().current.lineage
+    let valid = try expected.journal.recording(.writerClosure(l, permit: id.writer.uuidString, .unknown))
+    for event in [JobRecoveryPolicy.Event.acquireWriter(l, permit: UUID().uuidString),
+      .acquirePublication(l, writer: id.writer.uuidString, permit: id.publication.uuidString),
+      .publish(l, permit: id.publication.uuidString, .init(id: "forbidden new result")),
+      .dispatch(l), .claim(l)] {
+      XCTAssertThrowsError(try expected.journal.recording(event))
+    }
+    for bytes in [Data(), Data([0x20]) + expected.encoded, Data(expected.encoded.dropLast()),
+      Data(repeating: 0, count: bound + 1)] {
+      XCTAssertThrowsError(try db.recordJournaledDeletingImportAbort(expected: .init(journal: expected.journal, encoded: bytes),
+        replacement: valid, saga: saga, cleanupDebt: true))
+    }
+    let requested = try expected.journal.recording(.writerClosure(l, permit: id.writer.uuidString,
+      .closed(.unvalidated))).recording(.requestCleanup(l, permit: id.writer.uuidString, operation: UUID().uuidString))
+    let operation = try XCTUnwrap(requested.snapshot().permits.first?.cleanupOperation)
+    let clean = try requested.recording(.cleanupFinished(l, permit: id.writer.uuidString,
+      operation: operation, succeeded: true)).recording(.release(l, permit: id.writer.uuidString))
+    let removal = try clean.recording(.removeNamespace(operation: UUID().uuidString))
+    let removalOperation = try XCTUnwrap(removal.snapshot().pendingRemoval)
+    let retryID = ImportIdentity(paperID: id.paperID, generation: id.generation, jobID: id.jobID,
+      attempt: UUID(), fence: UUID(), correlation: UUID(), input: UUID(), epoch: id.epoch,
+      writer: UUID(), publication: UUID())
+    var replacements = [expected.journal, requested, clean, removal,
+      try removal.recording(.namespaceRemovalFinished(operation: removalOperation, succeeded: false)),
+      try removal.recording(.namespaceRemovalFinished(operation: removalOperation, succeeded: true))]
+    // Retry on revoked history is denied by policy before any storage admission.
+    XCTAssertThrowsError(try clean.retrying(identity: retryID, confirmedInput: facts))
+    for column in 0..<10 {
+      let other = try ImportRecoveryJournal(identity: changing(id, column: column), confirmedInput: facts)
+      let otherL = try other.snapshot().current.lineage
+      replacements.append(try other.recording(.claim(otherL)).recording(.revoke))
+    }
+    for changedFacts in [ImportRecoveryJournal.ConfirmedInput(expectedSHA256: String(repeating: "a", count: 64), destinationFolderID: nil),
+      .init(expectedSHA256: nil, destinationFolderID: UUID())] {
+      replacements.append(try ImportRecoveryJournal(identity: id, confirmedInput: changedFacts).recording(.claim(l)).recording(.revoke))
+    }
+    let initial = try ImportRecoveryJournal(identity: id, confirmedInput: facts)
+    let divergent = try initial.recording(.claim(l)).recording(.authorityChanged(initial.snapshot().authority))
+      .recording(.acquireWriter(l, permit: id.writer.uuidString)).recording(.revoke)
+    replacements.append(divergent)
+    // Finite raw fixture construction; replay/encode the full history only once,
+    // rather than repeatedly replaying every growing typed prefix to the quota.
+    let oneRevoke = try expected.journal.recording(.revoke).encoded(maximumBytes: bound)
+    let increment = oneRevoke.count - expected.encoded.count
+    guard increment > 0, expected.encoded.count <= bound else {
+      XCTFail("Expected a positive canonical revoke increment within the fixed quota")
+      return
+    }
+    let repeatCount = (bound - expected.encoded.count) / increment + 1
+    guard repeatCount > 0, repeatCount <= bound + 1 else {
+      XCTFail("Quota fixture generation must have an explicit finite bound")
+      return
+    }
+    var document = try XCTUnwrap(JSONSerialization.jsonObject(with: expected.encoded) as? [String: Any])
+    var events = try XCTUnwrap(document["events"] as? [Any])
+    let extendedDocument = try XCTUnwrap(JSONSerialization.jsonObject(with: oneRevoke) as? [String: Any])
+    let extendedEvents = try XCTUnwrap(extendedDocument["events"] as? [Any])
+    let revoke = try XCTUnwrap(extendedEvents.last)
+    events += Array(repeating: revoke, count: repeatCount)
+    document["events"] = events
+    let oversizedBytes = try JSONSerialization.data(withJSONObject: document, options: [.sortedKeys])
+    XCTAssertEqual(oversizedBytes.count, expected.encoded.count + repeatCount * increment)
+    XCTAssertGreaterThan(oversizedBytes.count, bound)
+    XCTAssertLessThanOrEqual(oversizedBytes.count, bound + increment)
+    let oversized = try ImportRecoveryJournal.decode(oversizedBytes, maximumBytes: Int.max)
+    XCTAssertEqual(try oversized.encoded(maximumBytes: Int.max), oversizedBytes)
+    replacements.append(oversized)
+    for replacement in replacements {
+      XCTAssertThrowsError(try db.recordJournaledDeletingImportAbort(expected: expected,
+        replacement: replacement, saga: saga, cleanupDebt: true))
+      assertRows(before, equal: try actualRows(db))
+    }
+    XCTAssertEqual(ProductJobRecovery.maximumImportRecoveryJournalBytes, bound)
+  }
+
+  func testDeletingLateAbortRejectsActualSagaAllTenIdentitiesStatesCausesAndPayloads() throws {
+    let mutations = [("paper", "deletionID", "'bad'"), ("paper", "deletionID", "'\(UUID().uuidString)'"),
+      ("paper", "deletionID", "NULL"), ("paper", "status", "'deletionFailed'"),
+      ("paper", "status", "'importFailed'"), ("importJob", "state", "'running'"),
+      ("importJob", "state", "'succeeded'"), ("importJob", "failure", "'importFailed'"),
+      ("importJob", "failure", "NULL"), ("importJob", "recoveryJournal", "NULL"),
+      ("importJob", "recoveryJournal", "'text'"), ("importJob", "recoveryJournal", "zeroblob(262145)"),
+      ("importJob", "recoveryJournal", "X'00'"), ("importJob", "recoveryJournal", "X''")]
+    for (table, column, value) in mutations {
+      let (root, db, id, saga, record) = try lateAbortFixture()
+      defer { try? FileManager.default.removeItem(at: root) }
+      try db.adapterWrite { try $0.execute(sql: "UPDATE \(table) SET \(column) = \(value)") }
+      let before = try actualRows(db)
+      XCTAssertThrowsError(try db.recordJournaledDeletingImportAbort(expected: record,
+        replacement: record.journal.recording(.writerClosure(record.journal.snapshot().current.lineage,
+          permit: id.writer.uuidString, .unknown)), saga: saga, cleanupDebt: true))
+      assertRows(before, equal: try actualRows(ProductDatabase.open(at: root)))
+    }
+    for column in 0..<10 {
+      for driftKind in 0..<3 {
+        let (root, db, id, saga, record) = try lateAbortFixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let names = ["paperID", "generation", "id", "attempt", "fence", "correlation", "input", "epoch", "writer", "publication"]
+        let drift = driftKind == 0 ? UUID().uuidString : driftKind == 1 ? "bad" : ids(id)[column].uuidString.lowercased()
+        try db.adapterWrite { sql in
+          if column == 0 {
+            try sql.execute(sql: "INSERT INTO paper(id, generation, title, status, createdAt, deletionID) VALUES (?, ?, 'rebound', 'deleting', 0, ?)",
+              arguments: [drift, id.generation.uuidString, saga.uuidString])
+          }
+          try sql.execute(sql: "UPDATE \(column == 1 ? "paper" : "importJob") SET \(names[column]) = ?", arguments: [drift])
+        }
+        let before = try actualRows(db)
+        XCTAssertThrowsError(try db.recordJournaledDeletingImportAbort(expected: record,
+          replacement: record.journal.recording(.revoke), saga: saga, cleanupDebt: true))
+        assertRows(before, equal: try actualRows(ProductDatabase.open(at: root)))
+      }
+    }
+    let (root, db, _, saga, record) = try lateAbortFixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    XCTAssertThrowsError(try db.recordJournaledDeletingImportAbort(expected: record,
+      replacement: record.journal.recording(.revoke), saga: UUID(), cleanupDebt: true))
+    try db.adapterWrite { try $0.execute(sql: "UPDATE paper SET deletionID = ?", arguments: [saga.uuidString.lowercased()]) }
+    XCTAssertThrowsError(try db.recordJournaledDeletingImportAbort(expected: record,
+      replacement: record.journal.recording(.revoke), saga: saga, cleanupDebt: true))
+    try db.adapterWrite { try $0.execute(sql: "UPDATE paper SET deletionID = ?", arguments: [saga.uuidString]) }
+    try db.adapterWrite { try $0.execute(sql: "UPDATE importJob SET recoveryJournal = ?", arguments: [Data([0x20]) + record.encoded]) }
+    let before = try actualRows(db)
+    XCTAssertThrowsError(try db.recordJournaledDeletingImportAbort(expected: record,
+      replacement: record.journal.recording(.revoke), saga: saga, cleanupDebt: true))
+    assertRows(before, equal: try actualRows(ProductDatabase.open(at: root)))
+  }
+
+  func testDeletingLateAbortTriggerIgnoreCorruptionForeignWritesAndRestoreRollBackActualWriter() throws {
+    for mutation in ["ignoreJournal", "ignoreDebt", "journal", "text", "oversize", "debt", "title", "state",
+      "failure", "counter", "folder", "provider", "otherRow", "restore", "compensatingDebt"] {
+      let (root, db, id, saga, record) = try lateAbortFixture()
+      defer { try? FileManager.default.removeItem(at: root) }
+      let other = UUID().uuidString
+      let folder = UUID().uuidString
+      try db.adapterWrite { sql in
+        try sql.execute(sql: "INSERT INTO paper(id, generation, title, status, createdAt) VALUES (?, ?, 'other', 'importFailed', 0)", arguments: [other, UUID().uuidString])
+        try sql.execute(sql: "INSERT INTO libraryFolder(id, name) VALUES (?, 'SYNTHETIC folder')", arguments: [folder])
+        var table = "importJob"
+        var column = "recoveryJournal"
+        var timing = "AFTER"
+        let action: String
+        switch mutation {
+        case "ignoreJournal": timing = "BEFORE"; action = "SELECT RAISE(IGNORE);"
+        case "ignoreDebt": table = "paper"; column = "cleanupDebt"; timing = "BEFORE"; action = "SELECT RAISE(IGNORE);"
+        case "journal": action = "UPDATE importJob SET recoveryJournal = X'00';"
+        case "text": action = "UPDATE importJob SET recoveryJournal = 'text';"
+        case "oversize": action = "UPDATE importJob SET recoveryJournal = zeroblob(262145);"
+        case "debt": table = "paper"; column = "cleanupDebt"; action = "UPDATE paper SET cleanupDebt = 0 WHERE id = '\(id.paperID.uuidString)';"
+        case "title": action = "UPDATE paper SET title = 'drift' WHERE id = '\(id.paperID.uuidString)';"
+        case "state": action = "UPDATE importJob SET state = 'running';"
+        case "failure": action = "UPDATE importJob SET failure = 'importFailed';"
+        case "counter": action = "UPDATE importJob SET bytesCopied = 999;"
+        case "folder": action = "INSERT INTO paperFolder(paperID, folderID) VALUES ('\(id.paperID.uuidString)', '\(folder)');"
+        case "provider": action = "UPDATE providerConfig SET model = 'foreign';"
+        case "otherRow": action = "UPDATE paper SET title = 'foreign' WHERE id = '\(other)';"
+        case "restore": action = "UPDATE providerConfig SET generation = generation + 1; UPDATE providerConfig SET generation = generation - 1;"
+        default:
+          table = "paper"; column = "cleanupDebt"; timing = "BEFORE"
+          // Foreign UPDATE substitutes the ignored debt UPDATE: exactly two writes.
+          action = "UPDATE providerConfig SET model = 'foreign'; SELECT RAISE(IGNORE);"
+        }
+        // Marker is inside the actual writer, never caller adapterWrite nesting.
+        let marker = ["restore", "compensatingDebt", "otherRow"].contains(mutation) ? "" : "UPDATE providerConfig SET generation = generation + 1, model = 'transaction-marker';"
+        try sql.execute(sql: "CREATE TRIGGER lateAbortMutation \(timing) UPDATE OF \(column) ON \(table) BEGIN \(marker) \(action) END")
+      }
+      let before = try actualRows(db)
+      let papersBefore = try db.adapterRead { try Row.fetchAll($0, sql: "SELECT * FROM paper ORDER BY id") }
+      XCTAssertThrowsError(try db.recordJournaledDeletingImportAbort(expected: record,
+        replacement: record.journal.recording(.writerClosure(record.journal.snapshot().current.lineage,
+          permit: id.writer.uuidString, .unknown)), saga: saga, cleanupDebt: true), mutation)
+      let reopened = try ProductDatabase.open(at: root)
+      assertRows(before, equal: try actualRows(reopened))
+      XCTAssertEqual(papersBefore, try reopened.adapterRead { try Row.fetchAll($0, sql: "SELECT * FROM paper ORDER BY id") })
+      XCTAssertEqual(try readDeleting(id, saga: saga, db: reopened).encoded, record.encoded)
+      XCTAssertEqual(try reopened.adapterRead { try Int.fetchOne($0, sql: "SELECT count(*) FROM paperFolder") }, 0)
+    }
+  }
+
+  func testDeletingLateAbortUserWithoutRowIDSchemaDeniedBeforeAnyEffects() throws {
+    let (root, db, id, saga, record) = try lateAbortFixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    try db.adapterWrite { sql in
+      try sql.execute(sql: "CREATE TABLE syntheticLateWR(key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID")
+      try sql.execute(sql: "INSERT INTO syntheticLateWR VALUES ('owned', 'unchanged')")
+    }
+    let before = try actualRows(db)
+    XCTAssertThrowsError(try db.recordJournaledDeletingImportAbort(expected: record,
+      replacement: record.journal.recording(.writerClosure(record.journal.snapshot().current.lineage,
+        permit: id.writer.uuidString, .unknown)), saga: saga, cleanupDebt: true))
+    let reopened = try ProductDatabase.open(at: root)
+    assertRows(before, equal: try actualRows(reopened))
+    XCTAssertEqual(try readDeleting(id, saga: saga, db: reopened).encoded, record.encoded)
+    XCTAssertEqual(try reopened.adapterRead { try String.fetchOne($0, sql: "SELECT value FROM syntheticLateWR") }, "unchanged")
+  }
+
+  func testDeletingLateAbortLegacyNullNeverReconstructsAndPositiveBoundsPrecedeSQL() throws {
+    let (root, db, id, claimed) = try fixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let saga = try XCTUnwrap(db.beginDeletion(id.paperID))
+    let revoked = try claimed.recording(.revoke)
+    let expected = ImportRecoveryRecord(journal: revoked, encoded: try revoked.encoded(maximumBytes: bound))
+    let replacement = try revoked.recording(.revoke)
+    let before = try actualRows(db)
+    XCTAssertThrowsError(try db.recordJournaledDeletingImportAbort(expected: expected,
+      replacement: replacement, saga: saga, cleanupDebt: true))
+    assertRows(before, equal: try actualRows(ProductDatabase.open(at: root)))
+    for maximum in [0, -1, 1] {
+      XCTAssertThrowsError(try db.adapterWrite {
+        try ProductDatabase.compareAndSwapImportRecoveryForDeletion(expected: expected.encoded,
+          replacement: replacement, saga: saga, maximumBytes: maximum, in: $0)
+      })
+    }
+    XCTAssertTrue((try actualRows(db).1["recoveryJournal"] as DatabaseValue).isNull)
+    XCTAssertEqual(ProductJobRecovery.maximumImportRecoveryJournalBytes, 262_144)
+  }
+
   func testJournaledReservationIgnoredInsertsCannotBackfillLegacyHistory() throws {
     for table in ["paper", "importJob"] {
       let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

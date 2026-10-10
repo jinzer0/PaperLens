@@ -259,28 +259,7 @@ extension ProductDatabase {
       let databases = try Row.fetchAll(db, sql: "PRAGMA database_list")
       // Update hooks cannot observe WITHOUT ROWID writes. Admit only schemas
       // whose user tables satisfy the observer's rowid coverage prerequisite.
-      let tables = try Row.fetchAll(db, sql: "PRAGMA table_list")
-      guard !tables.isEmpty else { throw ImportRecoveryPersistenceError.invalidHistory }
-      var listedSchemas = Set<String>()
-      var shadowTables = Set<String>()
-      for table in tables {
-        guard table.hasColumn("wr"), let schema = Self.recoveryString(table, "schema"),
-          let name = Self.recoveryString(table, "name"),
-          let type = Self.recoveryString(table, "type"),
-          ["table", "view", "virtual", "shadow"].contains(type),
-          case .int64(let withoutRowID) = (table["wr"] as DatabaseValue).storage,
-          withoutRowID == 0 || withoutRowID == 1,
-          name.hasPrefix("sqlite_") || type == "shadow" || withoutRowID == 0 else {
-          throw ImportRecoveryPersistenceError.invalidHistory
-        }
-        if type == "shadow" { shadowTables.insert(name.lowercased()) }
-        listedSchemas.insert(schema)
-      }
-      for database in databases {
-        guard let name = Self.recoveryString(database, "name"), listedSchemas.contains(name) else {
-          throw ImportRecoveryPersistenceError.invalidHistory
-        }
-      }
+      let shadowTables = try Self.importRecoveryShadowTables(databases: databases, in: db)
       let scope = ImportFailureWriteScope(paperRowID: paperRowID, jobRowID: jobRowID)
       db.add(transactionObserver: scope, extent: .nextTransaction)
       let shadowScope = ImportFailureShadowWriteScope(shadowTables: shadowTables)
@@ -318,6 +297,117 @@ extension ProductDatabase {
       }
       return readback
     }
+  }
+
+  /// Late producer metadata only, after actual beginDeletion revoked a running Job.
+  /// New cleanup operations belong to the separate deleting metadata boundary.
+  func recordJournaledDeletingImportAbort(expected: ImportRecoveryRecord,
+    replacement: ImportRecoveryJournal, saga: UUID, cleanupDebt: Bool) throws -> ImportRecoveryRecord {
+    try adapterWrite { db in
+      let maximum = ProductJobRecovery.maximumImportRecoveryJournalBytes
+      try Self.recoveryBound(maximum)
+      try Self.validateExpectedRecovery(expected)
+      let bytes = try Self.recoveryEncode(replacement, maximumBytes: maximum)
+      let capture = try expected.journal.currentCapture()
+      let nextCapture = try replacement.currentCapture()
+      let identity = capture.identity
+      let old = try expected.journal.snapshot()
+      let next = try replacement.snapshot()
+      guard Self.recoveryIDs(identity) == Self.recoveryIDs(nextCapture.identity),
+        capture.confirmedInput == nextCapture.confirmedInput,
+        try replacement.extends(expected.journal, maximumBytes: maximum),
+        old.revoked, next.revoked, old.current.state == .failed(.paperDeleting),
+        old.role == next.role, old.job == next.job, old.authority == next.authority,
+        old.executions == next.executions, old.usableResult == next.usableResult,
+        old.usedPermitIDs == next.usedPermitIDs, old.usedOperationIDs == next.usedOperationIDs,
+        old.pendingRemoval == next.pendingRemoval, old.removalDebt == next.removalDebt,
+        old.removedPapers == next.removedPapers,
+        cleanupDebt || (next.permits.isEmpty && next.removalDebt == nil && next.pendingRemoval == nil) else {
+        throw ImportRecoveryPersistenceError.invalidHistory
+      }
+      let current = try Self.readImportRecoveryForDeletion(identity, saga: saga, maximumBytes: maximum, in: db)
+      guard current.encoded == expected.encoded else { throw ImportRecoveryPersistenceError.staleHistory }
+      let before = try Self.importRows(identity, in: db)
+      let folder = try Self.importFolder(identity.paperID, in: db)
+      guard Self.recoveryString(before.1, "state") == "failed",
+        Self.recoveryString(before.1, "failure") == "paperDeleting",
+        let debt = Int64.fromDatabaseValue(before.0["cleanupDebt"]), debt == 0 || debt == 1,
+        let paperRowID = try Int64.fetchOne(db, sql: "SELECT rowid FROM main.paper WHERE id = ?",
+          arguments: [identity.paperID.uuidString]),
+        let jobRowID = try Int64.fetchOne(db, sql: "SELECT rowid FROM main.importJob WHERE id = ?",
+          arguments: [identity.jobID.uuidString]),
+        let schemaVersion = try Int64.fetchOne(db, sql: "PRAGMA main.schema_version") else {
+        throw ImportRecoveryPersistenceError.invalidHistory
+      }
+      let retainedDebt = cleanupDebt || debt == 1
+      let updateDebt = retainedDebt && debt == 0
+      let databases = try Row.fetchAll(db, sql: "PRAGMA database_list")
+      let shadowTables = try Self.importRecoveryShadowTables(databases: databases, in: db)
+      let scope = ImportFailureWriteScope(paperRowID: paperRowID, jobRowID: jobRowID)
+      let shadowScope = ImportFailureShadowWriteScope(shadowTables: shadowTables)
+      db.add(transactionObserver: scope, extent: .nextTransaction)
+      db.add(transactionObserver: shadowScope, extent: .nextTransaction)
+      let changesBefore = try Int64.fetchOne(db, sql: "SELECT total_changes()")
+      let stored = try Self.compareAndSwapImportRecoveryForDeletion(expected: expected.encoded,
+        replacement: replacement, saga: saga, maximumBytes: maximum, in: db)
+      if updateDebt {
+        let ids = Self.recoveryIDs(identity)
+        try db.execute(sql: """
+          UPDATE paper SET cleanupDebt = 1
+          WHERE id = ? AND generation = ? AND status = 'deleting' AND deletionID = ? AND cleanupDebt = 0
+            AND EXISTS (SELECT 1 FROM importJob j WHERE j.paperID = paper.id AND j.id = ?
+              AND j.attempt = ? AND j.fence = ? AND j.correlation = ? AND j.input = ?
+              AND j.epoch = ? AND j.writer = ? AND j.publication = ?
+              AND j.state = 'failed' AND j.failure = 'paperDeleting' AND j.recoveryJournal IS ?)
+          """, arguments: [ids[0], ids[1], saga.uuidString, ids[2], ids[3], ids[4], ids[5],
+            ids[6], ids[7], ids[8], ids[9], bytes])
+        guard db.changesCount == 1 else { throw ImportRecoveryPersistenceError.staleHistory }
+      }
+      let readback = try Self.readImportRecoveryForDeletion(identity, saga: saga, maximumBytes: maximum, in: db)
+      let after = try Self.importRows(identity, in: db)
+      let changesAfter = try Int64.fetchOne(db, sql: "SELECT total_changes()")
+      try scope.validate()
+      try shadowScope.validate()
+      guard Self.sameRow(before.0, after.0, except: ["cleanupDebt"]),
+        Self.sameRow(before.1, after.1, except: ["recoveryJournal"]),
+        Int64.fromDatabaseValue(after.0["cleanupDebt"]) == (retainedDebt ? 1 : 0),
+        try Self.importFolder(identity.paperID, in: db) == folder,
+        try Int64.fetchOne(db, sql: "PRAGMA main.schema_version") == schemaVersion,
+        try Row.fetchAll(db, sql: "PRAGMA database_list") == databases,
+        // CAS plus optional debt-only UPDATE. No status UPDATE / Reader trigger.
+        // Additional check, never a substitute for public row/shadow observation.
+        let changesBefore, let changesAfter, changesAfter - changesBefore == (updateDebt ? 2 : 1),
+        stored.encoded == bytes, readback.encoded == bytes,
+        try readback.journal.snapshot() == next else {
+        throw ImportRecoveryPersistenceError.invalidHistory
+      }
+      return readback
+    }
+  }
+
+  private static func importRecoveryShadowTables(databases: [Row], in db: Database) throws -> Set<String> {
+    let tables = try Row.fetchAll(db, sql: "PRAGMA table_list")
+    guard !tables.isEmpty else { throw ImportRecoveryPersistenceError.invalidHistory }
+    var listedSchemas = Set<String>()
+    var shadowTables = Set<String>()
+    for table in tables {
+      guard table.hasColumn("wr"), let schema = recoveryString(table, "schema"),
+        let name = recoveryString(table, "name"), let type = recoveryString(table, "type"),
+        ["table", "view", "virtual", "shadow"].contains(type),
+        case .int64(let withoutRowID) = (table["wr"] as DatabaseValue).storage,
+        withoutRowID == 0 || withoutRowID == 1,
+        name.hasPrefix("sqlite_") || type == "shadow" || withoutRowID == 0 else {
+        throw ImportRecoveryPersistenceError.invalidHistory
+      }
+      if type == "shadow" { shadowTables.insert(name.lowercased()) }
+      listedSchemas.insert(schema)
+    }
+    for database in databases {
+      guard let name = recoveryString(database, "name"), listedSchemas.contains(name) else {
+        throw ImportRecoveryPersistenceError.invalidHistory
+      }
+    }
+    return shadowTables
   }
 
   private static func validateExpectedRecovery(_ expected: ImportRecoveryRecord) throws {

@@ -1256,3 +1256,106 @@ rows, wrong saga/full identity/status/cause/NULL/type/bounds/prefix/Retry and re
 owned-GRDB ignore/corrupt/foreign-write whole rollback. All tests remain invoked
 in per-test isolated processes; no quota reset/fake ACK, SDK/app/helper/renderer,
 live/paid/protected trial/user document/credential/remote/release action admitted.
+
+### Deleting late-producer abort implementation (source-only, parent verification pending)
+
+Implemented internal sole-owner API
+`ProductDatabase.recordJournaledDeletingImportAbort(expected: ImportRecoveryRecord,
+replacement: ImportRecoveryJournal, saga: UUID, cleanupDebt: Bool) throws -> ImportRecoveryRecord`
+in `PaperLensApp/Infrastructure/ProductDatabase+ImportRecovery.swift`. Actual
+Paper.deleting / exact canonical saga, ten canonical captured UUIDs (including
+generation and ownership), exact bounded canonical expected BLOB and genuine
+revoked Job.failed/paperDeleting history are prerequisites. Earlier success or
+original failure causes are still valid for existing deleting metadata helpers,
+never for this API. No failure argument, generic-cause fallback, legacy backfill,
+selector/store/transaction/cache/root or ordinary-abort caller changes.
+
+The late acknowledgment is a strict immutable extension preserving capture/facts,
+authority, complete executions, usableResult, usedPermitIDs, revoked status and
+namespace state. Parent-directed narrow admission also preserves usedOperationIDs:
+new cleanup/removal operation requests belong to the separate existing deleting
+metadata CAS boundary, not this late-producer acknowledgment. Completion and release
+of an already-recorded cleanup operation are policy-validated observations. Tests
+first record the synthetic closure/request using deleting CAS, then acknowledge
+completion/release here. This restriction avoids new codec/event accessors and
+avoids separate JSON-tag parsing; exactly the original three paths remain writable.
+Unknown retained permits require requested true debt; false requires no retained
+permits, pending removal or removal debt. Existing Paper debt is always OR-preserved.
+These typed observations remain METADATA, not physical closure or cleanup ACKs.
+
+One existing adapterWrite performs deleting CAS followed only by an optional
+exact-saga/full-identity debt-only 0->1 UPDATE. An unchanged debt avoids UPDATE.
+Paper status/saga/generation/reference and all other fields, Job failed/paperDeleting
+and all other fields except journal, counters and folder remain exact. Bounded
+typed readback and full-row comparisons are required. Actual write count is one
+CAS plus optionally one debt UPDATE (1/2), not ordinary failure's four writes:
+the debt-only UPDATE does not fire the mandatory Reader status trigger. Count is
+additional detection, never independent authority. Existing rowid/main exact-target
+write-scope and public shadow-potential observers are both retained `.nextTransaction`,
+validated before return and veto actual commit. Ordinary schema admission is narrowly
+factored, not weakened: user WITHOUT ROWID tables deny before effects; canonical FTS
+shadows are admitted while potential shadow writes remain vetoed. Schema/database-list
+stability is checked. Ignore/corruption/foreign writes and write-restore substitutions
+throw and roll back the actual writer, including trigger-issued provider markers.
+
+Added methods in `Tests/Product/ImportRecoveryPersistenceTests.swift`:
+- `testDeletingLateAbortUnknownPermitDebtAndRepeatedObservationsReopenExactHistory`
+- `testDeletingLateAbortExistingCleanupCompletionAllowsFalseAndNeverClearsDebt`
+- `testDeletingLateAbortRejectsEarlierSuccessAndFailureEvenWithValidRevokedMetadata`
+- `testDeletingLateAbortRejectsExpectedEncodingCaptureDivergenceRetryNewOperationsAndQuota`
+- `testDeletingLateAbortRejectsActualSagaAllTenIdentitiesStatesCausesAndPayloads`
+- `testDeletingLateAbortTriggerIgnoreCorruptionForeignWritesAndRestoreRollBackActualWriter`
+- `testDeletingLateAbortUserWithoutRowIDSchemaDeniedBeforeAnyEffects`
+- `testDeletingLateAbortLegacyNullNeverReconstructsAndPositiveBoundsPrecedeSQL`
+
+Fixtures use actual reserveJournaledImport -> actual beginDeletion -> readDeleting
+baseline. Unknown/repeated/clean observations are explicitly synthetic metadata.
+Tests cover true/false monotonic debt and no-unneeded-debt-write, prefix/reopen,
+terminal history exclusion, canonical saga and all ten identities including rebound,
+state/cause/type/NULL/oversize/noncanonical/noop/stale/divergence/facts and policy-denied
+Retry/new grant/result/dispatch, unchanged positive shipped 262144-byte bound,
+actual writer trigger marker/ignore/corrupt/debt/foreign row/folder/provider/counter
+and write-restore rollback. Existing tests are retained, including finalization
+contentless erasure (DELETE importJob), ordinary failure/schema/shadow coverage.
+
+No tests/build/gates/lint/formatter/commit/remote actions run by this implementation
+lane; parent owns every runtime verification, review, evidence and commit. No claim
+of actual physical ACK, full actor cutover, unfinished physical cleanup completion,
+Same-Job Retry, Story/Epic acceptance or end-to-end product completion. Actual
+producer owners must independently admit observations and execute physical cleanup;
+future actor receipt journaling/caller cutover remains a separate boundary.
+
+Quota-fixture follow-up (source-only): parent affected105 run1290 timed out after
+300 seconds with last progress15; this is incomplete, not verification. Parent
+reports targeted pgrep found no remaining owned XCTest process. The new quota
+method previously replayed/encoded every growing repeated-revoke prefix. It now
+uses the existing bounded raw-fixture pattern: encode one typed revoke, derive
+the positive canonical increment, calculate a finite repeat count (at most
+262145), append that genuine event using sorted-key JSON, and decode/encode the
+complete oversized history once with maximumInt. Exact canonical bytes and size
+are asserted; the fixture exceeds 262144 by at most one event increment. No quota
+weakening, skipped case, production codec change or timeout increase.
+
+Source inspection of `testDeletingLateAbortRejectsEarlierSuccessAndFailureEvenWithValidRevokedMetadata`
+and its fixture/readDeleting/casDeleting paths found sequential adapterRead and
+adapterWrite calls, not nested adapter access. Thus progress15 is consistent with
+the subsequent quadratic quota fixture, not evidence of a nested-access deadlock.
+No follow-up gate/build/test/formatter/commit run in this lane; parent verification
+remains pending and run1290 remains recorded as timed out.
+
+### Parent strict late-abort verification and independent review
+
+After bounded quota-fixture correction, all105 affected cases passed1291:
+51 persistence (eight new methods),35 lifecycle and19 startup. Every407 Product
+case passed1300 using --parallel --num-workers1 per-test process isolation; no
+skipped cases, quota reset or manual FD logical ACK. Fresh unsigned Release
+arm64/macOS15 native-aq BUILD SUCCEEDED1302, warnings retained, no app/helper
+binary execution. Review108 SOURCE-ONLY CLEAR / APPROVE, no actionable findings.
+The timed-out1290 receipt and its owned fixture are preserved; timeout is not a
+pass and no protected trial was repeated or expanded. Two-source binary diff
+against Spec0605dc0 SHA256:
+`524308ffcfd3663d3f9ff241f2a71f858f0a6211a2325bb55c1253177a222b3c`.
+Main legacy late-abort guard/finalization, Reader trigger, Package/project,
+policy/codec/lifecycle/physical roots and paired resource contracts stay unchanged.
+Actual producer observation, journaled actor caller cutover/cleanup, same-Job Retry
+and canonical Story/Epic acceptance remain unfinished; metadata cannot ACK them.
