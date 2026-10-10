@@ -51,3 +51,20 @@ Single/multiline/supported multipage/rotated/scaled selections preserve text/nat
 Both record kinds actual commit/readback, validation/storage failures, repeated/out-of-order result and real fresh store/app restart. Barrier save admission/commit/UI completion against deletion in both orders; no restored records, unrelated Paper intact. Conditional physical write/close/rename/commit races, held publisher and cleanup failure prove synchronous cleanup/drain, not mocked policy-only assertions. Actual keyboard/VoiceOver in actual Reader, no mocked-control acceptance.
 
 Architect45 COMMENT/WATCH, five-source read-only only; no writes/tests/gates/formatter/build/GUI/SDK/auth/network/credentials/commits. Done needs accepted prerequisites, exact APIs and real durable restart/delete/native accessibility evidence plus parent verification/independent review. Planning commit passes none.
+
+## Bounded complete native reveal correction
+
+Current ReaderAnnotationContext.reveal silently skips a saved rectangle when PDFKit
+cannot reconstruct its selection, then installs a partial overlay and navigates as if
+the saved native location were completely revealed. Reject that missing fragment with
+AnnotationError.invalidSelection before installing any overlay or navigating. Keep
+existing membership, page geometry, session and durable identity checks. This is not
+canonical AI geometry validation, PDF text recalibration or a new publication owner.
+Exact source scope: existing AnnotationInspector.swift and ReaderAnnotationBindingTests.swift.
+Owned windowless PDFKit fixtures may use its public PDFDocumentDelegate page-class hook
+to deterministically deny one later page selection after a genuine captured multi-page
+annotation; assert no partial overlay/navigation, no saved-record loss and no PDF rewrite.
+Also cover complete reveal and session revocation during reconstruction. Parent owns
+focused/full isolated tests, fresh unsigned build, independent review and local evidence.
+No visible renderer/accessibility/clipboard trial, live request, remote operation or
+Story acceptance is admitted or inferred; existing protected gates remain unfinished.
