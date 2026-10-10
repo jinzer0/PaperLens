@@ -5,8 +5,42 @@ import Foundation
 import ProviderRequest
 #endif
 
+struct ActualURLStageValidationEffects: Sendable {
+  let acquired: @Sendable (Int32) -> Void
+  let checkedClose: @Sendable (FileHandle) throws -> Void
+  static let actual = ActualURLStageValidationEffects(acquired: { _ in },
+    checkedClose: { try $0.close() })
+}
+
+private final class ActualURLStageValidationOwner: @unchecked Sendable {
+  let id = UUID()
+  let stage: ClosedHTTPSPDFStage
+  let lease: RequestResourceLease
+  var input: FileHandle?
+  init(stage: ClosedHTTPSPDFStage, lease: RequestResourceLease) {
+    self.stage = stage
+    self.lease = lease
+  }
+}
+
+private final class ActualURLStageValidationRoots: @unchecked Sendable {
+  static let shared = ActualURLStageValidationRoots()
+  private let lock = NSLock()
+  private var owners: [UUID: ActualURLStageValidationOwner] = [:]
+  func retain(_ owner: ActualURLStageValidationOwner) {
+    lock.withLock { owners[owner.id] = owner }
+  }
+  func releaseKnown(_ owner: ActualURLStageValidationOwner) {
+    owner.lease.close()
+    let removed = lock.withLock { owners.removeValue(forKey: owner.id) }
+    withExtendedLifetime(removed) {} // Destruction must occur outside arbitration.
+  }
+  var ids: Set<UUID> { lock.withLock { Set(owners.keys) } }
+}
+
 /// A capability for one already-reserved ImportJob, never a second importer.
 final class LibraryURLImportWriter: URLImportWriter, @unchecked Sendable {
+  static var rootedValidationIDs: Set<UUID> { ActualURLStageValidationRoots.shared.ids }
   let stagingDirectory: URL
   let identity: ImportIdentity
   let destinationFolderID: UUID?
@@ -15,6 +49,7 @@ final class LibraryURLImportWriter: URLImportWriter, @unchecked Sendable {
   private let lock = NSLock()
   private enum Phase { case admitted, publishing, failed, finished }
   private var phase = Phase.admitted
+  private var publicationClosureUnknown = false
   private var producer: Task<ClosedHTTPSPDFStage, any Error>?
   private var ownsNamespace = false
   var namespaceOwned: Bool { lock.withLock { ownsNamespace } }
@@ -60,7 +95,10 @@ final class LibraryURLImportWriter: URLImportWriter, @unchecked Sendable {
       lock.withLock { phase = .finished }
       return result
     } catch {
-      lock.withLock { phase = .failed }
+      lock.withLock {
+        if (error as? URLImportError) == .closureUnknown { publicationClosureUnknown = true }
+        phase = .failed
+      }
       throw error
     }
   }
@@ -77,7 +115,8 @@ final class LibraryURLImportWriter: URLImportWriter, @unchecked Sendable {
     guard let consumed else { throw URLImportError.writerUnavailable }
     guard consumed else { return }
     revoke()
-    var closureReason = reason
+    var closureReason: URLImportError = lock.withLock { publicationClosureUnknown }
+      ? .closureUnknown : reason
     let producer = lock.withLock { self.producer }
     if let producer {
       do { _ = try await producer.value }
@@ -87,10 +126,15 @@ final class LibraryURLImportWriter: URLImportWriter, @unchecked Sendable {
   }
 
   static func validate(_ stage: ClosedHTTPSPDFStage, directory: URL,
-    cancellation: ImportCancellation) throws {
+    cancellation: ImportCancellation, effects: ActualURLStageValidationEffects) throws {
     try cancellation.check()
-    guard stage.file.isFileURL,
+    guard stage.file.isFileURL, directory.isFileURL,
+      !stage.file.path(percentEncoded: false).utf8.contains(0),
+      !directory.path(percentEncoded: false).utf8.contains(0),
+      stage.file.withUnsafeFileSystemRepresentation({ $0 != nil }),
+      directory.withUnsafeFileSystemRepresentation({ $0 != nil }),
       stage.file.deletingLastPathComponent().standardizedFileURL == directory.standardizedFileURL,
+      directory.resolvingSymlinksInPath() == directory.standardizedFileURL,
       stage.file.resolvingSymlinksInPath() == stage.file.standardizedFileURL else {
       throw URLImportError.rejected
     }
@@ -98,28 +142,46 @@ final class LibraryURLImportWriter: URLImportWriter, @unchecked Sendable {
     guard stage.byteCount > 0, stage.byteCount <= authority.limit("pdfBytes") else {
       throw URLImportError.rejected
     }
-    let fd = stage.file.withUnsafeFileSystemRepresentation {
-      Darwin.open($0!, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+    let budget = try RequestResourceBudget(authority: authority, kind: "import")
+    let pool = try RequestResourcePool(authority: authority, kind: "import")
+    guard let lease = pool.acquire() else { throw URLImportError.capacity }
+    let owner = ActualURLStageValidationOwner(stage: stage, lease: lease)
+    ActualURLStageValidationRoots.shared.retain(owner)
+    let fd = stage.file.withUnsafeFileSystemRepresentation { path in
+      guard let path else { return Int32(-1) }
+      return Darwin.open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
     }
-    guard fd >= 0 else { throw URLImportError.rejected }
-    let input = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+    guard fd >= 0 else {
+      ActualURLStageValidationRoots.shared.releaseKnown(owner)
+      throw URLImportError.rejected
+    }
+    let input = FileHandle(fileDescriptor: fd, closeOnDealloc: false)
+    owner.input = input
+    effects.acquired(fd)
     var workError: (any Error)?
     do {
+      try cancellation.check()
       var info = stat()
       guard fstat(fd, &info) == 0, info.st_mode & S_IFMT == S_IFREG,
-        info.st_mode & 0o777 == 0o400, info.st_nlink == 1,
+        info.st_mode & 0o7777 == 0o400, info.st_nlink == 1,
+        info.st_uid == Darwin.getuid(),
         info.st_size == Int64(stage.byteCount) else { throw URLImportError.rejected }
-      let budget = try RequestResourceBudget(authority: authority, kind: "import")
       var hash = SHA256()
       var count = 0
       var first = true
       let clock = ContinuousClock()
       let started = clock.now
-      while let chunk = try input.read(upToCount: authority.limit("readBufferBytes")), !chunk.isEmpty {
+      while true {
         try cancellation.check()
         let elapsed = started.duration(to: clock.now).components
         try budget.observe("elapsedMs", value: Int(elapsed.seconds) * 1000
           + Int(elapsed.attoseconds / 1_000_000_000_000_000))
+        let next = try input.read(upToCount: authority.limit("readBufferBytes"))
+        try cancellation.check()
+        let afterRead = started.duration(to: clock.now).components
+        try budget.observe("elapsedMs", value: Int(afterRead.seconds) * 1000
+          + Int(afterRead.attoseconds / 1_000_000_000_000_000))
+        guard let chunk = next, !chunk.isEmpty else { break }
         try budget.observe("readBufferBytes", value: chunk.count)
         try budget.add("bodyBytes", delta: chunk.count)
         if first {
@@ -137,13 +199,26 @@ final class LibraryURLImportWriter: URLImportWriter, @unchecked Sendable {
         throw URLImportError.rejected
       }
       var pathInfo = stat()
-      guard lstat(stage.file.path, &pathInfo) == 0,
+      var finalInfo = stat()
+      guard fstat(fd, &finalInfo) == 0,
+        finalInfo.st_ino == info.st_ino, finalInfo.st_dev == info.st_dev,
+        finalInfo.st_size == info.st_size, finalInfo.st_mode == info.st_mode,
+        finalInfo.st_nlink == 1, finalInfo.st_uid == info.st_uid,
+        stage.file.withUnsafeFileSystemRepresentation({ path in
+          guard let path else { return Int32(-1) }
+          return Darwin.lstat(path, &pathInfo)
+        }) == 0,
         pathInfo.st_ino == info.st_ino, pathInfo.st_dev == info.st_dev,
-        pathInfo.st_size == info.st_size, pathInfo.st_mode == info.st_mode else {
+        pathInfo.st_size == info.st_size, pathInfo.st_mode == info.st_mode,
+        pathInfo.st_nlink == 1, pathInfo.st_uid == info.st_uid else {
         throw URLImportError.rejected
       }
+      try cancellation.check()
     } catch { workError = error }
-    do { try input.close() } catch { throw URLImportError.closureUnknown }
+    // A throwing checked close is uncertainty, not an acknowledgment. Leave the
+    // exact handle, original lease and immutable stage rooted; never retry/probe it.
+    do { try effects.checkedClose(input) } catch { throw URLImportError.closureUnknown }
+    ActualURLStageValidationRoots.shared.releaseKnown(owner)
     if let workError { throw workError }
     try cancellation.check()
   }

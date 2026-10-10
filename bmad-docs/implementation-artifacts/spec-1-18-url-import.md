@@ -238,3 +238,101 @@ Tests/Product/LibraryURLImportWriterTests.swift and this integration Spec. Paren
 review and commits; worker skips all tests/builds/format/commits/SDK/helper/renderer/live/
 paid/remote/trial execution. No new Package/schema/selector/pool/gauge/history or actual
 journal-owner cutover; this closes a physical ownership prerequisite without Story proof.
+
+## Actual closed-stage validation FD/quota prerequisite
+
+Forward dependency after committed Spec `ffedb34` and baseline `5436b8f378`:
+the actual LibraryURLImportWriter validator used an ARC-closing read handle and no
+import-pool admission. A throwing checked close lost the physical handle at stack
+exit. This repair is separate from the completed HTTP producer ownership repair
+(`90b7189`); it does not reopen that audit or complete the full journal cutover.
+
+Required internal API (no default effects or compatibility overload):
+`static func validate(_ stage: ClosedHTTPSPDFStage, directory: URL,
+cancellation: ImportCancellation, effects: ActualURLStageValidationEffects) throws`.
+Immutable Sendable effects expose `acquired: @Sendable (Int32) -> Void` and
+`checkedClose: @Sendable (FileHandle) throws -> Void`; `.actual` observes nothing
+on acquisition and calls the real `FileHandle.close()` on close. Parent binds the
+single LocalLibraryLifecycle production caller with `effects: .actual`.
+
+Before admission/open, reject non-file/foreign directory, decoded NUL, missing
+filesystem representation, symlink path and cancelled input. Path rejection uses
+the fixed safe URLImportError.rejected, never user-path error projection. Existing
+ProviderRequest numeric authority and nonblocking import pool remain unchanged.
+Admission precedes open. A private operation root owns immutable stage/id and the
+original lease before effects. Open uses O_RDONLY/O_NOFOLLOW/O_NONBLOCK/O_CLOEXEC;
+install a closeOnDealloc:false FileHandle in the root before observation/fstat/read.
+No-FD failure explicitly releases the unused lease. Post-open validation rechecks
+actual descriptor type/400 mode/current UID/single link/size, signature, digest,
+budget, cancellation and after-read descriptor/path inode facts. Typed stage is
+not current read authority.
+
+Every post-open failure or success attempts checked close once. Unknown close
+outranks work failure and retains the exact handle/stage/original lease beyond
+stack/task/facade loss. No ARC close, retry, probe, manual ACK or namespace erase;
+no ready success. Known close releases the original lease/root outside the short
+reference-only registry lock, then returns/rethrows the original work outcome.
+Only read-only rootedValidationIDs are exposed internally to fixtures.
+
+Authored tests in LibraryURLImportWriterTests use the existing private
+`stage(_:stall:)` URLProtocol download helper to obtain real sealed stages; no
+synthetic/public stage initializer. `URLValidationObservation.effects(failClose:
+cancelOnOpen:)` captures numeric FD/read flags/mode while valid and attempts a
+real close unless injecting failure before close. Cases cover known-close success
+and publication reopen, tampered digest/magic/mode/type/missing file, original
+signature/cancellation errors, post-open cancellation, invalid directory/NUL/
+foreign paths and effect-free exhausted actual capacity. Invalid stage metadata
+cannot be manufactured through the private stage initializer; owned-stage
+filesystem tampering supplies the negative content/type cases instead.
+
+`testUnknownValidationCloseRetainsActualReadFDStageAndQuotaAfterFacadeLoss`
+creates exactly one irreversible validator debt, verifies a still-open read FD
+after validation frame/task/writer/lifecycle loss, actual declared global capacity,
+stage retention and closureUnknown priority over cancellation. Manual OS fixture
+FD cleanup is not logical acknowledgment; the root and lease remain. The fixture
+does not remove its unknown owned namespace. It is direct validator evidence,
+not injected actual lifecycle no-ready/debt integration proof by itself. Parent
+added an explicit owned-validation fixture factory and a separate actual lifecycle
+regression, as recorded below; the production factory still binds actual close.
+
+Isolation requirement for parent gates: irreversible validator/HTTP unknown-close
+cases execute in distinct fresh test processes. Parent used SwiftPM per-test
+process mode `--parallel --num-workers 1`, including every selected test and all
+three irreversible cases. No case was skipped, quota reset, fake ACK or relaxed
+capacity introduced. Running these cases together in one process would retain
+the declared cap-two pool before later ordinary imports.
+
+Worker evidence: source inspection and authored changes only; all tests/builds/
+gates/lint/format/commits skipped under the assignment. Parent owns production
+binding, verification/review/commit. Exactly three worker-writable paths are this
+Spec, Application/LibraryURLImportWriter.swift and its Product test file under the
+integration worktree. HTTP/DB/journal/policy and root documents are unchanged.
+False Story completion, P1/timing/profile/resource-isolation claims remain false;
+full journal-owner cutover and physical UI/production evidence remain pending.
+
+### Parent integration and verification — actual URL validation lifetime
+
+Parent bound the sole lifecycle validation call through immutable required effects,
+with `.actual` in production and existing copy fixtures. The explicit internal
+owned-validation factory injects checked-close failure only for owned test inputs.
+A sixth new test invokes actual writer publication, then aborts with `.cancelled`,
+and verifies not-ready state, GRDB cleanup debt/reopen, unchanged stage bytes,
+retained actual FD/lease/root after facade loss and denied namespace removal.
+Deletion denial in this fixture is `agentPurgeUnavailable`, not successful purge
+or proof of physical closure. Manual numeric-FD cleanup is never logical ACK.
+
+Review102 initially found P1: a later abort reason could downgrade publication
+closureUnknown. Parent made that uncertainty sticky under the existing writer
+lock and changed the actual lifecycle regression to exercise cancellation abort.
+Narrow rereview102 returned SOURCE-ONLY CLEAR / APPROVE, findings empty.
+Earlier passing evidence remains recorded: focused26 artifact1228, focused27
+artifact1230, Product384 artifact1237 and unsigned native-al artifact1239.
+Final focused27 passed artifact1241; all384 Product tests passed artifact1244
+with `--parallel --num-workers 1 --filter ProductTests`, no skipped tests.
+Fresh unsigned Release arm64/macOS15 native-am BUILD SUCCEEDED artifact1245;
+application/helper binaries were not executed and warnings were not suppressed.
+Three-source binary diff against committed Specffedb34 has SHA256
+`bca0a181783823cf044a014a4072dc61070cf90c4c5a66bb2fc71f49dea84887`.
+Package/project, HTTP adapter, DB/journal/policy and paired resource contracts
+remain unchanged. Full physical-receipt journal cutover, same-Job Retry, profile,
+helper/runtime, physical UI and Story acceptance remain unproved.

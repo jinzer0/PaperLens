@@ -27,10 +27,10 @@
   ],
   "verification": {
     "productUnion": {
-      "command": "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --filter ProductTests",
-      "tests": 378,
+      "command": "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --parallel --num-workers 1 --filter ProductTests",
+      "tests": 384,
       "failures": 0,
-      "output": "artifact://1220",
+      "output": "artifact://1244",
       "evidence": "Real GRDB transactions, owned synthetic files and actual local FIFO IO/close/peer metadata/EPIPE; mocked provider/HTTP transport and synthetic windowless PDFKit conversions. Not authenticated provider, app UI, SDK producer or PDFium execution."
     },
     "nativeCompilation": {
@@ -38,11 +38,11 @@
       "configuration": "Release",
       "architecture": "arm64",
       "minimumOS": "15.0",
-      "derivedData": ".build/product-native-compile-20261010-ak",
+      "derivedData": ".build/product-native-compile-20261010-am",
       "codeSigningAllowed": false,
       "result": "BUILD SUCCEEDED",
-      "rawOutput": "artifact://1221",
-      "output": "artifact://1221",
+      "rawOutput": "artifact://1245",
+      "output": "artifact://1245",
       "applicationAndHelperBinariesExecuted": false,
       "warnings": "AppIntents metadata skipped, PDFium debug-map duplicate/missing-symbol warnings and an unnecessary-await Swift warning remain; no warning suppression or debug-symbol repair claimed."
     },
@@ -295,6 +295,26 @@
     "visibleUIOrAccessibilityVerified": false,
     "runtimeParsingOrCalibrationVerified": false,
     "helperExecuted": false,
+    "storyAccepted": false
+  },
+  "actualURLStageValidationPhysicalOwnership": {
+    "specificationCommit": "ffedb34",
+    "sourceDiffAgainstSpecificationSha256": "bca0a181783823cf044a014a4072dc61070cf90c4c5a66bb2fc71f49dea84887",
+    "sourceScope": ["PaperLensApp/Application/LibraryURLImportWriter.swift", "PaperLensApp/Application/LocalLibraryLifecycle.swift", "Tests/Product/LibraryURLImportWriterTests.swift"],
+    "focusedTests": {"tests": 27, "failures": 0, "urlTests": 13, "writerTests": 14, "newTestMethods": 6, "output": "artifact://1241"},
+    "productUnion": {"tests": 384, "failures": 0, "output": "artifact://1244", "processMode": "SwiftPM --parallel --num-workers 1; every Product test invoked in isolated per-test processes", "testsSkipped": 0},
+    "nativeCompilation": {"result": "BUILD SUCCEEDED", "output": "artifact://1245", "derivedData": ".build/product-native-compile-20261010-am", "codeSigningAllowed": false, "applicationAndHelperBinariesExecuted": false},
+    "preservedPreCorrectionVerification": {"focused26": "artifact://1228", "focused27": "artifact://1230", "product384": "artifact://1237", "nativeAl": "artifact://1239"},
+    "review": "agent://102-URLValidationLifetimeIntegrity: final SOURCE-ONLY CLEAR / APPROVE; initial P1 abort-reason uncertainty downgrade resolved by locked irreversible publicationClosureUnknown and actual cancellation-abort regression",
+    "evidence": "Existing import quota admitted before readonly nofollow/nonblocking open; independently rooted original FD/lease/stage, once-only checked close, unknown retained after facade loss. Actual writer publish/abort route denies ready publication, preserves namespace and GRDB debt on cancellation abort after validation uncertainty; missing Agent purge still denies deletion. All three irreversible debt cases execute without quota reset, fake ACK or skipped tests.",
+    "actualReadFDAndQuotaRetentionVerified": true,
+    "actualLifecycleUncertaintyAndNamespaceRetentionVerified": true,
+    "manualFixtureFDClosureIsOwnerAcknowledgment": false,
+    "deletionDenialIsSuccessfulAgentPurge": false,
+    "liveHTTPOrAuthenticatedProviderUsed": false,
+    "durableJournaledPhysicalReceiptBridgeActivated": false,
+    "sameJobRetryUIActivated": false,
+    "helperOrRendererExecuted": false,
     "storyAccepted": false
   },
   "exactSagaBoundDeletingImportHistory": {

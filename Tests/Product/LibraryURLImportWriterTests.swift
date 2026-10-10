@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import GRDB
 import ProviderRequest
@@ -35,6 +36,191 @@ final class LibraryURLImportWriterTests: XCTestCase, @unchecked Sendable {
       configuration: configuration, effects: .actual)
   }
 
+  func testActualValidationClosesOnceReleasesQuotaAndCanPublishReopen() async throws {
+    let db = try database()
+    let lifecycle = try await LocalLibraryLifecycle.open(database: db)
+    let writer = try await lifecycle.grantURLImportWriter(for: continued())
+    let closed = try await stage(writer)
+    let pool = try RequestResourcePool(authority: ProviderRequest(), kind: "import")
+    let before = pool.active
+    let roots = LibraryURLImportWriter.rootedValidationIDs
+    let observation = URLValidationObservation(pool: pool)
+    try LibraryURLImportWriter.validate(closed, directory: writer.stagingDirectory,
+      cancellation: ImportCancellation(), effects: observation.effects())
+    XCTAssertEqual(observation.snapshot.acquisitions, 1)
+    XCTAssertEqual(observation.snapshot.closeAttempts, 1)
+    XCTAssertEqual(observation.snapshot.activeAtOpen, before + 1)
+    XCTAssertEqual(observation.snapshot.activeAtClose, before + 1)
+    XCTAssertEqual(observation.snapshot.readMode, O_RDONLY)
+    XCTAssertEqual(observation.snapshot.permissions, 0o400)
+    XCTAssertEqual(pool.active, before)
+    XCTAssertEqual(LibraryURLImportWriter.rootedValidationIDs, roots)
+    // Never ask FileHandle for its descriptor after known close; publication
+    // independently reopens and validates the same real sealed stage.
+    _ = try await writer.publish(closed)
+    XCTAssertEqual(try db.libraryRecords().map(\.status), [.ready])
+    XCTAssertEqual(try Data(contentsOf: writer.stagingDirectory.appendingPathComponent("document.pdf")),
+      URLWriterFixture.bytes)
+  }
+
+  func testActualValidationKnownClosePreservesTamperAndSignatureErrors() async throws {
+    let db = try database()
+    let lifecycle = try await LocalLibraryLifecycle.open(database: db)
+    let pool = try RequestResourcePool(authority: ProviderRequest(), kind: "import")
+    for mutation in ["hash", "magic", "mode", "directory", "missing"] {
+      let writer = try await lifecycle.grantURLImportWriter(for: continued())
+      let closed = try await stage(writer)
+      if mutation == "directory" || mutation == "missing" {
+        try FileManager.default.removeItem(at: closed.file)
+        if mutation == "directory" {
+          try FileManager.default.createDirectory(at: closed.file, withIntermediateDirectories: false)
+        }
+      } else {
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: closed.file.path)
+        if mutation != "mode" {
+          var bytes = URLWriterFixture.bytes
+          bytes[mutation == "magic" ? 0 : bytes.count - 1] = 88
+          try bytes.write(to: closed.file)
+          try FileManager.default.setAttributes([.posixPermissions: 0o400], ofItemAtPath: closed.file.path)
+        }
+      }
+      let before = pool.active
+      let roots = LibraryURLImportWriter.rootedValidationIDs
+      let observation = URLValidationObservation(pool: pool)
+      XCTAssertThrowsError(try LibraryURLImportWriter.validate(closed, directory: writer.stagingDirectory,
+        cancellation: ImportCancellation(), effects: observation.effects())) { error in
+        if mutation == "magic" {
+          XCTAssertTrue(error is RequestContractError, "signature work error must not become closureUnknown")
+        } else { XCTAssertEqual(error as? URLImportError, .rejected) }
+      }
+      XCTAssertEqual(observation.snapshot.closeAttempts, mutation == "missing" ? 0 : 1)
+      XCTAssertEqual(observation.snapshot.acquisitions, mutation == "missing" ? 0 : 1)
+      XCTAssertEqual(pool.active, before)
+      XCTAssertEqual(LibraryURLImportWriter.rootedValidationIDs, roots)
+      try await writer.abort(reason: .rejected)
+    }
+  }
+
+  func testActualValidationCancellationAfterOpenClosesOnceAndReleasesLease() async throws {
+    let db = try database()
+    let lifecycle = try await LocalLibraryLifecycle.open(database: db)
+    let writer = try await lifecycle.grantURLImportWriter(for: continued())
+    let closed = try await stage(writer)
+    let cancellation = ImportCancellation()
+    let pool = try RequestResourcePool(authority: ProviderRequest(), kind: "import")
+    let before = pool.active
+    let roots = LibraryURLImportWriter.rootedValidationIDs
+    let observation = URLValidationObservation(pool: pool)
+    XCTAssertThrowsError(try LibraryURLImportWriter.validate(closed, directory: writer.stagingDirectory,
+      cancellation: cancellation, effects: observation.effects(cancelOnOpen: cancellation))) {
+      XCTAssertEqual($0 as? LocalLibraryError, .cancelled)
+    }
+    XCTAssertEqual(observation.snapshot.acquisitions, 1)
+    XCTAssertEqual(observation.snapshot.closeAttempts, 1)
+    XCTAssertEqual(pool.active, before)
+    XCTAssertEqual(LibraryURLImportWriter.rootedValidationIDs, roots)
+    try await writer.abort(reason: .cancelled)
+  }
+
+  func testActualValidationInvalidPathsCancellationAndCapacityHaveNoFDEffects() async throws {
+    let db = try database()
+    let lifecycle = try await LocalLibraryLifecycle.open(database: db)
+    let writer = try await lifecycle.grantURLImportWriter(for: continued())
+    let closed = try await stage(writer)
+    let pool = try RequestResourcePool(authority: ProviderRequest(), kind: "import")
+    let before = pool.active
+    let roots = LibraryURLImportWriter.rootedValidationIDs
+    let observation = URLValidationObservation(pool: pool)
+    for directory in [URL(string: "https://writer.invalid/foreign")!,
+      writer.stagingDirectory.appendingPathComponent("foreign"),
+      writer.stagingDirectory.appendingPathComponent("decoded\0NUL"), closed.file] {
+      XCTAssertThrowsError(try LibraryURLImportWriter.validate(closed, directory: directory,
+        cancellation: ImportCancellation(), effects: observation.effects())) {
+        XCTAssertEqual($0 as? URLImportError, .rejected)
+      }
+    }
+    let cancelled = ImportCancellation()
+    cancelled.cancel()
+    XCTAssertThrowsError(try LibraryURLImportWriter.validate(closed, directory: writer.stagingDirectory,
+      cancellation: cancelled, effects: observation.effects())) {
+      XCTAssertEqual($0 as? LocalLibraryError, .cancelled)
+    }
+    let authority = try ProviderRequest()
+    let capacity = authority.limit(authority.contract["pools"]["import"]["limit"].string)
+    var leases: [RequestResourceLease] = []
+    defer { for lease in leases { lease.close() } }
+    for _ in 0..<(capacity - before) { leases.append(try XCTUnwrap(pool.acquire())) }
+    XCTAssertThrowsError(try LibraryURLImportWriter.validate(closed, directory: writer.stagingDirectory,
+      cancellation: ImportCancellation(), effects: observation.effects())) {
+      XCTAssertEqual($0 as? URLImportError, .capacity)
+    }
+    XCTAssertEqual(pool.active, capacity)
+    XCTAssertEqual(observation.snapshot.acquisitions, 0)
+    XCTAssertEqual(observation.snapshot.closeAttempts, 0)
+    XCTAssertEqual(LibraryURLImportWriter.rootedValidationIDs, roots)
+    for lease in leases { lease.close() }
+    XCTAssertEqual(pool.active, before)
+    try await writer.abort(reason: .rejected)
+  }
+
+  // Permanent logical debt: run ONLY in a dedicated process, separate from the
+  // adapter's irreversible unknown-close test and all ordinary tests.
+  func testUnknownValidationCloseRetainsActualReadFDStageAndQuotaAfterFacadeLoss() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let db = try ProductDatabase.open(at: root)
+    // No namespace teardown: uncertainty does not permit erasing an owned stage.
+    var lifecycle: LocalLibraryLifecycle? = try await LocalLibraryLifecycle.open(database: db)
+    let intent = try await continued()
+    var writer: (any URLImportWriter)? = try await XCTUnwrap(lifecycle).grantURLImportWriter(for: intent)
+    let closed = try await stage(XCTUnwrap(writer))
+    let directory = try XCTUnwrap(writer).stagingDirectory
+    let authority = try ProviderRequest()
+    let pool = try RequestResourcePool(authority: authority, kind: "import")
+    let before = pool.active
+    let roots = LibraryURLImportWriter.rootedValidationIDs
+    let observation = URLValidationObservation(pool: pool)
+    let cancellation = ImportCancellation()
+    var validation: Task<Void, any Error>? = Task {
+      // Cancel after real open to prove close uncertainty outranks work failure.
+      try LibraryURLImportWriter.validate(closed, directory: directory, cancellation: cancellation,
+        effects: observation.effects(failClose: true, cancelOnOpen: cancellation))
+    }
+    do { try await validation?.value; XCTFail("unknown validation returned success") }
+    catch { XCTAssertEqual(error as? URLImportError, .closureUnknown) }
+    let fd = try XCTUnwrap(observation.snapshot.descriptor)
+    defer {
+      // Manual OS fixture cleanup is NOT logical ACK: root and quota remain.
+      XCTAssertEqual(Darwin.close(fd), 0)
+      XCTAssertEqual(pool.active, before + 1)
+      XCTAssertEqual(LibraryURLImportWriter.rootedValidationIDs.subtracting(roots).count, 1)
+      XCTAssertEqual(observation.snapshot.closeAttempts, 1)
+    }
+    validation = nil
+    writer = nil
+    lifecycle = nil
+    for _ in 0..<20 { await Task.yield() }
+    XCTAssertNotEqual(Darwin.fcntl(fd, F_GETFD), -1)
+    XCTAssertEqual(observation.snapshot.readMode, O_RDONLY)
+    XCTAssertEqual(observation.snapshot.permissions, 0o400)
+    XCTAssertEqual(observation.snapshot.closeAttempts, 1)
+    XCTAssertEqual(pool.active, before + 1)
+    XCTAssertEqual(LibraryURLImportWriter.rootedValidationIDs.subtracting(roots).count, 1)
+    XCTAssertEqual(try Data(contentsOf: closed.file), URLWriterFixture.bytes)
+    let capacity = authority.limit(authority.contract["pools"]["import"]["limit"].string)
+    var leases: [RequestResourceLease] = []
+    defer { for lease in leases { lease.close() } }
+    for _ in 0..<(capacity - before - 1) { leases.append(try XCTUnwrap(pool.acquire())) }
+    XCTAssertEqual(pool.active, capacity)
+    XCTAssertNil(pool.acquire())
+    XCTAssertThrowsError(try LibraryURLImportWriter.validate(closed, directory: directory,
+      cancellation: ImportCancellation(), effects: .actual)) {
+      XCTAssertEqual($0 as? URLImportError, .capacity)
+    }
+    XCTAssertEqual(observation.snapshot.closeAttempts, 1)
+    // Direct actual validator evidence only: this does not inject the lifecycle's
+    // publishing call or prove its uncertainty/no-ready transition.
+  }
+
   @MainActor
   func testPrepareCancelAndUnconsumedFactoryCannotReserve() async throws {
     let db = try database()
@@ -48,6 +234,48 @@ final class LibraryURLImportWriterTests: XCTestCase, @unchecked Sendable {
     do { _ = try await lifecycle.grantURLImportWriter(for: intent); XCTFail("cancelled intent granted") }
     catch { XCTAssertEqual(error as? URLImportError, .writerUnavailable) }
     XCTAssertTrue(try db.libraryRecords().isEmpty)
+  }
+
+  func testActualLifecycleUnknownValidationCannotPublishOrEraseItsNamespace() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let db = try ProductDatabase.open(at: root)
+    let pool = try RequestResourcePool(authority: ProviderRequest(), kind: "import")
+    let before = pool.active
+    let roots = LibraryURLImportWriter.rootedValidationIDs
+    let observation = URLValidationObservation(pool: pool)
+    var lifecycle: LocalLibraryLifecycle? = try await LocalLibraryLifecycle.openForOwnedURLValidationFixtures(
+      database: db, effects: observation.effects(failClose: true))
+    var writer: (any URLImportWriter)? = try await XCTUnwrap(lifecycle).grantURLImportWriter(for: continued())
+    let closed = try await stage(XCTUnwrap(writer))
+    let directory = try XCTUnwrap(writer).stagingDirectory
+    do { _ = try await XCTUnwrap(writer).publish(closed); XCTFail("uncertain validation published") }
+    catch { XCTAssertEqual(error as? URLImportError, .closureUnknown) }
+    let fd = try XCTUnwrap(observation.snapshot.descriptor)
+    defer {
+      // Physical fixture cleanup is not a logical receipt or quota acknowledgment.
+      XCTAssertEqual(Darwin.close(fd), 0)
+      XCTAssertEqual(pool.active, before + 1)
+      XCTAssertEqual(LibraryURLImportWriter.rootedValidationIDs.subtracting(roots).count, 1)
+    }
+    // A later cancellation must not downgrade the actual validator's unknown close.
+    try await XCTUnwrap(writer).abort(reason: .cancelled)
+    let record = try XCTUnwrap(db.libraryRecords().first)
+    XCTAssertEqual(record.status, .importFailed)
+    XCTAssertTrue(record.cleanupDebt)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: directory.appendingPathComponent("document.pdf").path))
+    XCTAssertEqual(try Data(contentsOf: closed.file), URLWriterFixture.bytes)
+    do { try await XCTUnwrap(lifecycle).delete(paperID: record.id); XCTFail("uncertain namespace erased") }
+    catch { XCTAssertEqual(error as? LocalLibraryError, .agentPurgeUnavailable) }
+    XCTAssertEqual(try db.libraryRecords().map(\.status), [.deletionFailed])
+    XCTAssertEqual(try Data(contentsOf: closed.file), URLWriterFixture.bytes)
+    writer = nil
+    lifecycle = nil
+    for _ in 0..<20 { await Task.yield() }
+    XCTAssertNotEqual(Darwin.fcntl(fd, F_GETFD), -1)
+    XCTAssertEqual(observation.snapshot.closeAttempts, 1)
+    XCTAssertEqual(pool.active, before + 1)
+    XCTAssertEqual(LibraryURLImportWriter.rootedValidationIDs.subtracting(roots).count, 1)
+    XCTAssertTrue(try XCTUnwrap(ProductDatabase.open(at: root).libraryRecords().first).cleanupDebt)
   }
 
   func testOneReservedIdentityPublishesRealClosedStageIntoConfirmedFolder() async throws {
@@ -203,6 +431,53 @@ final class LibraryURLImportWriterTests: XCTestCase, @unchecked Sendable {
     do { _ = try await download.value; XCTFail("prior revocation ignored") } catch {}
     try await writer.abort(reason: .cancelled)
     XCTAssertFalse(FileManager.default.fileExists(atPath: writer.stagingDirectory.path))
+  }
+}
+
+private final class URLValidationObservation: @unchecked Sendable {
+  struct Snapshot {
+    var descriptor: Int32?
+    var acquisitions = 0
+    var closeAttempts = 0
+    var activeAtOpen = 0
+    var activeAtClose = 0
+    var readMode: Int32 = -1
+    var permissions: mode_t = 0
+  }
+  private let lock = NSLock()
+  private let pool: RequestResourcePool
+  private var value = Snapshot()
+  init(pool: RequestResourcePool) { self.pool = pool }
+  var snapshot: Snapshot { lock.withLock { value } }
+  func effects(failClose: Bool = false, cancelOnOpen: ImportCancellation? = nil)
+    -> ActualURLStageValidationEffects {
+    ActualURLStageValidationEffects(acquired: { fd in
+      let active = self.pool.active
+      let flags = Darwin.fcntl(fd, F_GETFL)
+      var info = stat()
+      XCTAssertEqual(Darwin.fstat(fd, &info), 0)
+      XCTAssertNotEqual(flags, -1)
+      XCTAssertNotEqual(flags & O_NONBLOCK, 0)
+      XCTAssertNotEqual(Darwin.fcntl(fd, F_GETFD) & FD_CLOEXEC, 0)
+      self.lock.withLock {
+        self.value.descriptor = fd
+        self.value.acquisitions += 1
+        self.value.activeAtOpen = active
+        self.value.readMode = flags & O_ACCMODE
+        self.value.permissions = info.st_mode & 0o7777
+      }
+      cancelOnOpen?.cancel()
+    }, checkedClose: { handle in
+      let active = self.pool.active
+      // Read the descriptor only while it is valid, before actual checked close.
+      XCTAssertEqual(handle.fileDescriptor, self.snapshot.descriptor)
+      self.lock.withLock {
+        self.value.closeAttempts += 1
+        self.value.activeAtClose = active
+      }
+      if failClose { throw URLImportError.cleanupFailed }
+      try handle.close()
+    })
   }
 }
 

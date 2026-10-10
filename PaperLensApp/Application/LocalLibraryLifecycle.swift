@@ -126,6 +126,7 @@ public actor LocalLibraryLifecycle {
   nonisolated var readLeaseDatabase: ProductDatabase { database }
   private let agentPurge: (any AgentLibraryPurging)?
   private let copyEffects: ActualCopyEffects
+  private let validationEffects: ActualURLStageValidationEffects
   nonisolated let epoch = UUID()
   private var snapshots: [UUID: JobRecoveryPolicy.Snapshot] = [:]
   private var cancellations: [UUID: ImportCancellation] = [:]
@@ -135,12 +136,20 @@ public actor LocalLibraryLifecycle {
   public static func open(
     database: ProductDatabase, agentPurge: (any AgentLibraryPurging)? = nil
   ) async throws -> LocalLibraryLifecycle {
-    try await open(database: database, agentPurge: agentPurge, copyEffects: .actual)
+    try await open(database: database, agentPurge: agentPurge, copyEffects: .actual,
+      validationEffects: .actual)
   }
 
   static func openForOwnedCopyFixtures(database: ProductDatabase, effects: ActualCopyEffects)
     async throws -> LocalLibraryLifecycle {
-    try await open(database: database, agentPurge: nil, copyEffects: effects)
+    try await open(database: database, agentPurge: nil, copyEffects: effects,
+      validationEffects: .actual)
+  }
+
+  static func openForOwnedURLValidationFixtures(database: ProductDatabase,
+    effects: ActualURLStageValidationEffects) async throws -> LocalLibraryLifecycle {
+    try await open(database: database, agentPurge: nil, copyEffects: .actual,
+      validationEffects: effects)
   }
 
   nonisolated static var actualCopyDebts: [ActualCopyDebt] {
@@ -148,11 +157,12 @@ public actor LocalLibraryLifecycle {
   }
 
   private static func open(database: ProductDatabase, agentPurge: (any AgentLibraryPurging)?,
-    copyEffects: ActualCopyEffects) async throws -> LocalLibraryLifecycle {
+    copyEffects: ActualCopyEffects, validationEffects: ActualURLStageValidationEffects)
+    async throws -> LocalLibraryLifecycle {
     // Allocate Main's lifetime epoch once, before recovery, and expose no owner until
     // all registered job kinds and library validation have completed successfully.
     let lifecycle = LocalLibraryLifecycle(database: database, agentPurge: agentPurge,
-      copyEffects: copyEffects)
+      copyEffects: copyEffects, validationEffects: validationEffects)
     let epoch = lifecycle.epoch
     try await Task.detached {
       let recovery = ProductJobRecovery(database: database)
@@ -163,10 +173,11 @@ public actor LocalLibraryLifecycle {
   }
 
   private init(database: ProductDatabase, agentPurge: (any AgentLibraryPurging)?,
-    copyEffects: ActualCopyEffects) {
+    copyEffects: ActualCopyEffects, validationEffects: ActualURLStageValidationEffects) {
     self.database = database
     self.agentPurge = agentPurge
     self.copyEffects = copyEffects
+    self.validationEffects = validationEffects
   }
 
   public func list() async throws -> [LibraryRecord] {
@@ -239,9 +250,10 @@ public actor LocalLibraryLifecycle {
     guard let snapshot = snapshots[identity.paperID] else { throw URLImportError.writerUnavailable }
     let lineage = snapshot.current.lineage
     try writer.assertCurrent()
+    let validationEffects = validationEffects
     try await Task.detached {
       try LibraryURLImportWriter.validate(stage, directory: writer.stagingDirectory,
-        cancellation: writer.cancellation)
+        cancellation: writer.cancellation, effects: validationEffects)
     }.value
     try writer.assertCurrent()
     let result = JobRecoveryPolicy.Result(id: identity.attempt.uuidString)
