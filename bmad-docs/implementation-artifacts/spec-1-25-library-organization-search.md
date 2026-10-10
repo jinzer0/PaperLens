@@ -83,3 +83,32 @@ isolated Product449/zero `artifact://1470`; fresh unsigned native-bc BUILD SUCCE
 Semantic projection and mounted source are not rendered native/VoiceOver delivery,
 actual keyboard/focus/contrast/scaling or physical restart/P6 proof. No app/helper binary,
 protected SDK/provider/renderer trial or remote action. Story/Epic false,0/26 unchanged.
+
+## Bounded synchronous organization action admission
+
+Assessment137 inspected this Spec, LibraryBrowserView.swift, existing
+LibraryOrganizationTests.swift and the established ImportConfirmationView admission
+pattern. Actual editor callbacks lack synchronous guards before save/revalidation Tasks
+or Cancel dismissal. Declarative disabled-state propagation is not callback admission;
+delivered consecutive callbacks must obey the existing Cancel/no-write and in-flight
+save/dismissal restriction. This is source ordering evidence, not observed native events.
+Exact source scope: LibraryBrowserView.swift and existing LibraryOrganizationTests.swift.
+One internal production-used OrganizationEditorInteraction replaces busy/failed state
+with phases editing/saving/failed/revalidating/closing. beginSave only editing;
+beginRevalidate only failed; beginCancel only editing/failed and terminal closing.
+Every button begins with mutating admission before draft capture/Task/dismiss effect.
+Saving completion transitions closing before successful dismiss, or failed on failure;
+revalidation installs current observed/value/tags before reopening editing, or returns
+failed. Completion in other phases denies. Disappearance invalidates to closing.
+Derive busy/failed/blocked projections; preserve failure visibility while revalidating.
+Only saving/revalidating display existing Korean pending cues; closing never claims a
+save. No second failure mirror/controller/durable owner, policy or service/CAS/query
+change. These are UI continuation fences, never positive write/database authority.
+Parent uses the exact production value plus existing owned GRDB/service fixtures for
+Cancel→Save zero commands/unchanged committed values, Save→Cancel/duplicate denial,
+failed Save→explicit current-value revalidation→new explicit Save, failed revalidation
+and terminal/obsolete-completion denial. No native interleaving/VoiceOver/mouse claims.
+Permitted isolated focused/full tests, unsigned compile, independent delta review and
+local evidence commit. Retain pending-cue receipt55dd7c7 and resolved CAS/query/Retry.
+No protected app/helper/SDK/provider/renderer trial, credentials or remote operation;
+full objective/0-of-26 and visible accessibility/physical restart/P6 limits unchanged.
