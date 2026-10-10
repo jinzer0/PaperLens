@@ -1570,3 +1570,84 @@ URL/DB/journal/policy/schema/membership/paired contracts and actual copier
 completion stay unchanged. This proves only checked private-path cleanup; actor
 journal/Retry, same-UID isolation/ABA, production Agent purge and Story acceptance
 remain unfinished and unclaimed.
+
+## Coordinated local/URL owner-to-journal cutover
+
+After verifiedc3b1abc, consume the existing contract92 (not a renewed audit) using
+the implemented sole-GRDB reservation/append/publication/failure/deletion primitives,
+actual local copier completion96906de, checked namespace absencec3b1abc, and actual
+HTTPS/validation lifetime roots90b7189/e8bf535. Implement local and URL cutover
+together: no optional journal, missing-history memory-success fallback, separate
+policy machine or partial production activation. Same-Job Retry remains separate.
+The current fixed ordinary failure mapping in a760a9f (.failed for cancelled too)
+overrides the older advisory contract92 mapping; strict deleting late abort remains
+failed/paperDeleting and usedOperationIDs-preserving7fe4daa. Contentless tombstone
+and final importJob/history deletion remain the privacy contract.
+
+Replace mutable snapshots/synchronous apply with acknowledged ImportRecoveryRecord
+captures and snapshot derivation. Per-Paper FIFO transition admission spans detached
+database work through committed record installation, never producer/network/copy
+or drain waits. Immediate cancellation/read revocation does not wait for that gate;
+subsequent transitions queue. SQL/FS remain offactor and MainActor reader callbacks
+remain outside all database/registry arbitration. Never install an older callback
+over a newer acknowledged record or use serialized history as read authority.
+
+Reservation captures explicit SHA/folder facts and commits reserveJournaledImport
+before source/scope/namespace/network effects. Actual producer rooting/start gate
+and durable writer-open acknowledgment precede effects. Local actual completion
+and URL actual file-close plus final network-drain plus validation-close receipt
+are independently retained in their existing physical roots until exact durable
+acknowledgment. Unknown original FD/scope/lease/stage obligations remain permanent.
+Do not infer either URL closure from reason enums or task terminal status; existing
+sticky publication uncertainty remains irreversible. Receipt callbacks/UUIDs and
+memory stages are fencing data, not manufactured authorization. No second pool,
+budget/selector/database or permanent registry for acknowledged known receipts.
+
+Publication records real closed-validated observation, acquires publication and
+records rename admission before physical move. Reuse publishJournaledImport for
+actual move plus success suffix/SQL/readback in one writer transaction. Parent
+removes obsolete reserveImport and updates owned legacy fixtures to explicit
+NULL-history inserts through existing adapterWrite/insertImport; no compatibility
+alias. Actual publication receipts must distinguish move/commit outcome: SQL rollback
+cannot undo move. Retain bytes and actual receipt on failed acknowledgment; verify
+exact committed ready/current-history state before cleanup. Late cancellation never
+rewrites committed success; independently admitted Delete still fences/drains.
+
+Abort consumes actual correlated producer completion. Ordinary running failure uses
+recordJournaledImportFailure; deleting late abort uses its exact saga and strict
+paperDeleting-only primitive, never rewrites retained success/original failure.
+Persist fresh cleanup request before actual removal; persist matching completion
+and release only afterwards. New cleanup operations enter existing separate deleting
+CAS before the strict late-abort completion boundary. Unknown prohibits cleanup,
+release and removal. Failures to persist are surfaced and retain actual receipt/
+obligation; no try?-discard of operational journal writes or fake restored ACK.
+
+Deletion returns acknowledged durable capture or explicitly legacy NULL history
+without reconstruction. Current/previous genuine capture/saga is restored, not
+re-created from row values. Persist cleanup/removal admissions before effects and
+actual completion afterwards. Add exact finalization transaction that validates
+and appends successful namespaceRemovalFinished, bounded readback, then performs
+existing terminal cascade/tombstone/importJob erasure atomically. Do not permanently
+retain full journal or turn earlier terminal execution into paperDeleting. Legacy
+deletion remains explicitly non-retryable as Import, with actual existing drains
+and no fabricated history. Agent:nil still denies successful deletion truthfully.
+
+Before every new physical admission, pre-encode correlated success/abort/deletion
+terminal branches and preserve terminal headroom under the existing262144 serialized
+metadata quota. Exhaustion denies new work but cannot erase outstanding physical
+obligations or receipts. No new allocator/RSS/enforcement profile or history pruning.
+Existing public signatures and caller-confirmed input stay intact. No production
+SDK/live/paid/helper/renderer/trial execution, old credentials/CODEX_HOME/user PDF,
+remote/release/migration permission relaxation or Story acceptance is included.
+
+Implementation lane owns exactly five source files: LocalLibraryLifecycle.swift,
+LibraryURLImportWriter.swift, HTTPSPDFImportAdapter.swift, ProductDatabase.swift and
+ProductDatabase+ImportRecovery.swift. Parent owns this Spec, membership if needed,
+all directly affected tests/legacy fixture updates, gates/review/evidence/commits.
+No new source file or abstraction outside these existing owners. Keep working
+imports end to end; deliver coherent local+URL+failure+deletion cutover, not stubs.
+Parent verifies actual owned local and URLProtocol flows, every existing Product
+case in per-test isolated processes, durable reopen/startup/legacy ineligibility,
+cancel/delete both race orders, failed close/rename/CAS/finalization receipts,
+immutable prefixes/fresh identity denial, false cleanup/absence and no resurrection.
+Unsigned native compile is separate from app/helper/runtime/Story certification.
