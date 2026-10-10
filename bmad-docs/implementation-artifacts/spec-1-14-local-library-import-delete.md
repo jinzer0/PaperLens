@@ -930,3 +930,73 @@ canonical bound/full-lineage rejection and ignore/corruption/unrelated-column
 trigger whole-command rollback. Run focused persistence/lifecycle/startup coverage
 and all Product tests in per-test isolated processes, then fresh unsigned native
 compilation; no app/helper/SDK/renderer/live/paid/protected trial or remote action.
+
+### Authored command bridge (parent verification pending)
+
+Authored against committed Spec 8a719c8 following verified implementation e8bf535.
+The four-file slice now connects actual `beginDeletion` to genuine durable history
+in its existing sole `queue.write`. `boundedDeletionJobs` first performs SQL CASE
+type/size admission at the shipped 262144-byte metadata quota, then captures full
+rows through the existing deterministic `deletionJobs`; oversized/nonBLOB payloads
+are never materialized by the command's full-row query. Finalization and failure
+bookkeeping retain their existing full-row capture and erasure contracts.
+Every nonNULL history is restored before operational changes. NULL remains NULL.
+`readImportRecoveryBeforeDeletion` obtains identity/facts from canonical captured
+history, verifies all ten IDs against actual joined rows, and uses ordinary restore
+for nondeleting commands. Its narrow existing-saga branch admits only actual
+deleting/deletionFailed with canonical matching saga and already-revoked terminal
+execution/cause. Public ordinary/deleting guards and fixed seven-cause mapping are
+unchanged. Unsupported pending commands and mismatched operational states fail.
+
+`revokeImportRecoveryForBeginDeletion` is a caller-Database-only transition hook:
+it validates the exact admitted old BLOB after operational mutations without
+pretending that old history was already revoked, records only policy `.revoke`,
+requires a genuine immutable extension, and updates by exact bytes, ten-ID lineage
+and deleting saga. Typed bounded readback must equal the canonical replacement
+and preserve full Paper/Job rows apart from the acknowledged journal column.
+The outer command allows journal differences only for returned exact acknowledgments;
+all existing running-only failed/paperDeleting and whole-row assertions remain.
+Succeeded/previously failed executions retain original state, result and cause;
+repeated same-saga/deletionFailed commands append valid same-snapshot observations.
+No Retry, permit/operation allocation, physical closure/cleanup/removal acknowledgment,
+actor cutover, diagnostic change or new transaction/store is introduced.
+
+Six new command tests cover running plus succeeded/seven fixed causes, retries and
+reopen/prefix/exact bytes, NULL legacy preservation, ten captured identity drifts,
+corrupt/nonBLOB/oversize/unrevoked prior saga/state/cause rejection, canonical pending
+and append-quota rejection, and journal/operational trigger whole-command rollback.
+Trigger cases retain complete before/after Paper/Job/provider rows across reopen;
+the public command has no caller transaction hook, so no provider marker mutation
+is fabricated. Existing manual-revoke metadata fixtures remain unchanged and
+synthetic terminal observations never assert physical ACK. Final deletion still
+erases importJob/full history and leaves only the existing contentless tombstone.
+
+No test/build/lint/formatter/commit was run in this authoring lane. Parent owns
+focused persistence/lifecycle/startup checks, isolated Product gates, fresh unsigned
+native compilation and review. Producer/actor receipt ownership and same-Job Retry
+remain unfinished; this bridge is actual durable admission revocation only.
+
+### Parent actual-command verification and independent review
+
+Initial affected88 run artifact1251 failed two test methods: the new fixture used
+forbidden terminate(.paperDeleting), and the older diagnostic fixture treated an
+opaque BLOB sentinel as eligible history. The former now obtains paperDeleting
+through actual beginDeletion plus exact deleting restore. The latter now asserts
+whole-command corruption denial and unchanged rows/opaque bytes, then restores
+the originallyNULL owned legacy fixture and verifies diagnostic ownership/reopen.
+No policy relaxation, decoder fallback, skipped test or invented history was added.
+The directly affected LocalLibraryLifecycleTests.swift is a parent-owned fifth
+source/spec path; its diagnostic assertions remain covered rather than removed.
+
+Final affected88 passed artifact1253:34 persistence (six new methods),35 lifecycle,
+19 startup. All390 Product tests passed artifact1258, with every test invoked by
+SwiftPM --parallel --num-workers1 per-test process isolation; no skipped cases,
+quota reset or manual-close logical ACK. Fresh unsigned Release arm64/macOS15
+native-an BUILD SUCCEEDED artifact1262; app/helper binaries were not executed and
+warnings were not suppressed. Review104 SOURCE-ONLY CLEAR / APPROVE, findings empty.
+Four-source binary diff against committed Spec8a719c8 SHA256:
+`9eeaa211e2506ea22bb19edce9b6059b5ac6679def64d0a25c9c6deb9ddeb793`.
+Package/project, policy/journal codec, lifecycle actor/physical roots, diagnostics
+schema, paired resource contracts and contentless finalization stay unchanged.
+This proves actual durable admission revocation, not producer receipt/actor
+cutover, physical closure/purge, same-Job Retry or Story/Epic acceptance.

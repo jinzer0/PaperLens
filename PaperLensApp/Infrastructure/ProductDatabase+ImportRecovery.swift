@@ -353,8 +353,88 @@ extension ProductDatabase {
     return readback
   }
 
+  /// Command-before admission only; public ordinary/deleting guards stay distinct.
+  static func readImportRecoveryBeforeDeletion(jobID: String, saga: UUID,
+    in db: Database) throws -> ImportRecoveryRecord? {
+    let maximum = ProductJobRecovery.maximumImportRecoveryJournalBytes
+    guard let payload = try Row.fetchOne(db, sql: """
+      SELECT typeof(recoveryJournal) AS payloadType,
+        CASE WHEN typeof(recoveryJournal) = 'blob' AND length(recoveryJournal) <= ?
+          THEN recoveryJournal ELSE NULL END AS payload
+      FROM importJob WHERE id = ?
+      """, arguments: [maximum, jobID]) else { throw ImportRecoveryPersistenceError.missingHistory }
+    if recoveryString(payload, "payloadType") == "null" { return nil }
+    guard recoveryString(payload, "payloadType") == "blob",
+      let bytes = Data.fromDatabaseValue(payload["payload"]), !bytes.isEmpty else {
+      throw ImportRecoveryPersistenceError.invalidHistory
+    }
+    let journal = try recoveryDecode(bytes, maximumBytes: maximum)
+    let identity = try journal.currentCapture().identity
+    guard identity.jobID.uuidString == jobID else { throw ImportRecoveryPersistenceError.invalidHistory }
+    let row = try recoveryRow(identity, maximumBytes: maximum, in: db)
+    try validateRecoveryIdentity(row, identity: identity)
+    let record: ImportRecoveryRecord
+    if ["deleting", "deletionFailed"].contains(recoveryString(row, "paperStatus") ?? "") {
+      guard recoveryString(row, "deletionID") == saga.uuidString else {
+        throw ImportRecoveryPersistenceError.invalidHistory
+      }
+      record = try recoveryRecord(row, identity: identity, maximumBytes: maximum)
+      try validateDeletingExecution(record.journal, row: row, identity: identity)
+    } else {
+      record = try readImportRecovery(identity, maximumBytes: maximum, in: db)
+      try validateRecoveryExecution(record.journal, row: row, identity: identity, revoked: false)
+    }
+    guard record.encoded == bytes else { throw ImportRecoveryPersistenceError.staleHistory }
+    return record
+  }
+
+  /// Sole beginDeletion transition: old bytes were admitted BEFORE operational
+  /// mutation. Do not route through deleting CAS, whose old journal is revoked.
+  static func revokeImportRecoveryForBeginDeletion(_ previous: ImportRecoveryRecord,
+    saga: UUID, in db: Database) throws -> ImportRecoveryRecord {
+    let maximum = ProductJobRecovery.maximumImportRecoveryJournalBytes
+    try validateExpectedRecovery(previous)
+    let identity = try previous.journal.currentCapture().identity
+    let replacement = try previous.journal.recording(.revoke)
+    let bytes = try recoveryEncode(replacement, maximumBytes: maximum)
+    guard try replacement.extends(previous.journal, maximumBytes: maximum) else {
+      throw ImportRecoveryPersistenceError.invalidHistory
+    }
+    let row = try recoveryRow(identity, maximumBytes: maximum, in: db)
+    try validateRecoveryIdentity(row, identity: identity)
+    guard recoveryString(row, "paperStatus") == "deleting",
+      recoveryString(row, "deletionID") == saga.uuidString,
+      try recoveryRecord(row, identity: identity, maximumBytes: maximum).encoded == previous.encoded else {
+      throw ImportRecoveryPersistenceError.staleHistory
+    }
+    try validateDeletingExecution(replacement, row: row, identity: identity)
+    let before = try deletionRecoveryRows(identity, maximumBytes: maximum, in: db)
+    let ids = recoveryIDs(identity)
+    try db.execute(sql: """
+      UPDATE importJob SET recoveryJournal = ?
+      WHERE recoveryJournal IS ? AND id = ? AND paperID = ? AND attempt = ? AND fence = ?
+        AND correlation = ? AND input = ? AND epoch = ? AND writer = ? AND publication = ?
+        AND EXISTS (SELECT 1 FROM paper p WHERE p.id = importJob.paperID AND p.generation = ?
+          AND p.status = 'deleting' AND p.deletionID = ?)
+      """, arguments: [bytes, previous.encoded, ids[2], ids[0], ids[3], ids[4], ids[5], ids[6],
+        ids[7], ids[8], ids[9], ids[1], saga.uuidString])
+    guard db.changesCount == 1 else { throw ImportRecoveryPersistenceError.staleHistory }
+    let readback = try readImportRecoveryForDeletion(identity, saga: saga, maximumBytes: maximum, in: db)
+    let after = try deletionRecoveryRows(identity, maximumBytes: maximum, in: db)
+    guard readback.encoded == bytes, sameRow(before.0, after.0),
+      sameRow(before.1, after.1, except: ["recoveryJournal"]) else {
+      throw ImportRecoveryPersistenceError.invalidHistory
+    }
+    return readback
+  }
+
   private static func validateDeletingExecution(_ journal: ImportRecoveryJournal,
     row: Row, identity: ImportIdentity) throws {
+    try validateRecoveryExecution(journal, row: row, identity: identity, revoked: true)
+  }
+
+  private static func validateRecoveryExecution(_ journal: ImportRecoveryJournal,
+    row: Row, identity: ImportIdentity, revoked: Bool) throws {
     let snapshot = try journal.snapshot()
     let captured = JobRecoveryPolicy.Authority(input: .source(version: identity.input.uuidString),
       config: .inapplicable, paper: .init(id: identity.paperID.uuidString,
@@ -364,20 +444,26 @@ extension ProductDatabase {
       reservation: .init(attempt: identity.attempt.uuidString, fence: identity.fence.uuidString,
         correlation: identity.correlation.uuidString), captured: captured)
     guard snapshot.role == .import, snapshot.job == identity.jobID.uuidString,
-      snapshot.revoked, snapshot.current.lineage == lineage else {
+      snapshot.revoked == revoked, snapshot.current.lineage == lineage else {
       throw ImportRecoveryPersistenceError.invalidHistory
     }
     switch snapshot.current.state {
     case .succeeded:
-      guard recoveryString(row, "jobState") == "succeeded", nullColumns(row, ["jobFailure"]) else {
+      guard (revoked || recoveryString(row, "paperStatus") == "ready"),
+        recoveryString(row, "jobState") == "succeeded", nullColumns(row, ["jobFailure"]) else {
         throw ImportRecoveryPersistenceError.invalidHistory
       }
     case .failed(let failure):
-      guard recoveryString(row, "jobState") == "failed",
+      guard (revoked || recoveryString(row, "paperStatus") == "importFailed"),
+        recoveryString(row, "jobState") == "failed",
         let code = recoveryString(row, "jobFailure"), deletionRecoveryFailure(code) == failure else {
         throw ImportRecoveryPersistenceError.invalidHistory
       }
-    case .pending, .running: throw ImportRecoveryPersistenceError.invalidHistory
+    case .pending: throw ImportRecoveryPersistenceError.invalidHistory
+    case .running:
+      guard !revoked, recoveryString(row, "paperStatus") == "importing",
+        recoveryString(row, "jobState") == "running",
+        nullColumns(row, ["jobFailure"]) else { throw ImportRecoveryPersistenceError.invalidHistory }
     }
   }
 

@@ -328,7 +328,11 @@ public final class ProductDatabase: @unchecked Sendable {
         guard state != .deleting, state != .deletionFailed else { throw ProductDatabaseError.invalidRecord }
         saga = UUID()
       }
-      let jobs = try Self.deletionJobs(paperID, in: db)
+      let jobs = try Self.boundedDeletionJobs(paperID, in: db)
+      let histories = try jobs.map { job -> ImportRecoveryRecord? in
+        guard let id = String.fromDatabaseValue(job["id"]) else { throw ProductDatabaseError.invalidRecord }
+        return try Self.readImportRecoveryBeforeDeletion(jobID: id, saga: saga, in: db)
+      }
       try db.execute(sql: """
         UPDATE paper SET status = 'deleting', deletionID = ?, pdfReference = NULL,
           deletionFailure = NULL WHERE id = ?
@@ -348,16 +352,28 @@ public final class ProductDatabase: @unchecked Sendable {
         after["pdfReference"] == DatabaseValue.null, after["deletionFailure"] == DatabaseValue.null else {
         throw ProductDatabaseError.invalidRecord
       }
-      let readback = try Self.deletionJobs(paperID, in: db)
+      let acknowledgments = try histories.map { history -> ImportRecoveryRecord? in
+        guard let history else { return nil }
+        return try Self.revokeImportRecoveryForBeginDeletion(history, saga: saga, in: db)
+      }
+      let readback = try Self.boundedDeletionJobs(paperID, in: db)
       guard jobs.count == readback.count else { throw ProductDatabaseError.invalidRecord }
-      for (before, after) in zip(jobs, readback) {
+      for (index, pair) in zip(jobs, readback).enumerated() {
+        let (before, after) = pair
+        var ignored: Set<String> = []
+        if let acknowledgment = acknowledgments[index] {
+          guard Data.fromDatabaseValue(after["recoveryJournal"]) == acknowledgment.encoded else {
+            throw ProductDatabaseError.invalidRecord
+          }
+          ignored.insert("recoveryJournal")
+        }
         if String.fromDatabaseValue(before["state"]) == "running" {
-          guard Self.sameDeletionRow(before, after, except: ["state", "failure"]),
+          guard Self.sameDeletionRow(before, after, except: ignored.union(["state", "failure"])),
             String.fromDatabaseValue(after["state"]) == "failed",
             String.fromDatabaseValue(after["failure"]) == "paperDeleting" else {
             throw ProductDatabaseError.invalidRecord
           }
-        } else if !Self.sameDeletionRow(before, after) { throw ProductDatabaseError.invalidRecord }
+        } else if !Self.sameDeletionRow(before, after, except: ignored) { throw ProductDatabaseError.invalidRecord }
       }
       return saga
     }
@@ -421,6 +437,24 @@ public final class ProductDatabase: @unchecked Sendable {
       throw ProductDatabaseError.invalidRecord
     }
     return row
+  }
+
+  private static func boundedDeletionJobs(_ paperID: UUID, in db: Database) throws -> [Row] {
+    let maximum = ProductJobRecovery.maximumImportRecoveryJournalBytes
+    // Admit type/size before any full-row capture, including trigger readbacks.
+    let payloads = try Row.fetchAll(db, sql: """
+      SELECT typeof(recoveryJournal) AS payloadType,
+        CASE WHEN typeof(recoveryJournal) = 'blob' AND length(recoveryJournal) <= ?
+          THEN recoveryJournal ELSE NULL END AS payload
+      FROM importJob WHERE paperID = ? ORDER BY id
+      """, arguments: [maximum, paperID.uuidString])
+    for row in payloads {
+      let type = String.fromDatabaseValue(row["payloadType"])
+      guard type == "null" || (type == "blob" && Data.fromDatabaseValue(row["payload"]) != nil) else {
+        throw ImportRecoveryPersistenceError.invalidHistory
+      }
+    }
+    return try deletionJobs(paperID, in: db)
   }
 
   private static func deletionJobs(_ paperID: UUID, in db: Database) throws -> [Row] {

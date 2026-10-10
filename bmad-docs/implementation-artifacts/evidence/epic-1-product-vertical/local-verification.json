@@ -28,9 +28,9 @@
   "verification": {
     "productUnion": {
       "command": "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --parallel --num-workers 1 --filter ProductTests",
-      "tests": 384,
+      "tests": 390,
       "failures": 0,
-      "output": "artifact://1244",
+      "output": "artifact://1258",
       "evidence": "Real GRDB transactions, owned synthetic files and actual local FIFO IO/close/peer metadata/EPIPE; mocked provider/HTTP transport and synthetic windowless PDFKit conversions. Not authenticated provider, app UI, SDK producer or PDFium execution."
     },
     "nativeCompilation": {
@@ -38,11 +38,11 @@
       "configuration": "Release",
       "architecture": "arm64",
       "minimumOS": "15.0",
-      "derivedData": ".build/product-native-compile-20261010-am",
+      "derivedData": ".build/product-native-compile-20261010-an",
       "codeSigningAllowed": false,
       "result": "BUILD SUCCEEDED",
-      "rawOutput": "artifact://1245",
-      "output": "artifact://1245",
+      "rawOutput": "artifact://1262",
+      "output": "artifact://1262",
       "applicationAndHelperBinariesExecuted": false,
       "warnings": "AppIntents metadata skipped, PDFium debug-map duplicate/missing-symbol warnings and an unnecessary-await Swift warning remain; no warning suppression or debug-symbol repair claimed."
     },
@@ -295,6 +295,27 @@
     "visibleUIOrAccessibilityVerified": false,
     "runtimeParsingOrCalibrationVerified": false,
     "helperExecuted": false,
+    "storyAccepted": false
+  },
+  "actualDeletionCommandJournalRevocation": {
+    "specificationCommit": "8a719c8",
+    "sourceDiffAgainstSpecificationSha256": "9eeaa211e2506ea22bb19edce9b6059b5ac6679def64d0a25c9c6deb9ddeb793",
+    "sourceScope": ["PaperLensApp/Infrastructure/ProductDatabase.swift", "PaperLensApp/Infrastructure/ProductDatabase+ImportRecovery.swift", "Tests/Product/ImportRecoveryPersistenceTests.swift", "Tests/Product/LocalLibraryLifecycleTests.swift"],
+    "focusedTests": {"tests": 88, "failures": 0, "persistenceTests": 34, "newTestMethods": 6, "lifecycleTests": 35, "startupTests": 19, "output": "artifact://1253"},
+    "preservedInitialFixtureFailures": {"tests": 88, "failedTestMethods": 2, "assertionFailures": 3, "output": "artifact://1251", "repair": "paperDeleting fixture now uses actual command instead of forbidden terminate; diagnostic opaque BLOB now proves corruption refusal and unchanged bytes before original NULL legacy fixture is restored."},
+    "productUnion": {"tests": 390, "failures": 0, "output": "artifact://1258", "processMode": "SwiftPM --parallel --num-workers 1; all Product cases invoked in isolated per-test processes", "testsSkipped": 0},
+    "nativeCompilation": {"result": "BUILD SUCCEEDED", "output": "artifact://1262", "derivedData": ".build/product-native-compile-20261010-an", "codeSigningAllowed": false, "applicationAndHelperBinariesExecuted": false},
+    "review": "agent://104-DeletionCommandHistoryIntegrity: SOURCE-ONLY CLEAR / APPROVE; four-source/Spec slice including parent diagnostic correction; no actionable finding",
+    "evidence": "Actual beginDeletion restores bounded genuine nonNULL captures before SQL changes, appends policy revoke with exact BLOB/full-lineage/canonical-saga fence and typed whole-row readback in the same sole writer transaction. Running-only paperDeleting, terminal state/cause/result preservation, same-saga repeated observations, NULL legacy preservation, actual command trigger rollback/reopen and final contentless erasure are verified.",
+    "actualDurableDeletionAdmissionRevocationVerified": true,
+    "legacyHistoryReconstructedOrBackfilled": false,
+    "allDeletingRowsForcedToPaperDeleting": false,
+    "lateProducerAbortAdmissionChanged": false,
+    "fullJournalRetainedAfterContentlessTombstone": false,
+    "physicalClosureOrPurgeAcknowledgedBySerialization": false,
+    "productionJournaledActorCutoverActivated": false,
+    "sameJobRetryUIActivated": false,
+    "helperOrRendererExecuted": false,
     "storyAccepted": false
   },
   "actualURLStageValidationPhysicalOwnership": {

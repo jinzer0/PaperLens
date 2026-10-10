@@ -888,7 +888,7 @@ final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
       let current = identity()
       try db.reserveImport(current, title: "owned diagnostic \(terminal)")
       try db.recordProgress(current, bytes: 17)
-      // Opaque owned history sentinel tests byte preservation, not journal bridge activation.
+      // An opaque owned sentinel is corruption, not an admitted recovery journal.
       let history = Data("owned retained history \(terminal)".utf8)
       try db.adapterWrite { sql in
         try sql.execute(sql: "UPDATE importJob SET recoveryJournal = ? WHERE id = ?",
@@ -907,6 +907,16 @@ final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(try ProductDatabase.open(at: root).libraryRecords()
           .first { $0.id == current.paperID }?.failure, "originalImportCause")
       }
+      let corruptBefore = try deletionRows(db, current.paperID)
+      XCTAssertThrowsError(try db.beginDeletion(current.paperID))
+      let corruptAfter = try deletionRows(db, current.paperID)
+      assertDeletionRowsEqual(corruptBefore, corruptAfter)
+      XCTAssertEqual(Data.fromDatabaseValue(corruptAfter[1]["recoveryJournal"]), history)
+      // Restore this originally NULL legacy fixture; no product backfill or decoder fallback.
+      try db.adapterWrite { sql in
+        try sql.execute(sql: "UPDATE importJob SET recoveryJournal = NULL WHERE id = ?",
+          arguments: [current.jobID.uuidString])
+      }
       let saga = try XCTUnwrap(db.beginDeletion(current.paperID))
       let before = try deletionRows(db, current.paperID)
       // Deleting list must not fall back to an original import failure or paperDeleting.
@@ -916,7 +926,7 @@ final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
       let after = try deletionRows(db, current.paperID)
       assertDeletionRowsEqual(before, after, paperExcept: ["status", "cleanupDebt", "deletionFailure"])
       XCTAssertEqual(String.fromDatabaseValue(after[0]["deletionFailure"]), reason)
-      XCTAssertEqual(Data.fromDatabaseValue(after[1]["recoveryJournal"]), history)
+      XCTAssertNil(Data.fromDatabaseValue(after[1]["recoveryJournal"]))
       XCTAssertEqual(String.fromDatabaseValue(after[1]["state"]), terminal == "running" ? "failed" : terminal)
       XCTAssertEqual(String.fromDatabaseValue(after[1]["failure"]),
         terminal == "running" ? "paperDeleting" : terminal == "failed" ? "originalImportCause" : nil)
