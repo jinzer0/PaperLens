@@ -45,16 +45,59 @@ final class ImportCancellation: @unchecked Sendable {
 
 enum ActualCopyEndpoint: Hashable, Sendable { case input, output }
 
+/// Fixture observation only; this value cannot attest closure to the lifecycle.
+struct ActualCopyCompletionObservation: Sendable {
+  enum Status: Equatable, Sendable { case neverStarted, closedUnvalidated, closedValidated, unknown }
+  let identity: ImportIdentity
+  let status: Status
+  let error: (any Error)?
+  let sha256: String?
+  let bytes: Int64?
+}
+
+private struct ActualClosedImportStage: Sendable {
+  let file: URL
+  let sha256: String
+  let bytes: Int64
+}
+
+private struct ActualCopyCompletion: Sendable {
+  enum Outcome: Sendable {
+    case neverStarted(any Error)
+    case closedUnvalidated(any Error)
+    case closedValidated(ActualClosedImportStage)
+    case unknown(ActualCopyOwner)
+  }
+  let identity: ImportIdentity
+  let outcome: Outcome
+
+  func matches(_ other: ImportIdentity) -> Bool {
+    identity.paperID == other.paperID && identity.generation == other.generation &&
+      identity.jobID == other.jobID && identity.attempt == other.attempt &&
+      identity.fence == other.fence && identity.correlation == other.correlation &&
+      identity.input == other.input && identity.epoch == other.epoch &&
+      identity.writer == other.writer && identity.publication == other.publication
+  }
+
+  var closureKnown: Bool {
+    switch outcome {
+    case .neverStarted, .closedUnvalidated, .closedValidated: return true
+    case .unknown: return false
+    }
+  }
+}
+
 struct ActualCopyEffects: Sendable {
   let beforeOpen: @Sendable (ActualCopyEndpoint, URL) throws -> Void
   let checkedClose: @Sendable (ActualCopyEndpoint, FileHandle) throws -> Void
   let startScope: @Sendable (URL) -> Bool
   let stopScope: @Sendable (URL) -> Void
+  let completed: @Sendable (ActualCopyCompletionObservation) -> Void
 
   static let actual = ActualCopyEffects(beforeOpen: { _, _ in },
     checkedClose: { _, handle in try handle.close() },
     startScope: { $0.startAccessingSecurityScopedResource() },
-    stopScope: { $0.stopAccessingSecurityScopedResource() })
+    stopScope: { $0.stopAccessingSecurityScopedResource() }, completed: { _ in })
 }
 
 /// A rooted operation owns physical obligations independently of the lifecycle facade.
@@ -355,6 +398,8 @@ public actor LocalLibraryLifecycle {
     let copyEffects = copyEffects
     var reserved = false
     var renamed = false
+    var producerStarted = false
+    var completion: ActualCopyCompletion?
     do {
       // Source title metadata is not accessed here; only the picker-supplied URL spelling.
       let title = String(source.deletingPathExtension().lastPathComponent.prefix(240))
@@ -364,23 +409,33 @@ public actor LocalLibraryLifecycle {
       reserved = true
       try apply(.writerClosure(lineage, permit: identity.writer.uuidString, .open),
         paperID: identity.paperID)
-      let digest = try await withTaskCancellationHandler {
-        try await Task.detached {
-          try Self.copyValidatedPDF(source: source, stage: stage, identity: identity,
-            database: database, cancellation: cancellation, effects: copyEffects)
-        }.value
+      producerStarted = true
+      let actualCompletion = await withTaskCancellationHandler {
+        let producerTask = Task.detached {
+          Self.copyValidatedPDF(source: source, stage: stage, identity: identity,
+            database: database, cancellation: cancellation, effects: copyEffects,
+            expectedSHA256: expectedSHA256)
+        }
+        return await producerTask.value
       } onCancel: { cancellation.cancel() }
+      guard actualCompletion.matches(identity) else { throw LocalLibraryError.producerClosureUnknown }
+      completion = actualCompletion
+      let closedStage: ActualClosedImportStage
+      switch actualCompletion.outcome {
+      case .neverStarted(let error), .closedUnvalidated(let error): throw error
+      case .unknown: throw LocalLibraryError.producerClosureUnknown
+      case .closedValidated(let stage): closedStage = stage
+      }
       let result = JobRecoveryPolicy.Result(id: identity.attempt.uuidString)
       try apply(.writerClosure(lineage, permit: identity.writer.uuidString,
         .closed(.validated(result))), paperID: identity.paperID)
-      if let expectedSHA256, digest != expectedSHA256 { throw FolderImportError.sourceChanged }
       try cancellation.check()
       try apply(.acquirePublication(lineage, writer: identity.writer.uuidString,
         permit: identity.publication.uuidString), paperID: identity.paperID)
       try apply(.rename(lineage, permit: identity.publication.uuidString), paperID: identity.paperID)
       do {
         try await Task.detached {
-          try database.publish(identity, stage: stage, final: final, sha256: digest,
+          try database.publish(identity, stage: closedStage.file, final: final, sha256: closedStage.sha256,
             destinationFolderID: destinationFolderID)
         }.value
         renamed = true
@@ -399,7 +454,10 @@ public actor LocalLibraryLifecycle {
     } catch {
       // Actual closure precedes cleanup/release. A failed guard after rename removes bytes
       // while its publication permit still prevents namespace deletion.
-      let closureKnown = (error as? LocalLibraryError) != .producerClosureUnknown
+      // A body error's label says nothing about physical endpoint closure. Only the
+      // correlated copier completion (or no producer invocation) authorizes cleanup.
+      let closureKnown = !producerStarted || (completion?.matches(identity) == true &&
+        completion?.closureKnown == true)
       if closureKnown, let snapshot = snapshots[identity.paperID],
         let permit = snapshot.permits.first, case .unknown = permit.closure {
         try? apply(.writerClosure(lineage, permit: permit.id, .closed(.unvalidated)),
@@ -543,21 +601,46 @@ public actor LocalLibraryLifecycle {
 
   private nonisolated static func copyValidatedPDF(
     source: URL, stage: URL, identity: ImportIdentity, database: ProductDatabase,
-    cancellation: ImportCancellation, effects: ActualCopyEffects
-  ) throws -> String {
-    try cancellation.check()
-    guard source.isFileURL, !source.path(percentEncoded: false).utf8.contains(0) else {
-      throw LocalLibraryError.invalidPDF
+    cancellation: ImportCancellation, effects: ActualCopyEffects, expectedSHA256: String?
+  ) -> ActualCopyCompletion {
+    // The only completion factory runs on the actual producer, after physical facts
+    // and retained obligations are settled. Observers never supply authority.
+    func completed(_ outcome: ActualCopyCompletion.Outcome) -> ActualCopyCompletion {
+      let observation: ActualCopyCompletionObservation
+      switch outcome {
+      case .neverStarted(let error):
+        observation = .init(identity: identity, status: .neverStarted, error: error, sha256: nil, bytes: nil)
+      case .closedUnvalidated(let error):
+        observation = .init(identity: identity, status: .closedUnvalidated, error: error, sha256: nil, bytes: nil)
+      case .closedValidated(let stage):
+        observation = .init(identity: identity, status: .closedValidated, error: nil,
+          sha256: stage.sha256, bytes: stage.bytes)
+      case .unknown:
+        observation = .init(identity: identity, status: .unknown,
+          error: LocalLibraryError.producerClosureUnknown, sha256: nil, bytes: nil)
+      }
+      effects.completed(observation)
+      return ActualCopyCompletion(identity: identity, outcome: outcome)
     }
-    let authority = try ProviderRequest()
-    let pool = try RequestResourcePool(authority: authority, kind: "import")
-    guard let lease = pool.acquire() else { throw LocalLibraryError.importCapacity }
+    let authority: ProviderRequest
+    let lease: RequestResourceLease
+    do {
+      try cancellation.check()
+      guard source.isFileURL, !source.path(percentEncoded: false).utf8.contains(0) else {
+        throw LocalLibraryError.invalidPDF
+      }
+      authority = try ProviderRequest()
+      let pool = try RequestResourcePool(authority: authority, kind: "import")
+      guard let acquired = pool.acquire() else { throw LocalLibraryError.importCapacity }
+      lease = acquired
+    } catch { return completed(.neverStarted(error)) }
     let owner = ActualCopyOwner(identity: identity, source: source, stage: stage, lease: lease,
       effects: effects)
     ActualCopyOwnership.shared.retain(owner)
     owner.scoped = effects.startScope(source)
     let fm = FileManager.default
     var hash = SHA256()
+    var copied: Int64 = 0
     var workError: (any Error)?
     do {
       var selected = stat()
@@ -602,7 +685,6 @@ public actor LocalLibraryLifecycle {
         created.st_uid == Darwin.getuid(), created.st_mode & 0o7777 == 0o600,
         created.st_nlink == 1, created.st_size == 0 else { throw LocalLibraryError.invalidPDF }
       var first = true
-      var copied: Int64 = 0
       let clock = ContinuousClock()
       let started = clock.now
       while true {
@@ -640,11 +722,16 @@ public actor LocalLibraryLifecycle {
     }
     guard !closureUnknown && inputClosed && outputClosed else {
       ActualCopyOwnership.shared.retainUnknown(owner, inputClosed: inputClosed, outputClosed: outputClosed)
-      throw LocalLibraryError.producerClosureUnknown
+      return completed(.unknown(owner))
     }
     ActualCopyOwnership.shared.releaseKnown(owner)
-    if let workError { throw workError }
-    try cancellation.check()
-    return hash.finalize().map { String(format: "%02x", $0) }.joined()
+    if let workError { return completed(.closedUnvalidated(workError)) }
+    do {
+      try cancellation.check()
+      let digest = hash.finalize().map { String(format: "%02x", $0) }.joined()
+      if let expectedSHA256, digest != expectedSHA256 { throw FolderImportError.sourceChanged }
+      guard copied > 0 else { throw LocalLibraryError.invalidPDF }
+      return completed(.closedValidated(.init(file: stage, sha256: digest, bytes: copied)))
+    } catch { return completed(.closedUnvalidated(error)) }
   }
 }

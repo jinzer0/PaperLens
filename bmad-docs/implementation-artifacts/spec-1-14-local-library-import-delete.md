@@ -1395,3 +1395,82 @@ run per-test isolated without skip/reset/manual ACK. URL writer/adapter, GRDB,
 journal/policy/schema/membership/contracts remain unchanged. No full journaled
 actor cutover, same-Job Retry, SDK/live/helper/renderer/trial/user-doc/credential,
 remote/release or Story acceptance is admitted by this bounded physical slice.
+
+### Explicit actual copier completion — source implementation, verification pending
+
+This bounded three-file change implements the above owner slice after Spec1e94cc4;
+it does not extend the prior407/native-aq receipts to the changed source. Parent
+owns all builds, tests, review and commits. No test/build/gate/lint/formatter,
+commit, remote, workflow, live/SDK/helper/renderer or protected trial ran in this
+implementation lane.
+
+`copyValidatedPDF(source:stage:identity:database:cancellation:effects:expectedSHA256:)`
+now returns nonthrowing private `ActualCopyCompletion`, with the full ten-field
+ImportIdentity and private nonserialized Outcome:
+`neverStarted(any Error)`, `closedUnvalidated(any Error)`,
+`closedValidated(ActualClosedImportStage)`, or `unknown(ActualCopyOwner)`.
+The private stage contains the actual file URL, SHA256 and positive Int64 bytes.
+Only the actual copier's local completion factory constructs these completions;
+no public constructor, encoded receipt, success default or observer authority is
+introduced. Before acquisition, cancellation/path/provider/pool failures return
+neverStarted. Once rooted, body errors preserve their original Error independently
+of its enum label. Original output-then-input checked close runs once per acquired
+endpoint. Any uncertain close retains the original owner and permanent debt with
+FDs, lease, scope and stage, outranking body failure. Known endpoints release the
+actual scope and lease outside arbitration before reporting. Confirmed SHA is
+checked inside the copier before closedValidated; mismatch is closedUnvalidated
+with sourceChanged. Post-close cancellation is unvalidated with cancelled.
+
+The actor records its producer invocation gate, awaits the nonthrowing detached
+producer through its cancellation handler, and correlates all identity fields
+before any completion-driven policy transition. Only closedValidated authorizes
+the existing validated writer closure and publication of that same actual stage.
+Catch cleanup uses the correlated completion, or the fact that no producer was
+invoked; a started operation without matching completion remains unknown. Later
+policy/publication errors cannot replace physical proof. Producer drains finish
+only after the awaited copier has returned. URL sticky uncertainty, original
+physical copy guards/progress/close ordering, GRDB and journal activation remain
+unchanged.
+
+Mandatory `ActualCopyEffects.completed` is bound explicitly by production and the
+existing sole OwnedCopyEffects constructor. It receives immutable read-only
+ActualCopyCompletionObservation(identity/status/error/optional SHA256/bytes), once
+per actual completion after release or retained-debt settlement. Fixture-only
+descriptor probes and pre-close fstat record timing, sealing and byte size; they
+do not authorize any runtime closure, retry or logical ACK. No global observation
+store or permanent known-completion registry is added.
+
+Authored tests (not run here): new
+`testActualBodyClosureUnknownLabelDoesNotOverrideKnownPhysicalClosure` injects the
+unchanged producerClosureUnknown error before output open, asserting original
+error observation, once-closed real input, released pool/scope, no namespace or
+FD debt, failed actual Paper/Job and clean reopen. New
+`testActualConfirmedHashMismatchClosesButNeverValidates` asserts real sealed-copy
+size, both actual closes before the unvalidated/sourceChanged observation, no
+Ready/hash/reference/debt, same failed identity/Job and clean reopen. Strengthened
+`testActualCopyCheckedEndpointCensusAndScopePoolRelease` checks one correlated
+validated completion, exact actual SHA/bytes, close-before-callback, immutable
+independent file and actual GRDB reopen. Existing full/partial unknown FD cases
+now assert exactly one unknown observation after facade loss, unchanged retained
+scope/pool/namespace and original permanent obligations; no additional unknown
+fixture is created. Malformed path and capacity tests assert neverStarted;
+existing output-open/cancel/once-close/delete coverage remains.
+
+Parent verification remains required with --parallel --num-workers1 and no skip,
+reset or manual ACK. This is physical local copier completion only, not whole
+actor journaling, same-Job Retry, Story acceptance or a product/profile claim.
+
+### Parent actual copier completion verification
+
+Affected121 all passed1310 (37 lifecycle including two new methods,51 persistence,
+19 folder,14 URL writer); every409 Product case passed1316 in per-test isolated
+--parallel --num-workers1 processes. No skipped tests, quota reset or manual FD
+logical ACK; original unknown fixtures remain invoked with no added debt fixture.
+Fresh unsigned Release arm64/macOS15 native-ar BUILD SUCCEEDED1317, warnings
+retained and app/helper binaries not executed. Review110 SOURCE-ONLY CLEAR /
+APPROVE, no findings, for actual physical completion prerequisite only.
+Two-source binary diff against Spec1e94cc4 SHA256:
+`4cf7d54eac337ae0d49c7bb9f103a5fa5c60c63149f6ec58f4d9ddd8d7e8d0a5`.
+GRDB/journal/policy/URL writer/adapter/schema/membership/paired contracts remain
+unchanged. Actual completion is not serialized read/cleanup/publication authority;
+whole journaled actor cutover and same-Job Retry/Story acceptance remain unfinished.

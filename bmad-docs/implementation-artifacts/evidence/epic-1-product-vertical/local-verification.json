@@ -28,9 +28,9 @@
   "verification": {
     "productUnion": {
       "command": "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --parallel --num-workers 1 --filter ProductTests",
-      "tests": 407,
+      "tests": 409,
       "failures": 0,
-      "output": "artifact://1300",
+      "output": "artifact://1316",
       "evidence": "Real GRDB transactions, owned synthetic files and actual local FIFO IO/close/peer metadata/EPIPE; mocked provider/HTTP transport and synthetic windowless PDFKit conversions. Not authenticated provider, app UI, SDK producer or PDFium execution."
     },
     "nativeCompilation": {
@@ -38,11 +38,11 @@
       "configuration": "Release",
       "architecture": "arm64",
       "minimumOS": "15.0",
-      "derivedData": ".build/product-native-compile-20261010-aq",
+      "derivedData": ".build/product-native-compile-20261010-ar",
       "codeSigningAllowed": false,
       "result": "BUILD SUCCEEDED",
-      "rawOutput": "artifact://1302",
-      "output": "artifact://1302",
+      "rawOutput": "artifact://1317",
+      "output": "artifact://1317",
       "applicationAndHelperBinariesExecuted": false,
       "warnings": "AppIntents metadata skipped, PDFium debug-map duplicate/missing-symbol warnings and an unnecessary-await Swift warning remain; no warning suppression or debug-symbol repair claimed."
     },
@@ -295,6 +295,27 @@
     "visibleUIOrAccessibilityVerified": false,
     "runtimeParsingOrCalibrationVerified": false,
     "helperExecuted": false,
+    "storyAccepted": false
+  },
+  "actualLocalCopierCompletion": {
+    "specificationCommit": "1e94cc4",
+    "sourceDiffAgainstSpecificationSha256": "4cf7d54eac337ae0d49c7bb9f103a5fa5c60c63149f6ec58f4d9ddd8d7e8d0a5",
+    "sourceScope": ["PaperLensApp/Application/LocalLibraryLifecycle.swift", "Tests/Product/LocalLibraryLifecycleTests.swift"],
+    "focusedTests": {"tests": 121, "failures": 0, "lifecycleTests": 37, "newTestMethods": 2, "persistenceTests": 51, "folderTests": 19, "urlWriterTests": 14, "output": "artifact://1310"},
+    "productUnion": {"tests": 409, "failures": 0, "output": "artifact://1316", "processMode": "SwiftPM --parallel --num-workers 1; every Product test invoked in isolated process", "testsSkipped": 0},
+    "nativeCompilation": {"result": "BUILD SUCCEEDED", "output": "artifact://1317", "derivedData": ".build/product-native-compile-20261010-ar", "codeSigningAllowed": false, "applicationAndHelperBinariesExecuted": false},
+    "review": "agent://110-ActualCopierCompletionIntegrity: SOURCE-ONLY CLEAR / APPROVE; no findings; actual local physical completion prerequisite only",
+    "evidence": "Actual nonthrowing copier completion correlates ten captured identities and distinguishes never-started, known-closed unvalidated original error, known-closed validated actual stage/SHA/bytes and retained unknown owner. Actor awaits producer quiescence and derives local cleanup from that outcome rather than error label. Confirmed SHA is checked before validated completion. Real once-close/scope/lease/sealing/census and owned GRDB failure/success/reopen observations pass; existing irreversible unknown cases retain their original roots.",
+    "actualOwnerCompletionAndCorrelationVerified": true,
+    "errorLabelUsedAsPhysicalClosureProof": false,
+    "confirmedSHAMismatchEmitsValidatedCompletion": false,
+    "observationCallbackGrantsAuthority": false,
+    "permanentKnownReceiptRegistryAdded": false,
+    "unknownResourcesReleasedByARCProbeOrManualACK": false,
+    "productionJournaledActorCutoverActivated": false,
+    "sameJobRetryUIActivated": false,
+    "liveHTTPOrAuthenticatedProviderUsed": false,
+    "helperOrRendererExecuted": false,
     "storyAccepted": false
   },
   "strictDeletingLateProducerAbortHistory": {

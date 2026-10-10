@@ -1,3 +1,4 @@
+import CryptoKit
 import Darwin
 import Foundation
 import GRDB
@@ -21,6 +22,12 @@ private final class OwnedCopyEffects: @unchecked Sendable {
   private weak var output: FileHandle?
   private var inputFD: Int32?
   private var outputFD: Int32?
+  private var completions: [ActualCopyCompletionObservation] = []
+  private var completionCloseCensus: [[ActualCopyEndpoint]] = []
+  private var completionScopeCensus: [[Int]] = []
+  private var completionClosedFDs: [Bool] = []
+  private var outputSeals: [Bool] = []
+  private var outputSizes: [Int64] = []
   let failures: Set<ActualCopyEndpoint>
   let beforeOpen: @Sendable (ActualCopyEndpoint, URL) throws -> Void
 
@@ -36,14 +43,37 @@ private final class OwnedCopyEffects: @unchecked Sendable {
         self.closeAttempts.append(endpoint)
         // Capture before attempting close. Runtime never uses descriptor-number probes.
         if endpoint == .input { self.input = handle; self.inputFD = handle.fileDescriptor }
-        else { self.output = handle; self.outputFD = handle.fileDescriptor }
+        else {
+          self.output = handle
+          self.outputFD = handle.fileDescriptor
+          var info = stat()
+          let inspected = Darwin.fstat(handle.fileDescriptor, &info) == 0
+          self.outputSeals.append(inspected && info.st_mode & 0o7777 == 0o400)
+          self.outputSizes.append(inspected ? info.st_size : -1)
+        }
       }
       if self.failures.contains(endpoint) { throw OwnedCopyFault.close }
       try handle.close()
     }, startScope: { _ in self.lock.withLock { self.starts += 1 }; return true },
-      stopScope: { _ in self.lock.withLock { self.stops += 1 } })
+      stopScope: { _ in self.lock.withLock { self.stops += 1 } },
+      completed: { observation in
+        self.lock.withLock {
+          self.completions.append(observation)
+          self.completionCloseCensus.append(self.closeAttempts)
+          self.completionScopeCensus.append([self.starts, self.stops])
+          // Fixture-only probes record timing, never grant runtime closure authority.
+          self.completionClosedFDs.append([self.inputFD, self.outputFD].compactMap { $0 }
+            .allSatisfy { Darwin.fcntl($0, F_GETFD) == -1 })
+        }
+      })
   }
 
+  var observations: [ActualCopyCompletionObservation] { lock.withLock { completions } }
+  var observedCloseCensus: [[ActualCopyEndpoint]] { lock.withLock { completionCloseCensus } }
+  var observedScopeCensus: [[Int]] { lock.withLock { completionScopeCensus } }
+  var observedClosedFDs: [Bool] { lock.withLock { completionClosedFDs } }
+  var observedOutputSeals: [Bool] { lock.withLock { outputSeals } }
+  var observedOutputSizes: [Int64] { lock.withLock { outputSizes } }
   var census: [ActualCopyEndpoint] { lock.withLock { closeAttempts } }
   var scopeCensus: [Int] { lock.withLock { [starts, stops] } }
   func retained(_ endpoint: ActualCopyEndpoint) -> Bool {
@@ -334,13 +364,116 @@ final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
     let db = try ProductDatabase.open(at: root)
     let effects = OwnedCopyEffects()
     let lifecycle = try await LocalLibraryLifecycle.openForOwnedCopyFixtures(database: db, effects: effects.effects)
-    let id = try await lifecycle.importPDF(from: source())
+    let original = try source()
+    let bytes = try Data(contentsOf: original)
+    let sha = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+    let id = try await lifecycle.importPDF(from: original, expectedSHA256: sha)
     XCTAssertEqual(try db.libraryRecords().first?.status, .ready)
+    XCTAssertEqual(effects.observations.count, 1)
+    let observation = try XCTUnwrap(effects.observations.first)
+    XCTAssertEqual(observation.status, .closedValidated)
+    XCTAssertEqual(observation.identity.paperID, id)
+    XCTAssertEqual(observation.sha256, sha)
+    XCTAssertEqual(observation.bytes, Int64(bytes.count))
+    XCTAssertNil(observation.error)
+    XCTAssertEqual(effects.observedCloseCensus, [[.output, .input]])
+    XCTAssertEqual(effects.observedScopeCensus, [[1, 1]])
+    XCTAssertEqual(effects.observedClosedFDs, [true])
+    XCTAssertEqual(effects.observedOutputSeals, [true])
+    XCTAssertEqual(effects.observedOutputSizes, [Int64(bytes.count)])
+    let rows = try observeImport(db, observation.identity)
+    XCTAssertEqual(rows[0], "ready")
+    XCTAssertEqual(rows[3], sha)
+    XCTAssertEqual(Array(rows[7...13]), [observation.identity.attempt.uuidString,
+      observation.identity.fence.uuidString, observation.identity.correlation.uuidString,
+      observation.identity.input.uuidString, observation.identity.epoch.uuidString,
+      observation.identity.writer.uuidString, observation.identity.publication.uuidString])
+    XCTAssertEqual(rows[1], observation.identity.generation.uuidString)
+    let owned = namespace(id).appendingPathComponent("document.pdf")
+    XCTAssertEqual(try Data(contentsOf: owned), bytes)
+    let attributes = try FileManager.default.attributesOfItem(atPath: owned.path)
+    XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, 0o400)
+    try Data("changed fixture source".utf8).write(to: original)
+    let reopened = try ProductDatabase.open(at: root)
+    XCTAssertEqual(try observeImport(reopened, observation.identity), rows)
+    XCTAssertEqual(try Data(contentsOf: owned), bytes)
     XCTAssertEqual(effects.census, [.output, .input])
     XCTAssertEqual(effects.scopeCensus, [1, 1])
     XCTAssertEqual(pool.active, baseline)
     XCTAssertFalse(LocalLibraryLifecycle.actualCopyDebts.contains { $0.identity.paperID == id })
     assertActualPoolDenial(pool, authority: authority)
+  }
+
+  func testActualBodyClosureUnknownLabelDoesNotOverrideKnownPhysicalClosure() async throws {
+    let authority = try ProviderRequest()
+    let pool = try RequestResourcePool(authority: authority, kind: "import")
+    let baseline = pool.active
+    let db = try ProductDatabase.open(at: root)
+    let effects = OwnedCopyEffects(beforeOpen: { endpoint, _ in
+      if endpoint == .output { throw LocalLibraryError.producerClosureUnknown }
+    })
+    let lifecycle = try await LocalLibraryLifecycle.openForOwnedCopyFixtures(database: db, effects: effects.effects)
+    let id = try await lifecycle.importPDF(from: source())
+    XCTAssertEqual(effects.observations.count, 1)
+    let observation = try XCTUnwrap(effects.observations.first)
+    XCTAssertEqual(observation.identity.paperID, id)
+    XCTAssertEqual(observation.status, .closedUnvalidated)
+    XCTAssertEqual(observation.error as? LocalLibraryError, .producerClosureUnknown)
+    XCTAssertNil(observation.sha256)
+    XCTAssertNil(observation.bytes)
+    XCTAssertEqual(effects.census, [.input])
+    XCTAssertEqual(effects.observedCloseCensus, [[.input]])
+    XCTAssertEqual(effects.observedClosedFDs, [true])
+    XCTAssertEqual(effects.observedScopeCensus, [[1, 1]])
+    XCTAssertEqual(pool.active, baseline)
+    XCTAssertFalse(LocalLibraryLifecycle.actualCopyDebts.contains { $0.identity.paperID == id })
+    XCTAssertFalse(FileManager.default.fileExists(atPath: namespace(id).path))
+    let rows = try observeImport(db, observation.identity)
+    XCTAssertEqual(rows[0], "importFailed")
+    XCTAssertEqual(rows[5], "failed")
+    XCTAssertEqual(rows[6], "importFailed")
+    XCTAssertEqual(rows[14], "0")
+    let reopened = try ProductDatabase.open(at: root)
+    XCTAssertEqual(try observeImport(reopened, observation.identity), rows)
+    XCTAssertFalse(try XCTUnwrap(reopened.libraryRecords().first { $0.id == id }).cleanupDebt)
+  }
+
+  func testActualConfirmedHashMismatchClosesButNeverValidates() async throws {
+    let authority = try ProviderRequest()
+    let pool = try RequestResourcePool(authority: authority, kind: "import")
+    let baseline = pool.active
+    let db = try ProductDatabase.open(at: root)
+    let effects = OwnedCopyEffects()
+    let lifecycle = try await LocalLibraryLifecycle.openForOwnedCopyFixtures(database: db, effects: effects.effects)
+    let original = try source()
+    let bytes = try Data(contentsOf: original)
+    let id = try await lifecycle.importPDF(from: original, expectedSHA256: String(repeating: "0", count: 64))
+    XCTAssertEqual(effects.observations.count, 1)
+    let observation = try XCTUnwrap(effects.observations.first)
+    XCTAssertEqual(observation.identity.paperID, id)
+    XCTAssertEqual(observation.status, .closedUnvalidated)
+    XCTAssertEqual(observation.error as? FolderImportError, .sourceChanged)
+    XCTAssertNil(observation.sha256)
+    XCTAssertNil(observation.bytes)
+    XCTAssertEqual(effects.census, [.output, .input])
+    XCTAssertEqual(effects.observedCloseCensus, [[.output, .input]])
+    XCTAssertEqual(effects.observedScopeCensus, [[1, 1]])
+    XCTAssertEqual(effects.observedClosedFDs, [true])
+    XCTAssertEqual(effects.observedOutputSeals, [true])
+    XCTAssertEqual(effects.observedOutputSizes, [Int64(bytes.count)])
+    XCTAssertEqual(pool.active, baseline)
+    XCTAssertFalse(LocalLibraryLifecycle.actualCopyDebts.contains { $0.identity.paperID == id })
+    XCTAssertFalse(FileManager.default.fileExists(atPath: namespace(id).path))
+    let rows = try observeImport(db, observation.identity)
+    XCTAssertEqual(rows[0], "importFailed")
+    XCTAssertEqual(rows[2], "<absent>")
+    XCTAssertEqual(rows[3], "<absent>")
+    XCTAssertEqual(rows[5], "failed")
+    XCTAssertEqual(rows[6], "sourceChanged")
+    XCTAssertEqual(rows[14], "0")
+    XCTAssertEqual(rows[15], String(bytes.count))
+    let reopened = try ProductDatabase.open(at: root)
+    XCTAssertEqual(try observeImport(reopened, observation.identity), rows)
   }
 
   func testActualNonFileAndNULInputsFailBeforeScopeOrEndpoints() async throws {
@@ -359,6 +492,7 @@ final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
     }
     XCTAssertTrue(effects.census.isEmpty)
     XCTAssertEqual(effects.scopeCensus, [0, 0])
+    XCTAssertEqual(effects.observations.map(\.status), [.neverStarted, .neverStarted])
   }
 
   func testActualSourceFIFOAndSymlinkRejectBeforeAcquisition() async throws {
@@ -400,6 +534,9 @@ final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
     XCTAssertTrue(effects.census.isEmpty)
     XCTAssertEqual(effects.scopeCensus, [0, 0])
     XCTAssertEqual(pool.active, baseline + held.count)
+    XCTAssertEqual(effects.observations.count, 1)
+    XCTAssertEqual(effects.observations.first?.status, .neverStarted)
+    XCTAssertEqual(effects.observations.first?.error as? LocalLibraryError, .importCapacity)
   }
 
   func testActualSourceSwapToFIFOOrSymlinkOrOtherRegularRejectsPinnedObject() async throws {
@@ -495,6 +632,16 @@ final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
       XCTAssertEqual(effects.scopeCensus, [1, 0])
       XCTAssertEqual(pool.active, baseline + 1)
       let debt = try XCTUnwrap(LocalLibraryLifecycle.actualCopyDebts.first { $0.identity.paperID == id })
+      XCTAssertEqual(effects.observations.count, 1)
+      let observation = try XCTUnwrap(effects.observations.first)
+      XCTAssertEqual(observation.status, .unknown)
+      XCTAssertEqual(observation.identity.paperID, id)
+      XCTAssertEqual(observation.identity.attempt, debt.identity.attempt)
+      XCTAssertNil(observation.sha256)
+      XCTAssertNil(observation.bytes)
+      XCTAssertEqual(effects.observedCloseCensus, [[.output, .input]])
+      XCTAssertEqual(effects.observedScopeCensus, [[1, 0]])
+      XCTAssertEqual(effects.observedClosedFDs, [false])
       XCTAssertEqual(debt.source, original)
       XCTAssertEqual(debt.inputClosed, !failures.contains(.input))
       XCTAssertEqual(debt.outputClosed, !failures.contains(.output))
@@ -539,6 +686,16 @@ final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
     XCTAssertNil(debt.output)
     XCTAssertTrue(debt.outputClosed)
     XCTAssertFalse(debt.inputClosed)
+    XCTAssertEqual(effects.observations.count, 1)
+    let observation = try XCTUnwrap(effects.observations.first)
+    XCTAssertEqual(observation.status, .unknown)
+    XCTAssertEqual(observation.identity.paperID, id)
+    XCTAssertEqual(observation.identity.attempt, debt.identity.attempt)
+    XCTAssertNil(observation.sha256)
+    XCTAssertNil(observation.bytes)
+    XCTAssertEqual(effects.observedCloseCensus, [[.input]])
+    XCTAssertEqual(effects.observedScopeCensus, [[1, 0]])
+    XCTAssertEqual(effects.observedClosedFDs, [false])
     XCTAssertEqual(effects.census, [.input])
     XCTAssertEqual(effects.scopeCensus, [1, 0])
     XCTAssertEqual(try Data(contentsOf: debt.stage), Data("owned collision never adopted".utf8))
