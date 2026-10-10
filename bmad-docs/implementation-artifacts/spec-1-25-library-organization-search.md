@@ -48,3 +48,24 @@ passed137 ProductTests/zero failures (artifact://788); unsigned native Release a
 scheme build succeeded in .build/product-native-compile-20261010-e (artifacts792/793).
 This supersedes the unexecuted-test statement for that integrated source only, not the
 visible UI/Cancel/Retry/accessibility/runtime/Story acceptance limitations above.
+
+## Bounded pending organization activity presentation
+
+Assessment130 inspected exactly Specs1.24/1.25, LibraryBrowserView.swift and existing
+LibraryOrganizationTests.swift at source640330d. OrganizationEditor already brackets
+save/revalidate awaits with busy and gates interactions, but has no explicit saving
+text or accessible pending-work label. Existing criteria require draft/saving/committed/
+failed distinction and Korean non-color saving cues. Repair exactly LibraryBrowserView.swift
+and existing LibraryOrganizationTests.swift. Reuse busy/failed without adding operation
+state, controller, persistence, query or success authority. Production-consumed internal
+pure organizationEditorActivityLabel(busy:failed:) returns nil when idle, 저장 중 for
+busy/nonfailed saving, 현재 저장값 확인 중 for busy/failed revalidation. Editor consumes
+it in a labelled native ProgressView; keep save/revalidate/dismiss/error/CAS unchanged.
+Parent branch regressions cover pending save, failed idle, pending current-value check,
+and idle after revalidation; revalidation must not claim a save, failure must not claim
+success. Run permitted focused/full isolated Product tests, unsigned native compilation,
+independent source delta review and local evidence commit. Test strings/state projection
+and source mounting do not prove rendered accessibility delivery, native interaction,
+contrast/scaling/focus/physical runtime or Story acceptance. No user documents, credentials,
+app/helper/SDK/provider/renderer execution, trial renewal, architecture/schema or remote
+action. Retain previous receipts and full Epic objective/0-of-26 acceptance boundaries.
