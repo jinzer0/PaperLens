@@ -155,3 +155,20 @@ and existing test settlement, no app/helper/SDK/provider/renderer trial. Isolate
 and full tests, unsigned native compile, independent delta review and local evidence
 commit remain admitted. Visible navigation/accessibility/physical restart/P6 and Story
 acceptance remain unproved. No material architecture, persistent schema or gate change.
+
+### Match continuation local receipt
+
+Preimplementation `1d0e2d7743faf3e3b256f7d060b27ca11318f3fa`; executor128 delivered
+one-file showMatch correction, parent retained immutable original request capture and
+added two actual owned public-PDFKit-notification regressions. A newer missing query
+interrupts selection and preserves native page0 immediately and after settlement;
+actual close preserves immediate idle/detach and original discard failure. Native
+navigation now requires a fresh actual session/durable-owner/lease validation after
+selection callbacks. No alternative owner or PDFView factory introduced.
+Focused30/zero `artifact://1456`; isolated Product448/zero `artifact://1461`;
+fresh unsigned native-bb BUILD SUCCEEDED `artifact://1462`; independent129 SOURCE-ONLY
+CLEAR / APPROVE. Two-source diff SHA256:
+`686ab92a260522cb0f7db5e2571eff0a68b50263f572c9603e4c81dbf119da6f`.
+Windowless native page/selection facts do not certify rendered navigation, accessibility,
+physical restart/P6 or Story. No app/helper binary or protected SDK/renderer trial or
+remote action. Canonical completion0/26 and Story/Epic false remain unchanged.

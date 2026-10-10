@@ -264,6 +264,73 @@ private final class AnnotationPageDelegate: NSObject, PDFDocumentDelegate {
     XCTAssertNil(reader.pdfView.currentSelection)
   }
 
+  func testNextNativeMatchCannotNavigateAfterSelectionCallbackStartsNewQuery() async throws {
+    let (_, db, lifecycle, id, _) = try await fixture()
+    let reader = try presentation(database: db, lifecycle: lifecycle, paperID: id)
+    defer { reader.session.close() }
+    reader.query = "alpha"
+    reader.search()
+    await settleSearch(reader)
+    XCTAssertEqual(reader.searchState, .matches(2))
+    let document = try XCTUnwrap(reader.pdfView.document)
+    let priorPage = try XCTUnwrap(reader.pdfView.currentPage)
+    XCTAssertEqual(document.index(for: priorPage), 0)
+    var observations = 0
+    let token = NotificationCenter.default.addObserver(forName: .PDFViewSelectionChanged,
+      object: reader.pdfView, queue: .main) { _ in
+      MainActor.assumeIsolated {
+        observations += 1
+        if observations == 1 {
+          reader.query = "missing newer native query"
+          reader.search()
+        }
+      }
+    }
+    defer { NotificationCenter.default.removeObserver(token) }
+    reader.showMatch(delta: 1)
+    XCTAssertGreaterThan(observations, 0)
+    XCTAssertTrue(reader.pdfView.currentPage === priorPage)
+    XCTAssertNil(reader.pdfView.currentSelection)
+    await settleSearch(reader)
+    XCTAssertEqual(reader.searchState, .noResults)
+    XCTAssertTrue(reader.pdfView.currentPage === priorPage)
+    XCTAssertTrue(reader.pdfView.document === document)
+    XCTAssertTrue(reader.opened)
+    XCTAssertNil(reader.failure)
+  }
+
+  func testNextNativeMatchSelectionCallbackClosesActualSessionBeforeNavigation() async throws {
+    let (_, db, lifecycle, id, _) = try await fixture()
+    let reader = try presentation(database: db, lifecycle: lifecycle, paperID: id)
+    defer { reader.session.close() }
+    reader.query = "alpha"
+    reader.search()
+    await settleSearch(reader)
+    XCTAssertEqual(reader.searchState, .matches(2))
+    var observations = 0
+    let token = NotificationCenter.default.addObserver(forName: .PDFViewSelectionChanged,
+      object: reader.pdfView, queue: .main) { _ in
+      MainActor.assumeIsolated {
+        observations += 1
+        if observations == 1 { reader.session.close() }
+      }
+    }
+    defer { NotificationCenter.default.removeObserver(token) }
+    reader.showMatch(delta: 1)
+    XCTAssertGreaterThan(observations, 0)
+    XCTAssertFalse(reader.opened)
+    XCTAssertNil(reader.pdfView.document)
+    XCTAssertNil(reader.pdfView.currentSelection)
+    XCTAssertEqual(reader.searchState, .idle)
+    let discardFailure = reader.failure
+    XCTAssertNotNil(discardFailure)
+    for _ in 0..<20 { await Task.yield() }
+    XCTAssertEqual(reader.failure, discardFailure)
+    XCTAssertEqual(reader.searchState, .idle)
+    XCTAssertNil(reader.pdfView.document)
+    XCTAssertNil(reader.pdfView.currentSelection)
+  }
+
   func testIncompleteMultipageRevealHasNoPartialOverlayNavigationOrRecordLoss() async throws {
     let (_, db, _, id, binding) = try await fixture()
     defer { binding.session.close() }

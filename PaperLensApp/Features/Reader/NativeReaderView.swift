@@ -235,11 +235,24 @@ import SwiftUI
 
   func showMatch(delta: Int) {
     guard !matches.isEmpty else { return }
-    perform {
-      matchIndex = (matchIndex + delta + matches.count) % matches.count
-      let selection = matches[matchIndex]
-      pdfView.setCurrentSelection(selection, animate: false)
-      pdfView.go(to: selection)
+    let generation = searchGeneration
+    do {
+      try session.withReadAccess {
+        guard opened, searchGeneration == generation, !matches.isEmpty else { return }
+        guard let document = pdfView.document else { throw ReaderError.notOpen }
+        matchIndex = (matchIndex + delta + matches.count) % matches.count
+        let selection = matches[matchIndex]
+        pdfView.setCurrentSelection(selection, animate: false)
+        // Selection notifications can synchronously discard or replace this search.
+        guard opened, searchGeneration == generation, pdfView.document === document else { return }
+        try session.withReadAccess {
+          guard opened, searchGeneration == generation, pdfView.document === document else { return }
+          pdfView.go(to: selection)
+        }
+      }
+    } catch {
+      guard opened, searchGeneration == generation else { return }
+      failure = "Reader operation rejected: \(error)"
     }
   }
 
