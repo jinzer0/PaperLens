@@ -1359,3 +1359,39 @@ Main legacy late-abort guard/finalization, Reader trigger, Package/project,
 policy/codec/lifecycle/physical roots and paired resource contracts stay unchanged.
 Actual producer observation, journaled actor caller cutover/cleanup, same-Job Retry
 and canonical Story/Epic acceptance remain unfinished; metadata cannot ACK them.
+
+## Next actual owner slice: explicit local copier completion
+
+After verified7fe4daa, LocalLibraryLifecycle still infers physical close from
+`error != producerClosureUnknown` and emits validated writer closure before checking
+the confirmed expectedSHA256. Replace that inference with a private nonserialized,
+identity-correlated completion issued only by the actual copying operation:
+never-started before acquisition, closed-unvalidated with original work error,
+closed-validated with actual sealed stage/SHA/positive copied bytes, or unknown.
+The copying operation returns an explicit outcome on every path rather than a
+digest-or-throw contract. Closed outcomes require both actual endpoints known
+closed or never acquired, original scope/lease release and producer quiescence;
+unknown retains original roots/FDs/quota/scope/stage and outranks work failure.
+Do not add ARC/probe/close retry/manual ACK or infer closure from serialized bytes.
+
+Validate the confirmed expectedSHA256 before issuing the validated completion.
+The actual actor consumes this completion for its existing policy/cleanup path;
+pre-producer command failure is distinguishable from a started operation without
+a completion, which must fail closed. Later publication errors cannot overwrite
+known actual copier completion or erase genuine unknown debt. Preserve original
+work errors even when their enum label happens to be producerClosureUnknown; the
+label alone is not a physical close attestation. No guessed successful defaults.
+
+For owned-input proof only, add immutable read-only completion observations to
+the explicit existing ActualCopyEffects fixture instrumentation; production and
+its sole owned-effects test constructor bind explicitly, no default fake-closed
+flag or compatibility overload. Observation callbacks grant no authority and
+cannot replace the private completion. Tests verify once-close/census/pool/scope,
+work-error label ambiguity with known endpoints, hash mismatch never validated,
+success actual SHA/bytes/identity and unchanged unknown-root preservation.
+Writable scope: LocalLibraryLifecycle.swift, LocalLibraryLifecycleTests.swift and
+this existing Spec. Parent owns gates/review/evidence/commits; all Product cases
+run per-test isolated without skip/reset/manual ACK. URL writer/adapter, GRDB,
+journal/policy/schema/membership/contracts remain unchanged. No full journaled
+actor cutover, same-Job Retry, SDK/live/helper/renderer/trial/user-doc/credential,
+remote/release or Story acceptance is admitted by this bounded physical slice.
