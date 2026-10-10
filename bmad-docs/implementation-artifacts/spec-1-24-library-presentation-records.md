@@ -156,3 +156,26 @@ states, not generated summaries or synthetic successful metadata. Physical card/
 native opener-focus return, accessibility/contrast/resize remain unverified; compilation,
 windowless owned-fixture tests and source review are not those proofs. Canonical0/26,
 Epicfalse and StoryDone=false remain unchanged; no protected trial or remote action ran.
+
+## Native Folder-save progress cue
+
+Root canonical epics1181–1189 applies Korean non-color progress cues to the1.24 Library UI.
+PaperMovementSheet already tracks actual pending saving but only disables destinations/
+Save; no labelled pending cue is rendered. Add one native ProgressView("폴더 배치 저장 중")
+with matching accessibilityLabel while saving. Exact source: LibraryBrowserView.swift
+only; no helper/state/controller/authority/service/Cancel/commit/load logic change.
+Existing captured movement admission/CAS/recovery proofs retained. Parent permitted
+owned Folder/Library tests and unsigned compile; static source cue is not observed
+rendered progress/VoiceOver/focus or actual Cancel/Save interleaving. No actual app/helper/
+SDK/provider/renderer trial or remote operation; Story/Epic0-of-26 unchanged.
+
+Parent direct one-line LOW-risk source correction; no new tests for a literal native
+label (no fabricated rendering/VoiceOver assertion). Current isolated Product455/zero
+`artifact://1507`; fresh unsigned native-bf BUILD SUCCEEDED `artifact://1508`.
+One-source diff SHA256 `3afc8f395198673ad8a043e0b7d4f8221863a88a0d728049ff134e247242e76f`.
+Parent inspected the actual saving predicate and sole added ProgressView; prior80
+captured movement authority/CAS remains unchanged. No fresh independent review claimed
+for this single literal cue; prior139 concerns separate editor interaction, not this cue.
+Root epics is root-only, absent from the integration worktree; its common criteria were
+read directly, not inferred from planner136's unverified canonical-file map.
+All physical/native/accessibility/Story limits remain false; no gate promotion.

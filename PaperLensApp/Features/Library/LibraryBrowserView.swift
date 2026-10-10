@@ -289,6 +289,7 @@ private struct LibraryMovement: Identifiable {
       Text("논문의 폴더 배치만 변경합니다. 앱 소유 PDF는 이동하거나 복사하지 않습니다.")
         .font(.caption)
       if observation.loading { ProgressView("현재 폴더 불러오는 중") }
+      if saving { ProgressView("폴더 배치 저장 중").accessibilityLabel("폴더 배치 저장 중") }
       if let captured = observation.captured {
         Text("현재 폴더: \(captured.folder?.name ?? "미분류")")
         Picker("이동할 폴더", selection: $destination) {

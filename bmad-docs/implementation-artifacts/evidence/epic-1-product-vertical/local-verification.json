@@ -32,14 +32,15 @@
     "Next-match navigation requires current request/document plus fresh actual session validation after selection callbacks; owned newer-query preserves native page and actual-close preserves detach, not rendered navigation certification",
     "Organization editor mounts distinct Korean saving/current-value-revalidation native progress cues from derived editor activity; semantic branch tests/source mount verified, rendered accessibility delivery unverified",
     "Settings SecureField uses synchronous changed-entry Binding invalidation before forwarding key writes; actual helper/owned shared Native owner tests reject late synthetic success, not observed SwiftUI interleaving or authentication",
-    "Organization Save/Revalidate/Cancel synchronously admit before effects through one ephemeral phase; closing has no fake saving cue and denies obsolete completion. Owned interaction/GRDB regressions, not actual overlapping native callbacks."
+    "Organization Save/Revalidate/Cancel synchronously admit before effects through one ephemeral phase; closing has no fake saving cue and denies obsolete completion. Owned interaction/GRDB regressions, not actual overlapping native callbacks.",
+    "Native PaperMovementSheet renders Korean labelled progress during actual pending Folder save; one literal cue, no movement/admission/CAS/load/cancellation change or rendered accessibility proof"
   ],
   "verification": {
     "productUnion": {
       "command": "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --parallel --num-workers 1 --filter ProductTests",
       "tests": 455,
       "failures": 0,
-      "output": "artifact://1504",
+      "output": "artifact://1507",
       "evidence": "Real GRDB transactions, owned synthetic files and actual local FIFO IO/close/peer metadata/EPIPE; mocked provider/HTTP transport and synthetic windowless PDFKit conversions. Not authenticated provider, app UI, SDK producer or PDFium execution."
     },
     "nativeCompilation": {
@@ -47,11 +48,11 @@
       "configuration": "Release",
       "architecture": "arm64",
       "minimumOS": "15.0",
-      "derivedData": ".build/product-native-compile-20261010-be",
+      "derivedData": ".build/product-native-compile-20261010-bf",
       "codeSigningAllowed": false,
       "result": "BUILD SUCCEEDED",
-      "rawOutput": "artifact://1505",
-      "output": "artifact://1505",
+      "rawOutput": "artifact://1508",
+      "output": "artifact://1508",
       "applicationAndHelperBinariesExecuted": false,
       "warnings": "AppIntents metadata skipped, PDFium debug-map duplicate/missing-symbol warnings and an unnecessary-await Swift warning remain; no warning suppression or debug-symbol repair claimed."
     },
@@ -305,6 +306,23 @@
     "runtimeParsingOrCalibrationVerified": false,
     "helperExecuted": false,
     "storyAccepted": false
+  },
+  "nativeFolderSaveProgressCue": {
+    "sourceBaseCommit": "4b571cb80e008a7cbba3a32942adcf979b34daad",
+    "criterion": "Actual ROOT epics1181–1189 common1.24 Korean non-color progress cues; integration planning-artifacts/epics.md absent, root-only canonical requirement read directly",
+    "sourceScope": "One ProgressView line in LibraryBrowserView.swift PaperMovementSheet; existing saving predicate/load/Save/Cancel/task/movement/CAS unchanged",
+    "sourceDiffSha256": "3afc8f395198673ad8a043e0b7d4f8221863a88a0d728049ff134e247242e76f",
+    "behavior": "While existing saving is true, labelled native ProgressView and matching accessibilityLabel say 폴더 배치 저장 중. No helper/state/controller/authority or success inference.",
+    "fullProduct": {"tests": 455, "failures": 0, "output": "artifact://1507", "processMode": "--parallel --num-workers 1; all cases invoked without skip or quota reset"},
+    "nativeCompilation": {"result": "BUILD SUCCEEDED", "output": "artifact://1508", "derivedData": ".build/product-native-compile-20261010-bf", "codeSigningAllowed": false},
+    "review": "Parent direct inspection of the literal/predicate. No fresh independent review for single-line LOW-risk cue; prior80 movement ownership/CAS unchanged. Prior139 editor interaction review is not cue review.",
+    "receiptAuditAttempt": "Tool rejected a bash input containing an artifact URI used as a JSON comparison literal, before execution. HEAD/status/index inspected: no command/staging occurred. Revised audit compares parsed receipt fields without artifact URI bash inputs; no permission or artifact expansion workaround.",
+    "limits": ["No new test asserting native literal rendering; compile and source inspection do not prove visible progress/VoiceOver delivery", "No native mouse/keyboard/focus/contrast/scaling/physical restart/P6 or Story certification"],
+    "visibleNativeInteractionVerified": false,
+    "applicationAndHelperBinariesExecuted": false,
+    "SDKProviderRendererExecuted": false,
+    "storyAccepted": false,
+    "epicAccepted": false
   },
   "synchronousOrganizationEditorAdmission": {
     "preImplementationSpecificationCommit": "80290b2e6e034743fa9225ea29f4e8288757a410",
