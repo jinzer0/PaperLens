@@ -30,6 +30,7 @@ public struct ReaderMetadataBindingState {
   private var context: ReaderMetadataContext?
   private var invalidated = false
   private var observing = false
+  private var publishing = false
 
   public init(session: ReaderSession, service: ReaderMetadataService,
     identity: ReaderMetadataIdentity, view: PDFView, document: PDFDocument) throws {
@@ -42,7 +43,7 @@ public struct ReaderMetadataBindingState {
         adapter: adapter, context: context, observed: nil))
     }
     context = initial.0
-    state = initial.1
+    try publish(initial.1)
   }
 
   /// Parent calls synchronously before PDF detach/lease release and on revision switch.
@@ -55,17 +56,19 @@ public struct ReaderMetadataBindingState {
 
   /// Reloads durable candidates and the actual outline without starting extraction.
   public func refresh() throws {
+    guard !publishing else { throw ReaderMetadataError.staleConfirmation }
     let next = try access { _, document, metadata in
       guard let context else { throw ReaderMetadataError.staleIdentity }
       return try makeState(metadata: metadata, document: document,
         adapter: ReaderOutlineAdapter(document: document, identity: identity),
         context: context, observed: nil)
     }
-    state = next
+    try publish(next)
   }
 
   /// Only dispatches intent. Position notifications, not this call, confirm movement.
   public func navigate(sectionID: String) throws {
+    guard !publishing else { throw ReaderMetadataError.staleConfirmation }
     try access { view, document, _ in
       let adapter = ReaderOutlineAdapter(document: document, identity: identity)
       try adapter.navigate(sectionID: sectionID, in: view, current: identity)
@@ -74,7 +77,7 @@ public struct ReaderMetadataBindingState {
 
   /// Called by the actual PDF position observer. No asynchronous PDF access escapes the lease.
   public func observePosition() throws {
-    guard !observing else { throw ReaderMetadataError.staleConfirmation }
+    guard !observing, !publishing else { throw ReaderMetadataError.staleConfirmation }
     observing = true
     defer { observing = false }
     do {
@@ -101,13 +104,30 @@ public struct ReaderMetadataBindingState {
         return (saved, nextState)
       }
       context = result.0
-      state = result.1
+      try publish(result.1)
     } catch {
       // Never leave a previous observation looking like the current position after failure.
       if let old = state {
-        state = ReaderMetadataBindingState(presentation: old.presentation, sections: old.sections,
-          restorationCandidate: old.restorationCandidate, observedLocation: nil, activeSectionID: nil)
+        do {
+          try publish(ReaderMetadataBindingState(presentation: old.presentation, sections: old.sections,
+            restorationCandidate: old.restorationCandidate, observedLocation: nil, activeSectionID: nil))
+        } catch {
+          state = nil
+        }
       }
+      throw error
+    }
+  }
+
+  private func publish(_ next: ReaderMetadataBindingState) throws {
+    guard !publishing else { throw ReaderMetadataError.staleConfirmation }
+    publishing = true
+    defer { publishing = false }
+    do {
+      try access { _, _, _ in state = next }
+    } catch {
+      // A willSet callback can invalidate before the outer setter installs next.
+      state = nil
       throw error
     }
   }

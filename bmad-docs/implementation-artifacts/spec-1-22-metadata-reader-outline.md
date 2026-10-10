@@ -23,6 +23,26 @@ Parent only minimum existing actual outline/persistence and reentrant close/nati
 mount scenarios. New publisher-interruption regressions, independent review, full/
 native/runtime checks remain deferred under implementation-first; none is acceptance.
 
+### Parent metadata-publication source receipt
+
+Committed Specad9aeea6b53bb6c98a846c73a98d1de17169fb94 precedes the single
+binding-source correction. Initialization, refresh, successful persisted observation
+and failed-observation snapshot replacement all use the same installer. A fresh actual
+read pin and the original pre/post identity/document/GRDB validation enclose the
+Published setter; synchronous refresh/navigation/observation reentry denies before
+effects. Interrupted installation clears state after that setter finishes, preserving
+original operation errors and already-durable CAS facts, never reviving a closed binding
+or pretending persistence rolled back. The publishing flag supplies no PDF/persistence/
+closure authority. No caller/schema/service/SDK/budget/physical-cleanup owner changed.
+Initial three existing cases passed (artifact1555; build4.50 seconds, existing weak-var
+warnings retained). After also fencing failure-state replacement, final four existing
+actual outline/observed-position, getter/navigation close, actual Reader mount/revision
+replacement and SQL/CAS failure scenarios pass exit0, build2.53 seconds. One-source
+binary diff SHA256 against Spec: `ea491c6ed2975ba8df9d5ebeced8790be9961540789987ee8b57dd2f12dbe676`.
+These existing cases do not trigger a new Published subscriber close/recursive-action
+branch. New publisher-interruption regressions and independent review remain required
+but deferred; full/native/visible/restart/calibrated/privacy gates are not promoted.
+
 ## Authority and admission
 
 Issue#24 / issue/24-story-1-22; basef14f15f3f1c1fed02657ebf0c7ecdcb23721bfa8. PRODUCT5eac3bb9424ad893eca7d63bc319b71f580838ed; ARCHITECTURE1195c92227cc628e325f5ff24d70cc93639bf7a9; Whole-Epic https://github.com/jinzer0/PaperLens/issues/3#issuecomment-6049004229. Own Spec before source, no repeatedunchangedSHAapproval; no actualgate/live/paid/credential/remote/distribution inference.
