@@ -179,3 +179,28 @@ for this single literal cue; prior139 concerns separate editor interaction, not 
 Root epics is root-only, absent from the integration worktree; its common criteria were
 read directly, not inferred from planner136's unverified canonical-file map.
 All physical/native/accessibility/Story limits remain false; no gate promotion.
+
+## Stored grounded Summary projection
+
+After original-owner archive17c1d03, implement actual stored result display in the existing
+Library projection, not a generation placeholder. Exact source: LibraryOrganizationService.swift,
+ProductDatabase+LibraryFacts.swift and LibraryBrowserView.swift. Parent supplies existing
+internal restoreLibrarySummary(paperID:geometry:in:) so facts/metadata/Summary are validated
+inside ONE existing adapterRead snapshot. No nested database/cache, polling, Provider send,
+parse, invented owner or preview from unchecked result JSON.
+Add optional accepted Summary observation to OrganizationSortFacts: nil means no delivered
+Summary fact, an explicit unavailable state distinguishes missing independent ownership,
+and restored carries actual LibrarySummaryRecord. Only catch geometryUnavailable as that
+safe unavailable state; corrupt/stale/invalid data continue throwing, not fake absence.
+Bind restored identity Paper UUID/generation to the current fact and existing actual owned
+PDF/revision checks. Both grid/list show actual validated saved text where available;
+existing identification detail shows full saved text and its actual claimAnchors' full
+source quotes/PDF page numbers. No reranking, quote truncation disguised as complete
+evidence, manufactured navigation or new generation. Do not call the result whole-Paper
+summary for unknown/fragment kind. Native Korean semantic labels and explicit unavailable
+state; no fake sample/disabled-success feature.
+Preserve existing refresh/filter/detail lifetime fences and Caller validation; these
+passive facts grant no PDF read/publication/write authority. User implementation-first
+applies to this lane too: no tests, correction fixtures, full/native gates or fresh review.
+Parent minimum confirmation only; production creator/calibration/profile, actual rendered
+interaction/accessibility/physical restart and Story/Epic0-of-26 remain unproved.
