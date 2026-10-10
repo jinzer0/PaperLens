@@ -13,10 +13,13 @@ final class ParsingRecoveryCoordinatorTests: XCTestCase {
 
   /// Controlled failure, not a parser or geometry-success substitute.
   private actor HeldFailureProducer: ExtractionBatchProducing {
+    private let failure: ExtractionError
     private var started = false
     private var startWaiter: CheckedContinuation<Void, Never>?
     private var releaseWaiter: CheckedContinuation<Void, Never>?
     private(set) var identities: [ExtractionIdentity] = []
+
+    init(failure: ExtractionError = .invalidBatch) { self.failure = failure }
 
     func withBatches(_ identity: ExtractionIdentity,
       consume: @escaping @Sendable ([ExtractionBatch], ExtractionConsumptionScope) async throws -> Void) async throws {
@@ -27,7 +30,7 @@ final class ParsingRecoveryCoordinatorTests: XCTestCase {
         startWaiter?.resume()
         startWaiter = nil
       }
-      throw ExtractionError.invalidBatch
+      throw failure
     }
 
     func waitForStart() async {
@@ -233,6 +236,70 @@ final class ParsingRecoveryCoordinatorTests: XCTestCase {
     XCTAssertEqual(try invocationCount(reopened), 1)
     let identities = await producer.identities
     XCTAssertTrue(identities.isEmpty)
+  }
+
+  func testFloatingNoticeTracksPersistedRetryAndReopenWithoutHidingUsableRevision() async throws {
+    let (database, old, root) = try fixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let usable = UUID()
+    // Storage-only retained-revision fixture; not a calibrated parsing result.
+    try database.adapterWrite { db in
+      try db.execute(sql: """
+        INSERT INTO extractionRevision(id, paperID, generation, pdfSHA256, pdfReference)
+        VALUES (?, ?, ?, ?, ?)
+        """, arguments: [usable.uuidString, old.paperID.uuidString, old.generation.uuidString,
+          old.pdfSHA256, old.pdfReference])
+      try db.execute(sql: "INSERT INTO extractionVisible(paperID, revision) VALUES (?, ?)",
+        arguments: [old.paperID.uuidString, usable.uuidString])
+    }
+    let failed = try database.extractionStatus(paperID: old.paperID)
+    XCTAssertEqual(failed.usableRevision, usable)
+    XCTAssertEqual(ParsingFailureNotice.message(status: failed, unavailable: false),
+      "원문 파싱 결과를 검증하지 못했습니다. 다시 시도하세요.")
+    let producer = HeldFailureProducer(failure: .storageFailure)
+    let coordinator = ParsingRecoveryCoordinator(service: .init(database: database,
+      producer: producer, geometryValidator: RejectingValidator()), currentEpoch: UUID())
+    let captured = try await coordinator.context(paperID: old.paperID)
+    let context = try XCTUnwrap(captured)
+    let retry = Task { try await coordinator.retry(context) }
+    await producer.waitForStart()
+    let running = try database.extractionStatus(paperID: old.paperID)
+    XCTAssertEqual(running.state, "running")
+    XCTAssertEqual(running.usableRevision, usable)
+    XCTAssertNil(ParsingFailureNotice.message(status: running, unavailable: false))
+    await producer.release()
+    do { try await retry.value; XCTFail("controlled failure reported success") }
+    catch { XCTAssertEqual(error as? ExtractionError, .storageFailure) }
+    let reopened = try ProductDatabase.open(at: root)
+    let latest = try reopened.extractionStatus(paperID: old.paperID)
+    XCTAssertEqual(latest.usableRevision, usable)
+    XCTAssertEqual(ParsingFailureNotice.message(status: latest, unavailable: false),
+      "원문 파싱 결과를 저장하지 못했습니다. 다시 시도하세요.")
+    XCTAssertNil(ParsingFailureNotice.message(status: latest, unavailable: true))
+    XCTAssertEqual(try invocationCount(reopened), 2)
+    XCTAssertEqual(try reopened.extractionStatus(paperID: old.paperID).failure, "storageFailure")
+    _ = try XCTUnwrap(reopened.beginDeletion(old.paperID))
+    let deleting = try reopened.extractionStatus(paperID: old.paperID)
+    XCTAssertEqual(deleting.state, "unavailable")
+    XCTAssertNil(ParsingFailureNotice.message(status: deleting, unavailable: false))
+  }
+
+  func testFloatingNoticeNeverLeaksDiagnosticsOrSurvivesNonfailedStatus() {
+    let diagnostic = "secret/path token=private duration=9 attempt=42"
+    for revision in [Optional<UUID>.none, UUID()] {
+      for state in ["running", "succeeded", "unavailable", "notStarted"] {
+        let status = ExtractionStatus(state: state, failure: diagnostic, usableRevision: revision)
+        XCTAssertNil(ParsingFailureNotice.message(status: status, unavailable: false), state)
+      }
+      let unknown = ExtractionStatus(state: "failed", failure: diagnostic, usableRevision: revision)
+      XCTAssertEqual(ParsingFailureNotice.message(status: unknown, unavailable: false),
+        "원문 파싱에 실패했습니다. 다시 시도하세요.")
+      XCTAssertNil(ParsingFailureNotice.message(status: unknown, unavailable: true))
+      let missingReason = ExtractionStatus(state: "failed", failure: nil, usableRevision: revision)
+      XCTAssertEqual(ParsingFailureNotice.message(status: missingReason, unavailable: false),
+        "원문 파싱에 실패했습니다. 다시 시도하세요.")
+    }
+    XCTAssertNil(ParsingFailureNotice.message(status: nil, unavailable: false))
   }
 
   func testFailureMessagesNeverExposeWorkerDiagnostics() {

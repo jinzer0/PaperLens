@@ -137,3 +137,17 @@ revision retention, read-unavailable suppression and unsafe diagnostic rejection
 Focused/union tests, unsigned compile and independent source review are required.
 Polling remains unchanged: this does not prove immediate producer delivery, rendered
 visibility, VoiceOver/focus, process relaunch, genuine parsing/Retry or Story acceptance.
+
+### Parent floating-presentation source receipt
+
+After committed745e395, the two named Swift files implement the stateless safe-failure
+projection and floating nonmodal overlay, without changing accepted-read fences, Reader
+mount, coordinator, storage or dispatch. Actual GRDB controlled failure/retry/reopen and
+deletion projections preserve the old usable revision; adversarial diagnostic/nonfailed
+inputs cannot display an old failure as current. Focused23/zero1434, full isolated441/
+zero1438 and fresh unsigned native-ay1439 pass. Independent125 SOURCE-ONLY CLEAR /
+APPROVE, no actionable delta findings. Two-source binary diff SHA256 versus745e395:
+`d4c8860b1d23c009e976c0d0a022851c17ee0c91d59e84d93f9d038687a642fa`.
+Rendered visibility/pointer behavior, VoiceOver/focus, immediate producer delivery,
+process relaunch and genuine calibrated parser/Retry remain unverified. No protected
+binary/renderer/SDK/provider/remote operation ran; canonical0/26 and Story/Epic false.

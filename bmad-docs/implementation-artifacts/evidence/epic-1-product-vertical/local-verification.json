@@ -25,14 +25,15 @@
     "Mounted stored abstract and source-topic observations in both Library presentations and captured native detail, with explicit missing/conflict/provenance and query invalidation",
     "Mounted existing-Paper Folder movement through actual captured generation/SHA/reference/prior-placement comparison, real UUID destinations and same-DB durable movement",
     "Mounted fresh selected-PDF same-failed-Paper/ImportJob confirmation, guarded atomic capture/execution replacement and six fresh IDs; owned Workspace behavior verified, not visible app UI",
-    "Shared canonical summary geometry resolver with independent owning anchors, complete UTF-8 quote/quads/page validation and explicit precision; production retained-revision owner recovery/injection is not established"
+    "Shared canonical summary geometry resolver with independent owning anchors, complete UTF-8 quote/quads/page validation and explicit precision; production retained-revision owner recovery/injection is not established",
+    "Mounted nonmodal floating parsing-failure overlay derived from the existing accepted persisted status, with safe Korean reason and no separate failure authority; rendered visibility and immediate delivery unverified"
   ],
   "verification": {
     "productUnion": {
       "command": "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --parallel --num-workers 1 --filter ProductTests",
-      "tests": 439,
+      "tests": 441,
       "failures": 0,
-      "output": "artifact://1425",
+      "output": "artifact://1438",
       "evidence": "Real GRDB transactions, owned synthetic files and actual local FIFO IO/close/peer metadata/EPIPE; mocked provider/HTTP transport and synthetic windowless PDFKit conversions. Not authenticated provider, app UI, SDK producer or PDFium execution."
     },
     "nativeCompilation": {
@@ -40,11 +41,11 @@
       "configuration": "Release",
       "architecture": "arm64",
       "minimumOS": "15.0",
-      "derivedData": ".build/product-native-compile-20261010-ax",
+      "derivedData": ".build/product-native-compile-20261010-ay",
       "codeSigningAllowed": false,
       "result": "BUILD SUCCEEDED",
-      "rawOutput": "artifact://1427",
-      "output": "artifact://1427",
+      "rawOutput": "artifact://1439",
+      "output": "artifact://1439",
       "applicationAndHelperBinariesExecuted": false,
       "warnings": "AppIntents metadata skipped, PDFium debug-map duplicate/missing-symbol warnings and an unnecessary-await Swift warning remain; no warning suppression or debug-symbol repair claimed."
     },
@@ -298,6 +299,25 @@
     "runtimeParsingOrCalibrationVerified": false,
     "helperExecuted": false,
     "storyAccepted": false
+  },
+  "acceptedParsingFailureFloatingPresentation": {
+    "preImplementationSpecificationCommit": "745e395477b24d99bff1929e3ef5b9077ab75d73",
+    "assessment": "agent://124-ReaderExecutableGap: current static header lacked separately required floating failure notice",
+    "sourceScope": "ParsingStatusView.swift and existing ParsingRecoveryCoordinatorTests.swift only; unchanged workspace mount, Reader, parser, database, Retry and safe failure mapping",
+    "sourceDiffSha256": "d4c8860b1d23c009e976c0d0a022851c17ee0c91d59e84d93f9d038687a642fa",
+    "behavior": "Stateless production-used projection and nonmodal overlay below the existing header; pointer-pass-through and one explicit Korean semantic label. Only accepted available failed status shows; running/success/nil/unavailable/deletion clear. Retained usable revision does not hide current failure. No event/history/count/time/diagnostic state, timer, coordinator or new execution authority.",
+    "focused": {"tests": 23, "failures": 0, "output": "artifact://1434"},
+    "fullProduct": {"tests": 441, "failures": 0, "output": "artifact://1438", "processMode": "--parallel --num-workers 1; every case invoked without skip or irreversible-debt quota reset"},
+    "nativeCompilation": {"result": "BUILD SUCCEEDED", "output": "artifact://1439", "derivedData": ".build/product-native-compile-20261010-ay", "codeSigningAllowed": false},
+    "review": "agent://125-FloatingParsingNoticeIntegrity: SOURCE-ONLY CLEAR / APPROVE; no actionable delta findings",
+    "actualStorageCoverage": "Controlled failed→retry-running→storageFailure→database reopen→deletion, with unchanged old usable revision and two genuine reserved fixture invocation records. Raw diagnostics, contradictory nonfailed reason, missing reason and unavailable reads cannot become a current notice. Controlled producer and retained storage fixture are not calibrated extraction.",
+    "attemptsPreserved": "Initial git add returned an ignored-path warning after staging the tracked Spec; parent inspected exact single-file staged diff, used tracked-only git add -u and committed without force/ignore-rule change. Evidence edit refused ambiguous historical native-path context; parent reread current fields and used precise top-level context without changing retained previous receipts.",
+    "renderedVisibilityPointerVoiceOverOrFocusVerified": false,
+    "immediateProducerDeliveryOrProcessRelaunchVerified": false,
+    "genuineParsingRetryOrCalibratedProfileVerified": false,
+    "applicationHelperSDKProviderRendererExecuted": false,
+    "storyAccepted": false,
+    "epicAccepted": false
   },
   "canonicalSummaryIndependentOwnerBinding": {
     "preImplementationSpecificationCommit": "44663a9130499521cf971f900d55ead6b306d14c",

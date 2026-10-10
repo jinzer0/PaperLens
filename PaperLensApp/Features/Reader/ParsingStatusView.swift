@@ -31,6 +31,14 @@ struct ParsingMetadataReconciliation {
   }
 }
 
+/// Presentation only: unavailable reads cannot leave an old failure presented as current.
+enum ParsingFailureNotice {
+  static func message(status: ExtractionStatus?, unavailable: Bool) -> String? {
+    guard !unavailable, let status, status.state == "failed" else { return nil }
+    return ParsingFailureMessage.korean(status.failure)
+  }
+}
+
 /// Reads persisted attempt/visibility state. Dispatching a task is never shown as success.
 public struct ParsingStatusView: View {
   public let database: ProductDatabase
@@ -76,6 +84,24 @@ public struct ParsingStatusView: View {
       Button("상태 새로 고침") { Task { await refresh() } }
     }
     .textSelection(.enabled)
+    .overlay(alignment: .bottomTrailing) {
+      if let message = ParsingFailureNotice.message(status: status, unavailable: unavailable) {
+        Label(message, systemImage: "exclamationmark.triangle")
+          .font(.callout)
+          .padding(12)
+          .frame(maxWidth: 360, alignment: .leading)
+          .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+          .overlay(RoundedRectangle(cornerRadius: 10).stroke(.secondary.opacity(0.4)))
+          .shadow(radius: 3)
+          .fixedSize(horizontal: false, vertical: true)
+          // Float below the header, not over its existing refresh/Retry controls.
+          .alignmentGuide(.bottom) { $0[.top] - 8 }
+          .allowsHitTesting(false)
+          .accessibilityElement(children: .ignore)
+          .accessibilityLabel("파싱 실패 알림. \(message)")
+      }
+    }
+    .zIndex(1)
     .task(id: paperID) {
       status = nil
       recoveryContext = nil
