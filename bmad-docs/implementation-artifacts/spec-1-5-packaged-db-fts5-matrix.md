@@ -19,7 +19,7 @@ First complete offline contract precursor: `scripts/topology/verify_packaged_db.
 
 Native authored-file budget is at most three: `PaperLensApp/App/PackagedDBProbe.swift`, `PaperLensApp/App/TopologyFixtures.swift`, `Tests/Topology/PackagedDBProbeTests.swift`. Fixture edits only add reusable descriptor/local-DB ownership support; existing Main/home/group selection and canary behavior remain unchanged. No root Package.swift, Xcode/project/app-entry wiring, CI, dependencies.json or package.py edits. Commit this amended existing Spec on Issue8 before native edits; concurrent root HEAD remains unchanged.
 
-The parent alone exclusively creates mode0700 `.build/topology/story-1-5-local-driver-<fresh-lowercase-UUIDv4>` as a generated test artifact, not a fourth authored source file. Its tools6.4/macOS15/Swift6 manifest uses a local `.package(path:)` dependency on the materialized GRDB source and `.product(name: "GRDB", package: "grdb-source-cd1e3231-04d6-4ec2-8d51-c7bd6b3d0f7c")`. Validate actual GRDB manifest/product/system-SQLite declarations first. A PackagedDBProbe target contains byte-identical copies of the two app Swift files; its test target contains unchanged PackagedDBProbeTests.swift bytes. No network resolution, generated alternative implementation, fake-origin flags or root-package mutation. Independently bind Spec/source/GRDB/materialization/generated-manifest/original-and-copied-source/executed-binary code identities. Driver paths are not durable exports. Build and the watchdog-bounded test launch are separate operations. No Main ownership, packaged execution, product persistence or CI proof is inferred.
+The parent alone exclusively creates mode0700 `.build/topology/story-1-5-local-driver-<fresh-lowercase-UUIDv4>` as a generated test artifact, not a fourth authored source file. Its tools6.4/macOS15/Swift6 manifest uses a local `.package(path:)` dependency on ROOT `.build/topology/grdb-source-only-cfc8c4b8-0ebb-4728-9575-5db33532443b/grdb-source/src` and `.product(name: "GRDB", package: "src")`; the path basename src is the actual dependency identity, not manifest display name GRDB or an obsolete acquisition-directory name. Validate actual GRDB manifest/product/system-SQLite declarations first. A PackagedDBProbe target contains byte-identical copies of the two app Swift files; its test target contains unchanged PackagedDBProbeTests.swift bytes. No network resolution, generated alternative implementation, fake-origin flags or root-package mutation. Independently bind Spec/source/GRDB/materialization/generated-manifest/original-and-copied-source/executed-binary code identities. Driver paths are not durable exports. Build and the watchdog-bounded test launch are separate operations. No Main ownership, packaged execution, product persistence or CI proof is inferred.
 
 ## Real-GRDB behavior
 
@@ -82,3 +82,21 @@ Canonical AC1–3 require these actual behaviors at every packaged cell, Xcode/S
 Architect16 inspected only epics/SOLUTION-DESIGN/dependencies baseline/package.py; no GRDB API, current native wiring, implementation or test execution. Parent removed its obsolete repeated-SHA-approval wording and speculative additional matrix cells. This is a useful offline precursor specification, not packaged/runtime proof or SDK/materialization assertion.
 
 Architect33 inspected only this existing Spec, root TopologyFixtures.swift/Package.swift and materialized DatabaseQueue.swift/DatabaseMigrator.swift. Public throwing close/interrupt/serialized access and transactional register/migrate/appliedIdentifiers/appliedMigrations exist. Binding/fetch/error-code/GRDB manifest/image APIs were outside that inspection and require actual declarations before implementation. Three local ownership/wiring/provenance ambiguities are resolved by this committed amendment, not by invented runtime proof. Parent alone implements/runs gates after committing it.
+
+## Current materialized-input reconciliation — parent local driver only
+
+Independent81 read exactly this Spec, existing probe/fixture/test sources and the actual
+materialized GRDB manifest. Its sole MEDIUM was the obsolete dependency identity above.
+Correcting that instruction admits the already specified driver, not another GRDB preparation
+retry or app/helper execution. Actual imports need only GRDB/system GRDBSQLite; evolved
+TopologyFixtures has no ProviderRequest import and unrelated Bundle.main resource paths
+are not called by this probe. No numeric-contract copy/new target or fake-origin flag needed.
+Keep SPI_BUILDER absent so the manifest's conditional remote documentation plugin is absent.
+Generated driver resides under the integration .build/topology so unchanged #filePath
+upward discovery finds this actual committed Spec. Root Package/Xcode/startup remain untouched.
+Parent retains compiler and XCTest stdout/stderr only in RAM; no raw logs, xcresult/JUnit
+or tool artifacts containing absolute source/runtime paths, SQL, sourceID timestamps or
+durations. Export safe test identities/status/reasons/approved numeric codes and code hashes
+only. Build separately; single nonparallel actual test launch has original <=30s watchdog.
+Timeout/kill is blocked unresolved ownership, never successful drain/cleanup or fixture
+deletion permission. Actual SQL success still sqlite_origin_unverified/P2false/Storyfalse.
