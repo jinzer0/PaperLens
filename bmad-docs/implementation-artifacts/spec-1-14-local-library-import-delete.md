@@ -408,3 +408,29 @@ The authoritative receipt is here in the integration worktree, not the launcher 
 Legacy NULL histories remain ineligible; production reservation/lifecycle journal wiring,
 explicit production codec-byte binding, fresh same-Job Retry UI and Story acceptance remain
 unimplemented by this primitive-only receipt. No app/helper/SDK/renderer/remote/trial action.
+
+### Next executable slice: journal-aware atomic startup
+
+For prior-epoch running imports whose recoveryJournal is non-NULL, ProductJobRecovery
+must restore the actual full captured history, require its exact running import lineage,
+record the real startup event, and CAS/read back that journal in the existing whole-kind
+recovery transaction together with failed/interrupted Job and Paper debt changes. Never
+replace genuine permits, prior results, used IDs or cleanup operations with a synthetic
+empty Snapshot. Corrupt/rebound/oversized history or journal update/readback refusal rolls
+back imports, extractions and summaries together before lifecycle admission. Legacy NULL
+records keep their existing conservative interruption path and remain Retry-ineligible.
+
+Application startup owns an explicit 262144-byte serialized journal-record ceiling passed
+to the existing bounded codec/storage operations. This is a newly declared metadata-format
+quota, not a measured allocator/combined-RSS bound, provider/parser profile, execution or
+closure admission. No codec default or guessed certified resource enforcement is added.
+Other production journal writers remain unwired; their owner admission remains separate.
+
+Worker writable files are ProductJobRecovery.swift, ProductJobRecoveryTests.swift and THIS
+Spec under the integration worktree only. No launcher-root Spec edits. Preserve all
+existing extraction/summary/legacy startup contracts, current-epoch and terminal records,
+and transaction/readback guards. Real owned-GRDB fixtures cover retained open/unknown
+writer debt, captured-versus-observed epoch, immutable history, corrupt/rebound records,
+ignore/corrupt triggers and cross-kind rollback. Parent runs gates/review/commit; worker
+skips all tests/builds/formatters/commits/SDK/helper/renderer/remote/trial operations.
+This slice does not create old history, prove closure, authorize Retry or complete Story1.14.
