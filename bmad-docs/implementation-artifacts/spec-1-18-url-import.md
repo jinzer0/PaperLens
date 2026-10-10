@@ -1,6 +1,66 @@
 # Story 1.18 Build Spec — URL Import and shared Library entry
 
-## Current source phase (2026-10-09 explicit human order)
+## Current source phase — actual HTTPS physical ownership repair
+
+Explicit assigned source-only order reuses Spec 46711a8 and baseline 28a43e1
+(parent-reported Product 1185/native-ai 1182/review 96 clear); those are baseline
+evidence, not verification of this change. Exactly four writable integration paths:
+`PaperLensApp/Adapters/HTTPSPDFImportAdapter.swift`, `Tests/Product/URLImportTests.swift`,
+`Tests/Product/LibraryURLImportWriterTests.swift`, and this Spec. No root docs changed.
+Parent owns verification, review, evidence and commit. No worker test/build/gate/lint/
+formatter/commit/network/SDK/helper/renderer/paid/remote/trial execution is performed.
+
+HTTPSPDFProducer now receives the original admitted import lease, and a process root
+registry retains the actual producer before any file/session effect. Registry locks
+only retain/release references and expose read-only IDs; destruction, callbacks, file
+IO, cleanup and lease release occur outside those locks. The actual FileHandle disables
+ARC closure. Exactly one checked-close attempt fences later callbacks; successful body
+sync and descriptor fchmod(0400) precede that attempt. Final URLSession invalidation
+alone supplies network drain, and only its conjunction with known file closure releases
+quota. Before-FD setup failure explicitly releases the lease without removing a foreign
+stage; unknown close keeps actual handle, producer, stage URL and original lease rooted
+indefinitely, even after returning closureUnknown. No retry, FD probe, ARC destruction,
+timer, cancellation or manually closed fixture FD becomes acknowledgment.
+
+The public download API is unchanged. Internal configured downloads require explicit
+HTTPSPDFFileEffects: actual-FD observation, checked FileHandle close, actual session
+observation and final invalidation observation. Production binds real close; existing
+configured callers in both assigned test files are updated without a compatibility
+default. Non-file/decoded-NUL/invalid filesystem representation rejection precedes
+resource admission and stage effects; existing owned-directory/symlink checks remain.
+
+Authored source-only URLProtocol tests cover actual close-once success, descriptor mode,
+lease held at final invalidation then released, body rejection, cancellation and early
+actual session invalidation, invalid path rejection before effects, and close failure
+before actual close. The unknown test captures its numeric FD while valid, verifies
+fcntl-open/bytes/namespace/quota/root retention after dropping task and facade, and uses
+the actual contract pool limit to fill only remaining capacity with distinct leases.
+Manual OS teardown is not an owner ACK; the logical debt is intentionally permanent.
+Run that irreversible debt case in an isolated test process when parallel fixtures
+would contend for the process-global import pool. Existing writer publication/deletion
+tests remain; conservative typed writer debt coverage is not claimed as FD fault proof.
+No same-UID isolation or hard allocator/RSS bounds are asserted. Journals, SameJobRetry
+and the full physical-receipt lifetime bridge remain unfinished.
+
+### Parent physical ownership verification and independent review
+
+Three-source binary diff against 46711a8 SHA256:
+2c029d3c7045d6333e6f5e4a72dc31f78baca449d991826fdd0a977d0d2dceb0.
+Initial focused21/1 artifact1192 and21/1 artifact1193, isolated1/1 artifact1194 retained.
+Parent corrected decoded path/NUL/empty file URL validation before effects and mapped
+directory-metadata rejection to writerUnavailable; added explicit NUL/missing-directory
+cases rather than weakening assertions. Final focused21/0 artifact1195, Product373/0
+artifact1206, fresh unsigned native Release arm64/macOS15 BUILD SUCCEEDED artifact1207,
+namespace product-native-compile-20261010-aj. Review98 SOURCE-ONLY CLEAR / APPROVE,
+no actionable finding. Actual descriptor/lease/delegate-drain fault proof uses owned
+URLProtocol files, not external network/SDK/provider/helper execution. Unknown fixture
+logical debt intentionally remains rooted after manual numeric FD cleanup, which is
+not ACK. No same-UID isolation, hard-RSS/profile, physical UI or Story acceptance claim.
+Package/project/policy/DB/lifecycle/journal sources unchanged. Warnings unsuppressed;
+no formatter, remote/release/renderer/live/paid/protected trial execution. Actual durable
+owner receipts, coordinated journaled lifecycle cutover and same-Job Retry still pending.
+
+## Previous source phase (2026-10-09 explicit human order)
 
 The actual-owner binding phase mutates exactly this Spec,
 `Application/LocalLibraryLifecycle.swift`, `Application/LibraryURLImportWriter.swift`,

@@ -28,9 +28,9 @@
   "verification": {
     "productUnion": {
       "command": "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --filter ProductTests",
-      "tests": 370,
+      "tests": 373,
       "failures": 0,
-      "output": "artifact://1185",
+      "output": "artifact://1206",
       "evidence": "Real GRDB transactions, owned synthetic files and actual local FIFO IO/close/peer metadata/EPIPE; mocked provider/HTTP transport and synthetic windowless PDFKit conversions. Not authenticated provider, app UI, SDK producer or PDFium execution."
     },
     "nativeCompilation": {
@@ -38,11 +38,11 @@
       "configuration": "Release",
       "architecture": "arm64",
       "minimumOS": "15.0",
-      "derivedData": ".build/product-native-compile-20261010-ai",
+      "derivedData": ".build/product-native-compile-20261010-aj",
       "codeSigningAllowed": false,
       "result": "BUILD SUCCEEDED",
-      "rawOutput": "artifact://1182",
-      "output": "artifact://1182",
+      "rawOutput": "artifact://1207",
+      "output": "artifact://1207",
       "applicationAndHelperBinariesExecuted": false,
       "warnings": "AppIntents metadata skipped, PDFium debug-map duplicate/missing-symbol warnings and an unnecessary-await Swift warning remain; no warning suppression or debug-symbol repair claimed."
     },
@@ -295,6 +295,27 @@
     "visibleUIOrAccessibilityVerified": false,
     "runtimeParsingOrCalibrationVerified": false,
     "helperExecuted": false,
+    "storyAccepted": false
+  },
+  "actualHTTPSImportPhysicalOwnership": {
+    "specificationCommit": "46711a8",
+    "sourceDiffAgainstSpecificationSha256": "2c029d3c7045d6333e6f5e4a72dc31f78baca449d991826fdd0a977d0d2dceb0",
+    "sourceScope": ["PaperLensApp/Adapters/HTTPSPDFImportAdapter.swift", "Tests/Product/URLImportTests.swift", "Tests/Product/LibraryURLImportWriterTests.swift"],
+    "focusedTests": {"tests": 21, "failures": 0, "urlTests": 13, "newTestMethods": 3, "writerTests": 8, "output": "artifact://1195"},
+    "preservedPathAdmissionFailures": [{"tests": 21, "failures": 1, "output": "artifact://1192"}, {"tests": 21, "failures": 1, "output": "artifact://1193"}, {"tests": 1, "failures": 1, "output": "artifact://1194"}],
+    "pathRepair": "Decoded absolute path/NUL validation and typed directory-metadata denial before lease/FD/session effects. Foundation can normalize a constructed NUL URL into file://; empty path is also denied. Expanded explicit NUL and missing-directory fixture paths preserve every assertion.",
+    "productUnion": {"tests": 373, "failures": 0, "output": "artifact://1206"},
+    "nativeCompilation": {"result": "BUILD SUCCEEDED", "output": "artifact://1207", "derivedData": ".build/product-native-compile-20261010-aj", "codeSigningAllowed": false, "applicationAndHelperBinariesExecuted": false},
+    "review": "agent://98-ActualHTTPSOwnershipIntegrity: SOURCE-ONLY CLEAR / APPROVE; exact adapter/test/Spec delta with unchanged pool reference",
+    "evidence": "Actual URLProtocol-owned stage FD and original import lease rooted before effects, single checked close, descriptor sealing, late-callback fences, known-close plus actual URLSession final invalidation release. Injected close failure retains exact FD/stage/producer/quota beyond stack/task/facade; manual OS fixture cleanup explicitly does not ACK or release logical debt. No public network request.",
+    "actualFDAndQuotaRetentionVerified": true,
+    "unknownCloseFixtureLogicalDebtPermanentlyRetained": true,
+    "manualFixtureFDClosureIsOwnerAcknowledgment": false,
+    "liveHTTPOrAuthenticatedProviderUsed": false,
+    "sameUIDIsolationOrHardRSSProfileCertified": false,
+    "durableJournaledPhysicalReceiptBridgeActivated": false,
+    "sameJobRetryUIActivated": false,
+    "helperOrRendererExecuted": false,
     "storyAccepted": false
   },
   "actualDeletionDiagnosticOwnership": {

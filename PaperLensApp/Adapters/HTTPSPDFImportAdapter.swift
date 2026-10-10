@@ -21,7 +21,31 @@ public struct ClosedHTTPSPDFStage: Sendable {
   }
 }
 
+struct HTTPSPDFFileEffects: Sendable {
+  let acquired: @Sendable (Int32) -> Void
+  let checkedClose: @Sendable (FileHandle) throws -> Void
+  let sessionStarted: @Sendable (URLSession) -> Void
+  let finalNetworkDrain: @Sendable () -> Void
+  static let actual = HTTPSPDFFileEffects(acquired: { _ in },
+    checkedClose: { try $0.close() }, sessionStarted: { _ in }, finalNetworkDrain: {})
+}
+
+private final class HTTPSPDFProducerRoots: @unchecked Sendable {
+  static let shared = HTTPSPDFProducerRoots()
+  private let lock = NSLock()
+  private var producers: [UUID: HTTPSPDFProducer] = [:]
+  func retain(_ producer: HTTPSPDFProducer) {
+    lock.withLock { producers[producer.id] = producer }
+  }
+  func release(_ id: UUID) {
+    let removed = lock.withLock { producers.removeValue(forKey: id) }
+    withExtendedLifetime(removed) {} // Destruction is outside the registry lock.
+  }
+  var ids: Set<UUID> { lock.withLock { Set(producers.keys) } }
+}
+
 public final class HTTPSPDFImportAdapter: Sendable {
+  static var rootedProducerIDs: Set<UUID> { HTTPSPDFProducerRoots.shared.ids }
   private let authority: ProviderRequest
   public init(authority: ProviderRequest) { self.authority = authority }
 
@@ -40,23 +64,37 @@ public final class HTTPSPDFImportAdapter: Sendable {
     assertCurrent: @escaping @Sendable () throws -> Void
   ) async throws -> ClosedHTTPSPDFStage {
     try await download(route: route, stagingDirectory: stagingDirectory,
-      assertCurrent: assertCurrent, configuration: .ephemeral)
+      assertCurrent: assertCurrent, configuration: .ephemeral, effects: .actual)
   }
 
   // Configuration injection is internal and used only for deterministic URLProtocol tests.
   func download(
     route: ValidatedRequestURL, stagingDirectory: URL,
     assertCurrent: @escaping @Sendable () throws -> Void,
-    configuration: URLSessionConfiguration
+    configuration: URLSessionConfiguration, effects: HTTPSPDFFileEffects
   ) async throws -> ClosedHTTPSPDFStage {
     try Task.checkCancellation()
     try assertCurrent()
     let validated = try authority.validateImportURL(route.value, sourceKind: route.sourceKind)
+    let decodedPath = stagingDirectory.path(percentEncoded: false)
+    guard stagingDirectory.isFileURL, decodedPath.hasPrefix("/"), !decodedPath.utf8.contains(0),
+      stagingDirectory.withUnsafeFileSystemRepresentation({ $0 != nil }) else {
+      throw URLImportError.writerUnavailable
+    }
+    let values: URLResourceValues
+    do {
+      values = try stagingDirectory.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+    } catch { throw URLImportError.writerUnavailable }
+    guard values.isDirectory == true, values.isSymbolicLink != true else {
+      throw URLImportError.writerUnavailable
+    }
+    let budget = try RequestResourceBudget(authority: authority, kind: "import")
     let pool = try RequestResourcePool(authority: authority, kind: "import")
     guard let lease = pool.acquire() else { throw URLImportError.capacity }
-    defer { lease.close() }
-    let producer = try HTTPSPDFProducer(authority: authority, route: validated,
-      directory: stagingDirectory, assertCurrent: assertCurrent)
+    let producer = HTTPSPDFProducer(authority: authority, route: validated,
+      directory: stagingDirectory, assertCurrent: assertCurrent, budget: budget,
+      lease: lease, effects: effects)
+    HTTPSPDFProducerRoots.shared.retain(producer)
     return try await withTaskCancellationHandler {
       try await withCheckedThrowingContinuation { continuation in
         producer.start(configuration: configuration, continuation: continuation)
@@ -66,6 +104,12 @@ public final class HTTPSPDFImportAdapter: Sendable {
 }
 
 private final class HTTPSPDFProducer: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+  let id = UUID()
+  private let lease: RequestResourceLease
+  private let effects: HTTPSPDFFileEffects
+  private var closeAttempted = false
+  private var fileClosed = false
+  private var finished = false
   private let authority: ProviderRequest
   private let budget: RequestResourceBudget
   private let assertCurrent: @Sendable () throws -> Void
@@ -89,27 +133,20 @@ private final class HTTPSPDFProducer: NSObject, URLSessionDataDelegate, @uncheck
   private var admitted = false
   private var failure: URLImportError?
   private var cancelled = false
-  private var result: ClosedHTTPSPDFStage?
+  private var bodyComplete = false
 
   init(authority: ProviderRequest, route: ValidatedRequestURL, directory: URL,
-    assertCurrent: @escaping @Sendable () throws -> Void) throws {
+    assertCurrent: @escaping @Sendable () throws -> Void, budget: RequestResourceBudget,
+    lease: RequestResourceLease, effects: HTTPSPDFFileEffects) {
     self.authority = authority
     self.route = route
     self.assertCurrent = assertCurrent
-    budget = try RequestResourceBudget(authority: authority, kind: "import")
+    self.budget = budget
+    self.lease = lease
+    self.effects = effects
     started = clock.now
     lastActivity = started
-    let values = try directory.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
-    guard directory.isFileURL, values.isDirectory == true, values.isSymbolicLink != true else {
-      throw URLImportError.writerUnavailable
-    }
     stage = directory.appendingPathComponent(UUID().uuidString + ".pdf")
-    // O_EXCL prevents replacing another producer's file, even under a name collision.
-    let descriptor = stage.withUnsafeFileSystemRepresentation {
-      Darwin.open($0!, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, mode_t(0o600))
-    }
-    guard descriptor >= 0 else { throw URLImportError.writerUnavailable }
-    output = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
     super.init()
   }
 
@@ -117,6 +154,19 @@ private final class HTTPSPDFProducer: NSObject, URLSessionDataDelegate, @uncheck
     continuation: CheckedContinuation<ClosedHTTPSPDFStage, any Error>) {
     queue.async {
       self.continuation = continuation
+      // Rooted producer owns the admitted lease before any FD or session effects.
+      let descriptor = self.stage.withUnsafeFileSystemRepresentation { path in
+        guard let path else { return Int32(-1) }
+        return Darwin.open(path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, mode_t(0o600))
+      }
+      guard descriptor >= 0 else {
+        self.fileClosed = true // No descriptor was ever acquired.
+        self.failure = .writerUnavailable
+        self.finish(removeStage: false)
+        return
+      }
+      self.output = FileHandle(fileDescriptor: descriptor, closeOnDealloc: false)
+      self.effects.acquired(descriptor)
       configuration.httpCookieStorage = nil
       configuration.urlCredentialStorage = nil
       configuration.urlCache = nil
@@ -137,13 +187,17 @@ private final class HTTPSPDFProducer: NSObject, URLSessionDataDelegate, @uncheck
       }
       timer.resume()
       if self.cancelled { self.fail(.cancelled) } else { self.request() }
+      if let session = self.session { self.effects.sessionStarted(session) }
     }
   }
 
   func cancel() {
     queue.async {
+      guard !self.finished else { return }
       self.cancelled = true
-      if self.session != nil { self.fail(.cancelled) }
+      if self.failure == nil { self.failure = .cancelled }
+      self.timer?.cancel()
+      self.session?.invalidateAndCancel()
     }
   }
 
@@ -153,7 +207,7 @@ private final class HTTPSPDFProducer: NSObject, URLSessionDataDelegate, @uncheck
   }
 
   private func check() throws {
-    guard failure == nil, !cancelled else { throw URLImportError.cancelled }
+    guard failure == nil, !cancelled, !closeAttempted, !finished else { throw URLImportError.cancelled }
     try assertCurrent()
     try budget.observe("elapsedMs", value: milliseconds(started))
     try budget.observe("idleMs", value: milliseconds(lastActivity))
@@ -178,6 +232,7 @@ private final class HTTPSPDFProducer: NSObject, URLSessionDataDelegate, @uncheck
   func urlSession(_ session: URLSession, task: URLSessionTask,
     willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
     completionHandler: @escaping (URLRequest?) -> Void) {
+    guard !finished, !closeAttempted else { completionHandler(nil); return }
     do {
       try check()
       let admission = try authority.validateHTTPResponse(current: route,
@@ -191,6 +246,7 @@ private final class HTTPSPDFProducer: NSObject, URLSessionDataDelegate, @uncheck
 
   func urlSession(_ session: URLSession, dataTask: URLSessionDataTask,
     didReceive response: URLResponse, completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+    guard !finished, !closeAttempted else { completionHandler(.cancel); return }
     do {
       try check()
       guard let http = response as? HTTPURLResponse else { throw URLImportError.rejected }
@@ -208,6 +264,7 @@ private final class HTTPSPDFProducer: NSObject, URLSessionDataDelegate, @uncheck
   }
 
   func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+    guard !finished, !closeAttempted else { return }
     do {
       try check()
       try budget.observe("readBufferBytes", value: data.count)
@@ -233,6 +290,10 @@ private final class HTTPSPDFProducer: NSObject, URLSessionDataDelegate, @uncheck
   func urlSession(_ session: URLSession, task: URLSessionTask,
     didReceive challenge: URLAuthenticationChallenge,
     completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+    guard !finished, !closeAttempted else {
+      completionHandler(.cancelAuthenticationChallenge, nil)
+      return
+    }
     if challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust {
       completionHandler(.performDefaultHandling, nil)
     } else {
@@ -242,12 +303,14 @@ private final class HTTPSPDFProducer: NSObject, URLSessionDataDelegate, @uncheck
   }
 
   private func fail(_ error: URLImportError) {
+    guard !finished, !closeAttempted else { return }
     if failure == nil { failure = error }
     timer?.cancel()
     session?.invalidateAndCancel()
   }
 
   func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: (any Error)?) {
+    guard !closeAttempted, !finished else { return }
     if failure == nil, error == nil, let target = nextRoute {
       nextRoute = nil
       route = target
@@ -259,35 +322,59 @@ private final class HTTPSPDFProducer: NSObject, URLSessionDataDelegate, @uncheck
       try check()
       guard admitted, bytes > 0, let output else { throw URLImportError.rejected }
       try output.synchronize()
+      guard Darwin.fchmod(output.fileDescriptor, mode_t(0o400)) == 0 else {
+        throw URLImportError.rejected
+      }
     } catch { if failure == nil { failure = .rejected } }
-    do { try output?.close() } catch { failure = .closureUnknown }
-    output = nil
-    if failure == nil {
-      do {
-        try FileManager.default.setAttributes([.posixPermissions: 0o400], ofItemAtPath: stage.path)
-        result = ClosedHTTPSPDFStage(file: stage,
-          sha256: digest.finalize().map { String(format: "%02x", $0) }.joined(), byteCount: bytes)
-      } catch { failure = .rejected }
-    }
+    closeFileOnce()
+    if failure == nil { bodyComplete = true }
     timer?.cancel()
     session.finishTasksAndInvalidate()
   }
 
   func urlSession(_ session: URLSession, didBecomeInvalidWithError error: (any Error)?) {
+    guard !finished else { return }
     timer?.cancel()
     // Invalidation is the final network producer drain, not merely task cancellation.
-    if output != nil {
-      do { try output?.close() } catch { failure = .closureUnknown }
-      output = nil
-    }
+    closeFileOnce()
+    effects.finalNetworkDrain()
     if error != nil, failure == nil { failure = .rejected }
-    if failure != nil || result == nil {
-      if failure != .closureUnknown {
+    finish(removeStage: true)
+  }
+
+  private func closeFileOnce() {
+    guard !closeAttempted else { return }
+    closeAttempted = true
+    guard let output else { return }
+    do {
+      try effects.checkedClose(output)
+      fileClosed = true
+      self.output = nil
+    } catch { failure = .closureUnknown }
+  }
+
+  private func finish(removeStage: Bool) {
+    finished = true
+    if !fileClosed { failure = .closureUnknown }
+    if failure != nil || !bodyComplete {
+      if removeStage, fileClosed {
         do { try FileManager.default.removeItem(at: stage) }
         catch { failure = .cleanupFailed }
       }
+    }
+    // Known file close plus final session drain, or setup without acquiring an FD.
+    // Unknown output and quota remain rooted even after the continuation returns.
+    if fileClosed {
+      lease.close()
+      HTTPSPDFProducerRoots.shared.release(id)
+    }
+    if failure != nil || !bodyComplete {
       continuation?.resume(throwing: failure ?? URLImportError.rejected)
-    } else if let result { continuation?.resume(returning: result) }
+    } else {
+      let result = ClosedHTTPSPDFStage(file: stage,
+        sha256: digest.finalize().map { String(format: "%02x", $0) }.joined(), byteCount: bytes)
+      continuation?.resume(returning: result)
+    }
     continuation = nil
     self.session = nil
   }

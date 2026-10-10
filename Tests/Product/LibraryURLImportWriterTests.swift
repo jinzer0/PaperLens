@@ -32,7 +32,7 @@ final class LibraryURLImportWriterTests: XCTestCase, @unchecked Sendable {
     configuration.protocolClasses = [URLWriterFixture.self]
     return try await adapter.download(route: adapter.route("https://writer.invalid/" + (stall ? "stall" : "pdf")),
       stagingDirectory: writer.stagingDirectory, assertCurrent: { try writer.assertCurrent() },
-      configuration: configuration)
+      configuration: configuration, effects: .actual)
   }
 
   @MainActor
