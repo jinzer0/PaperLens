@@ -1041,3 +1041,180 @@ existing debt preservation/reopen, stale and all full-lineage/state/payload/quot
 denials, and whole-row ignore/corrupt/marker rollback. All Product tests execute
 in isolated per-test processes; no skip/reset/ACK, live/SDK/helper/renderer/trial,
 user document/credential access, remote or release action is admitted.
+
+### Authored ordinary-failure boundary after committed Spec ed673b5
+
+The four permitted integration files now author the bounded ordinary failure
+transaction. This is source-only implementation evidence; no tests, builds,
+gates, formatter, review or commit were run by the executor. Parent verification
+must retain every existing Product test and use isolated per-test SwiftPM
+processes with `--parallel --num-workers 1`, without skip/reset/physical ACK.
+
+Internal `ImportAbortFailure: String, Sendable` admits exactly cancelled,
+sourceChanged, importFailed, urlImportFailed and publicationRejected. Its raw
+values are the existing SQL causes; every admitted replacement must end as
+policy `.failed(.failed)`, including cancelled. Interrupted and paperDeleting
+remain excluded owners. `failRunningImport` changes visibility only: its exact
+running guard and SQL body and every legacy caller remain unchanged.
+
+`recordJournaledImportFailure(expected:replacement:failure:cleanupDebt:)` uses
+one sole-owner adapterWrite transaction. Before SQL effects it validates the
+positive existing 262144-byte budget, typed/canonical expected bytes, canonical
+replacement, strict event prefix, full ten-ID capture/facts, unchanged prior
+executions/current lineage/dispatch/result/usableResult and usedPermitIDs.
+Current genuine non-NULL history must match the expected BLOB on a nondeleting
+running row. Ordinary journal CAS runs before the reused running failure hook;
+both are read back with exact fixed cause, typed history and whole-row checks.
+Only Paper status/pdfReference/conservative cleanupDebt and Job state/failure/
+recoveryJournal can change. Existing Paper debt is OR-preserved, incoming true
+is conservative, and false rejects retained permits or namespace-removal debt.
+Folder membership is compared within the same transaction. An exact four-write
+SQLite total_changes delta (journal CAS, Paper failure, Job failure and the existing
+mandatory revokeReaderPosition trigger's Paper UPDATE) additionally
+checks the expected write count, but is not row-scope authority: compensating
+RAISE(IGNORE) triggers can substitute a foreign write for the reader UPDATE.
+Transaction-local row-scope observation described below rejects those substitutions
+without materializing unrelated journal payloads.
+Snapshot/debt bytes never close a writer, purge bytes or grant physical authority.
+
+Authored owned-GRDB test names:
+- `testOrdinaryJournaledFailureFiveFixedCausesRetainUnknownPermitAndReopenExactRows`
+- `testOrdinaryJournaledFailureSyntheticCleanAllowsFalseButPreservesExistingDebt`
+- `testOrdinaryJournaledFailureRejectsExpectedBytesPrefixCapturePolicyPermitRetryAndQuotaBeforeEffects`
+- `testOrdinaryJournaledFailureRejectsLegacyNullStoredPayloadAndOperationalCaptureDrift`
+- `testOrdinaryJournaledFailureTriggerMutationsRollBackActualWriterAndProviderMarker`
+- `testOrdinaryJournaledFailureUnrelatedRowMutationWithoutMarkerIsRejected`
+- `testOrdinaryJournaledFailureCompensatingReaderTriggerCannotSubstituteForeignWrites`
+- `testOrdinaryJournaledFailureWithoutRowIDSchemaDeniesCompensatingAndUntriggeredWrites`
+- `testOrdinaryJournaledFailureShadowTriggerDefinitionDeniedAndCanonicalSchemaAdmitted`
+
+These fixtures reserve genuine new journals with fresh captures. Closed/unvalidated
+writer and successful cleanup observations are explicitly SYNTHETIC policy data,
+not physical receipts; unknown retained permits still require debt. Triggers
+place providerConfig rollback markers inside the actual method transaction,
+without nesting its queue writer. Existing tests remain unchanged and present.
+
+Actual lifecycle producer/actor cutover, independently observed physical closure,
+cleanup receipt reconciliation, namespace purge and fresh same-Job Retry remain
+unfinished. Publication is not an abort; deleting late abort stays outside this
+slice. No production activation, Story/Epic acceptance, physical cleanup, permanent
+journal retention or SameJobRetry completion is claimed.
+
+Parent focused94 run artifact1267 reported two authored test failures:
+`testOrdinaryJournaledFailureFiveFixedCausesRetainUnknownPermitAndReopenExactRows`
+and `testOrdinaryJournaledFailureSyntheticCleanAllowsFalseButPreservesExistingDebt`.
+Both reported generic invalidHistory. Source diagnosis identified the original
+three-write counter as incorrect: the shipped revokeReaderPosition trigger always
+updates Paper reader fields to NULL/0 on this non-ready status transition, even
+when already unchanged. The exact counter is corrected to four; all reader-field
+whole-row invariants and rejection of additional trigger writes remain enforced.
+The synthetic cleanup sequence, permit/debt constraints and existing SQL hook are
+unchanged. No executor reproduction/gate was run; parent must verify both failures
+and retained adversarial rollback coverage after this correction.
+
+Review106 P1 identified an exact-count bypass: a BEFORE UPDATE OF readerSequence
+trigger can write an unrelated Paper/providerConfig then RAISE(IGNORE), leaving
+four writes and unchanged target rows. The bounded correction registers a public
+GRDB TransactionObserver with `.nextTransaction` after exact canonical capture/
+running-row validation and before effects. It admits actual UPDATE events only
+on the captured main.paper/main.importJob SQLite rowids. Every observed insert,
+delete, foreign row/table/database event or unspecified change flags denial.
+The flag is checked before returning and again in databaseWillCommit; GRDB keeps
+a strong reference until actual commit/rollback, including buffered savepoint
+events. Existing four-write, whole-row/folder and exact readback checks remain.
+main.schema_version and database_list are compared before/after effects.
+
+Pinned public source inspected: GRDB/Core/TransactionObserver.swift defines
+databaseEventObservationStrategy, event databaseName/tableName/rowID, commit veto
+and `.nextTransaction` strong retention/release. Setting requiresDatabaseEventKind
+false observes universal events and prevents truncate optimization on all tables;
+registration also clears cached delete statements. No SQLite hook/authorizer is
+replaced and the shipped reader trigger is not disabled.
+
+The pinned Documentation.docc/Extension/TransactionObserver.md explicitly excludes
+schema/internal-table events, WITHOUT ROWID writes and implicit REPLACE deletions.
+WITHOUT ROWID user tables are now denied before effects by the schema admission
+guard below, rather than admitted with an observation exclusion. No guarantee for
+arbitrary invisible C/internal-schema effects or implicit REPLACE deletions is
+claimed; schema checks are additional checks, not an observer expansion. The actual
+bounded SQL uses GRDB UPDATEs on rowid tables and SQL triggers (which cannot issue
+schema DDL). This correction covers their observable main-rowid write scope.
+
+The new owned synthetic regression substitutes exactly one unrelated Paper update,
+providerConfig update, Paper deletion/insertion or truncate-style libraryFolder
+deletion for the ignored reader UPDATE. It adds no extra provider marker and
+requires whole rollback/reopen of all fixture rows and exact journal bytes.
+No executor tests/build/gates/formatter/commit were run; parent verifies the new
+regression, all retained authored/legacy tests and observer commit behavior.
+
+Review106 second P1 demonstrated the same substitution with an observer-invisible
+WITHOUT ROWID UPDATE. Before registering observation or issuing any SQL effects,
+the method now reads public `PRAGMA table_list` schema/name/type/wr metadata only.
+Every row must provide typed text schema/name/type and INTEGER wr in {0,1}; missing
+wr, empty results, unknown types or unlisted admitted databases deny. Any user table
+with wr=1 in main, temp or attached databases denies the transaction. This is an
+observer-coverage prerequisite, not a physical profile, new store or payload scan.
+Canonical rowid schemas retain the same observer/four-write/whole-row/folder and
+schema-version/database-list checks. No private hook fallback is introduced.
+
+Canonical FTS5 generates WITHOUT ROWID shadow tables, so type=shadow is not blanket
+schema denial. Instead every listed shadow table name (case-normalized across all
+databases) enters a second `.nextTransaction` public TransactionObserver using
+GRDB's default event-kind strategy. Pinned TransactionObserver.swift:1040-1080
+invokes observes(eventsOfKind:) over compiled statement.authorizerEventKinds,
+including trigger side effects before execution. Any potential shadow-table write
+flags denial, checked before return and in databaseWillCommit. This conservatively
+rejects even conditional compiled shadow writes; it does not depend on invisible
+WR row callbacks. Primary universal exact-row observation remains unchanged.
+Parent agreed to this bounded public-observer correction after source inspection.
+
+Parent affected97 run artifact1281 failed only the attempted shadow-trigger fixture:
+SQLite denied CREATE TRIGGER with SQLITE_ERROR and `may not write to shadow table
+extractionFTS_config`, before the helper executed. The corrected
+`testOrdinaryJournaledFailureShadowTriggerDefinitionDeniedAndCanonicalSchemaAdmitted`
+asserts that typed actual definition denial, absence of the trigger and unchanged
+shadow value/Paper/Job/providerConfig/history across reopen. It then requires an
+ordinary journaled failure to succeed with canonical FTS5 shadows still admitted,
+preserving shadow/configuration values across another reopen. The existing public
+shadow observer remains defense, but this profile's trigger-definition denial is
+not evidence that its observer caught a shadow write. No defensive/trusted-schema
+or other profile restriction is disabled and no fallback is introduced. This does
+not certify all SQLite profiles or extend coverage to arbitrary invisible
+C/internal-schema effects or implicit REPLACE. No executor gates were run; parent
+verifies the corrected regression and retained user-WR before-effects denial.
+
+The owned synthetic regression
+`testOrdinaryJournaledFailureWithoutRowIDSchemaDeniesCompensatingAndUntriggeredWrites`
+checks both a preexisting untriggered WR table and its compensating reader trigger
+(UPDATE WR then RAISE(IGNORE), with no extra provider marker). Both must deny before
+effects and reopen with unchanged WR value, original Paper/Job/providerConfig rows
+and exact history. No executor tests/build/gates/formatter/commit were run; parent
+owns runtime verification and narrow review. Arbitrary invisible C/internal-schema
+side effects remain outside the claimed public-observer coverage.
+
+### Parent ordinary-failure verification and independent review
+
+Nine new persistence methods (six initial plus three write-coverage regressions)
+were executed, not skipped. Initial affected94 artifact1267 failed two methods
+because the three-write count omitted the mandatory reader revoke UPDATE. After
+the four-write correction affected94 passed1269, Product396 passed1272 and unsigned
+native-ao succeeded1275. Review106 P1 compensated-rowid substitution then required
+the retained exact-row observer; affected95 passed1278. Its second P1 invisible
+user-WR substitution required enforced typed schema admission and shadow defense.
+Affected97 artifact1281 failed the assumption that SQLite would create a shadow
+trigger; the fixture instead now proves actual typed definition denial without
+relaxing SQLite configuration. Artifact1282 preserved one exact-message assertion
+failure; parent matched the observed quoted `"extractionFTS_config"` spelling.
+
+Final affected97 all passed1283 (43 persistence,35 lifecycle,19 startup). Every399
+Product case passed1285 in --parallel --num-workers1 per-test process isolation;
+no skipped cases, pool reset or manual FD logical ACK. Fresh unsigned Release
+arm64/macOS15 native-ap BUILD SUCCEEDED1286, warnings retained and no app/helper
+binary execution. Final narrow Review106 SOURCE-ONLY CLEAR / APPROVE, findings
+empty; both P1 substitutions resolved within public GRDB coverage and enforced
+schema boundaries. Shadow-definition denial is not an observer callback proof.
+Three-source binary diff against Speced673b5 SHA256:
+`6fb3fd3b0d6a64195527d65551facd535ad9bef3c363abc9b2a805ab667f55cb`.
+Package/project, reader trigger, policy/codec, lifecycle and physical owners remain
+unchanged. This is real GRDB metadata failure acknowledgment; producer observations,
+actual actor cutover/cleanup, same-Job Retry and Story/Epic acceptance remain open.

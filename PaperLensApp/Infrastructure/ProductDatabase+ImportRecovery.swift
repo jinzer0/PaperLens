@@ -20,6 +20,73 @@ enum ImportRecoveryPersistenceError: Error, Equatable {
   case missingHistory, staleHistory, invalidHistory
 }
 
+enum ImportAbortFailure: String, Sendable {
+  case cancelled, sourceChanged, importFailed, urlImportFailed, publicationRejected
+}
+
+/// Transaction-local observation, not an SQLite hook replacement. GRDB retains
+/// this observer through the actual commit/rollback with .nextTransaction.
+private final class ImportFailureWriteScope: TransactionObserver {
+  private let paperRowID: Int64
+  private let jobRowID: Int64
+  private var violated = false
+
+  init(paperRowID: Int64, jobRowID: Int64) {
+    self.paperRowID = paperRowID
+    self.jobRowID = jobRowID
+  }
+
+  var databaseEventObservationStrategy: DatabaseEventObservationStrategy {
+    var strategy = DatabaseEventObservationStrategy.default
+    // Universal observation also prevents truncate-delete optimization.
+    strategy.requiresDatabaseEventKind = false
+    return strategy
+  }
+
+  func observes(eventsOfKind eventKind: DatabaseEventKind) -> Bool { true }
+  func databaseDidChange() { violated = true }
+
+  func databaseDidChange(with event: DatabaseEvent) {
+    guard event.kind == .update, event.databaseName == "main",
+      (event.tableName == "paper" && event.rowID == paperRowID)
+        || (event.tableName == "importJob" && event.rowID == jobRowID) else {
+      violated = true
+      return
+    }
+  }
+
+  func validate() throws {
+    if violated { throw ImportRecoveryPersistenceError.invalidHistory }
+  }
+
+  func databaseWillCommit() throws { try validate() }
+  func databaseDidCommit(_ db: Database) { }
+  func databaseDidRollback(_ db: Database) { }
+}
+
+/// Default-strategy observation inspects GRDB's compiled statement event kinds,
+/// including trigger writes for which SQLite does not emit row-update events.
+private final class ImportFailureShadowWriteScope: TransactionObserver {
+  private let shadowTables: Set<String>
+  private var violated = false
+
+  init(shadowTables: Set<String>) { self.shadowTables = shadowTables }
+
+  func observes(eventsOfKind eventKind: DatabaseEventKind) -> Bool {
+    if shadowTables.contains(eventKind.tableName.lowercased()) { violated = true }
+    return true
+  }
+
+  func databaseDidChange() { violated = true }
+  func databaseDidChange(with event: DatabaseEvent) { }
+  func validate() throws {
+    if violated { throw ImportRecoveryPersistenceError.invalidHistory }
+  }
+  func databaseWillCommit() throws { try validate() }
+  func databaseDidCommit(_ db: Database) { }
+  func databaseDidRollback(_ db: Database) { }
+}
+
 extension ProductDatabase {
   func reserveJournaledImport(_ identity: ImportIdentity, title: String,
     confirmedInput: ImportRecoveryJournal.ConfirmedInput) throws -> ImportRecoveryRecord {
@@ -134,6 +201,119 @@ extension ProductDatabase {
         stored.encoded == finalBytes, readback.encoded == finalBytes,
         Data.fromDatabaseValue(after.1["recoveryJournal"]) == finalBytes,
         try readback.journal.snapshot() == completed.snapshot() else {
+        throw ImportRecoveryPersistenceError.invalidHistory
+      }
+      return readback
+    }
+  }
+
+  /// Durable failure metadata only. Neither retained debt nor synthetic closure
+  /// observations acknowledge physical cleanup or grant producer authority.
+  func recordJournaledImportFailure(expected: ImportRecoveryRecord,
+    replacement: ImportRecoveryJournal, failure: ImportAbortFailure,
+    cleanupDebt: Bool) throws -> ImportRecoveryRecord {
+    try adapterWrite { db in
+      let maximum = ProductJobRecovery.maximumImportRecoveryJournalBytes
+      try Self.recoveryBound(maximum)
+      try Self.validateExpectedRecovery(expected)
+      let bytes = try Self.recoveryEncode(replacement, maximumBytes: maximum)
+      let capture = try expected.journal.currentCapture()
+      let nextCapture = try replacement.currentCapture()
+      let old = try expected.journal.snapshot()
+      let next = try replacement.snapshot()
+      guard Self.recoveryIDs(capture.identity) == Self.recoveryIDs(nextCapture.identity),
+        capture.confirmedInput == nextCapture.confirmedInput,
+        try replacement.extends(expected.journal, maximumBytes: maximum),
+        old.current.state == .running, !old.revoked, !next.revoked,
+        old.role == next.role, old.job == next.job, old.authority == next.authority,
+        old.executions.count == next.executions.count,
+        Array(old.executions.dropLast()) == Array(next.executions.dropLast()),
+        old.current.lineage == next.current.lineage,
+        old.current.dispatch == next.current.dispatch,
+        old.current.result == next.current.result,
+        next.current.state == .failed(.failed),
+        old.usableResult == next.usableResult,
+        old.usedPermitIDs == next.usedPermitIDs,
+        cleanupDebt || (next.permits.isEmpty && next.removalDebt == nil && next.pendingRemoval == nil) else {
+        throw ImportRecoveryPersistenceError.invalidHistory
+      }
+      let identity = capture.identity
+      let current = try Self.readImportRecovery(identity, maximumBytes: maximum, in: db)
+      guard current.encoded == expected.encoded else { throw ImportRecoveryPersistenceError.staleHistory }
+      let row = try Self.recoveryRow(identity, maximumBytes: maximum, in: db)
+      try Self.validateRecoveryExecution(expected.journal, row: row, identity: identity, revoked: false)
+      _ = try Self.guardRunningImport(identity, in: db)
+      let before = try Self.importRows(identity, in: db)
+      let folder = try Self.importFolder(identity.paperID, in: db)
+      guard let debt = Int64.fromDatabaseValue(before.0["cleanupDebt"]), debt == 0 || debt == 1 else {
+        throw ImportRecoveryPersistenceError.invalidHistory
+      }
+      let retainedDebt = cleanupDebt || debt == 1
+      guard let paperRowID = try Int64.fetchOne(db, sql: "SELECT rowid FROM main.paper WHERE id = ?",
+        arguments: [identity.paperID.uuidString]),
+        let jobRowID = try Int64.fetchOne(db, sql: "SELECT rowid FROM main.importJob WHERE id = ?",
+          arguments: [identity.jobID.uuidString]),
+        let schemaVersion = try Int64.fetchOne(db, sql: "PRAGMA main.schema_version") else {
+        throw ImportRecoveryPersistenceError.invalidHistory
+      }
+      let databases = try Row.fetchAll(db, sql: "PRAGMA database_list")
+      // Update hooks cannot observe WITHOUT ROWID writes. Admit only schemas
+      // whose user tables satisfy the observer's rowid coverage prerequisite.
+      let tables = try Row.fetchAll(db, sql: "PRAGMA table_list")
+      guard !tables.isEmpty else { throw ImportRecoveryPersistenceError.invalidHistory }
+      var listedSchemas = Set<String>()
+      var shadowTables = Set<String>()
+      for table in tables {
+        guard table.hasColumn("wr"), let schema = Self.recoveryString(table, "schema"),
+          let name = Self.recoveryString(table, "name"),
+          let type = Self.recoveryString(table, "type"),
+          ["table", "view", "virtual", "shadow"].contains(type),
+          case .int64(let withoutRowID) = (table["wr"] as DatabaseValue).storage,
+          withoutRowID == 0 || withoutRowID == 1,
+          name.hasPrefix("sqlite_") || type == "shadow" || withoutRowID == 0 else {
+          throw ImportRecoveryPersistenceError.invalidHistory
+        }
+        if type == "shadow" { shadowTables.insert(name.lowercased()) }
+        listedSchemas.insert(schema)
+      }
+      for database in databases {
+        guard let name = Self.recoveryString(database, "name"), listedSchemas.contains(name) else {
+          throw ImportRecoveryPersistenceError.invalidHistory
+        }
+      }
+      let scope = ImportFailureWriteScope(paperRowID: paperRowID, jobRowID: jobRowID)
+      db.add(transactionObserver: scope, extent: .nextTransaction)
+      let shadowScope = ImportFailureShadowWriteScope(shadowTables: shadowTables)
+      db.add(transactionObserver: shadowScope, extent: .nextTransaction)
+      let changesBefore = try Int64.fetchOne(db, sql: "SELECT total_changes()")
+      // CAS must precede the existing running-only operational guard.
+      let stored = try Self.compareAndSwapImportRecovery(expected: expected.encoded,
+        replacement: replacement, maximumBytes: maximum, in: db)
+      try Self.failRunningImport(identity, failure: failure.rawValue, cleanupDebt: retainedDebt, in: db)
+      let readback = try Self.readImportRecovery(identity, maximumBytes: maximum, in: db)
+      try Self.validateRecoveryExecution(readback.journal,
+        row: Self.recoveryRow(identity, maximumBytes: maximum, in: db), identity: identity, revoked: false)
+      let after = try Self.importRows(identity, in: db)
+      let changesAfter = try Int64.fetchOne(db, sql: "SELECT total_changes()")
+      try scope.validate()
+      try shadowScope.validate()
+      guard Self.sameRow(before.0, after.0, except: ["status", "pdfReference", "cleanupDebt"]),
+        Self.sameRow(before.1, after.1, except: ["state", "failure", "recoveryJournal"]),
+        Self.recoveryString(after.0, "status") == "importFailed",
+        Self.nullColumns(after.0, ["pdfReference", "deletionID"]),
+        Int64.fromDatabaseValue(after.0["cleanupDebt"]) == (retainedDebt ? 1 : 0),
+        Self.recoveryString(after.1, "state") == "failed",
+        Self.recoveryString(after.1, "failure") == failure.rawValue,
+        try Self.importFolder(identity.paperID, in: db) == folder,
+        try Int64.fetchOne(db, sql: "PRAGMA main.schema_version") == schemaVersion,
+        try Row.fetchAll(db, sql: "PRAGMA database_list") == databases,
+        // CAS + Paper failure + Job failure + the existing revokeReaderPosition
+        // trigger's Paper UPDATE (even when its reader fields already equal NULL/0).
+        // Whole-row checks above require those reader fields to remain unchanged.
+        // Additional check only: row-scope observation rejects compensating writes.
+        let changesBefore, let changesAfter, changesAfter - changesBefore == 4,
+        stored.encoded == bytes, readback.encoded == bytes,
+        try readback.journal.snapshot() == next else {
         throw ImportRecoveryPersistenceError.invalidHistory
       }
       return readback

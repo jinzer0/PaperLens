@@ -1277,6 +1277,377 @@ final class ImportRecoveryPersistenceTests: XCTestCase {
     }
   }
 
+  private func ordinaryFailureFixture() throws -> (URL, ProductDatabase, ImportIdentity, ImportRecoveryRecord) {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let db = try ProductDatabase.open(at: root)
+    let id = identity()
+    let record = try db.reserveJournaledImport(id, title: "SYNTHETIC ordinary failure", confirmedInput: facts)
+    try db.adapterWrite { sql in
+      try sql.execute(sql: "UPDATE importJob SET bytesCopied = 37")
+      try sql.execute(sql: "UPDATE providerConfig SET generation = 7, model = 'baseline'")
+    }
+    return (root, db, id, record)
+  }
+
+  // SYNTHETIC observations only. This neither opens/closes a writer nor purges bytes.
+  private func syntheticCleanFailure(_ record: ImportRecoveryRecord) throws -> ImportRecoveryJournal {
+    let l = try record.journal.snapshot().current.lineage
+    let writer = try record.journal.currentCapture().identity.writer.uuidString
+    var journal = try record.journal.recording(.writerClosure(l, permit: writer, .closed(.unvalidated)))
+      .recording(.terminate(l, .failed))
+    let permit = try XCTUnwrap(journal.snapshot().permits.first)
+    journal = try journal.recording(.requestCleanup(l, permit: permit.id, operation: UUID().uuidString))
+    let operation = try XCTUnwrap(journal.snapshot().permits.first?.cleanupOperation)
+    return try journal.recording(.cleanupFinished(l, permit: permit.id, operation: operation, succeeded: true))
+      .recording(.release(l, permit: permit.id))
+  }
+
+  func testOrdinaryJournaledFailureFiveFixedCausesRetainUnknownPermitAndReopenExactRows() throws {
+    for cause in [ImportAbortFailure.cancelled, .sourceChanged, .importFailed, .urlImportFailed, .publicationRejected] {
+      let (root, db, id, original) = try ordinaryFailureFixture()
+      defer { try? FileManager.default.removeItem(at: root) }
+      let folder = UUID().uuidString
+      try db.adapterWrite { sql in
+        try sql.execute(sql: "INSERT INTO libraryFolder(id, name) VALUES (?, 'SYNTHETIC retained folder')", arguments: [folder])
+        try sql.execute(sql: "INSERT INTO paperFolder(paperID, folderID) VALUES (?, ?)", arguments: [id.paperID.uuidString, folder])
+      }
+      let before = try actualRows(db)
+      let l = try original.journal.snapshot().current.lineage
+      let replacement = try original.journal.recording(.terminate(l, .failed))
+      XCTAssertThrowsError(try db.recordJournaledImportFailure(expected: original,
+        replacement: replacement, failure: cause, cleanupDebt: false))
+      assertRows(before, equal: try actualRows(db))
+      let stored = try db.recordJournaledImportFailure(expected: original,
+        replacement: replacement, failure: cause, cleanupDebt: true)
+      let reopened = try ProductDatabase.open(at: root)
+      let readback = try read(id, db: reopened)
+      XCTAssertEqual(stored.encoded, try replacement.encoded(maximumBytes: bound))
+      XCTAssertEqual(readback.encoded, stored.encoded)
+      XCTAssertEqual(try readback.journal.snapshot(), try replacement.snapshot())
+      XCTAssertEqual(try readback.journal.snapshot().current.state, .failed(.failed))
+      XCTAssertEqual(try readback.journal.snapshot().permits.first?.closure, .unknown)
+      XCTAssertEqual(try readback.journal.snapshot().usedPermitIDs, try original.journal.snapshot().usedPermitIDs)
+      let after = try actualRows(reopened)
+      for column in before.0.columnNames where !["status", "pdfReference", "cleanupDebt"].contains(column) {
+        XCTAssertEqual(before.0[column] as DatabaseValue, after.0[column] as DatabaseValue, column)
+      }
+      for column in before.1.columnNames where !["state", "failure", "recoveryJournal"].contains(column) {
+        XCTAssertEqual(before.1[column] as DatabaseValue, after.1[column] as DatabaseValue, column)
+      }
+      XCTAssertEqual(String.fromDatabaseValue(after.0["status"]), "importFailed")
+      XCTAssertEqual(Int64.fromDatabaseValue(after.0["cleanupDebt"]), 1)
+      XCTAssertEqual(String.fromDatabaseValue(after.1["failure"]), cause.rawValue)
+      XCTAssertEqual(String.fromDatabaseValue(after.1["state"]), "failed")
+      XCTAssertEqual(Int64.fromDatabaseValue(after.1["bytesCopied"]), 37)
+      XCTAssertEqual(try reopened.adapterRead { try String.fetchOne($0, sql: "SELECT folderID FROM paperFolder WHERE paperID = ?", arguments: [id.paperID.uuidString]) }, folder)
+    }
+  }
+
+  func testOrdinaryJournaledFailureSyntheticCleanAllowsFalseButPreservesExistingDebt() throws {
+    for existingDebt in [0, 1] {
+      for requestedDebt in [false, true] {
+        let (root, db, id, record) = try ordinaryFailureFixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try db.adapterWrite { try $0.execute(sql: "UPDATE paper SET cleanupDebt = ?", arguments: [existingDebt]) }
+        let replacement = try syntheticCleanFailure(record)
+        let stored = try db.recordJournaledImportFailure(expected: record, replacement: replacement,
+          failure: .cancelled, cleanupDebt: requestedDebt)
+        let reopened = try ProductDatabase.open(at: root)
+        XCTAssertEqual(try read(id, db: reopened).encoded, stored.encoded)
+        XCTAssertEqual(try read(id, db: reopened).journal.snapshot(), try replacement.snapshot())
+        XCTAssertTrue(try replacement.snapshot().permits.isEmpty)
+        XCTAssertEqual(Int64.fromDatabaseValue(try actualRows(reopened).0["cleanupDebt"]),
+          existingDebt == 1 || requestedDebt ? 1 : 0)
+      }
+    }
+  }
+
+  func testOrdinaryJournaledFailureRejectsExpectedBytesPrefixCapturePolicyPermitRetryAndQuotaBeforeEffects() throws {
+    let (root, db, id, record) = try ordinaryFailureFixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let before = try actualRows(db)
+    let l = try record.journal.snapshot().current.lineage
+    let failed = try record.journal.recording(.terminate(l, .failed))
+    for bytes in [Data(), Data(record.encoded.dropLast()), Data([0x20]) + record.encoded,
+      Data(repeating: 0, count: bound + 1)] {
+      assertError(.invalidHistory) {
+        _ = try db.recordJournaledImportFailure(expected: .init(journal: record.journal, encoded: bytes),
+          replacement: failed, failure: .importFailed, cleanupDebt: true)
+      }
+    }
+    let initial = try ImportRecoveryJournal(identity: id, confirmedInput: facts)
+    let claimed = try initial.recording(.claim(l))
+    let divergent = try claimed.recording(.authorityChanged(claimed.snapshot().authority))
+      .recording(.acquireWriter(l, permit: id.writer.uuidString)).recording(.terminate(l, .failed))
+    let added = try record.journal.recording(.writerClosure(l, permit: id.writer.uuidString,
+      .closed(.validated(.init(id: "SYNTHETIC added-permit observation")))))
+      .recording(.acquirePublication(l, writer: id.writer.uuidString, permit: id.publication.uuidString))
+      .recording(.terminate(l, .failed))
+    let clean = try syntheticCleanFailure(record)
+    let retryID = ImportIdentity(paperID: id.paperID, generation: id.generation, jobID: id.jobID,
+      attempt: UUID(), fence: UUID(), correlation: UUID(), input: UUID(), epoch: id.epoch,
+      writer: UUID(), publication: UUID())
+    let retried = try clean.retrying(identity: retryID, confirmedInput: facts)
+    let nextLineage = try retried.snapshot().current.lineage
+    let retryFailure = try retried.recording(.claim(nextLineage)).recording(.terminate(nextLineage, .failed))
+    var replacements = [record.journal, claimed, divergent, added, retryFailure,
+      try record.journal.recording(.authorityChanged(record.journal.snapshot().authority)),
+      try record.journal.recording(.dispatch(l)).recording(.terminate(l, .failed)),
+      try record.journal.recording(.terminate(l, .cancelled)),
+      try record.journal.recording(.terminate(l, .timeout)),
+      try record.journal.recording(.startup(currentEpoch: UUID().uuidString)),
+      try record.journal.recording(.revoke),
+      try clean.recording(.revoke).recording(.removeNamespace(operation: UUID().uuidString))]
+    for column in 0..<10 {
+      let other = try ImportRecoveryJournal(identity: changing(id, column: column), confirmedInput: facts)
+      let otherL = try other.snapshot().current.lineage
+      replacements.append(try other.recording(.claim(otherL)).recording(.terminate(otherL, .failed)))
+    }
+    for changedFacts in [ImportRecoveryJournal.ConfirmedInput(expectedSHA256: String(repeating: "a", count: 64), destinationFolderID: nil),
+      .init(expectedSHA256: nil, destinationFolderID: UUID())] {
+      replacements.append(try ImportRecoveryJournal(identity: id, confirmedInput: changedFacts)
+        .recording(.claim(l)).recording(.terminate(l, .failed)))
+    }
+    let result = JobRecoveryPolicy.Result(id: "SYNTHETIC forbidden publication")
+    let publishing = try record.journal.recording(.writerClosure(l, permit: id.writer.uuidString, .closed(.validated(result))))
+      .recording(.acquirePublication(l, writer: id.writer.uuidString, permit: id.publication.uuidString))
+      .recording(.rename(l, permit: id.publication.uuidString))
+      .recording(.renameFinished(l, permit: id.publication.uuidString, succeeded: true))
+      .recording(.publish(l, permit: id.publication.uuidString, result))
+    replacements.append(publishing)
+    var oversized = record.journal
+    while try oversized.encoded(maximumBytes: Int.max).count <= bound {
+      oversized = try oversized.recording(.authorityChanged(oversized.snapshot().authority))
+    }
+    replacements.append(try oversized.recording(.terminate(l, .failed)))
+    for replacement in replacements {
+      XCTAssertThrowsError(try db.recordJournaledImportFailure(expected: record,
+        replacement: replacement, failure: .importFailed, cleanupDebt: true))
+      assertRows(before, equal: try actualRows(db))
+    }
+    let advanced = try db.appendJournaledImport(expected: record,
+      replacement: record.journal.recording(.authorityChanged(record.journal.snapshot().authority)))
+    let advancedRows = try actualRows(db)
+    assertError(.staleHistory) { _ = try db.recordJournaledImportFailure(expected: record,
+      replacement: failed, failure: .importFailed, cleanupDebt: true) }
+    assertRows(advancedRows, equal: try actualRows(ProductDatabase.open(at: root)))
+    XCTAssertEqual(try read(id, db: db).encoded, advanced.encoded)
+  }
+
+  func testOrdinaryJournaledFailureRejectsLegacyNullStoredPayloadAndOperationalCaptureDrift() throws {
+    let (legacyRoot, legacyDB, _, legacyClaimed) = try fixture()
+    defer { try? FileManager.default.removeItem(at: legacyRoot) }
+    let legacyExpected = ImportRecoveryRecord(journal: legacyClaimed,
+      encoded: try legacyClaimed.encoded(maximumBytes: bound))
+    let legacyBefore = try actualRows(legacyDB)
+    assertError(.missingHistory) {
+      _ = try legacyDB.recordJournaledImportFailure(expected: legacyExpected,
+        replacement: legacyClaimed.recording(.terminate(legacyClaimed.snapshot().current.lineage, .failed)),
+        failure: .importFailed, cleanupDebt: true)
+    }
+    assertRows(legacyBefore, equal: try actualRows(ProductDatabase.open(at: legacyRoot)))
+    let mutations = ["paper:status = 'deleting'", "paper:status = 'ready'", "paper:deletionID = 'invalid'",
+      "importJob:state = 'pending'", "importJob:state = 'failed'", "importJob:failure = 'cancelled'",
+      "importJob:recoveryJournal = NULL", "importJob:recoveryJournal = X'00'",
+      "importJob:recoveryJournal = 'text'", "importJob:recoveryJournal = zeroblob(262145)"]
+      + ["paper:generation = 'invalid'"]
+      + ["attempt", "fence", "correlation", "input", "epoch", "writer", "publication"].map { "importJob:\($0) = 'invalid'" }
+    for mutation in mutations {
+      let (root, db, _, record) = try ordinaryFailureFixture()
+      defer { try? FileManager.default.removeItem(at: root) }
+      let parts = mutation.split(separator: ":", maxSplits: 1)
+      try db.adapterWrite { try $0.execute(sql: "UPDATE \(parts[0]) SET \(parts[1])") }
+      let before = try actualRows(db)
+      let replacement = try record.journal.recording(.terminate(record.journal.snapshot().current.lineage, .failed))
+      if mutation.hasSuffix("NULL") {
+        assertError(.missingHistory) { _ = try db.recordJournaledImportFailure(expected: record,
+          replacement: replacement, failure: .importFailed, cleanupDebt: true) }
+      } else {
+        XCTAssertThrowsError(try db.recordJournaledImportFailure(expected: record,
+          replacement: replacement, failure: .importFailed, cleanupDebt: true), mutation)
+      }
+      assertRows(before, equal: try actualRows(ProductDatabase.open(at: root)))
+    }
+  }
+
+  func testOrdinaryJournaledFailureTriggerMutationsRollBackActualWriterAndProviderMarker() throws {
+    for mutation in ["ignoreJournal", "ignorePaper", "ignoreJob", "corrupt", "text", "oversize",
+      "state", "failure", "operationalCorrupt", "title", "counter", "folder", "provider", "otherRow"] {
+      let (root, db, id, record) = try ordinaryFailureFixture()
+      defer { try? FileManager.default.removeItem(at: root) }
+      let other = UUID().uuidString
+      let folder = UUID().uuidString
+      try db.adapterWrite { sql in
+        try sql.execute(sql: "INSERT INTO paper(id, generation, title, status, createdAt) VALUES (?, ?, 'other', 'importFailed', 0)", arguments: [other, UUID().uuidString])
+        try sql.execute(sql: "INSERT INTO libraryFolder(id, name) VALUES (?, 'SYNTHETIC folder')", arguments: [folder])
+      }
+      let before = try actualRows(db)
+      let otherBefore = try db.adapterRead { try Row.fetchOne($0, sql: "SELECT * FROM paper WHERE id = ?", arguments: [other]) }
+      try db.adapterWrite { sql in
+        var table = "importJob"
+        var column = "recoveryJournal"
+        var timing = "AFTER"
+        let action: String
+        switch mutation {
+        case "ignoreJournal", "ignorePaper", "ignoreJob":
+          timing = "BEFORE"
+          if mutation == "ignorePaper" { table = "paper"; column = "status" }
+          if mutation == "ignoreJob" { column = "state" }
+          action = "SELECT RAISE(IGNORE);"
+        case "corrupt": action = "UPDATE importJob SET recoveryJournal = X'00';"
+        case "text": action = "UPDATE importJob SET recoveryJournal = 'text';"
+        case "oversize": action = "UPDATE importJob SET recoveryJournal = zeroblob(262145);"
+        case "state": action = "UPDATE importJob SET state = 'running';"; column = "state"
+        case "failure": action = "UPDATE importJob SET failure = 'cancelled';"; column = "state"
+        case "operationalCorrupt": action = "UPDATE importJob SET recoveryJournal = X'00';"; column = "state"
+        case "title": action = "UPDATE paper SET title = 'drift';"
+        case "counter": action = "UPDATE importJob SET bytesCopied = 99;"
+        case "folder": action = "INSERT INTO paperFolder(paperID, folderID) VALUES ('\(id.paperID.uuidString)', '\(folder)');"
+        case "provider": action = "SELECT 1;"
+        default: action = "UPDATE paper SET title = 'foreign drift' WHERE id = '\(other)';"
+        }
+        // Executed INSIDE the actual method transaction, never a nested adapterWrite.
+        try sql.execute(sql: "CREATE TRIGGER abortMutation \(timing) UPDATE OF \(column) ON \(table) BEGIN UPDATE providerConfig SET generation = generation + 1, model = 'transaction-marker'; \(action) END")
+      }
+      XCTAssertThrowsError(try db.recordJournaledImportFailure(expected: record,
+        replacement: record.journal.recording(.terminate(record.journal.snapshot().current.lineage, .failed)),
+        failure: .importFailed, cleanupDebt: true), mutation)
+      let reopened = try ProductDatabase.open(at: root)
+      assertRows(before, equal: try actualRows(reopened))
+      let otherAfter = try reopened.adapterRead { try Row.fetchOne($0, sql: "SELECT * FROM paper WHERE id = ?", arguments: [other]) }
+      XCTAssertEqual(otherBefore, otherAfter)
+      XCTAssertEqual(try read(id, db: reopened).encoded, record.encoded)
+      XCTAssertEqual(try reopened.adapterRead { try Int.fetchOne($0, sql: "SELECT count(*) FROM paperFolder") }, 0)
+    }
+  }
+
+  func testOrdinaryJournaledFailureUnrelatedRowMutationWithoutMarkerIsRejected() throws {
+    let (root, db, _, record) = try ordinaryFailureFixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let other = UUID().uuidString
+    try db.adapterWrite { sql in
+      try sql.execute(sql: "INSERT INTO paper(id, generation, title, status, createdAt) VALUES (?, ?, 'other', 'importFailed', 0)", arguments: [other, UUID().uuidString])
+      try sql.execute(sql: "CREATE TRIGGER unrelatedMutation AFTER UPDATE OF state ON importJob BEGIN UPDATE paper SET title = 'foreign drift' WHERE id = '\(other)'; END")
+    }
+    let before = try db.adapterRead { try Row.fetchAll($0, sql: "SELECT * FROM paper ORDER BY id") }
+    let rowsBefore = try actualRows(db)
+    XCTAssertThrowsError(try db.recordJournaledImportFailure(expected: record,
+      replacement: record.journal.recording(.terminate(record.journal.snapshot().current.lineage, .failed)),
+      failure: .importFailed, cleanupDebt: true))
+    let reopened = try ProductDatabase.open(at: root)
+    XCTAssertEqual(before, try reopened.adapterRead { try Row.fetchAll($0, sql: "SELECT * FROM paper ORDER BY id") })
+    assertRows(rowsBefore, equal: try actualRows(reopened))
+  }
+
+  func testOrdinaryJournaledFailureCompensatingReaderTriggerCannotSubstituteForeignWrites() throws {
+    // SYNTHETIC SQL-only attack: one foreign write substitutes the ignored reader
+    // UPDATE, leaving total_changes == 4 and both target rows otherwise unchanged.
+    for mutation in ["otherPaper", "providerConfig", "delete", "insert", "truncate"] {
+      let (root, db, id, record) = try ordinaryFailureFixture()
+      defer { try? FileManager.default.removeItem(at: root) }
+      let other = UUID().uuidString
+      let inserted = UUID().uuidString
+      try db.adapterWrite { sql in
+        try sql.execute(sql: "INSERT INTO paper(id, generation, title, status, createdAt) VALUES (?, ?, 'SYNTHETIC other', 'importFailed', 0)", arguments: [other, UUID().uuidString])
+        try sql.execute(sql: "INSERT INTO libraryFolder(id, name) VALUES (?, 'SYNTHETIC truncate target')", arguments: [other])
+        let action: String
+        switch mutation {
+        case "otherPaper": action = "UPDATE paper SET title = 'foreign drift' WHERE id = '\(other)';"
+        case "providerConfig": action = "UPDATE providerConfig SET model = 'foreign drift';"
+        case "delete": action = "DELETE FROM paper WHERE id = '\(other)';"
+        case "insert": action = "INSERT INTO paper(id, generation, title, status, createdAt) VALUES ('\(inserted)', '\(UUID().uuidString)', 'foreign insertion', 'importFailed', 0);"
+        default: action = "DELETE FROM libraryFolder;"
+        }
+        // No extra provider marker: precisely one write replaces the mandatory
+        // inner reader UPDATE before RAISE(IGNORE), defeating count-only guards.
+        try sql.execute(sql: "CREATE TRIGGER compensatingReader BEFORE UPDATE OF readerSequence ON paper WHEN NEW.id = '\(id.paperID.uuidString)' BEGIN \(action) SELECT RAISE(IGNORE); END")
+      }
+      let before = try actualRows(db)
+      let papersBefore = try db.adapterRead { try Row.fetchAll($0, sql: "SELECT * FROM paper ORDER BY id") }
+      let foldersBefore = try db.adapterRead { try Row.fetchAll($0, sql: "SELECT * FROM libraryFolder ORDER BY id") }
+      XCTAssertThrowsError(try db.recordJournaledImportFailure(expected: record,
+        replacement: record.journal.recording(.terminate(record.journal.snapshot().current.lineage, .failed)),
+        failure: .importFailed, cleanupDebt: true), mutation)
+      let reopened = try ProductDatabase.open(at: root)
+      assertRows(before, equal: try actualRows(reopened))
+      XCTAssertEqual(papersBefore, try reopened.adapterRead { try Row.fetchAll($0, sql: "SELECT * FROM paper ORDER BY id") }, mutation)
+      XCTAssertEqual(foldersBefore, try reopened.adapterRead { try Row.fetchAll($0, sql: "SELECT * FROM libraryFolder ORDER BY id") }, mutation)
+      XCTAssertEqual(try read(id, db: reopened).encoded, record.encoded)
+    }
+  }
+
+  func testOrdinaryJournaledFailureWithoutRowIDSchemaDeniesCompensatingAndUntriggeredWrites() throws {
+    for compensatingTrigger in [false, true] {
+      let (root, db, id, record) = try ordinaryFailureFixture()
+      defer { try? FileManager.default.removeItem(at: root) }
+      try db.adapterWrite { sql in
+        try sql.execute(sql: "CREATE TABLE syntheticWR(key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID")
+        try sql.execute(sql: "INSERT INTO syntheticWR(key, value) VALUES ('owned', 'unchanged')")
+        if compensatingTrigger {
+          // Exactly one invisible WR write replaces the ignored reader UPDATE;
+          // there is no provider marker or additional fifth write.
+          try sql.execute(sql: "CREATE TRIGGER compensatingWR BEFORE UPDATE OF readerSequence ON paper WHEN NEW.id = '\(id.paperID.uuidString)' BEGIN UPDATE syntheticWR SET value = 'foreign drift'; SELECT RAISE(IGNORE); END")
+        }
+      }
+      let before = try actualRows(db)
+      assertError(.invalidHistory) {
+        _ = try db.recordJournaledImportFailure(expected: record,
+          replacement: record.journal.recording(.terminate(record.journal.snapshot().current.lineage, .failed)),
+          failure: .importFailed, cleanupDebt: true)
+      }
+      let reopened = try ProductDatabase.open(at: root)
+      assertRows(before, equal: try actualRows(reopened))
+      XCTAssertEqual(try read(id, db: reopened).encoded, record.encoded)
+      XCTAssertEqual(try reopened.adapterRead { try String.fetchOne($0, sql: "SELECT value FROM syntheticWR WHERE key = 'owned'") }, "unchanged")
+    }
+  }
+
+  func testOrdinaryJournaledFailureShadowTriggerDefinitionDeniedAndCanonicalSchemaAdmitted() throws {
+    let (root, db, id, record) = try ordinaryFailureFixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let before = try actualRows(db)
+    let valueBefore = try db.adapterRead {
+      try Int64.fetchOne($0, sql: "SELECT v FROM extractionFTS_config WHERE k = 'version'")
+    }
+    XCTAssertNotNil(valueBefore)
+    XCTAssertThrowsError(try db.adapterWrite { sql in
+      try sql.execute(sql: "CREATE TRIGGER compensatingShadow BEFORE UPDATE OF readerSequence ON paper WHEN NEW.id = '\(id.paperID.uuidString)' BEGIN UPDATE extractionFTS_config SET v = v + 1 WHERE k = 'version'; SELECT RAISE(IGNORE); END")
+    }) { error in
+      guard let databaseError = error as? DatabaseError else {
+        XCTFail("Expected typed SQLite trigger-definition denial, got \(error)")
+        return
+      }
+      XCTAssertEqual(databaseError.resultCode, .SQLITE_ERROR)
+      XCTAssertTrue(databaseError.message?.contains("may not write to shadow table \"extractionFTS_config\"") == true)
+    }
+    let reopened = try ProductDatabase.open(at: root)
+    assertRows(before, equal: try actualRows(reopened))
+    XCTAssertEqual(try read(id, db: reopened).encoded, record.encoded)
+    XCTAssertEqual(valueBefore, try reopened.adapterRead {
+      try Int64.fetchOne($0, sql: "SELECT v FROM extractionFTS_config WHERE k = 'version'")
+    })
+    XCTAssertEqual(try reopened.adapterRead {
+      try Int.fetchOne($0, sql: "SELECT count(*) FROM sqlite_schema WHERE type = 'trigger' AND name = 'compensatingShadow'")
+    }, 0)
+    // Actual SQLite definition denial is not evidence of an observer callback.
+    // Canonical shadow schema must still admit an ordinary failure afterwards.
+    let replacement = try record.journal.recording(.terminate(record.journal.snapshot().current.lineage, .failed))
+    let stored = try reopened.recordJournaledImportFailure(expected: record,
+      replacement: replacement, failure: .importFailed, cleanupDebt: true)
+    let final = try ProductDatabase.open(at: root)
+    XCTAssertEqual(try read(id, db: final).encoded, stored.encoded)
+    XCTAssertEqual(try read(id, db: final).journal.snapshot(), try replacement.snapshot())
+    XCTAssertEqual(String.fromDatabaseValue(try actualRows(final).0["status"]), "importFailed")
+    XCTAssertEqual(String.fromDatabaseValue(try actualRows(final).1["failure"]), "importFailed")
+    XCTAssertEqual(valueBefore, try final.adapterRead {
+      try Int64.fetchOne($0, sql: "SELECT v FROM extractionFTS_config WHERE k = 'version'")
+    })
+    let finalProvider = try actualRows(final).2
+    for column in before.2.columnNames {
+      XCTAssertEqual(before.2[column] as DatabaseValue, finalProvider[column] as DatabaseValue, column)
+    }
+  }
+
   func testJournaledReservationIgnoredInsertsCannotBackfillLegacyHistory() throws {
     for table in ["paper", "importJob"] {
       let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

@@ -259,7 +259,7 @@ public final class ProductDatabase: @unchecked Sendable {
     }
   }
 
-  private static func failRunningImport(_ identity: ImportIdentity, failure: String,
+  static func failRunningImport(_ identity: ImportIdentity, failure: String,
     cleanupDebt: Bool, in db: Database) throws {
     _ = try guardRunningImport(identity, in: db)
     try db.execute(sql: """

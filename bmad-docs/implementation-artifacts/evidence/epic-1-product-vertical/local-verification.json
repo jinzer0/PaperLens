@@ -28,9 +28,9 @@
   "verification": {
     "productUnion": {
       "command": "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --parallel --num-workers 1 --filter ProductTests",
-      "tests": 390,
+      "tests": 399,
       "failures": 0,
-      "output": "artifact://1258",
+      "output": "artifact://1285",
       "evidence": "Real GRDB transactions, owned synthetic files and actual local FIFO IO/close/peer metadata/EPIPE; mocked provider/HTTP transport and synthetic windowless PDFKit conversions. Not authenticated provider, app UI, SDK producer or PDFium execution."
     },
     "nativeCompilation": {
@@ -38,11 +38,11 @@
       "configuration": "Release",
       "architecture": "arm64",
       "minimumOS": "15.0",
-      "derivedData": ".build/product-native-compile-20261010-an",
+      "derivedData": ".build/product-native-compile-20261010-ap",
       "codeSigningAllowed": false,
       "result": "BUILD SUCCEEDED",
-      "rawOutput": "artifact://1262",
-      "output": "artifact://1262",
+      "rawOutput": "artifact://1286",
+      "output": "artifact://1286",
       "applicationAndHelperBinariesExecuted": false,
       "warnings": "AppIntents metadata skipped, PDFium debug-map duplicate/missing-symbol warnings and an unnecessary-await Swift warning remain; no warning suppression or debug-symbol repair claimed."
     },
@@ -295,6 +295,28 @@
     "visibleUIOrAccessibilityVerified": false,
     "runtimeParsingOrCalibrationVerified": false,
     "helperExecuted": false,
+    "storyAccepted": false
+  },
+  "atomicOrdinaryImportFailureHistory": {
+    "specificationCommit": "ed673b5",
+    "sourceDiffAgainstSpecificationSha256": "6fb3fd3b0d6a64195527d65551facd535ad9bef3c363abc9b2a805ab667f55cb",
+    "sourceScope": ["PaperLensApp/Infrastructure/ProductDatabase.swift", "PaperLensApp/Infrastructure/ProductDatabase+ImportRecovery.swift", "Tests/Product/ImportRecoveryPersistenceTests.swift"],
+    "focusedTests": {"tests": 97, "failures": 0, "persistenceTests": 43, "newTestMethods": 9, "lifecycleTests": 35, "startupTests": 19, "output": "artifact://1283"},
+    "productUnion": {"tests": 399, "failures": 0, "output": "artifact://1285", "processMode": "SwiftPM --parallel --num-workers 1; every Product case invoked", "testsSkipped": 0},
+    "nativeCompilation": {"result": "BUILD SUCCEEDED", "output": "artifact://1286", "derivedData": ".build/product-native-compile-20261010-ap", "codeSigningAllowed": false, "applicationAndHelperBinariesExecuted": false},
+    "preservedFailures": [{"tests": 94, "failedTestMethods": 2, "output": "artifact://1267", "repair": "Mandatory reader trigger accounts for the fourth actual write; no trigger suppression."}, {"tests": 97, "failedTestMethods": 1, "output": "artifact://1281", "repair": "Shadow fixture now asserts actual SQLite trigger-definition denial rather than assuming its setup succeeds."}, {"tests": 97, "failedTestMethods": 1, "output": "artifact://1282", "repair": "Exact SQLite error assertion includes observed quoted shadow-table spelling."}],
+    "intermediateVerification": {"focused94": "artifact://1269", "product396": "artifact://1272", "nativeAo": "artifact://1275", "focused95": "artifact://1278"},
+    "review": "agent://106-OrdinaryFailureHistoryIntegrity: final SOURCE-ONLY CLEAR / APPROVE; compensated observable row and invisible user-WR P1 substitutions resolved by public transaction observers and enforced typed schema admission",
+    "evidence": "Five fixed ordinary failure causes atomically commit strict genuine history prefix with exact operational failure/current capture, conservative existing debt and typed whole-row/folder readback. Retained public GRDB observers restrict captured main rowid UPDATEs through commit and veto potential shadow writes; typed table_list admission rejects unobservable user WR schemas. Trigger/refused/corrupt/foreign writes roll back with unchanged owned rows/config/history across reopen.",
+    "genuineAtomicFailureMetadataVerified": true,
+    "existingDebtClearedOrLegacyHistoryFabricated": false,
+    "readerTriggerDisabledOrPrivateSQLiteHookReplaced": false,
+    "shadowDefinitionDenialProvesObserverCallback": false,
+    "arbitraryInvisibleCOrInternalSchemaEffectsCertified": false,
+    "serializationGrantsPhysicalCleanupAuthority": false,
+    "productionJournaledActorCutoverActivated": false,
+    "sameJobRetryUIActivated": false,
+    "helperOrRendererExecuted": false,
     "storyAccepted": false
   },
   "actualDeletionCommandJournalRevocation": {
