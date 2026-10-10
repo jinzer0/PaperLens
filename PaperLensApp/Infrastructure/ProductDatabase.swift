@@ -185,13 +185,28 @@ public final class ProductDatabase: @unchecked Sendable {
 
   func recordProgress(_ identity: ImportIdentity, bytes: Int64) throws {
     try queue.write { db in
-      try db.execute(sql: """
-        UPDATE importJob SET bytesCopied = ? WHERE id = ? AND attempt = ? AND state = 'running'
-          AND EXISTS (SELECT 1 FROM paper WHERE id = ? AND status = 'importing')
-        """, arguments: [bytes, identity.jobID.uuidString, identity.attempt.uuidString,
-          identity.paperID.uuidString])
+      let currentBytes = try Self.guardRunningImport(identity, in: db)
+      guard bytes >= currentBytes else { throw ProductDatabaseError.invalidRecord }
+      try db.execute(sql: "UPDATE importJob SET bytesCopied = ? WHERE id = ?",
+        arguments: [bytes, identity.jobID.uuidString])
       guard db.changesCount == 1 else { throw ProductDatabaseError.staleImport }
     }
+  }
+
+  private static func guardRunningImport(_ identity: ImportIdentity, in db: Database) throws -> Int64 {
+    guard let bytes = try Int64.fetchOne(db, sql: """
+      SELECT j.bytesCopied FROM paper p JOIN importJob j ON p.id = j.paperID
+      WHERE p.id = ? AND p.generation = ? AND p.status = 'importing' AND p.deletionID IS NULL
+        AND j.id = ? AND j.attempt = ? AND j.fence = ? AND j.correlation = ?
+        AND j.input = ? AND j.epoch = ? AND j.writer = ? AND j.publication = ? AND j.state = 'running'
+      """, arguments: [identity.paperID.uuidString, identity.generation.uuidString,
+        identity.jobID.uuidString, identity.attempt.uuidString, identity.fence.uuidString,
+        identity.correlation.uuidString, identity.input.uuidString, identity.epoch.uuidString,
+        identity.writer.uuidString, identity.publication.uuidString]) else {
+      throw ProductDatabaseError.staleImport
+    }
+    guard bytes >= 0 else { throw ProductDatabaseError.invalidRecord }
+    return bytes
   }
 
   /// Rename and reference publication share the guarded transaction. Failure never leaves a
@@ -200,16 +215,7 @@ public final class ProductDatabase: @unchecked Sendable {
     destinationFolderID: UUID? = nil) throws {
     try queue.write { db in
       try Self.validateImportDestination(destinationFolderID, in: db)
-      let count = try Int.fetchOne(db, sql: """
-        SELECT COUNT(*) FROM paper JOIN importJob ON paper.id = importJob.paperID
-        WHERE paper.id = ? AND generation = ? AND status = 'importing'
-          AND importJob.id = ? AND attempt = ? AND fence = ? AND correlation = ?
-          AND input = ? AND epoch = ? AND writer = ? AND publication = ? AND state = 'running'
-        """, arguments: [identity.paperID.uuidString, identity.generation.uuidString,
-          identity.jobID.uuidString, identity.attempt.uuidString, identity.fence.uuidString,
-          identity.correlation.uuidString, identity.input.uuidString, identity.epoch.uuidString,
-          identity.writer.uuidString, identity.publication.uuidString])
-      guard count == 1 else { throw ProductDatabaseError.staleImport }
+      _ = try Self.guardRunningImport(identity, in: db)
       try FileManager.default.moveItem(at: stage, to: final)
       try db.execute(sql: "UPDATE paper SET status = 'ready', pdfReference = ?, pdfSHA256 = ? WHERE id = ?",
         arguments: ["papers/\(identity.paperID.uuidString)/document.pdf", sha256, identity.paperID.uuidString])
@@ -221,16 +227,54 @@ public final class ProductDatabase: @unchecked Sendable {
 
   func failImport(_ identity: ImportIdentity, failure: String, cleanupDebt: Bool) throws {
     try queue.write { db in
-      try db.execute(sql: """
-        UPDATE paper SET status = 'importFailed', pdfReference = NULL, cleanupDebt = ?
-        WHERE id = ? AND status = 'importing'
-        """, arguments: [cleanupDebt, identity.paperID.uuidString])
-      try db.execute(sql: """
-        UPDATE importJob SET state = 'failed', failure = ? WHERE id = ? AND state = 'running'
-        """, arguments: [failure, identity.jobID.uuidString])
-      if cleanupDebt {
-        try db.execute(sql: "UPDATE paper SET cleanupDebt = 1 WHERE id = ?",
-          arguments: [identity.paperID.uuidString])
+      try Self.failRunningImport(identity, failure: failure, cleanupDebt: cleanupDebt, in: db)
+    }
+  }
+
+  private static func failRunningImport(_ identity: ImportIdentity, failure: String,
+    cleanupDebt: Bool, in db: Database) throws {
+    _ = try guardRunningImport(identity, in: db)
+    try db.execute(sql: """
+      UPDATE paper SET status = 'importFailed', pdfReference = NULL, cleanupDebt = ?
+      WHERE id = ? AND status = 'importing'
+      """, arguments: [cleanupDebt, identity.paperID.uuidString])
+    guard db.changesCount == 1 else { throw ProductDatabaseError.staleImport }
+    try db.execute(sql: """
+      UPDATE importJob SET state = 'failed', failure = ? WHERE id = ? AND state = 'running'
+      """, arguments: [failure, identity.jobID.uuidString])
+    guard db.changesCount == 1 else { throw ProductDatabaseError.staleImport }
+  }
+
+  /// Producer abort may finish after deletion revoked this exact execution. It must
+  /// preserve the saga and other debts, never turn a deleting Paper back into a failure.
+  func recordImportAbort(_ identity: ImportIdentity, failure: String, cleanupDebt: Bool) throws {
+    try queue.write { db in
+      guard let row = try Row.fetchOne(db, sql: """
+        SELECT p.status, p.deletionID FROM paper p JOIN importJob j ON p.id = j.paperID
+        WHERE p.id = ? AND p.generation = ? AND j.id = ? AND j.attempt = ? AND j.fence = ?
+          AND j.correlation = ? AND j.input = ? AND j.epoch = ? AND j.writer = ? AND j.publication = ?
+          AND ((p.status = 'importing' AND p.deletionID IS NULL AND j.state = 'running')
+            OR (p.status = 'deleting' AND p.deletionID IS NOT NULL
+              AND j.state = 'failed' AND j.failure = 'paperDeleting'))
+        """, arguments: [identity.paperID.uuidString, identity.generation.uuidString,
+          identity.jobID.uuidString, identity.attempt.uuidString, identity.fence.uuidString,
+          identity.correlation.uuidString, identity.input.uuidString, identity.epoch.uuidString,
+          identity.writer.uuidString, identity.publication.uuidString]) else {
+        throw ProductDatabaseError.staleImport
+      }
+      let status: String = row["status"]
+      if status == "importing" {
+        try Self.failRunningImport(identity, failure: failure, cleanupDebt: cleanupDebt, in: db)
+      } else {
+        let saga: String = row["deletionID"]
+        guard let parsed = UUID(uuidString: saga), parsed.uuidString == saga else {
+          throw ProductDatabaseError.invalidRecord
+        }
+        if cleanupDebt {
+          try db.execute(sql: "UPDATE paper SET cleanupDebt = 1 WHERE id = ? AND deletionID = ?",
+            arguments: [identity.paperID.uuidString, saga])
+          guard db.changesCount == 1 else { throw ProductDatabaseError.staleImport }
+        }
       }
     }
   }

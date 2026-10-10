@@ -28,9 +28,9 @@
   "verification": {
     "productUnion": {
       "command": "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --filter ProductTests",
-      "tests": 313,
+      "tests": 318,
       "failures": 0,
-      "output": "artifact://1085",
+      "output": "artifact://1099",
       "evidence": "Real GRDB transactions, owned synthetic files and actual local FIFO IO/close/peer metadata/EPIPE; mocked provider/HTTP transport and synthetic windowless PDFKit conversions. Not authenticated provider, app UI, SDK producer or PDFium execution."
     },
     "nativeCompilation": {
@@ -38,11 +38,11 @@
       "configuration": "Release",
       "architecture": "arm64",
       "minimumOS": "15.0",
-      "derivedData": ".build/product-native-compile-20261010-aa",
+      "derivedData": ".build/product-native-compile-20261010-ac",
       "codeSigningAllowed": false,
       "result": "BUILD SUCCEEDED",
-      "rawOutput": "artifact://1086",
-      "output": "artifact://1086",
+      "rawOutput": "artifact://1100",
+      "output": "artifact://1100",
       "applicationAndHelperBinariesExecuted": false,
       "warnings": "AppIntents metadata skipped, PDFium debug-map duplicate/missing-symbol warnings and an unnecessary-await Swift warning remain; no warning suppression or debug-symbol repair claimed."
     },
@@ -295,6 +295,26 @@
     "visibleUIOrAccessibilityVerified": false,
     "runtimeParsingOrCalibrationVerified": false,
     "helperExecuted": false,
+    "storyAccepted": false
+  },
+  "exactImportMutationFencing": {
+    "initialSpecificationCommit": "13f32b1",
+    "deletingAbortCorrectionSpecificationCommit": "66d0ebe",
+    "sourceDiffAgainstCorrectionSpecificationSha256": "9c6119eefba37ac52cff587f4ca18bd3ba864a03e70c3b771f5c4fc2c97f6772",
+    "sourceScope": ["PaperLensApp/Infrastructure/ProductDatabase.swift", "PaperLensApp/Application/LocalLibraryLifecycle.swift", "Tests/Product/LocalLibraryLifecycleTests.swift", "Tests/Product/LibraryURLImportWriterTests.swift"],
+    "evidence": "One same-transaction guard binds current importing/nondeleting Paper ID/generation and Job owner/id/attempt/fence/correlation/input/epoch/writer/publication/running. Progress cannot decrease; strict failure checks both affected rows and rolls back Paper/debt if Job mutation refuses; publication shares full guard. Explicit producer-abort operation admits only that running state or exact deleting/canonical-saga/failed-paperDeleting to preserve saga/status/failure/reference and only increase cleanup debt. Both actual copy/URL callers use it; closure is never inferred from DB state.",
+    "preservedInitialUnion": {"tests": 317, "failures": 1, "output": "artifact://1094", "finding": "Stricter ordinary failure guard exposed actual URL abort after beginDeletion; fixed explicit deletion-preserving producer-abort semantics, not a permissive fallback."},
+    "preservedInitialNativeCompilation": {"result": "BUILD SUCCEEDED", "output": "artifact://1096", "derivedData": ".build/product-native-compile-20261010-ab"},
+    "focusedTests": {"tests": 36, "failures": 0, "newTests": 5, "output": "artifact://1098"},
+    "productUnion": {"tests": 318, "failures": 0, "output": "artifact://1099"},
+    "nativeCompilation": {"result": "BUILD SUCCEEDED", "output": "artifact://1100", "derivedData": ".build/product-native-compile-20261010-ac", "codeSigningAllowed": false, "applicationAndHelperBinariesExecuted": false},
+    "review": "agent://85-ImportMutationCASIntegrity: SOURCE-ONLY CLEAR / APPROVE final five-file source scope; ordinary CAS and actual deleting-abort callers both reviewed",
+    "realSQLRollbackAndLateLineageRejectionVerified": true,
+    "actualURLTransportDrainAbortDeletionSagaTestVerified": true,
+    "sameJobRetryOrDurableHistoryImplemented": false,
+    "schemaEpochPolicySelectorRootResourceCounterChanged": false,
+    "agentPurgeOrPhysicalUIVerified": false,
+    "helperOrRendererExecuted": false,
     "storyAccepted": false
   },
   "actualImportCopyOwnership": {

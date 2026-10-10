@@ -138,6 +138,184 @@ final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
     SyntheticAgentPurge(root: temporary.appendingPathComponent("agent"))
   }
 
+  private func observeImport(_ db: ProductDatabase, _ id: ImportIdentity) throws -> [String] {
+    try db.adapterRead { sql in
+      let row = try XCTUnwrap(Row.fetchOne(sql, sql: """
+        SELECT p.status AS paperStatus, p.generation, p.pdfReference, p.pdfSHA256,
+          p.cleanupDebt, p.deletionID, j.state AS jobState, j.bytesCopied, j.failure,
+          j.attempt, j.fence, j.correlation, j.input, j.epoch, j.writer, j.publication
+        FROM paper p, importJob j WHERE p.id = ? AND j.id = ?
+        """, arguments: [id.paperID.uuidString, id.jobID.uuidString]))
+      let columns = ["paperStatus", "generation", "pdfReference", "pdfSHA256", "deletionID",
+        "jobState", "failure", "attempt", "fence", "correlation", "input", "epoch", "writer", "publication"]
+      let text = columns.map { column -> String in
+        let value: String? = row[column]
+        return value ?? "<absent>"
+      }
+      let debt: Int64 = row["cleanupDebt"]
+      let bytes: Int64 = row["bytesCopied"]
+      return text + [String(debt), String(bytes)]
+    }
+  }
+
+  func testEveryImportMutationRejectsEachForeignExecutionIdentity() throws {
+    let db = try ProductDatabase.open(at: root)
+    let current = identity()
+    try db.reserveImport(current, title: "owned exact lineage")
+    try db.recordProgress(current, bytes: 7)
+    let original = try observeImport(db, current)
+    let owned = namespace(current.paperID)
+    try FileManager.default.createDirectory(at: owned, withIntermediateDirectories: true)
+    let stage = owned.appendingPathComponent("guard.stage")
+    let final = owned.appendingPathComponent("document.pdf")
+    let marker = Data("owned guarded stage".utf8)
+    try marker.write(to: stage)
+    for field in ["paper", "generation", "job", "attempt", "fence", "correlation", "input", "epoch", "writer", "publication"] {
+      let foreign = ImportIdentity(paperID: field == "paper" ? UUID() : current.paperID,
+        generation: field == "generation" ? UUID() : current.generation,
+        jobID: field == "job" ? UUID() : current.jobID,
+        attempt: field == "attempt" ? UUID() : current.attempt,
+        fence: field == "fence" ? UUID() : current.fence,
+        correlation: field == "correlation" ? UUID() : current.correlation,
+        input: field == "input" ? UUID() : current.input,
+        epoch: field == "epoch" ? UUID() : current.epoch,
+        writer: field == "writer" ? UUID() : current.writer,
+        publication: field == "publication" ? UUID() : current.publication)
+      XCTAssertThrowsError(try db.recordProgress(foreign, bytes: 99)) {
+        XCTAssertEqual($0 as? ProductDatabaseError, .staleImport, field)
+      }
+      XCTAssertThrowsError(try db.failImport(foreign, failure: "late", cleanupDebt: true)) {
+        XCTAssertEqual($0 as? ProductDatabaseError, .staleImport, field)
+      }
+      XCTAssertThrowsError(try db.recordImportAbort(foreign, failure: "late", cleanupDebt: true)) {
+        XCTAssertEqual($0 as? ProductDatabaseError, .staleImport, field)
+      }
+      XCTAssertThrowsError(try db.publish(foreign, stage: stage, final: final,
+        sha256: String(repeating: "a", count: 64))) {
+        XCTAssertEqual($0 as? ProductDatabaseError, .staleImport, field)
+      }
+      XCTAssertEqual(try observeImport(db, current), original, field)
+      XCTAssertEqual(try Data(contentsOf: stage), marker, field)
+      XCTAssertFalse(FileManager.default.fileExists(atPath: final.path), field)
+    }
+  }
+
+  func testOldImportFailureAndProgressCannotMutateReopenedNewerExecution() throws {
+    var db: ProductDatabase? = try ProductDatabase.open(at: root)
+    let old = identity()
+    try db!.reserveImport(old, title: "owned old execution")
+    let next = ImportIdentity(paperID: old.paperID, generation: old.generation, jobID: old.jobID,
+      attempt: UUID(), fence: UUID(), correlation: UUID(), input: UUID(), epoch: UUID(), writer: UUID(), publication: UUID())
+    // Adversarial owned SQL fixture, not an implemented Retry or fabricated history API.
+    try db!.adapterWrite { sql in
+      try sql.execute(sql: """
+        UPDATE importJob SET attempt = ?, fence = ?, correlation = ?, input = ?, epoch = ?,
+          writer = ?, publication = ? WHERE id = ?
+        """, arguments: [next.attempt.uuidString, next.fence.uuidString, next.correlation.uuidString,
+          next.input.uuidString, next.epoch.uuidString, next.writer.uuidString,
+          next.publication.uuidString, next.jobID.uuidString])
+    }
+    db = nil
+    let reopened = try ProductDatabase.open(at: root)
+    let before = try observeImport(reopened, next)
+    XCTAssertThrowsError(try reopened.failImport(old, failure: "late", cleanupDebt: true)) {
+      XCTAssertEqual($0 as? ProductDatabaseError, .staleImport)
+    }
+    XCTAssertThrowsError(try reopened.recordProgress(old, bytes: 40)) {
+      XCTAssertEqual($0 as? ProductDatabaseError, .staleImport)
+    }
+    XCTAssertEqual(try observeImport(reopened, next), before)
+    try reopened.recordProgress(next, bytes: 8)
+    try reopened.failImport(next, failure: "current", cleanupDebt: false)
+    let record = try XCTUnwrap(reopened.libraryRecords().first)
+    XCTAssertEqual(record.status, .importFailed)
+    XCTAssertEqual(record.bytesCopied, 8)
+    XCTAssertEqual(record.failure, "current")
+    XCTAssertFalse(record.cleanupDebt)
+    let terminal = try observeImport(reopened, next)
+    XCTAssertThrowsError(try reopened.failImport(next, failure: "duplicate", cleanupDebt: true))
+    XCTAssertEqual(try observeImport(reopened, next), terminal)
+  }
+
+  func testImportFailureRowRefusalRollsBackPaperAndDebtAtomically() throws {
+    let db = try ProductDatabase.open(at: root)
+    let current = identity()
+    try db.reserveImport(current, title: "owned rollback")
+    let before = try observeImport(db, current)
+    try db.adapterWrite { sql in
+      try sql.execute(sql: """
+        CREATE TRIGGER refuse_import_failure BEFORE UPDATE OF state ON importJob
+        WHEN NEW.state = 'failed' BEGIN SELECT RAISE(IGNORE); END
+        """)
+    }
+    XCTAssertThrowsError(try db.failImport(current, failure: "owned fault", cleanupDebt: true)) {
+      XCTAssertEqual($0 as? ProductDatabaseError, .staleImport)
+    }
+    XCTAssertEqual(try observeImport(db, current), before)
+    try db.adapterWrite { try $0.execute(sql: "DROP TRIGGER refuse_import_failure") }
+    try db.failImport(current, failure: "current", cleanupDebt: true)
+    let record = try XCTUnwrap(db.libraryRecords().first)
+    XCTAssertEqual(record.status, .importFailed)
+    XCTAssertEqual(record.failure, "current")
+    XCTAssertTrue(record.cleanupDebt)
+  }
+
+  func testImportProgressCannotDecreaseOrCrossDeletionFence() throws {
+    let db = try ProductDatabase.open(at: root)
+    let current = identity()
+    try db.reserveImport(current, title: "owned progress")
+    try db.recordProgress(current, bytes: 12)
+    let before = try observeImport(db, current)
+    for bytes in [Int64(-1), 0, 11] {
+      XCTAssertThrowsError(try db.recordProgress(current, bytes: bytes)) {
+        XCTAssertEqual($0 as? ProductDatabaseError, .invalidRecord)
+      }
+      XCTAssertEqual(try observeImport(db, current), before)
+    }
+    try db.recordProgress(current, bytes: 12)
+    _ = try db.beginDeletion(current.paperID)
+    let deleting = try observeImport(db, current)
+    XCTAssertThrowsError(try db.recordProgress(current, bytes: 13)) {
+      XCTAssertEqual($0 as? ProductDatabaseError, .staleImport)
+    }
+    XCTAssertThrowsError(try db.failImport(current, failure: "late", cleanupDebt: true)) {
+      XCTAssertEqual($0 as? ProductDatabaseError, .staleImport)
+    }
+    XCTAssertEqual(try observeImport(db, current), deleting)
+  }
+
+  func testExactDeletingAbortPreservesSagaFailureAndOtherCleanupDebt() throws {
+    let db = try ProductDatabase.open(at: root)
+    let current = identity()
+    try db.reserveImport(current, title: "owned deleting abort")
+    _ = try db.beginDeletion(current.paperID)
+    let before = try observeImport(db, current)
+    try db.recordImportAbort(current, failure: "cancelled", cleanupDebt: false)
+    XCTAssertEqual(try observeImport(db, current), before)
+    try db.recordImportAbort(current, failure: "cancelled", cleanupDebt: true)
+    var indebted = before
+    indebted[indebted.count - 2] = "1"
+    XCTAssertEqual(try observeImport(db, current), indebted)
+    try db.recordImportAbort(current, failure: "cancelled", cleanupDebt: false)
+    XCTAssertEqual(try observeImport(db, current), indebted)
+    let foreign = ImportIdentity(paperID: current.paperID, generation: current.generation,
+      jobID: current.jobID, attempt: current.attempt, fence: UUID(), correlation: current.correlation,
+      input: current.input, epoch: current.epoch, writer: current.writer, publication: current.publication)
+    XCTAssertThrowsError(try db.recordImportAbort(foreign, failure: "late", cleanupDebt: true)) {
+      XCTAssertEqual($0 as? ProductDatabaseError, .staleImport)
+    }
+    XCTAssertEqual(try observeImport(db, current), indebted)
+    try db.adapterWrite { sql in
+      try sql.execute(sql: "UPDATE paper SET deletionID = 'malformed' WHERE id = ?",
+        arguments: [current.paperID.uuidString])
+    }
+    let malformed = try observeImport(db, current)
+    XCTAssertThrowsError(try db.recordImportAbort(current, failure: "late", cleanupDebt: true)) {
+      XCTAssertEqual($0 as? ProductDatabaseError, .invalidRecord)
+    }
+    XCTAssertEqual(try observeImport(db, current), malformed)
+  }
+
   private func assertActualPoolDenial(_ pool: RequestResourcePool, authority: ProviderRequest,
     file: StaticString = #filePath, line: UInt = #line) {
     let occupied = pool.active

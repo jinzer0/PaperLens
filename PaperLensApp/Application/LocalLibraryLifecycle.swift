@@ -308,7 +308,7 @@ public actor LocalLibraryLifecycle {
     let database = database
     let cleanupDebt = !clean
     try await Task.detached {
-      try database.failImport(identity, failure: reason == .cancelled ? "cancelled" : "urlImportFailed",
+      try database.recordImportAbort(identity, failure: reason == .cancelled ? "cancelled" : "urlImportFailed",
         cleanupDebt: cleanupDebt)
     }.value
     if let cleanupError { throw cleanupError }
@@ -419,7 +419,7 @@ public actor LocalLibraryLifecycle {
         else { failure = renamed ? "publicationRejected" : "importFailed" }
         do {
           try await Task.detached {
-            try database.failImport(identity, failure: failure, cleanupDebt: !clean)
+            try database.recordImportAbort(identity, failure: failure, cleanupDebt: !clean)
           }.value
         } catch {
           finishProducer(identity.paperID)

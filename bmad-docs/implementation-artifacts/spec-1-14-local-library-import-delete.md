@@ -224,3 +224,21 @@ LocalLibraryLifecycleTests.swift, LibraryURLImportWriterTests.swift and this Spe
 retains failed1094, tests real deleting-phase receipt and malformed/stale/debt-preservation,
 then reruns affected/full and fresh native. No false deletion/Agent-purge success or Retry
 implementation; source85 review must include actual changed callers before final approval.
+
+### Parent final exact-mutation proof
+
+Final focused36/zero1098 (LocalLibraryLifecycle28 + actual URL writer8); five new methods
+plus enhanced existing real transport/deletion test. All ten independently mismatched
+identity fields reject progress/failure/abort/publication without byte/row/debt effects.
+Owned adversarial SQL replacement/reopen rejects the old execution without claiming a
+production Retry; real second-row RAISE(IGNORE) rolls back first-row Paper/debt update.
+Negative/decreasing progress and late deletion mutation reject. Exact deleting abort
+preserves saga/Job failure/status and existing debt; malformed/stale acknowledgement rejects.
+Full Product318/zero1099; fresh unsigned Release arm64/macOS15 native-ac succeeded1100.
+Initial317/one1094 and pre-correction native-ab1096 retained, not overwritten/promoted.
+Independent85 final SOURCE-ONLY CLEAR / APPROVE covers all five exact source/test/Spec
+owners including both actual callers; no blocking defect. Four-source binary diff SHA
+against66d0ebe:9c6119eefba37ac52cff587f4ca18bd3ba864a03e70c3b771f5c4fc2c97f6772.
+No schema/policy/epoch/root/selector/counter or actual-copy effects change. Ordinary same-Job
+Retry/history ledger remains separate unfinished development. No SDK/paid/user-PDF/helper/
+renderer/private API/remote/consumed trial execution; UI/Agent/P1/P2/P3/Story uncertified.

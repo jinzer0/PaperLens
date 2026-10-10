@@ -173,10 +173,22 @@ final class LibraryURLImportWriterTests: XCTestCase, @unchecked Sendable {
     XCTAssertTrue(URLWriterFixture.state.stopped)
     // Namespace still exists: transport cancellation/drain alone cannot release census.
     XCTAssertTrue(FileManager.default.fileExists(atPath: writer.stagingDirectory.path))
+    let saga = try db.adapterRead { sql in
+      try XCTUnwrap(String.fetchOne(sql, sql: "SELECT deletionID FROM paper WHERE id = ?",
+        arguments: [id.uuidString]))
+    }
     try await writer.abort(reason: .cancelled)
     do { try await deletion.value; XCTFail("missing Agent reported success") }
     catch { XCTAssertEqual(error as? LocalLibraryError, .agentPurgeUnavailable) }
     XCTAssertEqual(try db.libraryRecords().map(\.status), [.deletionFailed])
+    try db.adapterRead { sql in
+      XCTAssertEqual(try String.fetchOne(sql, sql: "SELECT deletionID FROM paper WHERE id = ?",
+        arguments: [id.uuidString]), saga)
+      XCTAssertEqual(try String.fetchOne(sql, sql: "SELECT state FROM importJob WHERE id = ?",
+        arguments: [actual.identity.jobID.uuidString]), "failed")
+      XCTAssertEqual(try String.fetchOne(sql, sql: "SELECT attempt FROM importJob WHERE id = ?",
+        arguments: [actual.identity.jobID.uuidString]), actual.identity.attempt.uuidString)
+    }
     do { try writer.assertCurrent(); XCTFail("revoked capability current") } catch {}
   }
 
