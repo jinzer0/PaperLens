@@ -404,7 +404,8 @@ public struct ProductWorkspaceView: View {
               filter: $workspace.libraryFilter, refreshRevision: workspace.revision,
               sortFacts: { try await workspace.sortFacts() },
               openPaper: { try await workspace.open($0) }, importPDF: { workspace.pickPDF() },
-              retryImportPDF: { workspace.pickRetryPDF(paperID: $0, generation: $1) })
+              retryImportPDF: { workspace.pickRetryPDF(paperID: $0, generation: $1) },
+              manageFolders: { workspace.sheet = .folders })
           }
           .onChange(of: urls.state) {
             if case .ready(let paper) = urls.state { workspace.imported(paper) }

@@ -20,7 +20,9 @@ public struct PaperOrganization: Equatable, Sendable {
     self.readingStatus = readingStatus; self.favorite = favorite; self.tags = tags
   }
 }
+public enum LibraryFolderSelection: Equatable, Sendable { case all, unfiled, folder(UUID) }
 public struct OrganizationFilter: Equatable, Sendable {
+  public var folder: LibraryFolderSelection = .all
   public var search = ""
   public var tag: String?
   public var readingStatus: PaperReadingStatus?

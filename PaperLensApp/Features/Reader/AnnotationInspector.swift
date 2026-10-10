@@ -134,11 +134,11 @@ import SwiftUI
 
   static func message(for error: Error) -> String {
     switch error as? AnnotationError {
-    case .invalidNote: return "Enter a nonempty note of at most 16384 UTF-8 bytes. Nothing was saved."
-    case .invalidSelection: return "Select supported original PDF text before this action."
-    case .stalePaper: return "This Paper is no longer available for annotation."
-    case .staleRecord: return "This record changed or was removed. Refresh before editing."
-    default: return "Annotation action failed. Refresh to check saved records before retrying."
+    case .invalidNote: return "내용이 있는 노트를 UTF-8 기준 16,384바이트 이내로 입력하세요. 저장되지 않았습니다."
+    case .invalidSelection: return "먼저 주석을 지원하는 원본 PDF 텍스트를 선택하세요."
+    case .stalePaper: return "이 논문에는 더 이상 주석을 남길 수 없습니다."
+    case .staleRecord: return "이 기록이 변경되었거나 삭제되었습니다. 새로고침 후 편집하세요."
+    default: return "주석 작업을 완료하지 못했습니다. 새로고침으로 저장된 기록을 확인한 후 다시 시도하세요."
     }
   }
 
@@ -148,9 +148,9 @@ import SwiftUI
       try publishEditor { editor.text = "" }
       try publishEditor { editor.editing = nil }
       try publishEditor { editor.draft = selection }
-      try publishEditor { editor.feedback = "" }
+      try publishEditor { editor.feedback = "노트 작성 중" }
     } else {
-      try publishEditor { editor.feedback = "Continue or cancel the current note before starting another." }
+      try publishEditor { editor.feedback = "새 노트를 시작하려면 작성 중인 노트를 저장하거나 취소하세요." }
     }
     try publishEditor { editor.noteFocusRequest = UUID() }
   }
@@ -160,13 +160,13 @@ import SwiftUI
     let records = try records()
     guard records.contains(saved) else { throw AnnotationError.staleRecord }
     try publishEditor { editor.records = records }
-    try publishEditor { editor.feedback = "Highlight saved" }
+    try publishEditor { editor.feedback = "하이라이트가 저장되었습니다." }
     return saved
   }
 
   func copyOriginalSelection() throws {
     try copySelection()
-    try publishEditor { editor.feedback = "Original selected text copied" }
+    try publishEditor { editor.feedback = "선택한 원본 텍스트가 복사되었습니다." }
   }
 
   public func reveal(_ record: AnnotationRecord) throws {
@@ -247,35 +247,43 @@ import SwiftUI
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
       HStack {
-        Text("Highlights & Notes").font(.headline)
+        Text("하이라이트·노트").font(.headline)
         Spacer()
-        Button("Close") { onClose() }.accessibilityHint("Return to the same PDF reading context")
+        Button("닫기") { onClose() }
+          .keyboardShortcut(draft == nil && editing == nil ? KeyboardShortcut(.escape, modifiers: []) : nil)
+          .accessibilityLabel("하이라이트와 노트 닫기")
+          .accessibilityHint("현재 PDF 읽기 위치로 돌아갑니다. 저장하지 않은 노트는 버립니다")
       }
       HStack {
-        Button("Highlight") {
+        Button("하이라이트") {
           perform {
             let saved = try context.highlightSelection()
             try context.reveal(saved)
           }
         }
-        Button("Add Note") {
+        .accessibilityLabel("선택한 원본 PDF 텍스트에 하이라이트 추가")
+        Button("노트 추가") {
           perform { try context.beginNote() }
         }
-        Button("Copy") {
+        .accessibilityLabel("선택한 원본 PDF 텍스트에 개인 노트 추가")
+        Button("복사") {
           perform { try context.copyOriginalSelection() }
         }
+        .accessibilityLabel("선택한 원본 PDF 텍스트 복사")
+        .accessibilityHint("주석을 저장하지 않고 원본 텍스트만 복사합니다")
       }.accessibilityElement(children: .contain)
       if let selected = editing?.selection ?? draft {
-        Text("Selected original text").font(.caption)
+        Text("선택한 원문").font(.caption)
         ScrollView { Text(selected.originalText).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }
           .frame(maxHeight: 100)
         TextEditor(text: Binding(get: { text }, set: { value in
           perform { try context.publishEditor { text = value } }
         })).focused($noteFocused).frame(minHeight: 100)
-          .accessibilityLabel("Personal note")
-        Text("\(text.utf8.count) / 16384 UTF-8 bytes").font(.caption)
+          .accessibilityLabel("개인 노트 내용")
+          .accessibilityHint("Command-Return으로 저장하고 Escape로 작성 또는 편집을 취소합니다")
+        Text("\(text.utf8.count) / 16,384바이트 (UTF-8)").font(.caption)
         HStack {
-          Button("Save Note") {
+          Button("노트 저장") {
             perform {
               let saved: AnnotationRecord
               if let editing { saved = try context.updateNote(editing, text: text) }
@@ -286,27 +294,35 @@ import SwiftUI
               try context.publishEditor { editing = nil }
               try context.publishEditor { text = "" }
               try context.publishEditor { records = refreshed }
-              try context.publishEditor { feedback = "Note saved" }
+              try context.publishEditor { feedback = "노트가 저장되었습니다." }
             }
           }
-          Button("Cancel") { perform {
-            resetEditor()
-            try context.publishEditor { feedback = "Draft discarded" }
+          .keyboardShortcut(.return, modifiers: [.command])
+          .accessibilityHint("저장에 실패하면 작성 중인 내용이 유지됩니다")
+          Button("취소") { perform {
+            try resetEditor()
+            try context.publishEditor { feedback = "노트 작성 또는 편집을 취소했습니다. 저장된 기록은 유지됩니다." }
           } }
+          .keyboardShortcut(.escape, modifiers: [])
+          .accessibilityHint("작성 중인 내용만 버리고 주석 목록과 현재 PDF 읽기 위치는 유지합니다")
         }
       }
-      if records.isEmpty { Text("No saved highlights or notes").foregroundStyle(.secondary) }
+      if records.isEmpty { Text("저장된 하이라이트나 노트가 없습니다").foregroundStyle(.secondary) }
       List(records) { record in
         VStack(alignment: .leading) {
-          Text(record.kind == .note ? "Personal Note" : "Highlight").font(.headline)
+          Text(record.kind == .note ? "개인 노트" : "하이라이트").font(.headline)
           Text(record.selection.originalText).lineLimit(3)
           if let note = record.note { Text(note).textSelection(.enabled) }
-          Text(record.selection.locations.map { "Page \($0.pageIndex + 1)" }.joined(separator: ", "))
+          Text(record.selection.locations.map { "\($0.pageIndex + 1)쪽" }.joined(separator: ", "))
             .font(.caption)
           HStack {
-            Button("Show in PDF") { perform { try context.reveal(record) } }
+            Button("PDF에서 보기") { perform {
+              try context.reveal(record)
+              try context.publishEditor { feedback = "저장된 주석의 원본 PDF 위치를 표시했습니다." }
+            } }
+            .accessibilityHint("저장된 원문 위치로 이동합니다")
             if record.kind == .note {
-              Button("Edit") {
+              Button("편집") {
                 perform {
                   guard try context.records().contains(record) else { throw AnnotationError.staleRecord }
                   guard draft == nil && editing == nil else {
@@ -314,27 +330,28 @@ import SwiftUI
                   }
                   try context.publishEditor { text = record.note ?? "" }
                   try context.publishEditor { editing = record }
+                  try context.publishEditor { feedback = "노트 편집 중" }
                   try context.publishEditor { editor.noteFocusRequest = UUID() }
                 }
               }
             }
-            Button("Delete", role: .destructive) {
+            Button("삭제", role: .destructive) {
               perform {
                 try context.delete(record)
-                if editing?.id == record.id { resetEditor() }
+                if editing?.id == record.id { try resetEditor() }
                 let refreshed = try context.records()
                 try context.publishEditor { records = refreshed }
-                try context.publishEditor { feedback = "Record deleted" }
+                try context.publishEditor { feedback = "주석 기록이 삭제되었습니다." }
               }
             }
           }
         }.padding(.vertical, 4)
       }
-      Text(feedback).font(.caption).accessibilityLabel("Annotation status: \(feedback)")
-      Button("Refresh") { perform {
+      Text(feedback).font(.caption).accessibilityLabel("주석 상태: \(feedback)")
+      Button("새로고침") { perform {
         let refreshed = try context.records()
         try context.publishEditor { records = refreshed }
-        try context.publishEditor { feedback = "" }
+        try context.publishEditor { feedback = "저장된 주석 목록을 새로고침했습니다." }
       } }
     }.padding().frame(minWidth: 280)
       .onAppear {
@@ -351,8 +368,9 @@ import SwiftUI
       .onChange(of: context.isActive) { if !context.isActive { reset() } }
   }
 
-  private func resetEditor() {
-    editor.cancel(); noteFocused = false
+  private func resetEditor() throws {
+    try context.publishEditor { editor.cancel() }
+    noteFocused = false
   }
 
   private func reset() {

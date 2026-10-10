@@ -8,9 +8,12 @@ public struct LibraryBrowserView: View {
   private let openPaper: @MainActor (OrganizedPaper) async throws -> Void
   private let importPDF: @MainActor () -> Void
   private let retryImportPDF: @MainActor (UUID, UUID) -> Void
+  private let manageFolders: @MainActor () -> Void
   private let refreshRevision: Int
   @State private var query = OrganizationQueryState()
   @State private var currentFacts: [UUID: OrganizationSortFacts] = [:]
+  @State private var folders: [LibraryFolder] = []
+  @State private var folderLoadFailed = false
   @Binding private var filter: OrganizationFilter
   @State private var operationFailed = false
   @State private var busy = false
@@ -33,11 +36,33 @@ public struct LibraryBrowserView: View {
     sortFacts: @escaping @Sendable () async throws -> [OrganizationSortFacts],
     openPaper: @escaping @MainActor (OrganizedPaper) async throws -> Void,
     importPDF: @escaping @MainActor () -> Void,
-    retryImportPDF: @escaping @MainActor (UUID, UUID) -> Void) {
+    retryImportPDF: @escaping @MainActor (UUID, UUID) -> Void,
+    manageFolders: @escaping @MainActor () -> Void) {
     self.service = service; self.folderService = folderService; self.sortFacts = sortFacts
     _filter = filter; self.refreshRevision = refreshRevision
     self.openPaper = openPaper; self.importPDF = importPDF
     self.retryImportPDF = retryImportPDF
+    self.manageFolders = manageFolders
+  }
+
+  private var folderHeading: String {
+    switch filter.folder {
+    case .all: return "전체 논문"
+    case .unfiled: return "미분류"
+    case .folder(let id):
+      return folders.first(where: { $0.id == id })?.name ?? "확인할 수 없는 폴더 · \(id.uuidString)"
+    }
+  }
+
+  private var selectedFolderUnavailable: Bool {
+    guard case .folder(let id) = filter.folder else { return false }
+    return !folders.contains(where: { $0.id == id })
+  }
+
+  private var clearedConditions: OrganizationFilter {
+    var value = OrganizationFilter()
+    value.folder = filter.folder
+    return value
   }
 
   private var libraryContent: some View {
@@ -48,6 +73,7 @@ public struct LibraryBrowserView: View {
         Button("PDF 추가", action: requestImport)
         Button("새로고침") { refresh() }.disabled(busy)
       }
+      Text(folderHeading).font(.title2).textSelection(.enabled)
       TextField("제목 또는 사용자 태그 검색", text: $filter.search)
         .textFieldStyle(.roundedBorder)
         .accessibilityLabel("라이브러리 제목 또는 사용자 태그 검색")
@@ -78,6 +104,12 @@ public struct LibraryBrowserView: View {
         Button("다시 불러오기") { refresh() }.disabled(busy)
       } else if loading {
         ProgressView("라이브러리 불러오는 중")
+      } else if selectedFolderUnavailable {
+        ContentUnavailableView("선택한 폴더를 확인할 수 없습니다", systemImage: "folder.badge.questionmark",
+          description: Text(folderLoadFailed
+            ? "폴더 목록을 불러오지 못했습니다. 선택은 유지됩니다. 다시 불러오세요."
+            : "이 UUID의 폴더가 현재 목록에 없습니다. 다른 폴더를 직접 선택하거나 폴더 관리에서 확인하세요."))
+        Button("폴더 관리", action: manageFolders).disabled(busy)
       } else if let snapshot {
         if snapshot.totalCount == 0 {
           ContentUnavailableView("아직 논문이 없습니다", systemImage: "books.vertical",
@@ -86,7 +118,7 @@ public struct LibraryBrowserView: View {
         } else if snapshot.papers.isEmpty {
           ContentUnavailableView("일치하는 논문 없음", systemImage: "line.3.horizontal.decrease.circle",
             description: Text("저장된 논문은 있습니다. 검색과 필터를 변경하세요."))
-          Button("필터 지우기") { filter = OrganizationFilter() }
+          Button("검색·조건 지우기") { filter = clearedConditions }
         } else if snapshot.preferences.presentation == .list {
           List(snapshot.papers) { paper in paperContent(paper) }
         } else {
@@ -104,7 +136,28 @@ public struct LibraryBrowserView: View {
   }
 
   private var filterSidebar: some View {
+    ScrollView {
     VStack(alignment: .leading, spacing: 16) {
+      Text("폴더").font(.headline)
+      folderControl("전체 논문", selection: .all)
+      folderControl("미분류", selection: .unfiled)
+      if loading {
+        ProgressView("폴더 불러오는 중")
+      } else if folderLoadFailed || loadFailed {
+        Text("폴더 목록을 불러오지 못했습니다.").font(.caption)
+        Button("폴더 다시 불러오기") { refresh() }.disabled(busy)
+      } else if folders.isEmpty {
+        Text("저장된 폴더가 없습니다.").font(.caption).foregroundStyle(.secondary)
+      } else {
+        ForEach(folders) { folder in
+          folderControl(folder.name, selection: .folder(folder.id))
+        }
+      }
+      if selectedFolderUnavailable, case .folder(let id) = filter.folder {
+        Text("선택 유지 · \(id.uuidString)").font(.caption).textSelection(.enabled)
+      }
+      Button("폴더 관리", action: manageFolders).disabled(busy)
+      Divider()
       Text("필터").font(.headline)
       Toggle("즐겨찾기만", isOn: $filter.favoritesOnly)
       Picker("읽기 상태", selection: $filter.readingStatus) {
@@ -119,14 +172,27 @@ public struct LibraryBrowserView: View {
         .accessibilityLabel("정확한 사용자 태그로 필터")
       Text("제목·태그 검색과 함께 적용됩니다. 출처 주제는 사용자 태그가 아닙니다.")
         .font(.caption).foregroundStyle(.secondary)
-      Button("검색·필터 모두 지우기") { filter = OrganizationFilter() }
-        .disabled(filter == OrganizationFilter())
+      Button("검색·조건 지우기") { filter = clearedConditions }
+        .disabled(filter == clearedConditions)
       Spacer()
     }
     .padding(12)
+    }
     .frame(minWidth: 180, idealWidth: 220, maxWidth: 300, maxHeight: .infinity, alignment: .topLeading)
     .accessibilityElement(children: .contain)
     .accessibilityLabel("라이브러리 필터 사이드바")
+  }
+
+  private func folderControl(_ title: String, selection: LibraryFolderSelection) -> some View {
+    Button { filter.folder = selection } label: {
+      HStack {
+        Text(title).multilineTextAlignment(.leading)
+        Spacer()
+        if filter.folder == selection { Image(systemName: "checkmark") }
+      }.frame(maxWidth: .infinity, alignment: .leading)
+    }
+    .disabled(busy)
+    .accessibilityValue(filter.folder == selection ? "선택됨" : "선택되지 않음")
   }
 
   public var body: some View {
@@ -314,13 +380,26 @@ public struct LibraryBrowserView: View {
     if let identification { focusedIdentification = identification.paper.id }
     identification = nil
     currentFacts = [:]
+    folders = []
+    folderLoadFailed = false
     query.invalidate()
   }
   private func load(_ request: OrganizationQueryState.Request) async {
+    let observedFolders: [LibraryFolder]
+    let foldersFailed: Bool
+    do {
+      observedFolders = try await folderService.folders()
+      foldersFailed = false
+    } catch {
+      observedFolders = []
+      foldersFailed = true
+    }
     do {
       let facts = try await sortFacts()
       let value = try await service.snapshot(filter: request.filter, facts: facts)
       guard query.accept(value, request: request, currentFilter: filter) else { return }
+      folders = observedFolders
+      folderLoadFailed = foldersFailed
       let generations = Dictionary(uniqueKeysWithValues: value.papers.map { ($0.id, $0.generation) })
       currentFacts = Dictionary(uniqueKeysWithValues: facts.filter { generations[$0.paperID] == $0.generation }.map { ($0.paperID, $0) })
     } catch {

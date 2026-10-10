@@ -379,7 +379,7 @@ import SwiftUI
 /// Parent supplies the Application session bound to the real shared lifecycle.
 @MainActor public struct NativeReaderView: View {
   @StateObject private var presentation: ReaderPresentation
-  private enum AnnotationOpener: Hashable { case browse, highlight, note, copy }
+  private enum AnnotationOpener: Hashable { case browse, highlight, note, copy, search }
   @FocusState private var annotationFocus: AnnotationOpener?
   @State private var annotationOrigin: AnnotationOpener = .browse
   private let paperID: UUID
@@ -428,8 +428,12 @@ import SwiftUI
       VStack(alignment: .leading, spacing: 8) {
         HStack {
           TextField("원본 PDF 텍스트 검색", text: $presentation.query)
+            .focused($annotationFocus, equals: .search)
             .onSubmit { presentation.search() }
             .accessibilityLabel("원본 PDF 텍스트 검색")
+          Button("검색 입력으로 이동") { annotationFocus = .search }
+            .keyboardShortcut("f", modifiers: [.command])
+            .accessibilityHint("검색어를 변경하거나 검색을 실행하지 않고 원본 PDF 검색 입력에 초점을 맞춥니다")
           Button("검색") { presentation.search() }.disabled(!presentation.opened)
         }
         HStack {

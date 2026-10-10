@@ -49,14 +49,28 @@ extension ProductDatabase {
         let presentation = LibraryPresentation(rawValue: preference["presentation"]),
         let sort = LibrarySort(rawValue: preference["sort"])
       else { throw ProductDatabaseError.invalidRecord }
+      let totalCount = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM paper WHERE status != 'tombstone'")!
+      let folderPredicate: String
+      let folderArguments: StatementArguments
+      switch filter.folder {
+      case .all:
+        folderPredicate = "1"
+        folderArguments = []
+      case .unfiled:
+        folderPredicate = "NOT EXISTS (SELECT 1 FROM paperFolder pf WHERE pf.paperID = p.id)"
+        folderArguments = []
+      case .folder(let id):
+        folderPredicate = "EXISTS (SELECT 1 FROM paperFolder pf WHERE pf.paperID = p.id AND pf.folderID = ?)"
+        folderArguments = [id.uuidString]
+      }
       let rows = try Row.fetchAll(db, sql: """
         SELECT p.*, j.failure, COALESCE(j.bytesCopied, 0) AS bytesCopied,
           COALESCE(o.readingStatus, 'unread') AS readingStatus,
           COALESCE(o.favorite, 0) AS favorite
         FROM paper p LEFT JOIN importJob j ON j.paperID = p.id
         LEFT JOIN paperOrganization o ON o.paperID = p.id AND o.generation = p.generation
-        WHERE p.status != 'tombstone' ORDER BY p.id
-        """)
+        WHERE p.status != 'tombstone' AND (\(folderPredicate)) ORDER BY p.id
+        """, arguments: folderArguments)
       let tagRows = try Row.fetchAll(db, sql: """
         SELECT t.paperID, t.label FROM paperUserTag t
         JOIN paperOrganization o ON o.paperID = t.paperID
@@ -84,7 +98,7 @@ extension ProductDatabase {
           && (filter.readingStatus == nil || paper.organization.readingStatus == filter.readingStatus)
           && (!filter.favoritesOnly || paper.organization.favorite)
       }
-      return OrganizationSnapshot(preferences: OrganizationPreferences(presentation: presentation, sort: sort), totalCount: rows.count, papers: papers)
+      return OrganizationSnapshot(preferences: OrganizationPreferences(presentation: presentation, sort: sort), totalCount: totalCount, papers: papers)
     }
   }
 
