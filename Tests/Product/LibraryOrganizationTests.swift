@@ -41,6 +41,134 @@ final class LibraryOrganizationTests: XCTestCase {
       organizationEditorActivityLabel(busy: true, failed: false))
   }
 
+  func testEditorCancelConsumesCallbacksWithoutSaveOrFakePendingState() async throws {
+    let database = try ProductDatabase.open(at: root())
+    _ = try seed(database, title: "Cancelled editor")
+    let lifecycle = try await LocalLibraryLifecycle.open(database: database)
+    let service = LibraryOrganizationService(database: database, lifecycle: lifecycle)
+    let observed = try XCTUnwrap(database.organizationSnapshot(filter: .init()).papers.first)
+    var interaction = OrganizationEditorInteraction()
+    var saves = 0, dismissals = 0
+    if interaction.beginCancel() { dismissals += 1 }
+    if interaction.beginSave() {
+      saves += 1
+      try await service.save(.init(favorite: true, tags: ["Unsubmitted"]), for: observed)
+    }
+    if interaction.beginCancel() { dismissals += 1 }
+    XCTAssertFalse(interaction.beginRevalidate())
+    XCTAssertEqual(saves, 0)
+    XCTAssertEqual(dismissals, 1)
+    XCTAssertEqual(interaction.phase, .closing)
+    XCTAssertNil(organizationEditorActivityLabel(busy: interaction.busy, failed: interaction.failed))
+    XCTAssertEqual(try database.organizationSnapshot(filter: .init()).papers.first?.organization,
+      observed.organization)
+    let reopened = try ProductDatabase.open(at: database.root)
+    XCTAssertEqual(try reopened.organizationSnapshot(filter: .init()).papers.first?.organization,
+      observed.organization)
+  }
+
+  func testEditorSaveAdmissionRejectsConsecutiveCancelAndDuplicateUntilOneRealCommit() async throws {
+    let database = try ProductDatabase.open(at: root())
+    _ = try seed(database, title: "Saving editor")
+    let lifecycle = try await LocalLibraryLifecycle.open(database: database)
+    let service = LibraryOrganizationService(database: database, lifecycle: lifecycle)
+    let observed = try XCTUnwrap(database.organizationSnapshot(filter: .init()).papers.first)
+    let draft = PaperOrganization(readingStatus: .reading, favorite: true, tags: ["One Save"])
+    var interaction = OrganizationEditorInteraction()
+    XCTAssertTrue(interaction.beginSave())
+    XCTAssertEqual(interaction.phase, .saving)
+    XCTAssertEqual(organizationEditorActivityLabel(busy: interaction.busy, failed: interaction.failed), "저장 중")
+    var dismissals = 0
+    if interaction.beginCancel() { dismissals += 1 }
+    XCTAssertFalse(interaction.beginSave())
+    XCTAssertFalse(interaction.beginRevalidate())
+    XCTAssertEqual(dismissals, 0)
+    XCTAssertEqual(try database.organizationSnapshot(filter: .init()).papers.first?.organization,
+      observed.organization)
+    try await service.save(draft, for: observed)
+    if interaction.finishSave(succeeded: true) { dismissals += 1 }
+    if interaction.finishSave(succeeded: true) { dismissals += 1 }
+    XCTAssertEqual(dismissals, 1)
+    XCTAssertFalse(interaction.beginSave())
+    XCTAssertFalse(interaction.beginCancel())
+    XCTAssertNil(organizationEditorActivityLabel(busy: interaction.busy, failed: interaction.failed))
+    XCTAssertEqual(try database.organizationSnapshot(filter: .init()).papers.first?.organization, draft)
+  }
+
+  func testEditorFailedSaveRequiresCurrentValuesAndAnotherExplicitSave() async throws {
+    let database = try ProductDatabase.open(at: root())
+    let id = try seed(database, title: "Revalidation")
+    let original = PaperOrganization(readingStatus: .reading, favorite: true, tags: ["Prior"])
+    try database.updatePaperOrganization(paperID: id.0, generation: id.1, expected: .init(), value: original)
+    let lifecycle = try await LocalLibraryLifecycle.open(database: database)
+    let service = LibraryOrganizationService(database: database, lifecycle: lifecycle)
+    var observed = try XCTUnwrap(database.organizationSnapshot(filter: .init()).papers.first)
+    try database.adapterWrite { db in
+      try db.execute(sql: """
+        CREATE TRIGGER rejectEditorSave BEFORE UPDATE ON paperOrganization
+        BEGIN SELECT RAISE(ABORT, 'owned editor failure'); END;
+        """)
+    }
+    var interaction = OrganizationEditorInteraction()
+    XCTAssertTrue(interaction.beginSave())
+    do { try await service.save(.init(tags: ["Failed draft"]), for: observed); XCTFail("Expected owned SQL fault") }
+    catch { XCTAssertTrue(interaction.finishSave(succeeded: false)) }
+    XCTAssertFalse(interaction.beginSave())
+    XCTAssertEqual(try database.organizationSnapshot(filter: .init()).papers.first?.organization, original)
+    try database.adapterWrite { db in try db.execute(sql: "DROP TRIGGER rejectEditorSave") }
+    let concurrent = PaperOrganization(readingStatus: .read, favorite: false, tags: ["Other editor"])
+    try database.updatePaperOrganization(paperID: id.0, generation: id.1, expected: original, value: concurrent)
+    XCTAssertTrue(interaction.beginRevalidate())
+    XCTAssertTrue(interaction.failed) // Prior failure stays visible while checking current values.
+    XCTAssertEqual(organizationEditorActivityLabel(busy: interaction.busy, failed: interaction.failed),
+      "현재 저장값 확인 중")
+    XCTAssertFalse(interaction.beginRevalidate())
+    XCTAssertFalse(interaction.beginSave())
+    XCTAssertFalse(interaction.beginCancel())
+    observed = try await service.revalidate(observed)
+    XCTAssertEqual(observed.organization, concurrent)
+    XCTAssertTrue(interaction.finishRevalidation(succeeded: true))
+    XCTAssertEqual(try database.organizationSnapshot(filter: .init()).papers.first?.organization, concurrent)
+    var freshDraft = observed.organization
+    freshDraft.favorite = true
+    XCTAssertTrue(interaction.beginSave())
+    try await service.save(freshDraft, for: observed)
+    XCTAssertTrue(interaction.finishSave(succeeded: true))
+    XCTAssertEqual(try database.organizationSnapshot(filter: .init()).papers.first?.organization, freshDraft)
+  }
+
+  func testEditorFailedRevalidationAndDisappearanceCannotReopenClosedInteraction() async throws {
+    let database = try ProductDatabase.open(at: root())
+    let id = try seed(database, title: "Stale editor")
+    let lifecycle = try await LocalLibraryLifecycle.open(database: database)
+    let service = LibraryOrganizationService(database: database, lifecycle: lifecycle)
+    let observed = try XCTUnwrap(database.organizationSnapshot(filter: .init()).papers.first)
+    var interaction = OrganizationEditorInteraction()
+    XCTAssertTrue(interaction.beginSave())
+    XCTAssertTrue(interaction.finishSave(succeeded: false))
+    try database.adapterWrite { db in
+      try db.execute(sql: "UPDATE paper SET generation = ? WHERE id = ?",
+        arguments: [UUID().uuidString, id.0.uuidString])
+    }
+    XCTAssertTrue(interaction.beginRevalidate())
+    do { _ = try await service.revalidate(observed); XCTFail("Revalidation must reject the old generation") }
+    catch {
+      XCTAssertEqual(error as? OrganizationError, .stalePaper)
+      XCTAssertTrue(interaction.finishRevalidation(succeeded: false))
+    }
+    XCTAssertFalse(interaction.beginSave())
+    XCTAssertNil(organizationEditorActivityLabel(busy: interaction.busy, failed: interaction.failed))
+    XCTAssertTrue(interaction.beginRevalidate()) // Only an explicit retry can reopen this work.
+    interaction.invalidate() // Mirror native disappearance before a delayed response.
+    XCTAssertFalse(interaction.finishRevalidation(succeeded: true))
+    XCTAssertFalse(interaction.finishSave(succeeded: false))
+    XCTAssertFalse(interaction.beginSave())
+    XCTAssertFalse(interaction.beginRevalidate())
+    XCTAssertFalse(interaction.beginCancel())
+    XCTAssertEqual(interaction.phase, .closing)
+    XCTAssertNil(organizationEditorActivityLabel(busy: interaction.busy, failed: interaction.failed))
+  }
+
   func testRestartPreferencesAndOrganizationWithIdenticalBytesSeparateIdentities() throws {
     let location = try root()
     let database = try ProductDatabase.open(at: location)

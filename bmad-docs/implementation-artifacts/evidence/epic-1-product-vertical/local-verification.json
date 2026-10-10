@@ -30,15 +30,16 @@
     "Native saved annotation reveal rejects missing PDFKit rectangle fragments before replacing overlay or navigating; owned windowless multi-page/reentry regressions pass, not visible UI or canonical AI geometry certification",
     "Actual ReaderPresentation native search preserves discard after synchronous PDFKit selection clearing and fences stale results/errors; owned native search and public-notification regressions pass, not visible UI or P6 certification",
     "Next-match navigation requires current request/document plus fresh actual session validation after selection callbacks; owned newer-query preserves native page and actual-close preserves detach, not rendered navigation certification",
-    "Organization editor mounts distinct Korean saving/current-value-revalidation native progress cues from existing busy/failed state; semantic branch tests/source mount verified, rendered accessibility delivery unverified",
-    "Settings SecureField uses synchronous changed-entry Binding invalidation before forwarding key writes; actual helper/owned shared Native owner tests reject late synthetic success, not observed SwiftUI interleaving or authentication"
+    "Organization editor mounts distinct Korean saving/current-value-revalidation native progress cues from derived editor activity; semantic branch tests/source mount verified, rendered accessibility delivery unverified",
+    "Settings SecureField uses synchronous changed-entry Binding invalidation before forwarding key writes; actual helper/owned shared Native owner tests reject late synthetic success, not observed SwiftUI interleaving or authentication",
+    "Organization Save/Revalidate/Cancel synchronously admit before effects through one ephemeral phase; closing has no fake saving cue and denies obsolete completion. Owned interaction/GRDB regressions, not actual overlapping native callbacks."
   ],
   "verification": {
     "productUnion": {
       "command": "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --parallel --num-workers 1 --filter ProductTests",
-      "tests": 451,
+      "tests": 455,
       "failures": 0,
-      "output": "artifact://1478",
+      "output": "artifact://1504",
       "evidence": "Real GRDB transactions, owned synthetic files and actual local FIFO IO/close/peer metadata/EPIPE; mocked provider/HTTP transport and synthetic windowless PDFKit conversions. Not authenticated provider, app UI, SDK producer or PDFium execution."
     },
     "nativeCompilation": {
@@ -46,11 +47,11 @@
       "configuration": "Release",
       "architecture": "arm64",
       "minimumOS": "15.0",
-      "derivedData": ".build/product-native-compile-20261010-bd",
+      "derivedData": ".build/product-native-compile-20261010-be",
       "codeSigningAllowed": false,
       "result": "BUILD SUCCEEDED",
-      "rawOutput": "artifact://1479",
-      "output": "artifact://1479",
+      "rawOutput": "artifact://1505",
+      "output": "artifact://1505",
       "applicationAndHelperBinariesExecuted": false,
       "warnings": "AppIntents metadata skipped, PDFium debug-map duplicate/missing-symbol warnings and an unnecessary-await Swift warning remain; no warning suppression or debug-symbol repair claimed."
     },
@@ -304,6 +305,25 @@
     "runtimeParsingOrCalibrationVerified": false,
     "helperExecuted": false,
     "storyAccepted": false
+  },
+  "synchronousOrganizationEditorAdmission": {
+    "preImplementationSpecificationCommit": "80290b2e6e034743fa9225ea29f4e8288757a410",
+    "initialAssessment": "agent://137-OrganizationActionBoundary SUPPORTED MEDIUM/P2: declarative disabled-only callbacks lacked synchronous admission before Task/dismiss. Source ordering, not observed native delivery.",
+    "implementation": "agent://138-OrganizationInteraction: one exact view file; parent paired regressions/verification/evidence",
+    "sourceScope": "LibraryBrowserView.swift actual editor/interaction plus existing LibraryOrganizationTests.swift; unchanged service calls/payload/expected-value CAS/query/Retry/persistence authority",
+    "sourceDiffSha256": "fb2c1458370c3f1ed86263bc529c913441e810cc5b78240360defed930077b63",
+    "behavior": "One production-used ephemeral editing/saving/failed/revalidating/closing value replaces busy/failed State. All three buttons begin mutating admission before draft/Task/dismiss. Cancel closes terminally, denies later Save and has no fake saving activity. Save completion closes before successful dismissal, failure reopens only failed. Revalidation requires current phase before installing current observed/value/tags, then editing without suspension. Disappearance terminally invalidates; obsolete completions cannot reopen. Derived busy/failed/blocked preserve pending/error labels. These are UI fences, not write authority.",
+    "focused": {"tests": 51, "failures": 0, "output": "artifact://1499"},
+    "fullProduct": {"tests": 455, "failures": 0, "output": "artifact://1504", "processMode": "--parallel --num-workers 1; all cases invoked, no skip or irreversible-debt quota reset"},
+    "nativeCompilation": {"result": "BUILD SUCCEEDED", "output": "artifact://1505", "derivedData": ".build/product-native-compile-20261010-be", "codeSigningAllowed": false},
+    "review": "agent://139-OrganizationInteractionReview SOURCE-ONLY CLEAR / APPROVE; explicitly resolves historical137 MEDIUM/P2, no new findings",
+    "controlledCoverage": "Actual production interaction value plus owned GRDB/LibraryOrganizationService. Cancel→Save zero commands/one simulated dismissal/unchanged records after database reopen. Saving denies Cancel/duplicate/revalidation before one real commit. Owned SQL fault preserves prior record; another editor commits new fields, explicit revalidation obtains current baseline before another explicit Save. Actual generation change produces stalePaper; failed revalidation and disappearance reject obsolete completion/remaining actions. No automatic write or duplicate dismissal.",
+    "limits": ["Tests invoke the production value, not mounted OrganizationEditor; actual button/continuation wiring established by source review", "Controlled admission/GRDB sequences are not actual overlapping native callbacks", "No visible interaction/VoiceOver/focus/physical application restart/P6 certification"],
+    "visibleNativeInteractionVerified": false,
+    "applicationAndHelperBinariesExecuted": false,
+    "SDKProviderRendererExecuted": false,
+    "storyAccepted": false,
+    "epicAccepted": false
   },
   "synchronousSettingsKeyEditBinding": {
     "preImplementationSpecificationCommit": "864866bac5825b4a16da05e9f86b254ddd9d6674",

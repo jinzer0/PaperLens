@@ -112,3 +112,23 @@ Permitted isolated focused/full tests, unsigned compile, independent delta revie
 local evidence commit. Retain pending-cue receipt55dd7c7 and resolved CAS/query/Retry.
 No protected app/helper/SDK/provider/renderer trial, credentials or remote operation;
 full objective/0-of-26 and visible accessibility/physical restart/P6 limits unchanged.
+
+### Organization callback admission local receipt
+
+Preimplementation `80290b2e6e034743fa9225ea29f4e8288757a410`; executor138 implemented
+the exact production interaction value and all three guarded button/continuation paths.
+Parent four tests use this actual value with owned GRDB/LibraryOrganizationService:
+Cancel→Save zero commands/one simulated dismiss/unchanged reopen; saving denies delivered
+Cancel/duplicate/revalidation before one actual commit; owned SQL failure preserves old
+record, explicit revalidation observes another editor's newer committed fields before
+another explicit Save; actual generation replacement denies revalidation and terminal
+disappearance denies obsolete completion. No actual overlapping native callbacks delivered.
+Focused51/zero `artifact://1499`; isolated Product455/zero `artifact://1504`;
+fresh unsigned native-be BUILD SUCCEEDED `artifact://1505`; independent139 SOURCE-ONLY
+CLEAR / APPROVE explicitly resolves historical137 MEDIUM/P2 finding with no new finding.
+Two-source diff SHA256:
+`fb2c1458370c3f1ed86263bc529c913441e810cc5b78240360defed930077b63`.
+Existing pending-label receipt retained; busy/failed now derived from one phase rather
+than duplicate State. Tests do not mount OrganizationEditor or prove native event/VoiceOver/
+focus, physical restart/P6. Service/CAS remains write authority; no actual app/helper/
+SDK/provider/renderer trial or remote action. Full objective/0-of-26/Story/Epic false.

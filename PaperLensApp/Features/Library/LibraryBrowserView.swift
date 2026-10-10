@@ -425,6 +425,51 @@ func organizationEditorActivityLabel(busy: Bool, failed: Bool) -> String? {
   return failed ? "현재 저장값 확인 중" : "저장 중"
 }
 
+struct OrganizationEditorInteraction {
+  enum Phase {
+    case editing, saving, failed, revalidating, closing
+  }
+
+  private(set) var phase: Phase = .editing
+  var busy: Bool { phase == .saving || phase == .revalidating }
+  var failed: Bool { phase == .failed || phase == .revalidating }
+  var blocksInteraction: Bool { busy || phase == .closing }
+
+  mutating func beginSave() -> Bool {
+    guard phase == .editing else { return false }
+    phase = .saving
+    return true
+  }
+
+  mutating func beginRevalidate() -> Bool {
+    guard phase == .failed else { return false }
+    phase = .revalidating
+    return true
+  }
+
+  mutating func beginCancel() -> Bool {
+    guard phase == .editing || phase == .failed else { return false }
+    phase = .closing
+    return true
+  }
+
+  mutating func finishSave(succeeded: Bool) -> Bool {
+    guard phase == .saving else { return false }
+    phase = succeeded ? .closing : .failed
+    return true
+  }
+
+  mutating func finishRevalidation(succeeded: Bool) -> Bool {
+    guard phase == .revalidating else { return false }
+    phase = succeeded ? .editing : .failed
+    return true
+  }
+
+  mutating func invalidate() {
+    phase = .closing
+  }
+}
+
 @MainActor private struct OrganizationEditor: View {
   let save: @MainActor (PaperOrganization, OrganizedPaper) async throws -> Void
   let revalidate: @MainActor (OrganizedPaper) async throws -> OrganizedPaper
@@ -432,8 +477,7 @@ func organizationEditorActivityLabel(busy: Bool, failed: Bool) -> String? {
   @State private var observed: OrganizedPaper
   @State private var value: PaperOrganization
   @State private var tags: String
-  @State private var busy = false
-  @State private var failed = false
+  @State private var interaction = OrganizationEditorInteraction()
   init(paper: OrganizedPaper,
     save: @escaping @MainActor (PaperOrganization, OrganizedPaper) async throws -> Void,
     revalidate: @escaping @MainActor (OrganizedPaper) async throws -> OrganizedPaper) {
@@ -449,40 +493,47 @@ func organizationEditorActivityLabel(busy: Bool, failed: Bool) -> String? {
         Text("읽지 않음").tag(PaperReadingStatus.unread)
         Text("읽는 중").tag(PaperReadingStatus.reading)
         Text("읽음").tag(PaperReadingStatus.read)
-      }.disabled(busy)
-      Toggle("즐겨찾기", isOn: $value.favorite).disabled(busy)
+      }.disabled(interaction.blocksInteraction)
+      Toggle("즐겨찾기", isOn: $value.favorite).disabled(interaction.blocksInteraction)
       Text("사용자 태그 · 한 줄에 하나 (최대 100개, 각 80자)")
-      TextEditor(text: $tags).frame(minHeight: 120).accessibilityLabel("사용자 태그").disabled(busy)
-      if let activity = organizationEditorActivityLabel(busy: busy, failed: failed) {
+      TextEditor(text: $tags).frame(minHeight: 120).accessibilityLabel("사용자 태그").disabled(interaction.blocksInteraction)
+      if let activity = organizationEditorActivityLabel(busy: interaction.busy, failed: interaction.failed) {
         ProgressView(activity).accessibilityLabel(activity)
       }
-      if failed {
+      if interaction.failed {
         Text("저장 실패 · 이전 값은 덮어쓰지 않았습니다. 현재 저장값을 다시 확인한 뒤 편집하세요.")
         Button("현재 저장값 확인 후 다시 시도") {
-          busy = true
+          guard interaction.beginRevalidate() else { return }
           Task {
             do {
               let current = try await revalidate(observed)
+              guard interaction.phase == .revalidating else { return }
               observed = current; value = current.organization
               tags = current.organization.tags.joined(separator: "\n")
-              failed = false
-            } catch { failed = true }
-            busy = false
+              _ = interaction.finishRevalidation(succeeded: true)
+            } catch { _ = interaction.finishRevalidation(succeeded: false) }
           }
-        }.disabled(busy)
+        }.disabled(interaction.blocksInteraction)
       }
       HStack {
-        Button("취소", role: .cancel) { dismiss() }
+        Button("취소", role: .cancel) {
+          guard interaction.beginCancel() else { return }
+          dismiss()
+        }
         Button("저장") {
-          busy = true
+          guard interaction.beginSave() else { return }
           var draft = value
           draft.tags = tags.split(separator: "\n").map(String.init)
           Task {
-            do { try await save(draft, observed); dismiss() }
-            catch { failed = true; busy = false }
+            do {
+              try await save(draft, observed)
+              guard interaction.finishSave(succeeded: true) else { return }
+              dismiss()
+            } catch { _ = interaction.finishSave(succeeded: false) }
           }
-        }.disabled(failed)
-      }.disabled(busy)
-    }.padding().frame(minWidth: 400).interactiveDismissDisabled(busy)
+        }.disabled(interaction.failed)
+      }.disabled(interaction.blocksInteraction)
+    }.padding().frame(minWidth: 400).interactiveDismissDisabled(interaction.blocksInteraction)
+      .onDisappear { interaction.invalidate() }
   }
 }
