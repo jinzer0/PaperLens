@@ -2,7 +2,7 @@ import Foundation
 import GRDB
 
 extension ProductDatabase {
-  /// One read transaction binds read, year and metadata observations to the ready Paper/revision.
+  /// One read transaction binds read, year, metadata and Summary observations to the ready Paper/revision.
   public func librarySortFacts() throws -> [OrganizationSortFacts] {
     try adapterRead { db in
       try Row.fetchAll(db, sql: """
@@ -33,9 +33,21 @@ extension ProductDatabase {
               year = value
             }
           }
+          let summary: AcceptedSummaryObservation?
+          do {
+            if let record = try restoreLibrarySummary(paperID: paperID, geometry: nil, in: db) {
+              guard record.identity.paperID == paperID, record.identity.generation == generationID
+              else { throw LibrarySummaryError.staleIdentity }
+              summary = .restored(record)
+            } else {
+              summary = nil
+            }
+          } catch LibrarySummaryError.geometryUnavailable {
+            summary = .unavailable
+          }
           return OrganizationSortFacts(paperID: paperID, generation: generationID,
             lastReadAt: timestamp.map(Date.init(timeIntervalSince1970:)), publicationYear: year,
-            metadata: metadata)
+            metadata: metadata, summary: summary)
         }
     }
   }

@@ -27,6 +27,11 @@ public struct OrganizationFilter: Equatable, Sendable {
   public var favoritesOnly = false
   public init() {}
 }
+public enum AcceptedSummaryObservation: Sendable {
+  case unavailable
+  case restored(LibrarySummaryRecord)
+}
+
 /// Parent supplies only accepted Reader/metadata values, bound to this exact Paper generation.
 public struct OrganizationSortFacts: Sendable {
   public let paperID: UUID
@@ -35,11 +40,14 @@ public struct OrganizationSortFacts: Sendable {
   public let publicationYear: Int?
   /// Validated stored observation at query time, not publication or read authority.
   public let metadata: ReaderMetadataSnapshot?
+  /// Nil means no delivered Summary fact, not known absence or successful generation.
+  public let summary: AcceptedSummaryObservation?
   public init(paperID: UUID, generation: UUID, lastReadAt: Date?, publicationYear: Int?,
-    metadata: ReaderMetadataSnapshot?) {
+    metadata: ReaderMetadataSnapshot?, summary: AcceptedSummaryObservation? = nil) {
     self.paperID = paperID; self.generation = generation
     self.lastReadAt = lastReadAt; self.publicationYear = publicationYear
     self.metadata = metadata
+    self.summary = summary
   }
 }
 public struct OrganizedPaper: Identifiable, Equatable, Sendable {
@@ -113,6 +121,10 @@ public actor LibraryOrganizationService {
         fact.lastReadAt?.timeIntervalSince1970.isFinite != false,
         fact.publicationYear.map({ (1...9999).contains($0) }) != false
       else { throw OrganizationError.invalidSortFacts }
+      if case .restored(let record) = fact.summary {
+        guard record.identity.paperID == fact.paperID, record.identity.generation == fact.generation
+        else { throw OrganizationError.invalidSortFacts }
+      }
     }
     func currentFacts(_ paper: OrganizedPaper) -> OrganizationSortFacts? {
       guard let fact = byID[paper.id], fact.generation == paper.generation else { return nil }

@@ -46,6 +46,26 @@ extension ProductDatabase {
         END;
         """)
     }
+    migrator.registerMigration("librarySummaryOriginalOwnersV1") { db in
+      try db.execute(sql: """
+        CREATE TABLE librarySummaryOwner (
+          job TEXT PRIMARY KEY NOT NULL REFERENCES librarySummaryJob(job) ON DELETE CASCADE,
+          format INTEGER NOT NULL CHECK(format = 1),
+          maximumErrorPDFPoints REAL NOT NULL CHECK(maximumErrorPDFPoints >= 0)
+        );
+        CREATE TABLE librarySummaryOwnerAnchor (
+          job TEXT NOT NULL REFERENCES librarySummaryOwner(job) ON DELETE CASCADE,
+          page INTEGER NOT NULL CHECK(page BETWEEN 0 AND 1999),
+          sentenceID INTEGER NOT NULL CHECK(sentenceID BETWEEN 0 AND 199999),
+          anchor BLOB NOT NULL CHECK(length(anchor) BETWEEN 1 AND 262144),
+          PRIMARY KEY(job, page, sentenceID)
+        );
+        CREATE TRIGGER librarySummaryOwnerImmutable BEFORE UPDATE ON librarySummaryOwner
+        BEGIN SELECT RAISE(ABORT, 'immutable summary owner'); END;
+        CREATE TRIGGER librarySummaryOwnerAnchorImmutable BEFORE UPDATE ON librarySummaryOwnerAnchor
+        BEGIN SELECT RAISE(ABORT, 'immutable summary owner anchor'); END;
+        """)
+    }
   }
 
   private func guardSummaryPaper(_ i: LibrarySummaryIdentity, db: Database,
@@ -125,6 +145,10 @@ extension ProductDatabase {
     try adapterWrite { db in
       try guardSummaryPaper(i, db: db, currentInput: true)
       _ = try summaryAnchors(i, frozen: frozen, db: db, geometry: geometry)
+      guard let original = geometry as? CanonicalExtractionGeometryValidator else {
+        throw LibrarySummaryError.geometryUnavailable
+      }
+      let owners = try original.captureSummaryOwners(summaryOwnerIdentities(i, frozen: frozen))
       // Never replace an invocation or clear previous usable data to make another send fit.
       try db.execute(sql: """
         INSERT INTO librarySummaryJob(job, paperID, attempt, fence, correlation, input, epoch,
@@ -132,7 +156,81 @@ extension ProductDatabase {
         """, arguments: [i.job.uuidString, i.paperID.uuidString, i.attempt.uuidString,
           i.fence.uuidString, i.correlation.uuidString, i.input.uuidString, i.epoch.uuidString,
           identity, saved])
+      try db.execute(sql: """
+        INSERT INTO librarySummaryOwner(job, format, maximumErrorPDFPoints) VALUES (?, 1, ?)
+        """, arguments: [i.job.uuidString, owners.maximumErrorPDFPoints])
+      for anchor in owners.anchors {
+        try db.execute(sql: """
+          INSERT INTO librarySummaryOwnerAnchor(job, page, sentenceID, anchor) VALUES (?, ?, ?, ?)
+          """, arguments: [i.job.uuidString, anchor.identity.pageIndex,
+            anchor.identity.sentenceID, anchor.bytes])
+      }
     }
+  }
+
+  private func summaryOwnerIdentities(_ i: LibrarySummaryIdentity,
+    frozen: LibrarySummaryFrozen) throws -> Set<PDFSentenceIdentity> {
+    guard frozen.sentences.count <= SummaryOwnerArchive.maximumBytes / 128 else {
+      throw LibrarySummaryError.invalidGrounding
+    }
+    let identities = try frozen.sentences.map {
+      try PDFSentenceIdentity(paperID: i.paperID, pdfSHA256: i.pdfSHA256,
+        extractionRevision: i.revision.uuidString.lowercased(), pageIndex: $0.page, sentenceID: $0.id)
+    }
+    let membership = Set(identities)
+    guard membership.count == identities.count else { throw LibrarySummaryError.invalidGrounding }
+    return membership
+  }
+
+  private func restoreSummaryOwners(_ i: LibrarySummaryIdentity, frozen: LibrarySummaryFrozen,
+    db: Database) throws -> CanonicalExtractionGeometryValidator {
+    let membership = try summaryOwnerIdentities(i, frozen: frozen)
+    guard let header = try Row.fetchOne(db, sql: """
+      SELECT format, maximumErrorPDFPoints FROM librarySummaryOwner WHERE job = ?
+        AND format = 1 AND typeof(format) = 'integer'
+        AND typeof(maximumErrorPDFPoints) IN ('real', 'integer')
+      """, arguments: [i.job.uuidString]),
+      (header["format"] as Int) == 1 else { throw LibrarySummaryError.geometryUnavailable }
+    let error: Double = header["maximumErrorPDFPoints"]
+    let precision = try PDFGeometryPrecision(maximumErrorPDFPoints: error)
+    // SQL aggregates inspect sizes before any BLOB fetch or JSON allocation.
+    guard let bounds = try Row.fetchOne(db, sql: """
+      SELECT COUNT(*) AS count, COALESCE(SUM(length(anchor)), 0) AS bytes,
+        COALESCE(MIN(length(anchor)), 1) AS minimum,
+        COALESCE(SUM(CASE WHEN typeof(anchor) = 'blob' AND typeof(page) = 'integer'
+          AND typeof(sentenceID) = 'integer' THEN 0 ELSE 1 END), 0) AS invalid
+      FROM librarySummaryOwnerAnchor WHERE job = ?
+      """, arguments: [i.job.uuidString]),
+      (bounds["count"] as Int) == membership.count,
+      (bounds["invalid"] as Int) == 0,
+      (bounds["bytes"] as Int64) >= 0,
+      (bounds["bytes"] as Int64) <= Int64(SummaryOwnerArchive.maximumBytes),
+      (bounds["minimum"] as Int) > 0 else { throw LibrarySummaryError.invalidGrounding }
+    let rows = try Row.fetchAll(db, sql: """
+      SELECT page, sentenceID, anchor FROM librarySummaryOwnerAnchor
+      WHERE job = ? ORDER BY page, sentenceID
+      """, arguments: [i.job.uuidString])
+    var anchors: [PDFSentenceAnchor] = []
+    var seen: Set<PDFSentenceIdentity> = []
+    for row in rows {
+      let key = try PDFSentenceIdentity(paperID: i.paperID, pdfSHA256: i.pdfSHA256,
+        extractionRevision: i.revision.uuidString.lowercased(), pageIndex: row["page"],
+        sentenceID: row["sentenceID"])
+      guard membership.contains(key), seen.insert(key).inserted else {
+        throw LibrarySummaryError.invalidGrounding
+      }
+      let bytes: Data = row["anchor"]
+      let anchor = try CanonicalExtractionGeometryValidator.decodeCanonicalAnchor(bytes)
+      try anchor.validateResolution(expected: key, publishedMembership: membership)
+      guard let sentence = frozen.sentences.first(where: { $0.page == key.pageIndex && $0.id == key.sentenceID }),
+        anchor.fullSourceQuote.utf8.elementsEqual(sentence.quote.utf8),
+        try CanonicalExtractionGeometryValidator.encodeCanonicalAnchor(anchor) == bytes else {
+        throw LibrarySummaryError.invalidGrounding
+      }
+      anchors.append(anchor)
+    }
+    guard seen == membership else { throw LibrarySummaryError.invalidGrounding }
+    return try CanonicalExtractionGeometryValidator(owningAnchors: anchors, precision: precision)
   }
 
   func publishLibrarySummary(_ i: LibrarySummaryIdentity, frozen: LibrarySummaryFrozen,
@@ -182,9 +280,16 @@ extension ProductDatabase {
     return summary.evidenceIndices.map { anchors[$0] }
   }
 
-  func restoreLibrarySummary(paperID: UUID, geometry: any LibrarySummaryGeometryValidating) throws
+  func restoreLibrarySummary(paperID: UUID, geometry: (any LibrarySummaryGeometryValidating)? = nil) throws
     -> LibrarySummaryRecord? {
     try adapterRead { db in
+      try restoreLibrarySummary(paperID: paperID, geometry: geometry, in: db)
+    }
+  }
+
+  /// Reuses the caller's sole queue snapshot; never opens a nested reader or sends requests.
+  func restoreLibrarySummary(paperID: UUID, geometry: (any LibrarySummaryGeometryValidating)?,
+    in db: Database) throws -> LibrarySummaryRecord? {
       guard let row = try Row.fetchOne(db, sql: """
         SELECT r.*, j.identity AS jobIdentity, j.frozen AS jobFrozen, j.permit AS publicationPermit
         FROM librarySummaryVisible v JOIN librarySummaryResult r ON r.id = v.resultID
@@ -206,10 +311,15 @@ extension ProductDatabase {
       // Prior config/revision may differ from current input, but never relabel the saved identity.
       try guardSummaryPaper(identity, db: db, currentInput: false)
       let result = try frozen.validate(result: row["result"])
-      let (bundle, anchors) = try summaryAnchors(identity, frozen: frozen, db: db, geometry: geometry)
+      let owner: any LibrarySummaryGeometryValidating
+      if let geometry {
+        owner = geometry
+      } else {
+        owner = try restoreSummaryOwners(identity, frozen: frozen, db: db)
+      }
+      let (bundle, anchors) = try summaryAnchors(identity, frozen: frozen, db: db, geometry: owner)
       return LibrarySummaryRecord(id: resultID, identity: identity, result: result,
         evidence: bundle, claimAnchors: try summaryClaimAnchors(result, anchors: anchors))
-    }
   }
 
   /// Parent calls only after its policy termination; this does not attest physical closure/purge.

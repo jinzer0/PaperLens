@@ -158,30 +158,32 @@ public struct LibraryBrowserView: View {
   }
 
   @ViewBuilder private func paperContent(_ paper: OrganizedPaper) -> some View {
+    let fact = currentFacts[paper.id].flatMap { $0.generation == paper.generation ? $0 : nil }
     VStack(alignment: .leading, spacing: 8) {
       Text(paper.title).font(.headline).textSelection(.enabled)
       Text(statusLabel(paper)).font(.caption)
       Text("\(readingLabel(paper.organization.readingStatus)) · \(paper.organization.favorite ? "즐겨찾기" : "즐겨찾기 아님")")
       if !paper.organization.tags.isEmpty { Text(paper.organization.tags.joined(separator: " · ")).font(.caption) }
-      if let year = currentFacts[paper.id]?.publicationYear { Text("발행연도 \(String(year))").font(.caption) }
+      if let year = fact?.publicationYear { Text("발행연도 \(String(year))").font(.caption) }
       else { Text("발행연도 정보 없음").font(.caption).foregroundStyle(.secondary) }
-      if let date = currentFacts[paper.id]?.lastReadAt {
+      if let date = fact?.lastReadAt {
         Text("최근 읽음 \(date.formatted())").font(.caption)
       }
-      Text("초록 · \(LibraryMetadataPresentation.preview(currentFacts[paper.id]?.metadata?.abstract, limit: 220))")
+      LibraryStoredSummary(paper: paper, observation: fact?.summary, showEvidence: false)
+      Text("초록 · \(LibraryMetadataPresentation.preview(fact?.metadata?.abstract, limit: 220))")
         .font(.caption).textSelection(.enabled)
-      Text("출처 주제 (사용자 태그 아님) · \(LibraryMetadataPresentation.preview(currentFacts[paper.id]?.metadata?.topics, limit: 120))")
+      Text("출처 주제 (사용자 태그 아님) · \(LibraryMetadataPresentation.preview(fact?.metadata?.topics, limit: 120))")
         .font(.caption).textSelection(.enabled)
       if paper.status == .importing { ProgressView(); Text("\(paper.bytesCopied) bytes 복사됨") }
       HStack {
         Button("열기") { perform { try await service.admitOpen(paper); try await openPaper(paper) } }
           .disabled(!paper.readable || busy)
-        Button("초록·출처 주제 상세") {
+        Button("요약·초록·출처 주제 상세") {
           guard !busy, !loading, !loadFailed else { return }
-          identification = LibraryIdentification(paper: paper, metadata: currentFacts[paper.id]?.metadata)
+          identification = LibraryIdentification(paper: paper, metadata: fact?.metadata, summary: fact?.summary)
         }.disabled(busy || loading || loadFailed)
           .focused($focusedIdentification, equals: paper.id)
-          .accessibilityLabel("\(paper.title) 초록·출처 주제 상세")
+          .accessibilityLabel("\(paper.title) 요약·초록·출처 주제 상세")
         Button("폴더 이동") {
           guard paper.readable, !busy, !loading, !loadFailed else { return }
           invalidateObservation(); moving = LibraryMovement(paper: paper)
@@ -368,6 +370,42 @@ private struct LibraryIdentification: Identifiable {
   var id: UUID { paper.id }
   let paper: OrganizedPaper
   let metadata: ReaderMetadataSnapshot?
+  let summary: AcceptedSummaryObservation?
+}
+
+@MainActor private struct LibraryStoredSummary: View {
+  let paper: OrganizedPaper
+  let observation: AcceptedSummaryObservation?
+  let showEvidence: Bool
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      Text("저장된 요약").font(.headline)
+      switch observation {
+      case .restored(let record):
+        if record.identity.paperID == paper.id, record.identity.generation == paper.generation,
+          case .librarySummary(let summary, _) = record.result.result {
+          Text(summary.text).textSelection(.enabled)
+          if showEvidence {
+            Text("저장된 요약의 원문 근거").font(.headline)
+            ForEach(record.claimAnchors.indices, id: \.self) { index in
+              let anchor = record.claimAnchors[index]
+              VStack(alignment: .leading, spacing: 4) {
+                Text("PDF \(anchor.identity.pageIndex + 1)쪽").font(.caption)
+                Text(anchor.fullSourceQuote).textSelection(.enabled)
+              }
+            }
+          }
+        } else {
+          Text("미확인 · 현재 논문의 저장된 요약을 확인할 수 없습니다.")
+        }
+      case .unavailable:
+        Text("미확인 · 원문 근거의 검증 소유자를 사용할 수 없어 저장된 요약을 확인할 수 없습니다.")
+      case nil:
+        Text("미확인 · 확인된 저장 요약 정보가 없습니다.")
+      }
+    }
+  }
 }
 
 /// Character prefixes preserve extended grapheme clusters, including emoji and combining marks.
@@ -393,6 +431,7 @@ enum LibraryMetadataPresentation {
         .font(.caption)
       ScrollView {
         VStack(alignment: .leading, spacing: 16) {
+          LibraryStoredSummary(paper: captured.paper, observation: captured.summary, showEvidence: true)
           field("초록", captured.metadata?.abstract)
           field("출처 주제 · 사용자 태그 아님", captured.metadata?.topics)
         }.frame(maxWidth: .infinity, alignment: .leading)

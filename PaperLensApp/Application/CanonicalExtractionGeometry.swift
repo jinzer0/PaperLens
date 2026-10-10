@@ -83,7 +83,7 @@ public struct CanonicalExtractionGeometryValidator: ExtractionGeometryValidating
         return anchor
     }
 
-    private static func decodeCanonicalAnchor(_ bytes: Data) throws -> PDFSentenceAnchor {
+    static func decodeCanonicalAnchor(_ bytes: Data) throws -> PDFSentenceAnchor {
         let encoded: EncodedAnchor
         do {
             encoded = try JSONDecoder().decode(EncodedAnchor.self, from: bytes)
@@ -94,6 +94,46 @@ public struct CanonicalExtractionGeometryValidator: ExtractionGeometryValidating
             throw CanonicalExtractionGeometryError.unsupportedEncodingVersion
         }
         return try encoded.anchor()
+    }
+
+    /// Passive original facts only; resolution candidates never supply this archive.
+    func captureSummaryOwners(_ identities: Set<PDFSentenceIdentity>) throws -> SummaryOwnerArchive {
+        // UUIDs, SHA and canonical field names alone exceed 128 encoded bytes per owner.
+        guard identities.count <= SummaryOwnerArchive.maximumBytes / 128 else {
+            throw LibrarySummaryError.invalidGrounding
+        }
+        var rows: [SummaryOwnerArchive.Anchor] = []
+        var total = 0
+        for identity in identities.sorted(by: {
+            ($0.pageIndex, $0.sentenceID) < ($1.pageIndex, $1.sentenceID)
+        }) {
+            guard let original = owningAnchors[identity],
+                  original.fullSourceQuote.utf8.count <= SummaryOwnerArchive.maximumBytes,
+                  original.quads.count <= SummaryOwnerArchive.maximumBytes / 8 else {
+                throw LibrarySummaryError.invalidGrounding
+            }
+            // Bound the input before EncodedAnchor allocates its quad array or JSON bytes.
+            // Six bytes per UTF-8 byte covers JSON escaping; fixed fields and each
+            // finite-coordinate quad have conservative metadata encoding headroom.
+            let remaining = SummaryOwnerArchive.maximumBytes - total
+            let quoteBytes = original.fullSourceQuote.utf8.count
+            guard remaining >= 2048,
+                  quoteBytes <= (remaining - 2048) / 6 else {
+                throw LibrarySummaryError.invalidGrounding
+            }
+            let quadBudget = remaining - 2048 - quoteBytes * 6
+            guard original.quads.count <= quadBudget / 512 else {
+                throw LibrarySummaryError.invalidGrounding
+            }
+            let bytes = try Self.encodeCanonicalAnchor(original)
+            guard !bytes.isEmpty, bytes.count <= SummaryOwnerArchive.maximumBytes - total else {
+                throw LibrarySummaryError.invalidGrounding
+            }
+            total += bytes.count
+            rows.append(.init(identity: identity, bytes: bytes))
+        }
+        return SummaryOwnerArchive(maximumErrorPDFPoints: precision.maximumErrorPDFPoints,
+                                   anchors: rows)
     }
 
     private func validate(_ anchor: PDFSentenceAnchor,
@@ -125,6 +165,17 @@ public struct CanonicalExtractionGeometryValidator: ExtractionGeometryValidating
             }
         }
     }
+}
+
+/// Storage metadata quota, not resource admission or a precision/calibration default.
+struct SummaryOwnerArchive {
+    static let maximumBytes = 262144
+    struct Anchor {
+        let identity: PDFSentenceIdentity
+        let bytes: Data
+    }
+    let maximumErrorPDFPoints: Double
+    let anchors: [Anchor]
 }
 
 // Wire representation only: all decoded geometry is reconstructed by Domain initializers.

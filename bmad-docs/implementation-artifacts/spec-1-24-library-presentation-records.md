@@ -204,3 +204,17 @@ passive facts grant no PDF read/publication/write authority. User implementation
 applies to this lane too: no tests, correction fixtures, full/native gates or fresh review.
 Parent minimum confirmation only; production creator/calibration/profile, actual rendered
 interaction/accessibility/physical restart and Story/Epic0-of-26 remain unproved.
+
+### Implemented saved Summary projection
+
+Worker143 changed only the three specified source files. Parent connected the existing
+Summary read helper without a nested queue. Actual validated record, exact Paper/generation,
+explicit unavailable ownership, full saved text and stored-order untruncated source quotes
+with one-based PDF pages now feed existing list/grid/detail. Neutral Korean labels do not
+claim fragment results summarize the whole Paper; no generation/navigation stub was added.
+SwiftPM minimum existing canonical Summary and atomic Library facts cases exited0; product
+source compiled, but neither scenario exercises new visible Summary UI or geometry-free
+archive reconstruction. Six-source digest and deferred proof are in Spec1.23/shared evidence.
+No new/correction tests, broad/full native build or independent review; rendered interaction,
+accessibility, missing/corrupt archive, physical restart, genuine creator/profile and Story
+acceptance remain unverified. Historical455/native-bf receipts belong to03ee2f5 only.

@@ -140,3 +140,23 @@ injection/calibration or generated UI. Those require genuine upstream complete a
 User implementation-first applies to workers: no new/correction tests, broad suites,
 native builds or review lanes. Parent minimum required confirmation only; all deferred
 proof and genuine producer/profile/UI/Story limits stay explicit and false.
+
+### Implementation-first archive delivery
+
+Worker142 implemented the three scoped sources; parent added same-snapshot restore entry
+for Library callers, conservative pre-encoding quote/quad/member bounds and typed SQL
+anchor-key inspection before decoding. Original private owners/explicit precision are
+persisted atomically with the existing Job and recovered through the existing codec;
+no candidate-derived authority or second store. Worker143 integrated actual saved result
+and ordered full evidence quotes into existing Library list/grid/detail (Spec4bb1a7b).
+Exact six-source binary diff against4bb1a7b SHA256:
+`f233f8f6013bfeaff551a8fb63875dec9d791e9b457177ab74a848e7a5baa2d9`.
+Minimum existing canonical save/reopen case passed (artifact1520 and final source rerun
+exit0); existing atomic year/metadata Library fact case passed exit0. SwiftPM compiled
+the changed product/UI source. The canonical case uses explicitly supplied fixture
+owners on restore: it does NOT verify geometry-free archive restart, corruption, quotas,
+deletion cascade, visible controls or genuine calibrated producer/profile activation.
+No new/correction tests, broad union/native gate or independent review were performed;
+legacy noncanonical reservation fixture expectations remain intentionally unmodified
+and require genuine independent Canonical owners before future broad verification.
+0/26 Stories and Epic acceptance remain false; no protected execution or remote action.

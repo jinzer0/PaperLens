@@ -25,7 +25,7 @@
     "Mounted stored abstract and source-topic observations in both Library presentations and captured native detail, with explicit missing/conflict/provenance and query invalidation",
     "Mounted existing-Paper Folder movement through actual captured generation/SHA/reference/prior-placement comparison, real UUID destinations and same-DB durable movement",
     "Mounted fresh selected-PDF same-failed-Paper/ImportJob confirmation, guarded atomic capture/execution replacement and six fresh IDs; owned Workspace behavior verified, not visible app UI",
-    "Shared canonical summary geometry resolver with independent owning anchors, complete UTF-8 quote/quads/page validation and explicit precision; production retained-revision owner recovery/injection is not established",
+    "Shared canonical summary resolver and immutable original-owner archive in sole GRDB; retained registered owners recover with captured precision, but geometry-free restart runtime and genuine production owner creation/calibration remain unproved",
     "Mounted nonmodal floating parsing-failure overlay derived from the existing accepted persisted status, with safe Korean reason and no separate failure authority; rendered visibility and immediate delivery unverified",
     "Native saved annotation reveal rejects missing PDFKit rectangle fragments before replacing overlay or navigating; owned windowless multi-page/reentry regressions pass, not visible UI or canonical AI geometry certification",
     "Actual ReaderPresentation native search preserves discard after synchronous PDFKit selection clearing and fences stale results/errors; owned native search and public-notification regressions pass, not visible UI or P6 certification",
@@ -33,8 +33,29 @@
     "Organization editor mounts distinct Korean saving/current-value-revalidation native progress cues from derived editor activity; semantic branch tests/source mount verified, rendered accessibility delivery unverified",
     "Settings SecureField uses synchronous changed-entry Binding invalidation before forwarding key writes; actual helper/owned shared Native owner tests reject late synthetic success, not observed SwiftUI interleaving or authentication",
     "Organization Save/Revalidate/Cancel synchronously admit before effects through one ephemeral phase; closing has no fake saving cue and denies obsolete completion. Owned interaction/GRDB regressions, not actual overlapping native callbacks.",
-    "Native PaperMovementSheet renders Korean labelled progress during actual pending Folder save; one literal cue, no movement/admission/CAS/load/cancellation change or rendered accessibility proof"
+    "Native PaperMovementSheet renders Korean labelled progress during actual pending Folder save; one literal cue, no movement/admission/CAS/load/cancellation change or rendered accessibility proof",
+    "Existing Library list/grid/detail consume same-snapshot validated saved Summary records with exact Paper/generation and full ordered source quotes; source compiled, not observed rendered UI"
   ],
+  "originalSummaryOwnerArchiveAndLibraryDisplay": {
+    "specificationCommits": ["17c1d03", "4bb1a7b"],
+    "sourceDiffBase": "4bb1a7b87bd675dcbb984f3e799712377c2766ca",
+    "sourceDiffSHA256": "f233f8f6013bfeaff551a8fb63875dec9d791e9b457177ab74a848e7a5baa2d9",
+    "sourceScope": ["CanonicalExtractionGeometry.swift", "LibraryOrganizationService.swift", "LibrarySummaryService.swift", "LibraryBrowserView.swift", "ProductDatabase+LibraryFacts.swift", "ProductDatabase+LibrarySummary.swift"],
+    "implementers": ["agent://142-SummaryOriginalOwnerArchive", "agent://143-StoredSummaryLibraryProjection"],
+    "behavior": "Private original Canonical owners and explicit precision persist atomically before Provider effects; bounded job-qualified recovery reuses existing decoder/Domain validation. Library reads valid saved records within existing facts transaction and displays actual text/ordered full quotes. No new codec/store/cache, candidate-derived authority, generation or fake PDF navigation.",
+    "minimumExistingScenarios": [
+      {"test": "testCanonicalSummarySaveReopenRestoresRetainedRevisionWithoutGenerationOrProvider", "exitCode": 0, "initialOutput": "artifact://1520", "finalSourceRerun": "Exit0; one existing case, product rebuilt in3.59 seconds. This case supplies fresh fixture geometry on restore, not geometry-free recovery."},
+      {"test": "testYearFactsOnlyUseCurrentRevisionWithNoConflictPrecedence", "exitCode": 0, "scope": "One existing atomic Library year/metadata facts case; not saved-Summary rendering."}
+    ],
+    "verificationPolicy": "User implementation-first for all lanes; only minimum existing scenarios. No new/correction tests, broad Product suite, native Xcode gate, formatter or independent review.",
+    "existingNoncanonicalFixturesUpdated": false,
+    "geometryFreeArchiveRestartCorruptionDeletionAndQuotaVerified": false,
+    "renderedSummaryAndAccessibilityVerified": false,
+    "genuineProductionOwnerCalibrationAndProviderActivationVerified": false,
+    "historical455AndNativeBFApplyToThisDelta": false,
+    "physicalOrLiveProtectedExecution": false,
+    "storyAccepted": false
+  },
   "verification": {
     "productUnion": {
       "sourceCommit": "03ee2f5615fedd5345cdaf7099ec9d2a91ca4868",

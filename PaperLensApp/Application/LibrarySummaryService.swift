@@ -115,7 +115,6 @@ public struct LibrarySummaryService: Sendable {
   }
 
   public func restore(paperID: UUID) throws -> LibrarySummaryRecord? {
-    guard let geometry else { throw LibrarySummaryError.geometryUnavailable }
     return try database.restoreLibrarySummary(paperID: paperID, geometry: geometry)
   }
 }
