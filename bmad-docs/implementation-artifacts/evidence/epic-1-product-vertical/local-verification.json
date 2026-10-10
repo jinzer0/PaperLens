@@ -29,14 +29,15 @@
     "Mounted nonmodal floating parsing-failure overlay derived from the existing accepted persisted status, with safe Korean reason and no separate failure authority; rendered visibility and immediate delivery unverified",
     "Native saved annotation reveal rejects missing PDFKit rectangle fragments before replacing overlay or navigating; owned windowless multi-page/reentry regressions pass, not visible UI or canonical AI geometry certification",
     "Actual ReaderPresentation native search preserves discard after synchronous PDFKit selection clearing and fences stale results/errors; owned native search and public-notification regressions pass, not visible UI or P6 certification",
-    "Next-match navigation requires current request/document plus fresh actual session validation after selection callbacks; owned newer-query preserves native page and actual-close preserves detach, not rendered navigation certification"
+    "Next-match navigation requires current request/document plus fresh actual session validation after selection callbacks; owned newer-query preserves native page and actual-close preserves detach, not rendered navigation certification",
+    "Organization editor mounts distinct Korean saving/current-value-revalidation native progress cues from existing busy/failed state; semantic branch tests/source mount verified, rendered accessibility delivery unverified"
   ],
   "verification": {
     "productUnion": {
       "command": "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --parallel --num-workers 1 --filter ProductTests",
-      "tests": 448,
+      "tests": 449,
       "failures": 0,
-      "output": "artifact://1461",
+      "output": "artifact://1470",
       "evidence": "Real GRDB transactions, owned synthetic files and actual local FIFO IO/close/peer metadata/EPIPE; mocked provider/HTTP transport and synthetic windowless PDFKit conversions. Not authenticated provider, app UI, SDK producer or PDFium execution."
     },
     "nativeCompilation": {
@@ -44,11 +45,11 @@
       "configuration": "Release",
       "architecture": "arm64",
       "minimumOS": "15.0",
-      "derivedData": ".build/product-native-compile-20261010-bb",
+      "derivedData": ".build/product-native-compile-20261010-bc",
       "codeSigningAllowed": false,
       "result": "BUILD SUCCEEDED",
-      "rawOutput": "artifact://1462",
-      "output": "artifact://1462",
+      "rawOutput": "artifact://1471",
+      "output": "artifact://1471",
       "applicationAndHelperBinariesExecuted": false,
       "warnings": "AppIntents metadata skipped, PDFium debug-map duplicate/missing-symbol warnings and an unnecessary-await Swift warning remain; no warning suppression or debug-symbol repair claimed."
     },
@@ -302,6 +303,25 @@
     "runtimeParsingOrCalibrationVerified": false,
     "helperExecuted": false,
     "storyAccepted": false
+  },
+  "organizationPendingActivityPresentation": {
+    "preImplementationSpecificationCommit": "76c9fe9ee1f03afc77450d2e3bc903085ae5efd6",
+    "assessment": "agent://130-LibraryPresentationGap: existing1.25 saving/failed and Korean non-color pending cue criterion was missing despite interaction gating",
+    "implementation": "agent://131-OrganizationActivityCue: exact one-file implementation; parent owns paired tests/verification/evidence",
+    "sourceScope": "LibraryBrowserView.swift helper/OrganizationEditor.body and existing LibraryOrganizationTests.swift only; save/revalidate/gating/dismissal/error/CAS/query/ownership unchanged",
+    "sourceDiffSha256": "c40d8abb4d62befda0acdbcb972a052a1028173e0be60f8a2d4e82775ec64810",
+    "behavior": "Production-consumed pure organizationEditorActivityLabel returns nil idle, 저장 중 busy/nonfailed save, 현재 저장값 확인 중 busy/failed revalidation. Actual body mounts labelled native ProgressView with explicit accessibilityLabel. No new state/controller or invented successful save.",
+    "focused": {"tests": 47, "failures": 0, "output": "artifact://1468"},
+    "fullProduct": {"tests": 449, "failures": 0, "output": "artifact://1470", "processMode": "--parallel --num-workers 1; every case invoked without skips or irreversible-debt quota reset"},
+    "nativeCompilation": {"result": "BUILD SUCCEEDED", "output": "artifact://1471", "derivedData": ".build/product-native-compile-20261010-bc", "codeSigningAllowed": false},
+    "review": "agent://132-OrganizationActivityReview SOURCE-ONLY CLEAR / APPROVE; actual busy/failed await contexts match labels, unchanged operations confirmed",
+    "coverage": "All four production helper Boolean branches and distinct Korean save/revalidation labels; failure idle removes activity without claiming success. Source inspection verifies same helper mounted in actual editor. Not event/race or renderer proof.",
+    "limits": ["Mounted source and windowless semantic projection do not prove visible native progress or VoiceOver delivery", "No keyboard/focus/contrast/scaling/physical restart/P6 certification"],
+    "visibleNativeInteractionVerified": false,
+    "applicationAndHelperBinariesExecuted": false,
+    "SDKProviderRendererExecuted": false,
+    "storyAccepted": false,
+    "epicAccepted": false
   },
   "nativeMatchNavigationReentry": {
     "preImplementationSpecificationCommit": "1d0e2d7743faf3e3b256f7d060b27ca11318f3fa",

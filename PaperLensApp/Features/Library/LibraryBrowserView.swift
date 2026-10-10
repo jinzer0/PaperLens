@@ -420,6 +420,11 @@ enum LibraryMetadataPresentation {
   }
 }
 
+func organizationEditorActivityLabel(busy: Bool, failed: Bool) -> String? {
+  guard busy else { return nil }
+  return failed ? "현재 저장값 확인 중" : "저장 중"
+}
+
 @MainActor private struct OrganizationEditor: View {
   let save: @MainActor (PaperOrganization, OrganizedPaper) async throws -> Void
   let revalidate: @MainActor (OrganizedPaper) async throws -> OrganizedPaper
@@ -448,6 +453,9 @@ enum LibraryMetadataPresentation {
       Toggle("즐겨찾기", isOn: $value.favorite).disabled(busy)
       Text("사용자 태그 · 한 줄에 하나 (최대 100개, 각 80자)")
       TextEditor(text: $tags).frame(minHeight: 120).accessibilityLabel("사용자 태그").disabled(busy)
+      if let activity = organizationEditorActivityLabel(busy: busy, failed: failed) {
+        ProgressView(activity).accessibilityLabel(activity)
+      }
       if failed {
         Text("저장 실패 · 이전 값은 덮어쓰지 않았습니다. 현재 저장값을 다시 확인한 뒤 편집하세요.")
         Button("현재 저장값 확인 후 다시 시도") {

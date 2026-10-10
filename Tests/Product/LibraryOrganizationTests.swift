@@ -30,6 +30,17 @@ final class LibraryOrganizationTests: XCTestCase {
     return (id, generation)
   }
 
+  func testOrganizationSaveFailureAndRevalidationHaveDistinctPendingSemantics() {
+    XCTAssertNil(organizationEditorActivityLabel(busy: false, failed: false))
+    XCTAssertEqual(organizationEditorActivityLabel(busy: true, failed: false), "저장 중")
+    // A failed save preserves the error and stops activity, never claiming success.
+    XCTAssertNil(organizationEditorActivityLabel(busy: false, failed: true))
+    // Revalidating committed values is not another write or a successful save.
+    XCTAssertEqual(organizationEditorActivityLabel(busy: true, failed: true), "현재 저장값 확인 중")
+    XCTAssertNotEqual(organizationEditorActivityLabel(busy: true, failed: true),
+      organizationEditorActivityLabel(busy: true, failed: false))
+  }
+
   func testRestartPreferencesAndOrganizationWithIdenticalBytesSeparateIdentities() throws {
     let location = try root()
     let database = try ProductDatabase.open(at: location)
