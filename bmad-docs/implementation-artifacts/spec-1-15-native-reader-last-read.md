@@ -1,5 +1,21 @@
 # Story 1.15 Build Spec — Native Reader and durable last-read
 
+## Adaptable native Reader controls and panes
+
+Baseline e50a60f2f2d015a0e0365e6d3a175d44330b96fe has a single wide English
+toolbar and permanently reserves300 points for even absent metadata, plus340 for
+annotations. Change only NativeReaderView.swift presentation: separate document and
+navigation controls, Korean control/search labels and accessibility, native HSplitView
+with adjustable existing PDF/metadata/annotation panes; absent metadata/failure uses
+no blank panel. Keep actual StateObject/PDFView/session/document/context, actions,
+pins, search/restoration/revocation, error values and original PDF unchanged. Layout
+widths are UI choices, not resource/calibration bounds. No new owner, capability,
+timing/probe or synthetic availability. Minimum existing actual windowless PDFKit
+search/session and annotation cases only; new branch tests, independent review,
+full/native/visible resizing/focus/VoiceOver gates and trials remain deferred under
+implementation-first. Source/compile checks cannot certify rendered native behavior,
+P6 or Story/Epic completion. Annotation editor content is unchanged in this slice.
+
 ## Authority and admission
 
 Issue#17 / issue/17-story-1-15, base119a28aa9cc941b2bf88851228a67c0bfec88f5a. PRODUCT5eac3bb9424ad893eca7d63bc319b71f580838ed; ARCHITECTURE1195c92227cc628e325f5ff24d70cc93639bf7a9; Whole-Epic https://github.com/jinzer0/PaperLens/issues/3#issuecomment-6049004229. Own Spec before source; no repeated unchanged-scope SHA approval. Authority does not pass gates or permit live/paid/credential/remote/distribution.

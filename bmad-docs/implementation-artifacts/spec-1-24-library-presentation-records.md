@@ -1,5 +1,18 @@
 # Story 1.24 Build Spec — Library presentation and record revisits
 
+## Compact saved Summary preview versus complete detail
+
+Baseline e50a60f2f2d015a0e0365e6d3a175d44330b96fe renders full saved Summary text
+in both rows/cards, contrary to canonical one-line preview. Change only
+LibraryBrowserView.swift/LibraryStoredSummary: showEvidence false renders one native
+line with trailing truncation and Korean preview label; detail keeps full selectable
+original text and every full ordered quote/page. Do not truncate persisted/result
+bytes, construct a replacement Summary, change observations/identity/availability,
+hide actual recent-attempt or insufficiency/failure states, or modify navigation,
+organization/focus/actions/queries/SQL. Same validated record feeds both surfaces.
+Parent minimum existing stored-summary case/source compilation only; new UI tests,
+independent review/full/native/accessibility gates remain deferred; Story/Epic false.
+
 ## Authority and admission
 
 Issue#26 / `issue/26-story-1-24`; base `f14f15f3f1c1fed02657ebf0c7ecdcb23721bfa8`. PRODUCT `5eac3bb9424ad893eca7d63bc319b71f580838ed`; ARCHITECTURE `1195c92227cc628e325f5ff24d70cc93639bf7a9`; Whole-Epic https://github.com/jinzer0/PaperLens/issues/3#issuecomment-6049004229. Commit own Spec before source; no repeated unchanged-scope SHA approval. No gate certification or credential/live/paid/remote/distribution permission follows.
