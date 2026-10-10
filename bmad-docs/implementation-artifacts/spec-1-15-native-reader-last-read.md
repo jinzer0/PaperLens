@@ -172,3 +172,25 @@ CLEAR / APPROVE. Two-source diff SHA256:
 Windowless native page/selection facts do not certify rendered navigation, accessibility,
 physical restart/P6 or Story. No app/helper binary or protected SDK/renderer trial or
 remote action. Canonical completion0/26 and Story/Epic false remain unchanged.
+
+## Restoration callback admission correction
+
+Assessment140 SOURCE-ONLY HIGH/P1 supports interruption during native scale/navigation
+or Published installation after successful session admission. A delivered close can
+discard the Reader while the old setter/continuation republishes opened=true. Correct
+NativeReaderView.swift and existing ReaderAnnotationBindingTests.swift only; shared
+ReaderSession remains unchanged. Existing restoring also excludes recursive open.
+Capture existing admitted UUID and weak original mounted document as interruption
+fences, never read authority. Separate scale/navigation and published installations
+with fresh actual session.withReadAccess checks. Reacquire document inside each pin;
+retain no PDF document/page outside pins. After callback-capable effects check the
+attempted admission, stop interrupted continuation and rerun discard to repair a setter
+that finished after close. Preserve genuine validation/storage Unable-to-open errors;
+only explicitly detected callback interruption preserves original access-ended failure.
+Owned two-page PDF/GRDB/lifecycle regressions must observe actual public scale notification
+at saved zoom2.5 and actual opened publisher emission, close actual session, and assert
+false/detached/closed/zero-page/original failure after open returns. Recursive open during
+restoration is denied; later explicit opening remains permitted. No fake PDFView, extra
+lease/controller/store or altered search/showMatch behavior. Parent isolated tests,
+unsigned compile, independent review and local evidence commit; no app/helper/SDK/provider/
+renderer trial, credentials/remote or rendered visibility/accessibility/P6/Story claims.
