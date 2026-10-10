@@ -1,5 +1,28 @@
 # Story 1.21 Build Spec — Parsing failure and explicit Retry
 
+## Right-panel recovery and explicit AI availability
+
+Baseline4ff6a2fa80737798092849eadfda350d17510ab6 mounts ParsingStatusView in a
+horizontal header above Reader, not the canonical right panel, and does not explain
+Translation/Paper Chat/Brief generation availability. Exact source scope:
+Features/Reader/ParsingStatusView.swift, Features/Reader/NativeReaderView.swift,
+Features/Library/ProductWorkspaceView.swift. Workspace passes its existing actual
+ParsingStatusView value as a required NativeReaderView initializer argument; Reader
+mounts it at the top of its existing right metadata pane. Preserve whole mount identity,
+actual StateObject/session/document/annotation and metadata bindings, read callbacks,
+polling request/Paper/cancellation fences, notification and disabled Retry admission.
+No duplicate status mount, fourth pane, extra owner/schema/store/timer/producer or
+calibration. Pane contains meaningful status when metadata is absent, not blank space.
+Explain AI preparation using only accepted persisted usableRevision: initial nil/read
+unavailable is unknown, known missing revision is unavailable, retained revision is
+usable despite latest failure. Independently name all three unimplemented features;
+no enabled action, generated success, Provider request, partial-row readiness or raw
+diagnostic/count/time/history. Existing actual storage projection and safe mapping stay
+unchanged. Only minimum existing persisted notice/reopen/retained-revision and actual
+Reader search scenarios; new tests/review/full/native/formatter/rendered gates remain
+deferred per implementation-first. Scope does not certify immediate/visible notice,
+focus/VoiceOver, real process restart, calibrated parsing/Retry or Story/Epic acceptance.
+
 ## Authority and admission
 
 Issue#23 / issue/23-story-1-21, basef14f15f3f1c1fed02657ebf0c7ecdcb23721bfa8. PRODUCT5eac3bb9424ad893eca7d63bc319b71f580838ed; ARCHITECTURE1195c92227cc628e325f5ff24d70cc93639bf7a9; Whole-Epic https://github.com/jinzer0/PaperLens/issues/3#issuecomment-6049004229. Own committed Spec before source; no repeated unchanged-scope SHA approval (parent reconciled proposal's generic per-SHA wording). No actual gates/live/paid/credential/remote/distribution permission inferred.
