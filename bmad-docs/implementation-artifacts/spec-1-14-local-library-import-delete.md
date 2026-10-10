@@ -294,3 +294,47 @@ reselection/confirmation against the captured failed Job; Cancel no reservation,
 intent never replayed, old callbacks fenced. No whole namespace cleanup of usable results.
 Each layer stays truthful: journal-only source/fixtures are NOT durable activation or Retry.
 Same-Job completion and canonical0/26/P1/P2/P3/UI/Story remain unclaimed until actual gates.
+
+### First-layer source handoff — immutable journal, not durable Retry
+
+Worker86 authored only Application/ImportRecoveryJournal.swift,
+Tests/Product/ImportRecoveryJournalTests.swift and this Spec. Internal Sendable journal and
+ConfirmedInput expose the specified throwing constructor, snapshot, recording, retrying,
+explicit-bound encoded and static decode APIs. ConfirmedInput's initializer requires both
+optional facts; wire format requires both keys, including explicit null. Format1 contains
+the full initial capture and typed ordered event DTOs; Retry records another full capture.
+All stored DTO fields are immutable. Policy Snapshot is computed by create/apply on the
+calling thread and is not declared Sendable. No policy or ImportIdentity source changed.
+
+Replay preserves actual policy rejections and additionally checks exact captured lineage,
+stable Paper/generation/Job, source/inapplicable applicability, canonical UUID spelling,
+lowercase64 expected hash, distinct initial identity categories, all prior reserved IDs,
+and reserved writer/publication binding. Fresh Retry identities include input and both
+unused permits; current observed epoch is checked by policy, not allocated by the codec.
+Result IDs retain the policy's nonempty opaque-string contract, not invented UUID/SHA rules.
+Ordinary recording of retry is rejected. Startup observations do not rewrite old captures.
+Decode compares the complete decoded/re-encoded JSON tree, with scalar JSON types preserved,
+to reject unknown nested keys/variants/types; unknown versions fail. Bounds are caller-supplied
+positive bytes only, checked before decode and after encode, not a production memory profile.
+
+Fixtures author controlled synthetic owner attestations, checking complete Snapshot equality
+against actual apply at every admitted event and round trip. Cases include success/release,
+failed writer/publication cleanup, unknown/open closure and cleanup debt, old-epoch startup,
+same-Job fresh Retry, usable-pointer/history retention, late historical send, authority
+observation, revoke/removal debt, reserved-ID aliases, wrong role/config/Job/generation,
+nested corrupt JSON and explicit byte-bound edges. These are authored checks, not passed
+checks: worker ran no tests/builds/gates/lint/format/commits/runtime. Parent owns Package/Xcode
+membership, compilation, fixture execution, independent review and all integration/gates.
+No durable SQL capture, production budget binding, physical closure/purge, publication,
+input/action authority or native Retry activation is claimed by this source-only handoff.
+
+### Strict-format correction before persistence
+
+Review87 found that lossy JSON tree normalization can discard duplicate object members,
+including a hidden revocation or unsupported variant. Format1 is now the exact sorted-key
+JSONEncoder byte representation emitted by encoded(maximumBytes:). Decode must compare
+the original bounded bytes with the typed re-encoding before replay. Duplicate members,
+escaped duplicate spellings, reordered keys and added whitespace reject; no alternate
+representation or compatibility decoder is promised. This avoids introducing a second
+JSON parser. Raw-byte fixtures cover root and nested duplicate keys and hidden events.
+This narrows serialization only; it grants no attestation or execution authority.
