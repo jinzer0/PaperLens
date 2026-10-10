@@ -37,6 +37,7 @@
   ],
   "verification": {
     "productUnion": {
+      "sourceCommit": "03ee2f5615fedd5345cdaf7099ec9d2a91ca4868",
       "command": "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --parallel --num-workers 1 --filter ProductTests",
       "tests": 455,
       "failures": 0,
@@ -44,6 +45,7 @@
       "evidence": "Real GRDB transactions, owned synthetic files and actual local FIFO IO/close/peer metadata/EPIPE; mocked provider/HTTP transport and synthetic windowless PDFKit conversions. Not authenticated provider, app UI, SDK producer or PDFium execution."
     },
     "nativeCompilation": {
+      "sourceCommit": "03ee2f5615fedd5345cdaf7099ec9d2a91ca4868",
       "scheme": "PaperLensTopology",
       "configuration": "Release",
       "architecture": "arm64",
@@ -306,6 +308,26 @@
     "runtimeParsingOrCalibrationVerified": false,
     "helperExecuted": false,
     "storyAccepted": false
+  },
+  "implementationFirstReaderRestoration": {
+    "preImplementationSpecificationCommit": "71116fd",
+    "implementation": "agent://141-ReaderRestoreCorrection; exact NativeReaderView.swift only; ReaderSession unchanged",
+    "sourceDiffSha256": "24720c54268f760cee18f58a81511d06489642a2bc13d0f57b00a0c3bd115bcb",
+    "behavior": "Existing restoring guard rejects recursive opening; weak original document and admitted UUID fence interruption only. Each scale/navigation/published installation reacquires actual session read authority and current document. Callback interruption stops continuation and repairs stale Published setter with discard. Genuine pin/storage/document errors retain ordinary failure path. No new lease/controller/store or search/showMatch changes.",
+    "userDirection": "Implementation first for all parallel tasks; defer verification/correction tests, full suites, native build and fresh independent review",
+    "minimalExistingScenario": {"command": "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --parallel --num-workers 1 --filter testActualPresentationSearchMatchesNoResultsEmptyQueryAndLatestRequest", "cases": 1, "exitCode": 0, "scope": "Existing actual owned Reader opening/search only; new callback interruption not exercised"},
+    "newTestsWritten": false,
+    "callbackRegressionsExecuted": false,
+    "fullProductRerun": false,
+    "freshNativeBuild": false,
+    "freshIndependentReview": false,
+    "findingStatus": "140 HIGH/P1 source finding retained; implementation authored, regression/review confirmation pending",
+    "priorFullVerificationSource": "03ee2f5615fedd5345cdaf7099ec9d2a91ca4868",
+    "visibleNativeInteractionVerified": false,
+    "applicationAndHelperBinariesExecuted": false,
+    "SDKProviderRendererExecuted": false,
+    "storyAccepted": false,
+    "epicAccepted": false
   },
   "nativeFolderSaveProgressCue": {
     "sourceBaseCommit": "4b571cb80e008a7cbba3a32942adcf979b34daad",

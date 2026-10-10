@@ -194,3 +194,18 @@ restoration is denied; later explicit opening remains permitted. No fake PDFView
 lease/controller/store or altered search/showMatch behavior. Parent isolated tests,
 unsigned compile, independent review and local evidence commit; no app/helper/SDK/provider/
 renderer trial, credentials/remote or rendered visibility/accessibility/P6/Story claims.
+
+### Implementation-first continuation
+
+User explicitly directs implementation first across every parallel lane, deferring
+verification/correction tests. Executor141 implemented the exact NativeReaderView path:
+existing restoring recursion guard, weak original document, admitted UUID checkpoints,
+separate fresh actual pins for scale/navigation/published installations and metadata,
+typed interruption discard repair, unchanged genuine-error catch. ReaderSession unchanged.
+New callback regressions, full union/native build and fresh independent review are
+deferred; no test file changed. One mandatory minimal existing actual Reader open/search
+scenario executed and passed (one case, SwiftPM exit0); it does NOT test the new callback
+interruption branches. No stronger repaired-race/runtime/Story certification is asserted.
+Source diff SHA256 `24720c54268f760cee18f58a81511d06489642a2bc13d0f57b00a0c3bd115bcb`.
+Prior455/native-bf receipts belong to03ee2f5, not this changed source. Assessment140
+remains historical with implementation authored; regression/review resolution pending.

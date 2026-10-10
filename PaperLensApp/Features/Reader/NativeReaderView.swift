@@ -51,9 +51,11 @@ import SwiftUI
   }
 
   func open(paperID: UUID) {
-    guard !opened else { return }
+    guard !opened, !restoring else { return }
     restoring = true
     defer { restoring = false }
+    enum RestorationInterrupted: Error { case admissionChanged }
+    weak var admittedDocument: PDFDocument?
     do {
       let position = try session.open(paperID: paperID, validateDocument: { url in
         for directory in [url.deletingLastPathComponent(),
@@ -67,26 +69,55 @@ import SwiftUI
         guard values.isRegularFile == true, values.isSymbolicLink != true,
           let document = PDFDocument(url: url), !document.isLocked,
           document.pageCount > 0 else { throw ReaderError.invalidDocument }
+        admittedDocument = document
         pdfView.document = document
         return document.pageCount
       }, discard: { [weak self] in self?.discard() })
-      try session.withReadAccess {
+      guard case .admitted(let admittedUUID) = session.admissionState else {
+        throw ReaderError.notOpen
+      }
+      // Admission identity is an interruption fence, never a substitute for the pin.
+      func checkpoint() throws {
+        guard session.admissionState == .admitted(admittedUUID) else {
+          throw RestorationInterrupted.admissionChanged
+        }
+      }
+      func step(_ effect: (PDFDocument) throws -> Void) throws {
+        try checkpoint()
+        try session.withReadAccess {
+          try checkpoint()
+          guard let document = pdfView.document, document === admittedDocument else {
+            throw ReaderError.invalidDocument
+          }
+          try effect(document)
+          try checkpoint()
+        }
+        try checkpoint()
+      }
+      try step { _ in
         guard session.currentPaper?.paperID == annotationIdentity.id,
           session.currentPaper?.generation == annotationIdentity.generation,
           paperID == annotationIdentity.id else { throw AnnotationError.stalePaper }
         _ = try annotationService.records(for: annotationIdentity)
-        guard let document = pdfView.document,
-          let page = document.page(at: position.pageIndex) else { throw ReaderError.invalidDocument }
-        pdfView.scaleFactor = CGFloat(position.zoom)
-        pdfView.go(to: page)
-        pageCount = document.pageCount
-        pageIndex = position.pageIndex
-        zoom = position.zoom
       }
-      title = session.currentPaper?.title ?? "Reader"
-      opened = true
-      failure = nil
-      mountMetadata()
+      try step { _ in pdfView.scaleFactor = CGFloat(position.zoom) }
+      try step { document in
+        guard let page = document.page(at: position.pageIndex) else {
+          throw ReaderError.invalidDocument
+        }
+        try checkpoint()
+        pdfView.go(to: page)
+      }
+      try step { document in pageCount = document.pageCount }
+      try step { _ in pageIndex = position.pageIndex }
+      try step { _ in zoom = position.zoom }
+      try step { _ in title = session.currentPaper?.title ?? "Reader" }
+      try step { _ in opened = true }
+      try step { _ in failure = nil }
+      try step { _ in mountMetadata() }
+    } catch is RestorationInterrupted {
+      // Published setters finish after their callbacks; repair any late stale write.
+      discard()
     } catch {
       session.close()
       failure = "Unable to open Reader: \(error)"
