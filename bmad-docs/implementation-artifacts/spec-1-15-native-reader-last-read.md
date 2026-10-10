@@ -1,5 +1,24 @@
 # Story 1.15 Build Spec — Native Reader and durable last-read
 
+## Korean Reader failure presentation without diagnostic exposure
+
+Baseline33979f9f42085100a5387a03f53461de7a05ea42 still renders the internal
+English failure String (including arbitrary Error descriptions) directly in the
+native banner. Preserve that original internal failure, throws and discard/error
+ordering; change only its displayed native banner to a short Korean failure/next
+action. No description parsing, invented cause, success, closure or persistence
+claim. Keep the actual existing save/discard navigation choices unchanged. Metadata
+construction failure must use a safe Korean unavailable message with continued PDF
+availability rather than displaying arbitrary error descriptions. Other current
+metadata availability/revision and annotation error behavior remain unchanged.
+Exact source: Features/Reader/NativeReaderView.swift, presentation/message assignments
+only. No new model/queue/schema/owner/API/capability, PDF rewrite or action changes.
+Latest human instruction defers all verification/new or correction tests across
+parallel lanes and prioritizes implementation; workers and parent run no tests,
+builds/gates/formatters or independent review for this presentation-only slice.
+Deferred required proof remains required; authored source is not compilation,
+rendered Korean/accessibility/privacy proof, Story completion or Epic acceptance.
+
 ## Adaptable native Reader controls and panes
 
 Baseline e50a60f2f2d015a0e0365e6d3a175d44330b96fe has a single wide English

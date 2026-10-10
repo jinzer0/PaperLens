@@ -1,5 +1,25 @@
 # Story 1.14 Build Spec — Actual Library, local PDF import and deletion
 
+## Safe Korean workspace failure presentation
+
+Baseline33979f9f42085100a5387a03f53461de7a05ea42 uses arbitrary caught Error
+descriptions in workspace UI for PDF preparation, fresh same-Job retry preparation,
+Reader opening, published metadata observation and position saving. Replace only
+these displayed String values with operation-specific Korean failure and next
+action; do not expose raw file paths/SQL/provider/worker diagnostics or parse error
+descriptions. No inferred cause, guaranteed successful Retry or rollback claim.
+Preserve original thrown errors, read/session/identity checks, startup/admission,
+source-scope cancellation, imported refresh, same-Job retry purpose, callback fences
+and committed CAS truth. Exact source: Features/Library/ProductWorkspaceView.swift,
+existing catch/report message assignments only; no new helper/store/queue/schema,
+public API or side effect. Canonical Story1.14/1.15/1.17/1.22 common Korean recovery
+presentation is traced without extending their authority or acceptance criteria.
+Latest human instruction defers verification/new or correction tests for all parallel
+lanes; parent/worker skip tests/builds/gates/formatters and independent review for this
+presentation-only source slice. Existing tests stay unchanged pending that deferred
+verification. Compilation/rendered error/keyboard/VoiceOver/restart proof is unrun;
+all required acceptance/runtime/privacy gates stay open, Story/Epic false.
+
 ## Authority and admission
 
 Issue#16 / `issue/16-story-1-14`, base119a28aa9cc941b2bf88851228a67c0bfec88f5a. PRODUCT5eac3bb9424ad893eca7d63bc319b71f580838ed; ARCHITECTURE1195c92227cc628e325f5ff24d70cc93639bf7a9; Whole-Epic https://github.com/jinzer0/PaperLens/issues/3#issuecomment-6049004229. Commit own Spec before source; unchanged-scope local work requires no repeated SHA approval. Material scope changes still require governance. Authority does not pass gates or permit credentials/paid/live/remote/distribution.
