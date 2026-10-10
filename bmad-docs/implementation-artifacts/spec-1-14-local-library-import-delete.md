@@ -539,3 +539,111 @@ no policy/copier/lifecycle/startup edits, no launcher-root Spec. Parent gates/re
 worker skips all gates/formatters/commits/SDK/helper/renderer/paid/remote/trial actions.
 Deletion diagnostic schema and full physical-receipt/actor gate bridge are deferred, not
 assumed approved or invented. Ordinary transaction tests do not complete owner cutover.
+
+### Ordinary transaction primitives authored after c43bdbd (worker93; gates pending)
+
+Story1.14 / existing local-library-import-delete work unit; bounded implementation follows
+contract92 and the committed c43bdbd Spec after cd363c8. No new execution approval, trial,
+runtime certification or Story completion is asserted. Only the four integration paths
+named above were edited; launcher-root documentation and production owner callsites remain
+unchanged. Parent owns tests/build/review/commit and subsequent coordinated owner cutover.
+
+Internal API signatures now authored:
+
+```swift
+func reserveJournaledImport(_ identity: ImportIdentity, title: String,
+  confirmedInput: ImportRecoveryJournal.ConfirmedInput) throws -> ImportRecoveryRecord
+func appendJournaledImport(expected: ImportRecoveryRecord,
+  replacement: ImportRecoveryJournal) throws -> ImportRecoveryRecord
+func publishJournaledImport(expected: ImportRecoveryRecord,
+  closedStage: ClosedImportStage) throws -> ImportRecoveryRecord
+struct ClosedImportStage: Sendable {
+  let file: URL
+  let sha256: String
+  let bytes: Int64
+}
+```
+
+ClosedImportStage has the internal memberwise initializer `init(file:sha256:bytes:)`, no
+codec and no persisted path. It conveys an independently admitted, immutable memory-only
+producer observation; constructing it is not closure/read authority. Helpers never open
+or rehash the stage or caller PDF. Existing exact insertion and guarded row publication
+utilities are shared with old reserveImport/publish callers, which remain active until
+full cutover; no overload, fallback or legacy NULL-journal backfill is added.
+
+Each helper performs one sole-queue write transaction. Reservation checks captured folder,
+inserts caller-provided full identity and actual running Job, narrowly initializes initial
+plus claim, CAS-appends acquireWriter, and checks typed history/whole identity and inserted
+facts. Ignored inserts are refused by exact row counts, including attempted legacy backfill.
+Append validates expected canonical bytes against its typed journal, bounded current exact
+BLOB/full lineage, immutable captured facts and prefix using existing CAS; whole-row/folder
+readback rejects trigger mutation of execution or Paper facts. No policy Event crosses an
+actor boundary through this API; replacement journals are already immutable Sendable values.
+
+Publication admits only the actual importing/nondeleting Paper and running exact Job with
+acknowledged publication-permit `.rename`: current lineage, `.renaming`, unrevoked/no cleanup,
+validated Result(id: attempt.uuidString). The existing policy deliberately makes publication
+permit closure `.unknown` during rename; this helper does not reinterpret that as producer
+closure failure or introduce a second policy. Independently closed producer observation,
+positive bytes, progress at most observation bytes, lowercase SHA and immutable confirmed
+hash/folder are required. Confirmed nil hash remains nil after discovered hash publication.
+
+Before effects, encode the entire renameFinished(true)/publish/release suffix using
+ProductJobRecovery.maximumImportRecoveryJournalBytes (262144), exclusively a serialized
+metadata quota. Preview never persists a success attestation. Validate exact canonical Paper
+namespace, nonsymlink owned directories/root, regular current-UID single-link 0400-sealed
+stage and matching stat size; safe single-component names need not be attempt.stage. Reject
+foreign/prefix-lookalike namespace, decoded NUL, final-path alias and any existing final
+entry before FileManager move. These checks do not isolate hostile same-UID path/in-place
+races. Move without overwrite to document.pdf, then exact-old-BLOB/full-lineage journal CAS,
+ready reference/hash/folder and succeeded/failure-nil updates. Verify exact row counts,
+all otherwise immutable columns, progress, folder and exact bytes/typed whole readback.
+SQL rollback after a move preserves final bytes and throws, never deletes bytes or claims
+physical rollback/committed success. Later physical-receipt reconciliation remains required.
+
+Twelve additional XCTest methods were authored in existing ImportRecoveryPersistenceTests,
+without Package/schema/test-file additions. Fixtures create actual private owned stage files,
+FileHandle write/synchronize/checked close, then chmod0400. Synthetic owner observations in
+these fixtures are explicitly not production closure authorization. Authored coverage:
+reservation exact captures/claim/writer/reopen and no namespace effects; invalid folder,
+duplicate/ignored inserts and initialization rollback; ordinary open/closed/publication/
+rename intent appends; actual rename, ready Job/reference/hash/folder, complete suffix and
+reopen with confirmed nil preserved; typed-byte/fact/prefix/stale mismatch; all ten UUID
+drifts, deletion, missing/corrupt/oversize/revoked history; hash/folder/progress/result/intent
+and malformed observation denials; foreign/prefix/symlink/nonregular/hardlink/writable/size/
+NUL/final-alias/final-overwrite/namespace-symlink denial before effects. Quota case grows
+genuine valid same-authority observations until current journal fits the actual production
+metadata limit but terminal suffix does not; no test override of the limit. Ignored/corrupt
+journal/Paper/Job, immutable-column and folder triggers exercise whole SQL rollback and
+preserved moved bytes, including corruption only after success-state update.
+
+Worker performed source inspection only. These tests are authored, NOT executed; no build,
+test/gate/lint/format/commit/workflow/delegation/SDK/app/helper/renderer/network/paid/remote/
+credential/user-document/trial actions ran. Prior startup351/native-ag/review91 evidence
+applies only to its earlier baseline, not this unverified implementation. Parent must run
+ImportRecoveryPersistenceTests and affected legacy Library/Folder/URL import tests, Product
+suite/native compile and change-focused integrity review before treating the new primitives
+as verified. ActualLocalLifecycle/URL writer cutover, abort/deletion/receipt actor bridge,
+freshSameJobRetry/UI and production physical receipt acknowledgments remain unfinished.
+
+### Parent ordinary transaction verification and independent review
+
+Three-source binary diff against c43bdbd SHA256:
+bdf75312c86feda88d78e6f872158a5d8414be8e1d3357bb5b1a6f4edaf41e98.
+Focused78/0 artifact1159 (23 persistence including12 new,28 lifecycle,19 folder,8 URL
+writer); Product363/0 artifact1165; fresh unsigned native Release arm64/macOS15 BUILD
+SUCCEEDED artifact1167, namespace product-native-compile-20261010-ah. Review94 found no
+production correctness defect and one LOW post-insert folder-corruption matrix gap.
+Parent added that exact trigger case; changed test1/0 across11 scenarios artifact1171
+proves SQL/readback rollback with moved bytes retained. Union/native precede this test-only
+extension; production source unchanged and unchanged gates not repeated. Review94 final
+SOURCE-ONLY CLEAR / APPROVE closes the gap; no outstanding finding from that review.
+
+Actual owned-file rename and GRDB durable publication/reopen/rollback are verified, not
+production local/URL owner cutover or physical receipt acknowledgment. SQLite cannot undo
+rename; preserving bytes is intentional. Serialized quota is not allocator/profile proof;
+typed stage observation/codec is not authority. Legacy imports remain working with shared
+row utilities; old API removal occurs only at complete owner cutover, not via fallback.
+No new schema/Package/project/epoch/policy/copier/source-selector or budget profile changes,
+no formatter added, warnings suppressed, app/helper/SDK/renderer/remote/trial actions.
+Same-Job Retry and canonical Story/Epic acceptance remain unfinished and unclaimed.

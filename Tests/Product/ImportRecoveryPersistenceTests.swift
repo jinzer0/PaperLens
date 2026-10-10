@@ -1,6 +1,7 @@
 import Foundation
 import GRDB
 import XCTest
+import CryptoKit
 @testable import PaperLensProduct
 
 final class ImportRecoveryPersistenceTests: XCTestCase {
@@ -312,5 +313,408 @@ final class ImportRecoveryPersistenceTests: XCTestCase {
           """)
       }
     }
+  }
+
+  private let stageData = Data("owned closed import fixture\n".utf8)
+
+  private var stageHash: String {
+    SHA256.hash(data: stageData).map { String(format: "%02x", $0) }.joined()
+  }
+
+  private func ownedStage(root: URL, id: ImportIdentity, name: String = "checked-closed.pdf") throws
+    -> ClosedImportStage {
+    let namespace = root.resolvingSymlinksInPath().appendingPathComponent("papers")
+      .appendingPathComponent(id.paperID.uuidString)
+    try FileManager.default.createDirectory(at: namespace, withIntermediateDirectories: true,
+      attributes: [.posixPermissions: 0o700])
+    let file = namespace.appendingPathComponent(name)
+    XCTAssertTrue(FileManager.default.createFile(atPath: file.path, contents: nil))
+    let handle = try FileHandle(forWritingTo: file)
+    do {
+      try handle.write(contentsOf: stageData)
+      try handle.synchronize()
+      try handle.close()
+    } catch {
+      try? handle.close()
+      throw error
+    }
+    try FileManager.default.setAttributes([.posixPermissions: 0o400], ofItemAtPath: file.path)
+    return ClosedImportStage(file: file, sha256: stageHash, bytes: Int64(stageData.count))
+  }
+
+  private func append(_ event: JobRecoveryPolicy.Event, to record: ImportRecoveryRecord,
+    db: ProductDatabase) throws -> ImportRecoveryRecord {
+    try db.appendJournaledImport(expected: record, replacement: record.journal.recording(event))
+  }
+
+  // Real fixture files, but these owner observations are synthetic, not production authority.
+  private func renameIntent(_ reserved: ImportRecoveryRecord, db: ProductDatabase,
+    resultID: String? = nil) throws -> ImportRecoveryRecord {
+    let id = try reserved.journal.currentCapture().identity
+    let lineage = try reserved.journal.snapshot().current.lineage
+    var record = reserved
+    for event in [JobRecoveryPolicy.Event.writerClosure(lineage, permit: id.writer.uuidString, .open),
+      .writerClosure(lineage, permit: id.writer.uuidString,
+        .closed(.validated(.init(id: resultID ?? id.attempt.uuidString)))),
+      .acquirePublication(lineage, writer: id.writer.uuidString, permit: id.publication.uuidString),
+      .rename(lineage, permit: id.publication.uuidString)] {
+      record = try append(event, to: record, db: db)
+    }
+    return record
+  }
+
+  private func publicationFixture(confirmedHash: Bool = false, folder: Bool = false,
+    resultID: String? = nil, includeIntent: Bool = true) throws
+    -> (URL, ProductDatabase, ImportIdentity, ImportRecoveryRecord, ClosedImportStage) {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    let db = try ProductDatabase.open(at: root)
+    let id = identity()
+    let folderID = folder ? try db.createFolder(name: "Captured destination").id : nil
+    let confirmed = ImportRecoveryJournal.ConfirmedInput(
+      expectedSHA256: confirmedHash ? stageHash : nil, destinationFolderID: folderID)
+    let reserved = try db.reserveJournaledImport(id, title: "Actual transaction fixture", confirmedInput: confirmed)
+    let stage = try ownedStage(root: root, id: id)
+    let record = includeIntent ? try renameIntent(reserved, db: db, resultID: resultID) : reserved
+    return (root, db, id, record, stage)
+  }
+
+  private func finalURL(_ stage: ClosedImportStage) -> URL {
+    stage.file.deletingLastPathComponent().appendingPathComponent("document.pdf")
+  }
+
+  private func assertNoMove(_ record: ImportRecoveryRecord, stage: ClosedImportStage,
+    db: ProductDatabase, file: StaticString = #filePath, line: UInt = #line) throws {
+    XCTAssertTrue(FileManager.default.fileExists(atPath: stage.file.path), file: file, line: line)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: finalURL(stage).path), file: file, line: line)
+    let id = try record.journal.currentCapture().identity
+    XCTAssertEqual(try read(id, db: db).encoded, record.encoded, file: file, line: line)
+  }
+
+  func testJournaledReservationCapturesExactIdentityFactsWriterAndReopens() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let db = try ProductDatabase.open(at: root)
+    let id = identity()
+    let folder = try db.createFolder(name: "Reservation destination")
+    let confirmed = ImportRecoveryJournal.ConfirmedInput(expectedSHA256: stageHash, destinationFolderID: folder.id)
+    let record = try db.reserveJournaledImport(id, title: "Exact reservation", confirmedInput: confirmed)
+    let capture = try record.journal.currentCapture()
+    XCTAssertEqual(ids(capture.identity), ids(id))
+    XCTAssertEqual(capture.confirmedInput, confirmed)
+    let snapshot = try record.journal.snapshot()
+    XCTAssertEqual(snapshot.current.state, .running)
+    XCTAssertEqual(snapshot.permits.count, 1)
+    XCTAssertEqual(snapshot.permits.first?.kind, .writer)
+    XCTAssertEqual(snapshot.permits.first?.id, id.writer.uuidString)
+    XCTAssertEqual(snapshot.permits.first?.owner, snapshot.current.lineage)
+    XCTAssertEqual(snapshot.permits.first?.closure, .unknown)
+    XCTAssertEqual(try read(id, db: ProductDatabase.open(at: root)).encoded, record.encoded)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("papers").path))
+  }
+
+  func testJournaledReservationInvalidFolderDuplicateAndIgnoredInitializationRollBack() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let db = try ProductDatabase.open(at: root)
+    let invalid = identity()
+    XCTAssertThrowsError(try db.reserveJournaledImport(invalid, title: "Denied",
+      confirmedInput: .init(expectedSHA256: nil, destinationFolderID: UUID())))
+    XCTAssertTrue(try db.libraryRecords().isEmpty)
+    let id = identity()
+    let record = try db.reserveJournaledImport(id, title: "Original", confirmedInput: facts)
+    let duplicateJob = ImportIdentity(paperID: UUID(), generation: UUID(), jobID: id.jobID,
+      attempt: UUID(), fence: UUID(), correlation: UUID(), input: UUID(), epoch: UUID(),
+      writer: UUID(), publication: UUID())
+    XCTAssertThrowsError(try db.reserveJournaledImport(duplicateJob, title: "Must roll back", confirmedInput: facts))
+    XCTAssertThrowsError(try db.reserveJournaledImport(id, title: "Duplicate", confirmedInput: facts))
+    XCTAssertEqual(try db.libraryRecords().map(\.title), ["Original"])
+    XCTAssertEqual(try read(id, db: db).encoded, record.encoded)
+    try installTrigger(corrupt: false, db: db)
+    XCTAssertThrowsError(try db.reserveJournaledImport(identity(), title: "Ignored initialization", confirmedInput: facts))
+    XCTAssertEqual(try db.libraryRecords().map(\.title), ["Original"])
+    XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("papers").path))
+  }
+
+  func testJournaledPublicationMovesActualClosedStageAndPublishesCompleteFactsOnReopen() throws {
+    for confirmedHash in [false, true] {
+      let (root, db, id, expected, stage) = try publicationFixture(confirmedHash: confirmedHash, folder: true)
+      defer { try? FileManager.default.removeItem(at: root) }
+      try db.recordProgress(id, bytes: stage.bytes)
+      let completed = try db.publishJournaledImport(expected: expected, closedStage: stage)
+      XCTAssertFalse(FileManager.default.fileExists(atPath: stage.file.path))
+      XCTAssertEqual(try Data(contentsOf: finalURL(stage)), stageData)
+      let snapshot = try completed.journal.snapshot()
+      XCTAssertEqual(snapshot.current.state, .succeeded)
+      XCTAssertTrue(snapshot.permits.isEmpty)
+      XCTAssertEqual(snapshot.usableResult?.result.id, id.attempt.uuidString)
+      let confirmed = try completed.journal.currentCapture().confirmedInput
+      XCTAssertEqual(confirmed, try expected.journal.currentCapture().confirmedInput)
+      XCTAssertEqual(confirmed.expectedSHA256, confirmedHash ? stageHash : nil)
+      let reopened = try ProductDatabase.open(at: root)
+      XCTAssertEqual(try read(id, db: reopened).encoded, completed.encoded)
+      XCTAssertEqual(try read(id, db: reopened).journal.snapshot(), snapshot)
+      XCTAssertEqual(try reopened.folderID(for: id.paperID), confirmed.destinationFolderID)
+      let placement = try reopened.capturePaperPlacement(paperID: id.paperID, generation: id.generation)
+      XCTAssertEqual(placement.sha256, stageHash)
+      XCTAssertEqual(placement.pdfReference, "papers/\(id.paperID.uuidString)/document.pdf")
+      let library = try XCTUnwrap(reopened.libraryRecords().first)
+      XCTAssertEqual(library.status, .ready)
+      XCTAssertEqual(library.bytesCopied, stage.bytes)
+      XCTAssertNil(library.failure)
+    }
+  }
+
+  func testJournaledAppendRejectsTypedBytesFactsPrefixAndStaleMismatch() throws {
+    let (root, db, id, expected, stage) = try publicationFixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let snapshot = try expected.journal.snapshot()
+    let replacement = try expected.journal.recording(.authorityChanged(snapshot.authority))
+    let inconsistent = ImportRecoveryRecord(journal: replacement, encoded: expected.encoded)
+    assertError(.invalidHistory) { _ = try db.appendJournaledImport(expected: inconsistent, replacement: replacement) }
+    assertError(.invalidHistory) { _ = try db.appendJournaledImport(expected: expected, replacement: expected.journal) }
+    let differentFacts = try ImportRecoveryJournal(identity: id,
+      confirmedInput: .init(expectedSHA256: stageHash, destinationFolderID: nil))
+    XCTAssertThrowsError(try db.appendJournaledImport(expected: expected, replacement: differentFacts))
+    let updated = try db.appendJournaledImport(expected: expected, replacement: replacement)
+    assertError(.staleHistory) { _ = try db.appendJournaledImport(expected: expected, replacement: replacement) }
+    assertError(.staleHistory) { _ = try db.publishJournaledImport(expected: expected, closedStage: stage) }
+    try assertNoMove(updated, stage: stage, db: db)
+  }
+
+  func testJournaledPublicationRejectsHashFolderProgressAndUnacknowledgedIntentBeforeMove() throws {
+    for denial in ["hash", "folder", "progress", "result", "intent", "canonical", "bytes", "upperHash"] {
+      let (root, db, id, expected, stage) = try publicationFixture(confirmedHash: true, folder: true,
+        resultID: denial == "result" ? UUID().uuidString : nil, includeIntent: denial != "intent")
+      defer { try? FileManager.default.removeItem(at: root) }
+      var observation = stage
+      var supplied = expected
+      switch denial {
+      case "hash": observation = ClosedImportStage(file: stage.file, sha256: String(repeating: "a", count: 64), bytes: stage.bytes)
+      case "folder": try db.deleteFolder(id: XCTUnwrap(expected.journal.currentCapture().confirmedInput.destinationFolderID))
+      case "progress": try db.recordProgress(id, bytes: stage.bytes + 1)
+      case "canonical": supplied = ImportRecoveryRecord(journal: expected.journal, encoded: expected.encoded + Data([0]))
+      case "bytes": observation = ClosedImportStage(file: stage.file, sha256: stage.sha256, bytes: 0)
+      case "upperHash": observation = ClosedImportStage(file: stage.file, sha256: stage.sha256.uppercased(), bytes: stage.bytes)
+      default: break
+      }
+      XCTAssertThrowsError(try db.publishJournaledImport(expected: supplied, closedStage: observation), denial)
+      try assertNoMove(expected, stage: stage, db: db)
+    }
+  }
+
+  func testJournaledPublicationAndAppendRejectEveryUUIDDriftAndDeletionBeforeMove() throws {
+    let names = ["paperID", "generation", "id", "attempt", "fence", "correlation", "input", "epoch", "writer", "publication"]
+    for column in 0..<10 {
+      let (root, db, id, expected, stage) = try publicationFixture()
+      defer { try? FileManager.default.removeItem(at: root) }
+      try db.adapterWrite { sql in
+        if column == 0 {
+          // Preserve FK integrity while drifting actual job/paper association.
+          let other = identity()
+          try ProductDatabase.insertImport(other, title: "Foreign association", createdAt: 1, in: sql)
+          try sql.execute(sql: "DELETE FROM importJob WHERE id = ?", arguments: [other.jobID.uuidString])
+          try sql.execute(sql: "UPDATE importJob SET paperID = ? WHERE id = ?", arguments: [other.paperID.uuidString, id.jobID.uuidString])
+        } else {
+          let table = column == 1 ? "paper" : "importJob"
+          try sql.execute(sql: "UPDATE \(table) SET \(names[column]) = ?", arguments: [UUID().uuidString])
+        }
+      }
+      let replacement = try expected.journal.recording(.authorityChanged(expected.journal.snapshot().authority))
+      XCTAssertThrowsError(try db.appendJournaledImport(expected: expected, replacement: replacement))
+      XCTAssertThrowsError(try db.publishJournaledImport(expected: expected, closedStage: stage))
+      XCTAssertTrue(FileManager.default.fileExists(atPath: stage.file.path))
+      XCTAssertFalse(FileManager.default.fileExists(atPath: finalURL(stage).path))
+    }
+    let (root, db, id, expected, stage) = try publicationFixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    _ = try db.beginDeletion(id.paperID)
+    XCTAssertThrowsError(try db.appendJournaledImport(expected: expected,
+      replacement: expected.journal.recording(.revoke)))
+    XCTAssertThrowsError(try db.publishJournaledImport(expected: expected, closedStage: stage))
+    XCTAssertTrue(FileManager.default.fileExists(atPath: stage.file.path))
+    XCTAssertFalse(FileManager.default.fileExists(atPath: finalURL(stage).path))
+  }
+
+  func testJournaledPublicationRejectsUnsafeOwnedFileShapesAndFinalOverwrite() throws {
+    for denial in ["foreign", "siblingPrefix", "symlink", "directory", "hardlink", "writable", "size", "finalAlias", "overwrite", "nul", "namespaceSymlink"] {
+      let (root, db, id, expected, stage) = try publicationFixture()
+      defer { try? FileManager.default.removeItem(at: root) }
+      let fm = FileManager.default
+      var file = stage.file
+      let final = finalURL(stage)
+      switch denial {
+      case "foreign", "siblingPrefix":
+        let foreign = denial == "foreign" ? identity() : ImportIdentity(paperID: id.paperID,
+          generation: id.generation, jobID: id.jobID, attempt: id.attempt, fence: id.fence,
+          correlation: id.correlation, input: id.input, epoch: id.epoch, writer: id.writer, publication: id.publication)
+        if denial == "foreign" { file = try ownedStage(root: root, id: foreign).file }
+        else {
+          let sibling = stage.file.deletingLastPathComponent().appendingPathExtension("foreign")
+          try fm.createDirectory(at: sibling, withIntermediateDirectories: true)
+          file = sibling.appendingPathComponent("closed.pdf")
+          try fm.copyItem(at: stage.file, to: file)
+        }
+      case "symlink":
+        file = stage.file.deletingLastPathComponent().appendingPathComponent("link.pdf")
+        try fm.createSymbolicLink(at: file, withDestinationURL: stage.file)
+      case "directory": file = stage.file.deletingLastPathComponent()
+      case "hardlink":
+        try fm.linkItem(at: stage.file, to: stage.file.deletingLastPathComponent().appendingPathComponent("hardlink.pdf"))
+      case "writable": try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+      case "size": break
+      case "finalAlias": file = final
+      case "overwrite": try stageData.write(to: final)
+      case "nul": file = try XCTUnwrap(URL(string: stage.file.absoluteString + "%00"))
+      default:
+        let namespace = stage.file.deletingLastPathComponent()
+        let relocated = namespace.appendingPathExtension("relocated")
+        try fm.moveItem(at: namespace, to: relocated)
+        try fm.createSymbolicLink(at: namespace, withDestinationURL: relocated)
+      }
+      let observation = ClosedImportStage(file: file, sha256: stage.sha256,
+        bytes: denial == "size" ? stage.bytes + 1 : stage.bytes)
+      XCTAssertThrowsError(try db.publishJournaledImport(expected: expected, closedStage: observation), denial)
+      XCTAssertEqual(try read(id, db: db).encoded, expected.encoded)
+      XCTAssertTrue(fm.fileExists(atPath: stage.file.path))
+      if denial == "overwrite" { XCTAssertEqual(try Data(contentsOf: final), stageData) }
+      else { XCTAssertFalse(fm.fileExists(atPath: final.path)) }
+    }
+  }
+
+  func testJournaledPublicationPreflightsRealMetadataQuotaBeforeFilesystemEffects() throws {
+    let (root, db, id, initial, stage) = try publicationFixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let maximum = ProductJobRecovery.maximumImportRecoveryJournalBytes
+    var journal = initial.journal
+    let snapshot = try journal.snapshot()
+    let lineage = snapshot.current.lineage
+    while true {
+      let suffix = try journal.recording(.renameFinished(lineage, permit: id.publication.uuidString, succeeded: true))
+        .recording(.publish(lineage, permit: id.publication.uuidString, .init(id: id.attempt.uuidString)))
+        .recording(.release(lineage, permit: id.publication.uuidString))
+      if (try? suffix.encoded(maximumBytes: maximum)) == nil { break }
+      journal = try journal.recording(.authorityChanged(snapshot.authority))
+      _ = try journal.encoded(maximumBytes: maximum)
+    }
+    let expected = try db.appendJournaledImport(expected: initial, replacement: journal)
+    XCTAssertLessThanOrEqual(expected.encoded.count, maximum)
+    XCTAssertThrowsError(try db.publishJournaledImport(expected: expected, closedStage: stage))
+    try assertNoMove(expected, stage: stage, db: db)
+  }
+
+  func testJournaledPublicationSQLFailuresPreserveMovedBytesAndRollBackEveryStoredFact() throws {
+    for trigger in ["ignoreJournal", "corruptJournal", "ignorePaper", "corruptPaper", "ignoreJob", "corruptJob", "immutablePaper", "immutableJob", "ignoreFolder", "corruptFolder", "corruptAfterSuccess"] {
+      let (root, db, id, expected, stage) = try publicationFixture(folder: true)
+      defer { try? FileManager.default.removeItem(at: root) }
+      let before = try db.adapterRead { sql in
+        (try XCTUnwrap(Row.fetchOne(sql, sql: "SELECT * FROM paper")),
+          try XCTUnwrap(Row.fetchOne(sql, sql: "SELECT * FROM importJob")))
+      }
+      try db.adapterWrite { sql in
+        let statement: String
+        switch trigger {
+        case "ignoreJournal": statement = "BEFORE UPDATE OF recoveryJournal ON importJob BEGIN SELECT RAISE(IGNORE); END"
+        case "corruptJournal": statement = "AFTER UPDATE OF recoveryJournal ON importJob BEGIN UPDATE importJob SET recoveryJournal = X'00' WHERE id = NEW.id; END"
+        case "ignorePaper": statement = "BEFORE UPDATE OF status ON paper BEGIN SELECT RAISE(IGNORE); END"
+        case "corruptPaper": statement = "AFTER UPDATE OF status ON paper BEGIN UPDATE paper SET pdfSHA256 = 'wrong' WHERE id = NEW.id; END"
+        case "ignoreJob": statement = "BEFORE UPDATE OF state ON importJob BEGIN SELECT RAISE(IGNORE); END"
+        case "corruptJob": statement = "AFTER UPDATE OF state ON importJob BEGIN UPDATE importJob SET state = 'failed' WHERE id = NEW.id; END"
+        case "immutablePaper": statement = "AFTER UPDATE OF status ON paper BEGIN UPDATE paper SET title = 'mutated' WHERE id = NEW.id; END"
+        case "immutableJob": statement = "AFTER UPDATE OF state ON importJob BEGIN UPDATE importJob SET bytesCopied = 999 WHERE id = NEW.id; END"
+        case "ignoreFolder": statement = "BEFORE INSERT ON paperFolder BEGIN SELECT RAISE(IGNORE); END"
+        case "corruptFolder": statement = "AFTER INSERT ON paperFolder BEGIN DELETE FROM paperFolder WHERE paperID = NEW.paperID; END"
+        default: statement = "AFTER UPDATE OF state ON importJob BEGIN UPDATE importJob SET recoveryJournal = X'00' WHERE id = NEW.id; END"
+        }
+        try sql.execute(sql: "CREATE TRIGGER denyPublication \(statement)")
+      }
+      XCTAssertThrowsError(try db.publishJournaledImport(expected: expected, closedStage: stage), trigger)
+      XCTAssertFalse(FileManager.default.fileExists(atPath: stage.file.path))
+      XCTAssertEqual(try Data(contentsOf: finalURL(stage)), stageData)
+      XCTAssertEqual(try read(id, db: db).encoded, expected.encoded)
+      XCTAssertEqual(try read(id, db: ProductDatabase.open(at: root)).encoded, expected.encoded)
+      let after = try db.adapterRead { sql in
+        (try XCTUnwrap(Row.fetchOne(sql, sql: "SELECT * FROM paper")),
+          try XCTUnwrap(Row.fetchOne(sql, sql: "SELECT * FROM importJob")))
+      }
+      for (old, new) in [(before.0, after.0), (before.1, after.1)] {
+        for column in old.columnNames {
+          let a: DatabaseValue = old[column]
+          let b: DatabaseValue = new[column]
+          XCTAssertEqual(a, b, "\(trigger): \(column)")
+        }
+      }
+      XCTAssertNil(try db.folderID(for: id.paperID))
+    }
+  }
+
+  func testJournaledAppendRejectsIgnoredCorruptAndImmutableMutationWithWholeSQLRollback() throws {
+    for trigger in ["ignored", "corrupt", "immutable"] {
+      let (root, db, id, expected, stage) = try publicationFixture()
+      defer { try? FileManager.default.removeItem(at: root) }
+      if trigger == "immutable" {
+        try db.adapterWrite { sql in
+          try sql.execute(sql: """
+            CREATE TRIGGER mutateAppend AFTER UPDATE OF recoveryJournal ON importJob
+            BEGIN UPDATE paper SET title = 'mutated'; END
+            """)
+        }
+      } else { try installTrigger(corrupt: trigger == "corrupt", db: db) }
+      let replacement = try expected.journal.recording(.authorityChanged(expected.journal.snapshot().authority))
+      XCTAssertThrowsError(try db.appendJournaledImport(expected: expected, replacement: replacement))
+      XCTAssertEqual(try db.libraryRecords().first?.title, "Actual transaction fixture")
+      XCTAssertEqual(try read(id, db: db).encoded, expected.encoded)
+      try assertNoMove(expected, stage: stage, db: db)
+    }
+  }
+
+  func testJournaledAppendAndPublicationRejectMissingCorruptOversizeAndRevokedHistory() throws {
+    for denial in ["null", "corrupt", "oversize", "missingJob", "revoked"] {
+      let (root, db, id, initial, stage) = try publicationFixture()
+      defer { try? FileManager.default.removeItem(at: root) }
+      var expected = initial
+      if denial == "revoked" {
+        expected = try append(.revoke, to: initial, db: db)
+      } else {
+        try db.adapterWrite { sql in
+          switch denial {
+          case "null": try sql.execute(sql: "UPDATE importJob SET recoveryJournal = NULL")
+          case "corrupt": try sql.execute(sql: "UPDATE importJob SET recoveryJournal = X'00'")
+          case "oversize": try sql.execute(sql: "UPDATE importJob SET recoveryJournal = ?",
+            arguments: [Data(repeating: 0, count: ProductJobRecovery.maximumImportRecoveryJournalBytes + 1)])
+          default: try sql.execute(sql: "DELETE FROM importJob WHERE id = ?", arguments: [id.jobID.uuidString])
+          }
+        }
+      }
+      let observation = try expected.journal.recording(.authorityChanged(expected.journal.snapshot().authority))
+      if denial != "revoked" {
+        XCTAssertThrowsError(try db.appendJournaledImport(expected: expected, replacement: observation))
+      }
+      XCTAssertThrowsError(try db.publishJournaledImport(expected: expected, closedStage: stage))
+      XCTAssertTrue(FileManager.default.fileExists(atPath: stage.file.path))
+      XCTAssertFalse(FileManager.default.fileExists(atPath: finalURL(stage).path))
+    }
+  }
+
+  func testJournaledReservationIgnoredInsertsCannotBackfillLegacyHistory() throws {
+    for table in ["paper", "importJob"] {
+      let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+      defer { try? FileManager.default.removeItem(at: root) }
+      let db = try ProductDatabase.open(at: root)
+      let id = identity()
+      try db.adapterWrite { sql in
+        try sql.execute(sql: "CREATE TRIGGER ignoreInsert BEFORE INSERT ON \(table) BEGIN SELECT RAISE(IGNORE); END")
+      }
+      XCTAssertThrowsError(try db.reserveJournaledImport(id, title: "Ignored insert", confirmedInput: facts))
+      XCTAssertTrue(try db.libraryRecords().isEmpty)
+      assertError(.missingHistory) { _ = try read(id, db: db) }
+    }
+    let (root, db, id, _) = try fixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    try db.adapterWrite { sql in
+      try sql.execute(sql: "CREATE TRIGGER ignorePaperInsert BEFORE INSERT ON paper BEGIN SELECT RAISE(IGNORE); END")
+      try sql.execute(sql: "CREATE TRIGGER ignoreJobInsert BEFORE INSERT ON importJob BEGIN SELECT RAISE(IGNORE); END")
+    }
+    XCTAssertThrowsError(try db.reserveJournaledImport(id, title: "Forbidden legacy backfill", confirmedInput: facts))
+    assertError(.missingHistory) { _ = try read(id, db: db) }
   }
 }

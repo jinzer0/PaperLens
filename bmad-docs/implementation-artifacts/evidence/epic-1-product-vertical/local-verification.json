@@ -28,9 +28,9 @@
   "verification": {
     "productUnion": {
       "command": "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --filter ProductTests",
-      "tests": 351,
+      "tests": 363,
       "failures": 0,
-      "output": "artifact://1148",
+      "output": "artifact://1165",
       "evidence": "Real GRDB transactions, owned synthetic files and actual local FIFO IO/close/peer metadata/EPIPE; mocked provider/HTTP transport and synthetic windowless PDFKit conversions. Not authenticated provider, app UI, SDK producer or PDFium execution."
     },
     "nativeCompilation": {
@@ -38,11 +38,11 @@
       "configuration": "Release",
       "architecture": "arm64",
       "minimumOS": "15.0",
-      "derivedData": ".build/product-native-compile-20261010-ag",
+      "derivedData": ".build/product-native-compile-20261010-ah",
       "codeSigningAllowed": false,
       "result": "BUILD SUCCEEDED",
-      "rawOutput": "artifact://1149",
-      "output": "artifact://1149",
+      "rawOutput": "artifact://1167",
+      "output": "artifact://1167",
       "applicationAndHelperBinariesExecuted": false,
       "warnings": "AppIntents metadata skipped, PDFium debug-map duplicate/missing-symbol warnings and an unnecessary-await Swift warning remain; no warning suppression or debug-symbol repair claimed."
     },
@@ -295,6 +295,25 @@
     "visibleUIOrAccessibilityVerified": false,
     "runtimeParsingOrCalibrationVerified": false,
     "helperExecuted": false,
+    "storyAccepted": false
+  },
+  "atomicJournaledReservationAndPublication": {
+    "specificationCommit": "c43bdbd",
+    "sourceDiffAgainstSpecificationSha256": "bdf75312c86feda88d78e6f872158a5d8414be8e1d3357bb5b1a6f4edaf41e98",
+    "sourceScope": ["PaperLensApp/Infrastructure/ProductDatabase.swift", "PaperLensApp/Infrastructure/ProductDatabase+ImportRecovery.swift", "Tests/Product/ImportRecoveryPersistenceTests.swift"],
+    "focusedTests": {"tests": 78, "failures": 0, "persistenceTests": 23, "newPersistenceTests": 12, "localLifecycleTests": 28, "folderTests": 19, "urlWriterTests": 8, "output": "artifact://1159"},
+    "productUnion": {"tests": 363, "failures": 0, "output": "artifact://1165"},
+    "finalTestOnlyMatrixExtension": {"tests": 1, "failures": 0, "triggerCases": 11, "output": "artifact://1171", "scope": "After union and native compile, added post-insert folder corruption to the existing matrix; production source unchanged. This exact changed test passed without repeating unchanged gates."},
+    "nativeCompilation": {"result": "BUILD SUCCEEDED", "output": "artifact://1167", "derivedData": ".build/product-native-compile-20261010-ah", "codeSigningAllowed": false, "applicationAndHelperBinariesExecuted": false},
+    "review": "agent://94-AtomicJournaledPublicationIntegrity: final SOURCE-ONLY CLEAR / APPROVE; LOW post-insert folder corruption matrix gap resolved",
+    "evidence": "Real Paper/Job/initial-claim-writer reservation, immutable ordinary append and actual owned checked-closed stage move/reference/hash/folder/Job-success/full-journal publication in sole GRDB transaction. Exact terminal suffix preflight denies metadata quota exhaustion before file effects; current lineage/facts/bytes and unrelated columns are checked. SQL rollback preserves moved bytes for future owner reconciliation rather than pretending physical rollback. Shared existing working import row utilities remain verified.",
+    "realOwnedRenameGRDBPublicationReopenAndRollbackVerified": true,
+    "serializationOrClosedStageTypeGrantsPhysicalAuthority": false,
+    "sameUIDPathOrInPlaceIsolationProved": false,
+    "productionLifecycleCutoverActivated": false,
+    "productionPhysicalReceiptReconciliationActivated": false,
+    "sameJobRetryUIActivated": false,
+    "helperOrRendererExecuted": false,
     "storyAccepted": false
   },
   "journalAwareAtomicImportStartup": {

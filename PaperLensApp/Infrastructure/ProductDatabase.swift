@@ -170,10 +170,17 @@ public final class ProductDatabase: @unchecked Sendable {
   func reserveImport(_ identity: ImportIdentity, title: String, destinationFolderID: UUID? = nil) throws {
     try queue.write { db in
       try Self.validateImportDestination(destinationFolderID, in: db)
+      try Self.insertImport(identity, title: title, createdAt: Date().timeIntervalSince1970, in: db)
+    }
+  }
+
+  static func insertImport(_ identity: ImportIdentity, title: String, createdAt: Double,
+    in db: Database) throws {
       try db.execute(sql: """
         INSERT INTO paper(id, generation, title, status, createdAt) VALUES (?, ?, ?, 'importing', ?)
         """, arguments: [identity.paperID.uuidString, identity.generation.uuidString, title,
-          Date().timeIntervalSince1970])
+          createdAt])
+      guard db.changesCount == 1 else { throw ProductDatabaseError.staleImport }
       try db.execute(sql: """
         INSERT INTO importJob(id, paperID, attempt, fence, correlation, input, epoch, writer,
           publication, state) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'running')
@@ -181,7 +188,7 @@ public final class ProductDatabase: @unchecked Sendable {
           identity.attempt.uuidString, identity.fence.uuidString, identity.correlation.uuidString,
           identity.input.uuidString, identity.epoch.uuidString, identity.writer.uuidString,
           identity.publication.uuidString])
-    }
+      guard db.changesCount == 1 else { throw ProductDatabaseError.staleImport }
   }
 
   func recordProgress(_ identity: ImportIdentity, bytes: Int64) throws {
@@ -194,7 +201,7 @@ public final class ProductDatabase: @unchecked Sendable {
     }
   }
 
-  private static func guardRunningImport(_ identity: ImportIdentity, in db: Database) throws -> Int64 {
+  static func guardRunningImport(_ identity: ImportIdentity, in db: Database) throws -> Int64 {
     guard let bytes = try Int64.fetchOne(db, sql: """
       SELECT j.bytesCopied FROM paper p JOIN importJob j ON p.id = j.paperID
       WHERE p.id = ? AND p.generation = ? AND p.status = 'importing' AND p.deletionID IS NULL
@@ -218,12 +225,23 @@ public final class ProductDatabase: @unchecked Sendable {
       try Self.validateImportDestination(destinationFolderID, in: db)
       _ = try Self.guardRunningImport(identity, in: db)
       try FileManager.default.moveItem(at: stage, to: final)
-      try db.execute(sql: "UPDATE paper SET status = 'ready', pdfReference = ?, pdfSHA256 = ? WHERE id = ?",
-        arguments: ["papers/\(identity.paperID.uuidString)/document.pdf", sha256, identity.paperID.uuidString])
-      try Self.assignImportedPaper(identity.paperID, folderID: destinationFolderID, in: db)
-      try db.execute(sql: "UPDATE importJob SET state = 'succeeded', failure = NULL WHERE id = ?",
-        arguments: [identity.jobID.uuidString])
+      try Self.publishImportRows(identity, sha256: sha256, destinationFolderID: destinationFolderID, in: db)
     }
+  }
+
+  static func publishImportRows(_ identity: ImportIdentity, sha256: String,
+    destinationFolderID: UUID?, in db: Database) throws {
+    _ = try guardRunningImport(identity, in: db)
+    try db.execute(sql: """
+      UPDATE paper SET status = 'ready', pdfReference = ?, pdfSHA256 = ?
+      WHERE id = ? AND generation = ? AND status = 'importing' AND deletionID IS NULL
+      """, arguments: ["papers/\(identity.paperID.uuidString)/document.pdf", sha256,
+        identity.paperID.uuidString, identity.generation.uuidString])
+    guard db.changesCount == 1 else { throw ProductDatabaseError.staleImport }
+    try assignImportedPaper(identity.paperID, folderID: destinationFolderID, in: db)
+    try db.execute(sql: "UPDATE importJob SET state = 'succeeded', failure = NULL WHERE id = ? AND state = 'running'",
+      arguments: [identity.jobID.uuidString])
+    guard db.changesCount == 1 else { throw ProductDatabaseError.staleImport }
   }
 
   func failImport(_ identity: ImportIdentity, failure: String, cleanupDebt: Bool) throws {
