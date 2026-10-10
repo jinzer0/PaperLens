@@ -647,3 +647,34 @@ row utilities; old API removal occurs only at complete owner cutover, not via fa
 No new schema/Package/project/epoch/policy/copier/source-selector or budget profile changes,
 no formatter added, warnings suppressed, app/helper/SDK/renderer/remote/trial actions.
 Same-Job Retry and canonical Story/Epic acceptance remain unfinished and unclaimed.
+
+### Deletion diagnostic prerequisite inside the existing persistence owner
+
+Contract92 identified that deletionFailed currently overwrites importJob.failure with a
+deletion diagnostic. That destroys the retained terminal import cause and paperDeleting
+execution fence even though the Paper saga owns the deletion. Resolve with one nullable
+paper.deletionFailure field on the existing sole GRDB migrator, restricted to the existing
+fixed codes agentPurgeUnavailable/agentClosureUnproved/deletionIncomplete. No new owner,
+store, configurable profile or acceptance-criteria change. Existing rows remain NULL; do
+not backfill guessed causes or create legacy fallbacks. This is in-scope data-integrity
+feature work, not an approval of a new architecture or weakened abort guard.
+
+deletionFailed changes only the exact current deleting/canonical-saga Paper, checked row
+count/readback, status/debt/fixed diagnostic. Never modify ANY importJob lineage/state/
+failure/history/progress or PDF hash/generation. Wrong saga, invalid reason or trigger
+refusal/corruption rolls back; no success from zero changed rows. libraryRecords chooses
+the Paper diagnostic for deleting/deletionFailed and the Job cause for import states,
+without silent field fallback. beginDeletion keeps its running-only Job interruption
+and clears the old Paper diagnostic for a newly admitted retry; all other immutable data
+and original saga remain fenced. finalizeDeletion clears the diagnostic in its existing
+contentless tombstone transaction. Abort still requires failed/paperDeleting plus exact
+full execution and actual deleting saga; diagnostic separation does not relax that rule.
+
+Parent registers the checked nullable-field migration before the worker; worker writable
+files are ProductDatabase.swift, LocalLibraryLifecycleTests.swift and this integration
+Spec only. Existing actual lifecycle caller uses these same three codes, no new public
+API/Package membership. Real owned-GRDB tests prove successful/failed import cause and
+history preserved, deleting/failed display uses own cause, reopen, wrong-saga/trigger
+rollback, retry clearing and final tombstone erasure. Parent verifies/reviews/commits;
+worker skips gates/format/commits/SDK/helper/renderer/remote/trial execution. This prerequisite
+does not itself activate the full journaled abort/deletion bridge or same-Job Retry.
