@@ -1725,7 +1725,9 @@ Core bounded interface in existing owners:
 
 Sequence core storage/lifecycle implementation (two existing files) before actual
 confirmation/caller integration (FolderImportService, ProductWorkspaceView and
-LibraryBrowserView). Parent owns tests, membership, independent data-integrity
+LibraryBrowserView), including directly affected ImportConfirmationView wording
+that distinguishes same-Job Retry from an independent new Paper. Parent owns
+tests, membership, independent data-integrity
 review, unsigned compile, evidence and commits. Verify same Paper/Job with fresh
 execution IDs across reopen, immutable previous failure/facts, fresh-folder/SHA
 publication, Cancel/replay/stale/delete/unknown/legacy/succeeded denials, SQL
