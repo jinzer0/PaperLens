@@ -1503,3 +1503,70 @@ this existing Spec. Parent all gates/review/evidence/commits; all Product cases
 remain isolated per test. No URL/DB/journal/policy/schema/membership/contract change,
 full actor cutover/Retry/Story acceptance, live/SDK/helper/renderer/paid/protected
 trial/user document/credential/remote/release execution is admitted.
+
+### Checked namespace absence implementation (parent verification pending)
+
+The shared production removeNamespace now calls checkedNamespace before removal
+and after a successful real FileManager.removeItem. The checked helper validates
+a file URL, its fully decoded absolute path without NUL, and a nonnil C filesystem
+representation; Darwin.lstat is immediately followed by errno capture. Only
+result -1 with ENOENT yields absence. EACCES, EPERM, ENOTDIR and every other failed
+probe throw LocalLibraryError.cleanupFailed. Directory spelling's trailing
+separators are removed for the probe so lstat cannot follow the final namespace
+symlink merely because the URL carries isDirectory=true. Present entries must be
+actual directories owned by getuid() with exact private mode 0700, matching the
+existing namespace creation mode; unexpected links/files/modes/owners are denied
+before erasure. Actual removal errors propagate without suppression. No boolean
+fileExists result supplies either cleanup acknowledgment.
+
+Four added owned-fixture cases:
+- testInaccessibleNamespaceAncestorCannotProveAbsenceOrFinalizeDeletion
+- testSymlinkNamespaceDeniesDeletionAndPreservesOwnedTargetAcrossReopen
+- testRegularFileNamespaceDeniesDeletionAndPreservesObstructionAcrossReopen
+- testAlreadyAbsentNamespaceFinalizesDeletionOnlyAfterActualENOENT
+
+Each imports a real private synthetic PDF and uses the existing explicit fake
+owned Agent fixture, not a certified real Agent purge. Denials assert typed
+cleanupFailed, deletionFailed/deletionIncomplete, retained cleanup debt and no
+tombstone. All original importJob columns and immutable paper facts remain equal;
+only the existing deletion transitions (including clearing pdfReference to make
+the paper unopenable) are excluded from the before/after comparison. Rows and
+physical bytes/obstructions remain checked after reopening. The non-directory
+fixture additionally observes actual child lstat ENOTDIR; the symlink fixture
+checks the link itself and the relocated owned PDF target separately. Exact
+ENOENT after actual fixture removal admits contentless tombstone finalization and
+idempotent deletion across reopen. Existing normal deletion coverage is unchanged.
+
+The chmod-000 case changes only this fixture's owned papers directory, not the
+database root, so product.db can record failure. Before delete it requires actual
+lstat EACCES/EPERM. A runner that bypasses ancestor search permissions fails that
+owned-fixture prerequisite; there is no root fallback or skip. Its scoped fixture
+teardown restores the captured original mode even on error, before retained bytes
+and reopened rows are inspected. This is not production permission repair.
+
+Implementation is source-only here: no tests, builds, gates, lint, formatter,
+commits, workflows, network or binaries were run for this slice. Parent must run
+every Product case with --parallel --num-workers1, without skips, reset or manual
+ACK, then independent review/native/evidence/commit. Verified96906de actual copier
+completion, physical drains, policy admission and permanent unknown/once-close
+semantics are unchanged; no new FD/lease/pool debt fixture was added. The proof is
+absence of one private pathname only, not same-UID race/ABA protection,
+inode-global closure, Agent purge, whole journaling, same-Job Retry or Story
+acceptance. Writable changes remain exactly the helper source, its lifecycle
+tests and this existing Spec.
+
+### Parent checked namespace verification
+
+All82 affected cases passed1319 (41 lifecycle with four new methods,14 URLwriter,
+19 folder,8 read-lease). Every413 Product case passed1323 in per-test isolated
+--parallel --num-workers1 processes, no skipped test/quota reset/manual logical
+ACK. Actual EACCES/EPERM, symlink/non-directory preservation, checked ENOENT and
+durable denial/finalization across reopen were exercised on owned fixtures.
+Fresh unsigned Release arm64/macOS15 native-as BUILD SUCCEEDED1324; warnings
+retained, app/helper binaries not executed. Review112 SOURCE-ONLY CLEAR / APPROVE,
+no findings. Two-source binary diff against Spece651acb SHA256:
+`c1a6f4984fae7caf4cf338569693b0e8e98c6a030601790a376449c1e1f6a915`.
+URL/DB/journal/policy/schema/membership/paired contracts and actual copier
+completion stay unchanged. This proves only checked private-path cleanup; actor
+journal/Retry, same-UID isolation/ABA, production Agent purge and Story acceptance
+remain unfinished and unclaimed.

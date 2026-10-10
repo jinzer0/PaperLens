@@ -11,6 +11,8 @@ private enum SyntheticPurgeError: Error { case failed, stillPresent }
 
 private enum OwnedCopyFault: Error { case close, open }
 
+private enum OwnedNamespaceFixtureError: Error { case prerequisite(String) }
+
 /// Effects operate only on this test's real private files/handles. Scope counters model a
 /// granted scope; they are not evidence of a sandbox extension on ordinary temporary URLs.
 private final class OwnedCopyEffects: @unchecked Sendable {
@@ -796,6 +798,187 @@ final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
     let restarted = try await LocalLibraryLifecycle.open(database: ProductDatabase.open(at: root), agentPurge: agent)
     let restartedRecords = try await restarted.list()
     XCTAssertTrue(restartedRecords.isEmpty)
+  }
+
+  /// Explicit fake peer only: these cases certify local pathname checks, not Agent purge.
+  private func prepareNamespaceDeletion(_ db: ProductDatabase) async throws
+    -> (LocalLibraryLifecycle, UUID, Data) {
+    let agent = makeAgent()
+    let lifecycle = try await LocalLibraryLifecycle.open(database: db, agentPurge: agent)
+    let selected = try source()
+    let bytes = try Data(contentsOf: selected)
+    let id = try await lifecycle.importPDF(from: selected)
+    let peer = temporary.appendingPathComponent("agent").appendingPathComponent(id.uuidString)
+    try FileManager.default.createDirectory(at: peer, withIntermediateDirectories: true,
+      attributes: [.posixPermissions: 0o700])
+    try Data("explicit synthetic peer bytes".utf8).write(to: peer.appendingPathComponent("stage"))
+    return (lifecycle, id, bytes)
+  }
+
+  private func inspectOwnedPath(_ url: URL) throws -> (result: Int32, failure: Int32, info: stat) {
+    try url.withUnsafeFileSystemRepresentation { representation in
+      let representation = try XCTUnwrap(representation)
+      var info = stat()
+      let result = Darwin.lstat(representation, &info)
+      let failure = errno
+      return (result, failure, info)
+    }
+  }
+
+  private func assertRetainedNamespaceFailure(_ db: ProductDatabase, _ id: UUID, before: [Row]) throws {
+    let after = try deletionRows(db, id)
+    assertDeletionRowsEqual(before, after,
+      paperExcept: ["status", "cleanupDebt", "deletionID", "deletionFailure", "pdfReference"])
+    XCTAssertNil(String.fromDatabaseValue(after[0]["pdfReference"]))
+    let record = try XCTUnwrap(db.libraryRecords().first { $0.id == id })
+    XCTAssertEqual(record.status, .deletionFailed)
+    XCTAssertEqual(record.failure, "deletionIncomplete")
+    XCTAssertTrue(record.cleanupDebt)
+    XCTAssertNotNil(String.fromDatabaseValue(after[0]["deletionID"]))
+  }
+
+  private func withInaccessibleOwnedPapers(_ operation: () async throws -> Void) async throws {
+    let papers = root.appendingPathComponent("papers")
+    let original = try inspectOwnedPath(papers)
+    XCTAssertEqual(original.result, 0)
+    XCTAssertEqual(original.info.st_uid, Darwin.getuid())
+    guard original.result == 0, original.info.st_uid == Darwin.getuid(),
+      original.info.st_mode & S_IFMT == S_IFDIR else {
+      throw OwnedNamespaceFixtureError.prerequisite("Expected this fixture's owned papers directory")
+    }
+    let mode = original.info.st_mode & 0o7777
+    let changed = papers.withUnsafeFileSystemRepresentation { representation in
+      representation.map { Darwin.chmod($0, 0) } ?? -1
+    }
+    guard changed == 0 else {
+      throw OwnedNamespaceFixtureError.prerequisite("Cannot chmod the owned papers fixture to 000")
+    }
+    defer {
+      // Fixture teardown only, restoring the exact original mode even on assertion/error.
+      let restored = papers.withUnsafeFileSystemRepresentation { representation in
+        representation.map { Darwin.chmod($0, mode) } ?? -1
+      }
+      XCTAssertEqual(restored, 0, "Owned papers fixture must restore its original mode")
+    }
+    try await operation()
+  }
+
+  func testInaccessibleNamespaceAncestorCannotProveAbsenceOrFinalizeDeletion() async throws {
+    let db = try ProductDatabase.open(at: root)
+    let (lifecycle, id, bytes) = try await prepareNamespaceDeletion(db)
+    let before = try deletionRows(db, id)
+    try await withInaccessibleOwnedPapers {
+      let blocked = try self.inspectOwnedPath(self.namespace(id))
+      guard blocked.result == -1, blocked.failure == EACCES || blocked.failure == EPERM else {
+        XCTFail("Owned chmod-000 fixture requires actual lstat EACCES/EPERM; got \(blocked.result)/\(blocked.failure)")
+        throw OwnedNamespaceFixtureError.prerequisite("Runner must enforce owned ancestor search permissions")
+      }
+      do {
+        try await lifecycle.delete(paperID: id)
+        XCTFail("Inaccessible namespace must not be accepted as absent")
+      } catch { XCTAssertEqual(error as? LocalLibraryError, .cleanupFailed) }
+      try self.assertRetainedNamespaceFailure(db, id, before: before)
+    }
+    // The fixture's teardown above restores search permission before physical/reopen checks.
+    let after = try deletionRows(db, id)
+    let retained = try inspectOwnedPath(namespace(id))
+    XCTAssertEqual(retained.result, 0)
+    XCTAssertEqual(retained.info.st_mode & S_IFMT, S_IFDIR)
+    XCTAssertEqual(try Data(contentsOf: namespace(id).appendingPathComponent("document.pdf")), bytes)
+    let reopened = try ProductDatabase.open(at: root)
+    _ = try await LocalLibraryLifecycle.open(database: reopened, agentPurge: makeAgent())
+    try assertRetainedNamespaceFailure(reopened, id, before: before)
+    assertDeletionRowsEqual(after, try deletionRows(reopened, id))
+    XCTAssertEqual(try Data(contentsOf: namespace(id).appendingPathComponent("document.pdf")), bytes)
+  }
+
+  func testSymlinkNamespaceDeniesDeletionAndPreservesOwnedTargetAcrossReopen() async throws {
+    let db = try ProductDatabase.open(at: root)
+    let (lifecycle, id, bytes) = try await prepareNamespaceDeletion(db)
+    let before = try deletionRows(db, id)
+    let target = temporary.appendingPathComponent("moved-owned-namespace", isDirectory: true)
+    try FileManager.default.moveItem(at: namespace(id), to: target)
+    try FileManager.default.createSymbolicLink(at: namespace(id), withDestinationURL: target)
+    let link = try inspectOwnedPath(namespace(id))
+    XCTAssertEqual(link.result, 0)
+    XCTAssertEqual(link.info.st_mode & S_IFMT, S_IFLNK)
+    do {
+      try await lifecycle.delete(paperID: id)
+      XCTFail("Unexpected namespace symlink must not be followed or erased")
+    } catch { XCTAssertEqual(error as? LocalLibraryError, .cleanupFailed) }
+    try assertRetainedNamespaceFailure(db, id, before: before)
+    XCTAssertEqual(try inspectOwnedPath(namespace(id)).info.st_mode & S_IFMT, S_IFLNK)
+    XCTAssertEqual(try Data(contentsOf: target.appendingPathComponent("document.pdf")), bytes)
+    let after = try deletionRows(db, id)
+    let reopened = try ProductDatabase.open(at: root)
+    _ = try await LocalLibraryLifecycle.open(database: reopened, agentPurge: makeAgent())
+    try assertRetainedNamespaceFailure(reopened, id, before: before)
+    assertDeletionRowsEqual(after, try deletionRows(reopened, id))
+    let retained = try inspectOwnedPath(namespace(id))
+    XCTAssertEqual(retained.result, 0)
+    XCTAssertEqual(retained.info.st_mode & S_IFMT, S_IFLNK)
+    XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: namespace(id).path), target.path)
+    XCTAssertEqual(try Data(contentsOf: target.appendingPathComponent("document.pdf")), bytes)
+  }
+
+  func testRegularFileNamespaceDeniesDeletionAndPreservesObstructionAcrossReopen() async throws {
+    let db = try ProductDatabase.open(at: root)
+    let (lifecycle, id, bytes) = try await prepareNamespaceDeletion(db)
+    let before = try deletionRows(db, id)
+    let target = temporary.appendingPathComponent("moved-owned-namespace", isDirectory: true)
+    try FileManager.default.moveItem(at: namespace(id), to: target)
+    let obstruction = Data("owned regular-file obstruction".utf8)
+    try obstruction.write(to: namespace(id))
+    let present = try inspectOwnedPath(namespace(id))
+    XCTAssertEqual(present.result, 0)
+    XCTAssertEqual(present.info.st_mode & S_IFMT, S_IFREG)
+    let child = try inspectOwnedPath(namespace(id).appendingPathComponent("document.pdf"))
+    XCTAssertEqual(child.result, -1)
+    XCTAssertEqual(child.failure, ENOTDIR)
+    do {
+      try await lifecycle.delete(paperID: id)
+      XCTFail("Unexpected regular file must not be erased or accepted as absent")
+    } catch { XCTAssertEqual(error as? LocalLibraryError, .cleanupFailed) }
+    try assertRetainedNamespaceFailure(db, id, before: before)
+    XCTAssertEqual(try Data(contentsOf: namespace(id)), obstruction)
+    XCTAssertEqual(try Data(contentsOf: target.appendingPathComponent("document.pdf")), bytes)
+    let after = try deletionRows(db, id)
+    let reopened = try ProductDatabase.open(at: root)
+    _ = try await LocalLibraryLifecycle.open(database: reopened, agentPurge: makeAgent())
+    try assertRetainedNamespaceFailure(reopened, id, before: before)
+    assertDeletionRowsEqual(after, try deletionRows(reopened, id))
+    let retained = try inspectOwnedPath(namespace(id))
+    XCTAssertEqual(retained.result, 0)
+    XCTAssertEqual(retained.info.st_mode & S_IFMT, S_IFREG)
+    XCTAssertEqual(try Data(contentsOf: namespace(id)), obstruction)
+    XCTAssertEqual(try Data(contentsOf: target.appendingPathComponent("document.pdf")), bytes)
+  }
+
+  func testAlreadyAbsentNamespaceFinalizesDeletionOnlyAfterActualENOENT() async throws {
+    let db = try ProductDatabase.open(at: root)
+    let (lifecycle, id, _) = try await prepareNamespaceDeletion(db)
+    try FileManager.default.removeItem(at: namespace(id))
+    let absent = try inspectOwnedPath(namespace(id))
+    XCTAssertEqual(absent.result, -1)
+    XCTAssertEqual(absent.failure, ENOENT)
+    try await lifecycle.delete(paperID: id)
+    let records = try await lifecycle.list()
+    XCTAssertTrue(records.isEmpty)
+    let finalized = try inspectOwnedPath(namespace(id))
+    XCTAssertEqual(finalized.result, -1)
+    XCTAssertEqual(finalized.failure, ENOENT)
+    let tombstone = try deletionRows(db, id)
+    XCTAssertEqual(tombstone.count, 1)
+    XCTAssertEqual(String.fromDatabaseValue(tombstone[0]["status"]), "tombstone")
+    XCTAssertNil(String.fromDatabaseValue(tombstone[0]["pdfSHA256"]))
+    XCTAssertNil(String.fromDatabaseValue(tombstone[0]["pdfReference"]))
+    XCTAssertEqual(Int64.fromDatabaseValue(tombstone[0]["cleanupDebt"]), 0)
+    let reopened = try ProductDatabase.open(at: root)
+    let restarted = try await LocalLibraryLifecycle.open(database: reopened, agentPurge: makeAgent())
+    try await restarted.delete(paperID: id)
+    let reopenedRecords = try await restarted.list()
+    XCTAssertTrue(reopenedRecords.isEmpty)
+    assertDeletionRowsEqual(tombstone, try deletionRows(reopened, id))
   }
 
   func testMissingPurgeBlocksDeletionAndKeepsTruthfulDebt() async throws {

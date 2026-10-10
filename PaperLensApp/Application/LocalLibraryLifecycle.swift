@@ -594,9 +594,31 @@ public actor LocalLibraryLifecycle {
   }
 
   private nonisolated static func removeNamespace(_ url: URL) throws {
-    let fm = FileManager.default
-    if fm.fileExists(atPath: url.path) { try fm.removeItem(at: url) }
-    guard !fm.fileExists(atPath: url.path) else { throw LocalLibraryError.cleanupFailed }
+    guard let present = try checkedNamespace(url) else { return }
+    guard present.st_mode & S_IFMT == S_IFDIR, present.st_uid == Darwin.getuid(),
+      present.st_mode & 0o7777 == 0o700 else { throw LocalLibraryError.cleanupFailed }
+    try FileManager.default.removeItem(at: url)
+    guard try checkedNamespace(url) == nil else { throw LocalLibraryError.cleanupFailed }
+  }
+
+  /// Only ENOENT proves this private pathname absent; this is not race/ABA isolation.
+  private nonisolated static func checkedNamespace(_ url: URL) throws -> stat? {
+    var path = url.path(percentEncoded: false)
+    guard url.isFileURL, path.hasPrefix("/"), !path.utf8.contains(0) else {
+      throw LocalLibraryError.cleanupFailed
+    }
+    // A trailing directory separator would make lstat follow the final symlink.
+    while path.count > 1 && path.hasSuffix("/") { path.removeLast() }
+    let checkedURL = URL(fileURLWithPath: path, isDirectory: false)
+    return try checkedURL.withUnsafeFileSystemRepresentation { representation in
+      guard let representation else { throw LocalLibraryError.cleanupFailed }
+      var info = stat()
+      let result = Darwin.lstat(representation, &info)
+      let failure = errno
+      if result == 0 { return info }
+      if result == -1 && failure == ENOENT { return nil }
+      throw LocalLibraryError.cleanupFailed
+    }
   }
 
   private nonisolated static func copyValidatedPDF(

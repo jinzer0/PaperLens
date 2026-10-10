@@ -28,9 +28,9 @@
   "verification": {
     "productUnion": {
       "command": "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --parallel --num-workers 1 --filter ProductTests",
-      "tests": 409,
+      "tests": 413,
       "failures": 0,
-      "output": "artifact://1316",
+      "output": "artifact://1323",
       "evidence": "Real GRDB transactions, owned synthetic files and actual local FIFO IO/close/peer metadata/EPIPE; mocked provider/HTTP transport and synthetic windowless PDFKit conversions. Not authenticated provider, app UI, SDK producer or PDFium execution."
     },
     "nativeCompilation": {
@@ -38,11 +38,11 @@
       "configuration": "Release",
       "architecture": "arm64",
       "minimumOS": "15.0",
-      "derivedData": ".build/product-native-compile-20261010-ar",
+      "derivedData": ".build/product-native-compile-20261010-as",
       "codeSigningAllowed": false,
       "result": "BUILD SUCCEEDED",
-      "rawOutput": "artifact://1317",
-      "output": "artifact://1317",
+      "rawOutput": "artifact://1324",
+      "output": "artifact://1324",
       "applicationAndHelperBinariesExecuted": false,
       "warnings": "AppIntents metadata skipped, PDFium debug-map duplicate/missing-symbol warnings and an unnecessary-await Swift warning remain; no warning suppression or debug-symbol repair claimed."
     },
@@ -295,6 +295,26 @@
     "visibleUIOrAccessibilityVerified": false,
     "runtimeParsingOrCalibrationVerified": false,
     "helperExecuted": false,
+    "storyAccepted": false
+  },
+  "checkedActualNamespaceAbsence": {
+    "specificationCommit": "e651acb",
+    "sourceDiffAgainstSpecificationSha256": "c1a6f4984fae7caf4cf338569693b0e8e98c6a030601790a376449c1e1f6a915",
+    "sourceScope": ["PaperLensApp/Application/LocalLibraryLifecycle.swift", "Tests/Product/LocalLibraryLifecycleTests.swift"],
+    "focusedTests": {"tests": 82, "failures": 0, "lifecycleTests": 41, "newTestMethods": 4, "urlWriterTests": 14, "folderTests": 19, "readLeaseTests": 8, "output": "artifact://1319"},
+    "productUnion": {"tests": 413, "failures": 0, "output": "artifact://1323", "processMode": "SwiftPM --parallel --num-workers 1; every Product case invoked", "testsSkipped": 0},
+    "nativeCompilation": {"result": "BUILD SUCCEEDED", "output": "artifact://1324", "derivedData": ".build/product-native-compile-20261010-as", "codeSigningAllowed": false, "applicationAndHelperBinariesExecuted": false},
+    "review": "agent://112-CheckedNamespaceIntegrity: SOURCE-ONLY CLEAR / APPROVE; actual one-path absence and denied erasure prerequisite only; findings empty",
+    "evidence": "Actual helper validates private path and lstat errno immediately; ENOENT alone means absence, permission/traversal errors fail closed. Present entry must be current-user private directory before real removal and checked post-removal ENOENT. Owned permission/symlink/regular obstruction tests retain physical bytes and durable deletion failure/Job facts across reopen; actual absent/normal removal permits existing contentless finalization.",
+    "checkedPrivatePathAbsenceVerified": true,
+    "fileExistsFalseUsedAsCleanupACK": false,
+    "runtimePermissionsRepaired": false,
+    "fixturePermissionRestorationIsPhysicalACK": false,
+    "sameUIDRaceABAOrInodeGlobalClosureProved": false,
+    "syntheticAgentFixtureIsProductionPurgeProof": false,
+    "productionJournaledActorCutoverActivated": false,
+    "sameJobRetryUIActivated": false,
+    "helperOrRendererExecuted": false,
     "storyAccepted": false
   },
   "actualLocalCopierCompletion": {
