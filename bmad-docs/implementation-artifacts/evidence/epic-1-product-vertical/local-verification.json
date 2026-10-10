@@ -28,9 +28,9 @@
   "verification": {
     "productUnion": {
       "command": "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --filter ProductTests",
-      "tests": 342,
+      "tests": 351,
       "failures": 0,
-      "output": "artifact://1127",
+      "output": "artifact://1148",
       "evidence": "Real GRDB transactions, owned synthetic files and actual local FIFO IO/close/peer metadata/EPIPE; mocked provider/HTTP transport and synthetic windowless PDFKit conversions. Not authenticated provider, app UI, SDK producer or PDFium execution."
     },
     "nativeCompilation": {
@@ -38,11 +38,11 @@
       "configuration": "Release",
       "architecture": "arm64",
       "minimumOS": "15.0",
-      "derivedData": ".build/product-native-compile-20261010-af",
+      "derivedData": ".build/product-native-compile-20261010-ag",
       "codeSigningAllowed": false,
       "result": "BUILD SUCCEEDED",
-      "rawOutput": "artifact://1128",
-      "output": "artifact://1128",
+      "rawOutput": "artifact://1149",
+      "output": "artifact://1149",
       "applicationAndHelperBinariesExecuted": false,
       "warnings": "AppIntents metadata skipped, PDFium debug-map duplicate/missing-symbol warnings and an unnecessary-await Swift warning remain; no warning suppression or debug-symbol repair claimed."
     },
@@ -295,6 +295,24 @@
     "visibleUIOrAccessibilityVerified": false,
     "runtimeParsingOrCalibrationVerified": false,
     "helperExecuted": false,
+    "storyAccepted": false
+  },
+  "journalAwareAtomicImportStartup": {
+    "specificationCommit": "c90f161",
+    "sourceDiffAgainstSpecificationSha256": "4d81a631b5dfdc0c0d624dcfa92d2c2bb222173d3c8cef80439b23a1bdddcfb9",
+    "sourceScope": ["PaperLensApp/Application/ProductJobRecovery.swift", "Tests/Product/ProductJobRecoveryTests.swift"],
+    "focusedTests": {"tests": 43, "failures": 0, "startupTests": 19, "newStartupTests": 9, "journalTests": 13, "persistenceTests": 11, "output": "artifact://1142"},
+    "productUnion": {"tests": 351, "failures": 0, "output": "artifact://1148"},
+    "nativeCompilation": {"result": "BUILD SUCCEEDED", "output": "artifact://1149", "derivedData": ".build/product-native-compile-20261010-ag", "codeSigningAllowed": false, "applicationAndHelperBinariesExecuted": false},
+    "review": "agent://91-JournalStartupIntegrity: SOURCE-ONLY CLEAR / APPROVE; exact startup source/test delta with unchanged policy/journal/storage references",
+    "evidence": "Public startup restores actual non-NULL history, validates ten captured UUIDs and running import lineage, appends actual policy startup, CASes before state/debt changes, and checks bounded exact journal/whole-row readback in the existing all-kind transaction. Real owned-GRDB ignore/corrupt triggers verify cross-kind rollback; open/unknown permits, cleanup operations, older captures, used IDs and result pointers are retained without synthetic closure. Legacy NULL remains conservative and Retry-ineligible.",
+    "startupSerializedRecordQuotaBytes": 262144,
+    "quotaIsCertifiedAllocatorRSSOrProviderProfile": false,
+    "genuineHistoryStartupIntegratedAndVerified": true,
+    "productionReservationAndLifecycleJournalWired": false,
+    "sameJobRetryUIActivated": false,
+    "physicalClosureOrFreshRetryAuthorityEstablished": false,
+    "helperOrRendererExecuted": false,
     "storyAccepted": false
   },
   "soleImportRecoveryPersistencePrimitives": {

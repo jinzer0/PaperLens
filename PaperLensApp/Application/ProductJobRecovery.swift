@@ -30,6 +30,8 @@ public struct ProductJobRecoveryReceipt: Equatable, Sendable {
 /// Startup only, before admitting producers. Uses Main's existing epoch and sole GRDB queue.
 /// No policy commands are executed: prior-process cancellation cannot prove physical closure.
 public struct ProductJobRecovery: Sendable {
+  // Serialized metadata-record quota, not an allocator/RSS or producer-admission bound.
+  static let maximumImportRecoveryJournalBytes = 262_144
   private let database: ProductDatabase
 
   public init(database: ProductDatabase) { self.database = database }
@@ -40,8 +42,9 @@ public struct ProductJobRecovery: Sendable {
       for kind in [ProductJobRecoveryReceipt.Kind.import, .extraction] {
         let table = kind == .import ? "importJob" : "extractionAttempt"
         let jobColumn = kind == .import ? "id" : "job"
+        let projection = kind == .import ? try Self.importProjection(db) : "*"
         let rows = try Row.fetchAll(db, sql: """
-          SELECT * FROM \(table) WHERE state = 'running' AND epoch != ? ORDER BY paperID
+          SELECT \(projection) FROM \(table) WHERE state = 'running' AND epoch != ? ORDER BY paperID
           """, arguments: [currentEpoch.uuidString])
         for row in rows {
           let paperID = try Self.uuid(row, "paperID")
@@ -71,20 +74,23 @@ public struct ProductJobRecovery: Sendable {
           let lineage = JobRecoveryPolicy.Lineage(job: job.uuidString,
             reservation: .init(attempt: attempt.uuidString, fence: fence.uuidString,
               correlation: correlation.uuidString), captured: authority)
-          // Rehydration records persisted running state, not a new claim or permit grant.
-          // These schemas store neither dispatch/permit history nor prior-result lineage.
-          // The transient snapshot supplies only startup's inputs; it is never persisted or
-          // returned as execution authority. Retained pointers are read separately.
-          let snapshot = JobRecoveryPolicy.Snapshot(job: job.uuidString,
-            role: kind == .import ? .import : .parsing, authority: authority,
-            executions: [.init(lineage: lineage, state: .running, dispatch: .none, result: nil)],
-            usableResult: nil, permits: [], usedPermitIDs: [], revoked: false,
-            usedOperationIDs: [], pendingRemoval: nil, removalDebt: nil, removedPapers: [])
-          let decision = JobRecoveryPolicy.apply(.startup(currentEpoch: currentEpoch.uuidString),
-            to: snapshot)
-          guard decision.rejection == nil, decision.snapshot.current.state == .failed(.interrupted),
-            decision.snapshot.current.lineage == lineage else {
-            throw ProductJobRecoveryError.recoveryConflict
+          var journaled: ImportRecoveryRecord?
+          if kind == .import, row["startupJournalType"] as String != "null" {
+            journaled = try Self.recoverJournal(row, paper: paper, currentEpoch: currentEpoch, in: db)
+          } else {
+            // Legacy NULL imports remain Retry-ineligible. Parsing also has no journal.
+            // These transient policy inputs never create persisted history or permit authority.
+            let snapshot = JobRecoveryPolicy.Snapshot(job: job.uuidString,
+              role: kind == .import ? .import : .parsing, authority: authority,
+              executions: [.init(lineage: lineage, state: .running, dispatch: .none, result: nil)],
+              usableResult: nil, permits: [], usedPermitIDs: [], revoked: false,
+              usedOperationIDs: [], pendingRemoval: nil, removalDebt: nil, removedPapers: [])
+            let decision = JobRecoveryPolicy.apply(.startup(currentEpoch: currentEpoch.uuidString),
+              to: snapshot)
+            guard decision.rejection == nil, decision.snapshot.current.state == .failed(.interrupted),
+              decision.snapshot.current.lineage == lineage else {
+              throw ProductJobRecoveryError.recoveryConflict
+            }
           }
           // Selection, exact-lineage CAS and readback share one serialized transaction.
           try db.execute(sql: """
@@ -103,7 +109,7 @@ public struct ProductJobRecovery: Sendable {
               """, arguments: [paperID.uuidString])
             guard db.changesCount == 1 else { throw ProductJobRecoveryError.recoveryConflict }
           }
-          guard let after = try Row.fetchOne(db, sql: "SELECT * FROM \(table) WHERE paperID = ?",
+          guard let after = try Row.fetchOne(db, sql: "SELECT \(projection) FROM \(table) WHERE paperID = ?",
             arguments: [paperID.uuidString]),
             let afterPaper = try Row.fetchOne(db, sql: "SELECT * FROM paper WHERE id = ?",
               arguments: [paperID.uuidString]) else {
@@ -111,8 +117,21 @@ public struct ProductJobRecovery: Sendable {
           }
           let state: String = after["state"]
           let failure: String? = after["failure"]
+          if let journaled {
+            do {
+              let identity = try journaled.journal.currentCapture().identity
+              let readback = try ProductDatabase.readImportRecovery(identity,
+                maximumBytes: Self.maximumImportRecoveryJournalBytes, in: db)
+              guard readback.encoded == journaled.encoded,
+                try readback.journal.snapshot() == journaled.journal.snapshot(),
+                Data.fromDatabaseValue(after["recoveryJournal"]) == journaled.encoded else {
+                throw ProductJobRecoveryError.readbackMismatch
+              }
+            } catch { throw ProductJobRecoveryError.readbackMismatch }
+          }
           guard state == "failed", failure == "interrupted",
-            Self.matches(row, after, except: ["state", "failure"]),
+            Self.matches(row, after, except: journaled == nil
+              ? ["state", "failure"] : ["state", "failure", "recoveryJournal"]),
             Self.matches(paper, afterPaper,
               except: kind == .import ? ["status", "cleanupDebt"] : []),
             try Self.retainedRevision(db, paperID: paperID) == beforeRevision else {
@@ -237,11 +256,81 @@ public struct ProductJobRecovery: Sendable {
   }
 
   private static func uuid(_ row: Row, _ column: String) throws -> UUID {
-    let value: String? = row[column]
-    guard let value, let uuid = UUID(uuidString: value), uuid.uuidString == value else {
+    let value: DatabaseValue = row[column]
+    guard case .string(let text) = value.storage,
+      let uuid = UUID(uuidString: text), uuid.uuidString == text else {
       throw ProductJobRecoveryError.invalidLineage
     }
     return uuid
+  }
+
+  /// Preserve every actual column in the exact-row comparison without materializing an
+  /// oversized/non-BLOB history. The type discriminator keeps invalid history distinct from NULL.
+  private static func importProjection(_ db: Database) throws -> String {
+    let columns = try Row.fetchAll(db, sql: "PRAGMA table_info(importJob)").map { row -> String in
+      let name: String = row["name"]
+      if name == "recoveryJournal" {
+        return "CASE WHEN typeof(recoveryJournal) = 'blob' AND length(recoveryJournal) <= \(maximumImportRecoveryJournalBytes) THEN recoveryJournal ELSE NULL END AS recoveryJournal"
+      }
+      return "\"\(name.replacingOccurrences(of: "\"", with: "\"\""))\""
+    }
+    return (columns + ["typeof(recoveryJournal) AS startupJournalType"]).joined(separator: ", ")
+  }
+
+  private static func recoverJournal(_ row: Row, paper: Row, currentEpoch: UUID,
+    in db: Database) throws -> ImportRecoveryRecord {
+    let identity = ImportIdentity(paperID: try uuid(row, "paperID"),
+      generation: try uuid(paper, "generation"), jobID: try uuid(row, "id"),
+      attempt: try uuid(row, "attempt"), fence: try uuid(row, "fence"),
+      correlation: try uuid(row, "correlation"), input: try uuid(row, "input"),
+      epoch: try uuid(row, "epoch"), writer: try uuid(row, "writer"),
+      publication: try uuid(row, "publication"))
+    let previous: ImportRecoveryRecord
+    let replacement: ImportRecoveryJournal
+    do {
+      previous = try ProductDatabase.readImportRecovery(identity,
+        maximumBytes: maximumImportRecoveryJournalBytes, in: db)
+      guard Data.fromDatabaseValue(row["recoveryJournal"]) == previous.encoded else {
+        throw ProductJobRecoveryError.recoveryConflict
+      }
+      let snapshot = try previous.journal.snapshot()
+      let captured = snapshot.current.lineage
+      guard snapshot.role == .import, snapshot.job == identity.jobID.uuidString,
+        snapshot.current.state == .running,
+        captured.job == identity.jobID.uuidString,
+        captured.reservation == .init(attempt: identity.attempt.uuidString,
+          fence: identity.fence.uuidString, correlation: identity.correlation.uuidString),
+        captured.captured.input == .source(version: identity.input.uuidString),
+        captured.captured.config == .inapplicable,
+        captured.captured.paper == .init(id: identity.paperID.uuidString,
+          generation: identity.generation.uuidString),
+        captured.captured.epoch == identity.epoch.uuidString else {
+        throw ProductJobRecoveryError.invalidLineage
+      }
+      let event = JobRecoveryPolicy.Event.startup(currentEpoch: currentEpoch.uuidString)
+      let decision = JobRecoveryPolicy.apply(event, to: snapshot)
+      guard decision.rejection == nil, decision.snapshot.current.state == .failed(.interrupted),
+        decision.snapshot.current.lineage == captured else {
+        throw ProductJobRecoveryError.recoveryConflict
+      }
+      replacement = try previous.journal.recording(event)
+      _ = try replacement.encoded(maximumBytes: maximumImportRecoveryJournalBytes)
+      guard try replacement.snapshot() == decision.snapshot else {
+        throw ProductJobRecoveryError.recoveryConflict
+      }
+    } catch let error as ProductJobRecoveryError { throw error }
+    catch { throw ProductJobRecoveryError.invalidLineage }
+    // Journal CAS must precede ordinary state/debt updates while the row is still admitted.
+    do {
+      return try ProductDatabase.compareAndSwapImportRecovery(expected: previous.encoded,
+        replacement: replacement, maximumBytes: maximumImportRecoveryJournalBytes, in: db)
+    } catch ImportRecoveryPersistenceError.staleHistory {
+      throw ProductJobRecoveryError.recoveryConflict
+    } catch ImportRecoveryPersistenceError.invalidHistory {
+      throw ProductJobRecoveryError.readbackMismatch
+    } catch ImportRecoveryPersistenceError.missingHistory {
+      throw ProductJobRecoveryError.readbackMismatch
+    }
   }
 
   private static func retainedRevision(_ db: Database, paperID: UUID) throws -> UUID? {

@@ -434,3 +434,71 @@ writer debt, captured-versus-observed epoch, immutable history, corrupt/rebound 
 ignore/corrupt triggers and cross-kind rollback. Parent runs gates/review/commit; worker
 skips all tests/builds/formatters/commits/SDK/helper/renderer/remote/trial operations.
 This slice does not create old history, prove closure, authorize Retry or complete Story1.14.
+
+### Worker90 authored journal-aware startup (parent verification pending)
+
+Against baseline3b7d2bf and startup-slice Specc90f161, ProductJobRecovery now restores
+non-NULL import history inside the existing adapterWrite transaction. Application owns
+internal static maximumImportRecoveryJournalBytes = 262144 and explicitly passes this
+serialized-record quota to bounded restore, encoding, CAS and final typed readback. Import
+selection/readback projects every actual column, bounding the BLOB in SQL and retaining
+its storage-type discriminator; oversized/non-BLOB data is never treated as legacy NULL.
+All ten captured UUIDs and joined Paper generation/ownership, nondeleting admission,
+exact import/running lineage and captured epoch must match. Genuine immutable startup
+append is compared with the policy decision, then exact prior-byte CAS occurs before
+ordinary Job failure and Paper debt updates. Final readback checks exact bytes and replayed
+typed history. Only actually journaled imports allow recoveryJournal to differ in the
+exact-row comparison; all other columns remain guarded. Invalid restoration is
+invalidLineage, refused/stale CAS is recoveryConflict, and journal/final readback corruption
+is readbackMismatch. Throws escape the one transaction; no fallback/catch-and-continue.
+
+Policy clarification resolved with parent: existing startup semantics retain an attested
+writer .open as .open while revoking it and requiring cleanup; an existing .unknown writer
+remains .unknown. This slice does NOT synthesize an open-to-unknown event or modify policy.
+Neither retained closure value proves present physical closure. Known cleanup operations,
+failed debt, used IDs, prior results and every earlier Retry capture remain genuine history.
+Legacy NULL remains the original conservative transient path and Retry-ineligible;
+parsing/summary, current-epoch and terminal startup behavior is unchanged.
+
+Nine new owned-GRDB tests authored in ProductJobRecoveryTests:
+- testJournalStartupRetainsOpenWriterDebtAllCapturesAndObservedEpochWithoutRenewal
+- testJournalStartupRetainsPriorResultOlderRetryCapturesAndKnownCleanupDebt
+- testJournalStartupRejectsCorruptNonBlobOversizedAndNonRunningHistoryWithoutFallback
+- testJournalStartupRetainsUnknownWriterWithoutInventingClosure
+- testJournalStartupRejectsEveryReboundCapturedUUID
+- testJournalCurrentEpochAndTerminalRecordsAreNotReadOrRewritten
+- testIgnoredJournalCASRollsBackEarlierImportsOtherKindsAndTriggerMarker
+- testCorruptedJournalCASRollsBackEarlierImportsOtherKindsAndTriggerMarker
+- testJournalFinalReadbackRejectsPostStateCorruptionAndUnrelatedColumnMutation
+
+Existing malformed-summary, extraction-write-failure and malformed-extraction rollback
+tests now seed genuine journals to include rollback of earlier journal appends. Fixtures
+use the new-reservation initialization hook and ordinary exact-byte CAS for owner events.
+The multi-Retry fixture uses genuine replayed capture events and an explicitly test-only
+atomic execution-column transition; it is not a shipped Retry owner or reconstructed
+history. All closure/publication/cleanup events are synthetic attestations only. Trigger
+fixtures assert earlier import/Paper rollback and extraction/summary/metadata-marker
+rollback; final-state triggers exercise corruption after the initial successful journal CAS.
+
+Worker performed source inspection only: no tests, builds, gates, lint, formatters, commits,
+runtime or external actions. Parent must run focused ProductJobRecoveryTests and the
+existing journal/persistence suites, then owned integration verification/review/commit.
+Migration registration and target membership already exist; no new file or membership
+change is required. This is startup-only source, not actual reservation/lifecycle journal
+wiring, Retry UI/authority, physical closure, external activation or Story success.
+
+### Parent journal-aware startup verification and independent review
+
+Two-source binary diff against c90f161 SHA256:
+4d81a631b5dfdc0c0d624dcfa92d2c2bb222173d3c8cef80439b23a1bdddcfb9.
+Focused43/0 artifact1142 (19 startup including9 new,13 journal,11 persistence);
+Product351/0 artifact1148; fresh unsigned native Release arm64/macOS15 BUILD SUCCEEDED
+artifact1149, namespace product-native-compile-20261010-ag. Review91 SOURCE-ONLY CLEAR /
+APPROVE, no actionable finding. Root application startup path handles genuine journals;
+real owned GRDB transactions/reopen/cross-kind rollback are verified. Physical process
+restart, closure, app/UI/helper/provider/SDK/P1/P2/P3 remain unverified. Metadata quota is
+serialized-record policy only, not hard-RSS/profile certification. Existing policy,
+journal/storage primitives, Package/project and actual copier/lifecycle sources unchanged.
+No warnings suppressed, formatter added, remote/release/trial execution performed.
+Production import reservation/event writers and same-Job Retry UI remain unfinished;
+this startup integration does not admit synthetic legacy history or complete the Story.

@@ -167,6 +167,339 @@ final class ProductJobRecoveryTests: XCTestCase, @unchecked Sendable {
     }
   }
 
+  private let journalBound = ProductJobRecovery.maximumImportRecoveryJournalBytes
+  private let journalFacts = ImportRecoveryJournal.ConfirmedInput(
+    expectedSHA256: String(repeating: "a", count: 64), destinationFolderID: UUID())
+
+  // Synthetic owner attestations only: these fixtures close no handles or physical writers.
+  private func initializeJournal(_ identity: ImportIdentity) throws -> ImportRecoveryJournal {
+    let initial = try ImportRecoveryJournal(identity: identity, confirmedInput: journalFacts)
+    let claimed = try initial.recording(.claim(initial.snapshot().current.lineage))
+    try database.adapterWrite {
+      try ProductDatabase.initializeImportRecovery(claimed, maximumBytes: journalBound, in: $0)
+    }
+    return claimed
+  }
+
+  private func appendJournal(_ journal: ImportRecoveryJournal,
+    _ events: [JobRecoveryPolicy.Event]) throws -> ImportRecoveryJournal {
+    var previous = journal
+    for event in events {
+      let next = try previous.recording(event)
+      let bytes = try previous.encoded(maximumBytes: journalBound)
+      _ = try database.adapterWrite {
+        try ProductDatabase.compareAndSwapImportRecovery(expected: bytes, replacement: next,
+          maximumBytes: journalBound, in: $0)
+      }
+      previous = next
+    }
+    return previous
+  }
+
+  private func journalRecord(_ identity: ImportIdentity) throws -> ImportRecoveryRecord {
+    try database.adapterRead {
+      try ProductDatabase.readImportRecovery(identity, maximumBytes: journalBound, in: $0)
+    }
+  }
+
+  private func capturedIDs(_ identity: ImportIdentity) -> [UUID] {
+    [identity.paperID, identity.generation, identity.jobID, identity.attempt, identity.fence,
+      identity.correlation, identity.input, identity.epoch, identity.writer, identity.publication]
+  }
+
+  // Test-only execution-column transition with a genuine replayed Retry capture. Production
+  // Retry reservation is deliberately not implemented or admitted by this startup slice.
+  private func retryJournal(_ journal: ImportRecoveryJournal) throws -> (ImportIdentity, ImportRecoveryJournal) {
+    let old = try journal.currentCapture().identity
+    let next = ImportIdentity(paperID: old.paperID, generation: old.generation, jobID: old.jobID,
+      attempt: UUID(), fence: UUID(), correlation: UUID(), input: UUID(), epoch: old.epoch,
+      writer: UUID(), publication: UUID())
+    let facts = ImportRecoveryJournal.ConfirmedInput(expectedSHA256: nil, destinationFolderID: UUID())
+    let pending = try journal.retrying(identity: next, confirmedInput: facts)
+    let claimed = try pending.recording(.claim(pending.snapshot().current.lineage))
+    let bytes = try claimed.encoded(maximumBytes: journalBound)
+    try database.adapterWrite { db in
+      try db.execute(sql: """
+        UPDATE importJob SET attempt = ?, fence = ?, correlation = ?, input = ?, epoch = ?,
+          writer = ?, publication = ?, state = 'running', failure = NULL, recoveryJournal = ?
+        WHERE id = ? AND recoveryJournal = ?
+        """, arguments: [next.attempt.uuidString, next.fence.uuidString, next.correlation.uuidString,
+          next.input.uuidString, next.epoch.uuidString, next.writer.uuidString,
+          next.publication.uuidString, bytes, next.jobID.uuidString,
+          try journal.encoded(maximumBytes: journalBound)])
+      XCTAssertEqual(db.changesCount, 1)
+      XCTAssertEqual(try ProductDatabase.readImportRecovery(next,
+        maximumBytes: journalBound, in: db).encoded, bytes)
+    }
+    return (next, claimed)
+  }
+
+  func testJournalStartupRetainsOpenWriterDebtAllCapturesAndObservedEpochWithoutRenewal() throws {
+    let identity = try importJob(epoch: UUID())
+    let claimed = try initializeJournal(identity)
+    let lineage = try claimed.snapshot().current.lineage
+    let journal = try appendJournal(claimed, [
+      .acquireWriter(lineage, permit: identity.writer.uuidString),
+      .writerClosure(lineage, permit: identity.writer.uuidString, .open)])
+    let before = try row("importJob", paper: identity.paperID)
+    let beforePaper = try row("paper", paper: identity.paperID)
+    let bytes = try journal.encoded(maximumBytes: journalBound)
+    let observed = UUID()
+    let receipt = try ProductJobRecovery(database: database).recoverStartup(currentEpoch: observed)
+    XCTAssertEqual(receipt.interruptedJobs.first?.capturedEpoch, identity.epoch)
+    let record = try journalRecord(identity)
+    let expected = try journal.recording(.startup(currentEpoch: observed.uuidString))
+    XCTAssertEqual(record.encoded, try expected.encoded(maximumBytes: journalBound))
+    XCTAssertTrue(try record.journal.extends(journal, maximumBytes: journalBound))
+    let snapshot = try record.journal.snapshot()
+    XCTAssertEqual(snapshot, try expected.snapshot())
+    XCTAssertEqual(snapshot.authority.epoch, observed.uuidString)
+    XCTAssertEqual(snapshot.current.lineage, lineage)
+    XCTAssertEqual(snapshot.current.state, .failed(.interrupted))
+    XCTAssertEqual(snapshot.usedPermitIDs, [identity.writer.uuidString])
+    let permit = try XCTUnwrap(snapshot.permits.first)
+    // Existing policy retains .open; epoch change does not synthesize an .unknown attestation.
+    XCTAssertEqual(permit.closure, .open)
+    XCTAssertTrue(permit.revoked)
+    XCTAssertEqual(permit.cleanup, .required)
+    XCTAssertEqual(permit.owner, lineage)
+    XCTAssertEqual(capturedIDs(try record.journal.currentCapture().identity), capturedIDs(identity))
+    XCTAssertEqual(try record.journal.currentCapture().confirmedInput, journalFacts)
+    assertUnchanged(before, try row("importJob", paper: identity.paperID),
+      except: ["state", "failure", "recoveryJournal"])
+    assertUnchanged(beforePaper, try row("paper", paper: identity.paperID), except: ["status", "cleanupDebt"])
+    XCTAssertEqual(try journal.encoded(maximumBytes: journalBound), bytes)
+    let after = try row("importJob", paper: identity.paperID)
+    XCTAssertTrue(try ProductJobRecovery(database: database).recoverStartup(currentEpoch: UUID()).interruptedJobs.isEmpty)
+    assertUnchanged(after, try row("importJob", paper: identity.paperID))
+    database = nil
+    database = try ProductDatabase.open(at: root)
+    XCTAssertEqual(try journalRecord(identity).encoded, record.encoded)
+  }
+
+  func testJournalStartupRetainsPriorResultOlderRetryCapturesAndKnownCleanupDebt() throws {
+    let first = try importJob(epoch: UUID())
+    var journal = try initializeJournal(first)
+    let l = try journal.snapshot().current.lineage
+    let result = JobRecoveryPolicy.Result(id: "synthetic-prior-result-not-physical-proof")
+    journal = try appendJournal(journal, [
+      .acquireWriter(l, permit: first.writer.uuidString),
+      .writerClosure(l, permit: first.writer.uuidString, .closed(.validated(result))),
+      .acquirePublication(l, writer: first.writer.uuidString, permit: first.publication.uuidString),
+      .rename(l, permit: first.publication.uuidString),
+      .renameFinished(l, permit: first.publication.uuidString, succeeded: true),
+      .publish(l, permit: first.publication.uuidString, result),
+      .release(l, permit: first.publication.uuidString)])
+    let (second, retried) = try retryJournal(journal)
+    journal = retried
+    let secondLineage = try journal.snapshot().current.lineage
+    let oldOperation = JobRecoveryPolicy.Operation(id: UUID().uuidString, paper: secondLineage.captured.paper)
+    journal = try appendJournal(journal, [
+      .acquireWriter(secondLineage, permit: second.writer.uuidString),
+      .writerClosure(secondLineage, permit: second.writer.uuidString, .closed(.unvalidated)),
+      .terminate(secondLineage, .failed),
+      .requestCleanup(secondLineage, permit: second.writer.uuidString, operation: oldOperation.id),
+      .cleanupFinished(secondLineage, permit: second.writer.uuidString, operation: oldOperation, succeeded: true),
+      .release(secondLineage, permit: second.writer.uuidString)])
+    let (third, current) = try retryJournal(journal)
+    let currentLineage = try current.snapshot().current.lineage
+    let operation = JobRecoveryPolicy.Operation(id: UUID().uuidString, paper: currentLineage.captured.paper)
+    let authority = currentLineage.captured
+    journal = try appendJournal(current, [
+      .acquireWriter(currentLineage, permit: third.writer.uuidString),
+      .writerClosure(currentLineage, permit: third.writer.uuidString, .closed(.unvalidated)),
+      .authorityChanged(.init(input: authority.input, config: authority.config, paper: authority.paper,
+        epoch: authority.epoch, prerequisitesAvailable: false)),
+      .requestCleanup(currentLineage, permit: third.writer.uuidString, operation: operation.id),
+      .cleanupFinished(currentLineage, permit: third.writer.uuidString, operation: operation, succeeded: false)])
+    let before = try journal.snapshot()
+    let observed = UUID()
+    _ = try ProductJobRecovery(database: database).recoverStartup(currentEpoch: observed)
+    let record = try journalRecord(third)
+    let after = try record.journal.snapshot()
+    XCTAssertEqual(after, try journal.recording(.startup(currentEpoch: observed.uuidString)).snapshot())
+    XCTAssertEqual(Array(after.executions.dropLast()), Array(before.executions.dropLast()))
+    XCTAssertEqual(after.usableResult, before.usableResult)
+    XCTAssertEqual(after.usableResult?.result, result)
+    XCTAssertEqual(after.permits, before.permits)
+    XCTAssertEqual(after.permits.first?.cleanup, .failed)
+    XCTAssertEqual(after.usedOperationIDs, [oldOperation.id, operation.id])
+    XCTAssertEqual(after.usedPermitIDs, before.usedPermitIDs)
+    XCTAssertTrue(try record.journal.extends(journal, maximumBytes: journalBound))
+    XCTAssertEqual(capturedIDs(try record.journal.currentCapture().identity), capturedIDs(third))
+    XCTAssertEqual(try record.journal.currentCapture().confirmedInput, try current.currentCapture().confirmedInput)
+  }
+
+  func testJournalStartupRejectsCorruptNonBlobOversizedAndNonRunningHistoryWithoutFallback() async throws {
+    let lifecycle = try await LocalLibraryLifecycle.open(database: database)
+    let summary = try await StartupSummaryFixture(database: database, lifecycle: lifecycle, epoch: UUID())
+    try summary.reserve()
+    let (paperID, generation) = try extractionPaper()
+    let extraction = try extraction(paperID, generation, epoch: UUID())
+    try database.reserveExtraction(extraction)
+    let imports = try [importJob(epoch: UUID()), importJob(epoch: UUID())]
+      .sorted { $0.paperID.uuidString < $1.paperID.uuidString }
+    let earlier = imports[0], identity = imports[1]
+    _ = try initializeJournal(earlier)
+    let journal = try initializeJournal(identity)
+    let earlierRow = try row("importJob", paper: earlier.paperID)
+    let earlierPaper = try row("paper", paper: earlier.paperID)
+    let extractionRow = try row("extractionAttempt", paper: paperID)
+    let summaryRow = try row("librarySummaryJob", paper: summary.identity.paperID)
+    let pending = try ImportRecoveryJournal(identity: identity, confirmedInput: journalFacts)
+    let terminated = try journal.recording(.terminate(journal.snapshot().current.lineage, .failed))
+    let payloads: [DatabaseValue] = [Data().databaseValue, Data("corrupt".utf8).databaseValue,
+      Data(repeating: 0, count: journalBound + 1).databaseValue, "text-not-blob".databaseValue,
+      42.databaseValue, try pending.encoded(maximumBytes: journalBound).databaseValue,
+      try terminated.encoded(maximumBytes: journalBound).databaseValue]
+    for payload in payloads {
+      try database.adapterWrite {
+        try $0.execute(sql: "UPDATE importJob SET recoveryJournal = ? WHERE id = ?",
+          arguments: [payload, identity.jobID.uuidString])
+      }
+      let before = try row("importJob", paper: identity.paperID)
+      let paper = try row("paper", paper: identity.paperID)
+      XCTAssertThrowsError(try ProductJobRecovery(database: database).recoverStartup(currentEpoch: UUID())) {
+        XCTAssertEqual($0 as? ProductJobRecoveryError, .invalidLineage)
+      }
+      assertUnchanged(before, try row("importJob", paper: identity.paperID))
+      assertUnchanged(paper, try row("paper", paper: identity.paperID))
+      assertUnchanged(earlierRow, try row("importJob", paper: earlier.paperID))
+      assertUnchanged(earlierPaper, try row("paper", paper: earlier.paperID))
+      assertUnchanged(extractionRow, try row("extractionAttempt", paper: paperID))
+      assertUnchanged(summaryRow, try row("librarySummaryJob", paper: summary.identity.paperID))
+    }
+  }
+
+  func testJournalStartupRetainsUnknownWriterWithoutInventingClosure() throws {
+    let identity = try importJob(epoch: UUID())
+    let claimed = try initializeJournal(identity)
+    let lineage = try claimed.snapshot().current.lineage
+    let journal = try appendJournal(claimed, [.acquireWriter(lineage, permit: identity.writer.uuidString)])
+    let observed = UUID()
+    _ = try ProductJobRecovery(database: database).recoverStartup(currentEpoch: observed)
+    let snapshot = try journalRecord(identity).journal.snapshot()
+    XCTAssertEqual(snapshot, try journal.recording(.startup(currentEpoch: observed.uuidString)).snapshot())
+    XCTAssertEqual(snapshot.permits.count, 1)
+    XCTAssertEqual(snapshot.permits.first?.closure, .unknown)
+    XCTAssertEqual(snapshot.permits.first?.cleanup, .required)
+    XCTAssertEqual(snapshot.permits.first?.revoked, true)
+    XCTAssertEqual(snapshot.usedPermitIDs, [identity.writer.uuidString])
+  }
+
+  func testJournalStartupRejectsEveryReboundCapturedUUID() throws {
+    let identity = try importJob(epoch: UUID())
+    _ = try initializeJournal(identity)
+    let values = capturedIDs(identity)
+    let columns = ["paperID", "generation", "id", "attempt", "fence", "correlation", "input", "epoch", "writer", "publication"]
+    for index in columns.indices {
+      let table = index == 1 ? "paper" : "importJob"
+      // paperID is FK-bound: rebind ownership to another genuine owned Paper.
+      let replacement: UUID
+      if index == 0 { replacement = try extractionPaper().0 } else { replacement = UUID() }
+      let scope = index == 1 ? " WHERE id = '\(identity.paperID.uuidString)'" : ""
+      try database.adapterWrite { try $0.execute(sql: "UPDATE \(table) SET \(columns[index]) = ?\(scope)",
+        arguments: [replacement.uuidString]) }
+      let rows = try database.adapterRead { try Row.fetchAll($0, sql: "SELECT * FROM importJob") }
+      let papers = try database.adapterRead { try Row.fetchAll($0, sql: "SELECT * FROM paper ORDER BY id") }
+      XCTAssertThrowsError(try ProductJobRecovery(database: database).recoverStartup(currentEpoch: UUID())) {
+        XCTAssertEqual($0 as? ProductJobRecoveryError, .invalidLineage)
+      }
+      XCTAssertEqual(rows, try database.adapterRead { try Row.fetchAll($0, sql: "SELECT * FROM importJob") })
+      XCTAssertEqual(papers, try database.adapterRead { try Row.fetchAll($0, sql: "SELECT * FROM paper ORDER BY id") })
+      try database.adapterWrite { try $0.execute(sql: "UPDATE \(table) SET \(columns[index]) = ?\(scope)",
+        arguments: [values[index].uuidString]) }
+    }
+  }
+
+  func testJournalCurrentEpochAndTerminalRecordsAreNotReadOrRewritten() throws {
+    let epoch = UUID()
+    let current = try importJob(epoch: epoch)
+    _ = try initializeJournal(current)
+    let terminal = try importJob(epoch: UUID())
+    _ = try initializeJournal(terminal)
+    try database.adapterWrite { db in
+      try db.execute(sql: "UPDATE importJob SET state = 'failed', recoveryJournal = X'00' WHERE id = ?",
+        arguments: [terminal.jobID.uuidString])
+    }
+    let before = try [current, terminal].map { try row("importJob", paper: $0.paperID) }
+    XCTAssertTrue(try ProductJobRecovery(database: database).recoverStartup(currentEpoch: epoch).interruptedJobs.isEmpty)
+    for (index, identity) in [current, terminal].enumerated() {
+      assertUnchanged(before[index], try row("importJob", paper: identity.paperID))
+    }
+  }
+
+  func testIgnoredJournalCASRollsBackEarlierImportsOtherKindsAndTriggerMarker() async throws {
+    try await journalTriggerRollback(corrupt: false)
+  }
+
+  func testCorruptedJournalCASRollsBackEarlierImportsOtherKindsAndTriggerMarker() async throws {
+    try await journalTriggerRollback(corrupt: true)
+  }
+
+  func testJournalFinalReadbackRejectsPostStateCorruptionAndUnrelatedColumnMutation() throws {
+    let identity = try importJob(epoch: UUID())
+    _ = try initializeJournal(identity)
+    let before = try row("importJob", paper: identity.paperID)
+    let paper = try row("paper", paper: identity.paperID)
+    for assignment in ["recoveryJournal = X'00'", "recoveryJournal = NULL", "bytesCopied = bytesCopied + 1"] {
+      try database.adapterWrite { db in
+        try db.execute(sql: """
+          CREATE TRIGGER corruptFinalReadback AFTER UPDATE OF state ON importJob
+          BEGIN UPDATE importJob SET \(assignment) WHERE id = NEW.id; END;
+          """)
+      }
+      XCTAssertThrowsError(try ProductJobRecovery(database: database).recoverStartup(currentEpoch: UUID())) {
+        XCTAssertEqual($0 as? ProductJobRecoveryError, .readbackMismatch)
+      }
+      assertUnchanged(before, try row("importJob", paper: identity.paperID))
+      assertUnchanged(paper, try row("paper", paper: identity.paperID))
+      try database.adapterWrite { try $0.execute(sql: "DROP TRIGGER corruptFinalReadback") }
+    }
+  }
+
+  private func journalTriggerRollback(corrupt: Bool) async throws {
+    let lifecycle = try await LocalLibraryLifecycle.open(database: database)
+    let summary = try await StartupSummaryFixture(database: database, lifecycle: lifecycle, epoch: UUID())
+    try summary.reserve()
+    let (paper, generation) = try extractionPaper()
+    let extraction = try extraction(paper, generation, epoch: UUID())
+    try database.reserveExtraction(extraction)
+    let imports = try [importJob(epoch: UUID()), importJob(epoch: UUID())]
+      .sorted { $0.paperID.uuidString < $1.paperID.uuidString }
+    for identity in imports { _ = try initializeJournal(identity) }
+    let jobs = try imports.map { try row("importJob", paper: $0.paperID) }
+    let papers = try imports.map { try row("paper", paper: $0.paperID) }
+    let extractionRow = try row("extractionAttempt", paper: paper)
+    let summaryRow = try row("librarySummaryJob", paper: summary.identity.paperID)
+    let configuration = try database.providerConfiguration()
+    try database.adapterWrite { db in
+      let action = corrupt
+        ? "UPDATE importJob SET recoveryJournal = X'00' WHERE id = NEW.id;"
+        : "SELECT RAISE(IGNORE);"
+      try db.execute(sql: """
+        CREATE TRIGGER refuseJournal \(corrupt ? "AFTER" : "BEFORE") UPDATE OF recoveryJournal ON importJob
+        WHEN NEW.id = '\(imports[1].jobID.uuidString)'
+        BEGIN
+          UPDATE providerConfig SET generation = generation + 1;
+          UPDATE extractionAttempt SET state = 'failed', failure = 'trigger-marker';
+          UPDATE librarySummaryJob SET state = 'failed', failure = 'trigger-marker';
+          \(action)
+        END;
+        """)
+    }
+    XCTAssertThrowsError(try ProductJobRecovery(database: database).recoverStartup(currentEpoch: lifecycle.epoch)) {
+      XCTAssertEqual($0 as? ProductJobRecoveryError, corrupt ? .readbackMismatch : .recoveryConflict)
+    }
+    for (index, identity) in imports.enumerated() {
+      assertUnchanged(jobs[index], try row("importJob", paper: identity.paperID))
+      assertUnchanged(papers[index], try row("paper", paper: identity.paperID))
+    }
+    assertUnchanged(extractionRow, try row("extractionAttempt", paper: paper))
+    assertUnchanged(summaryRow, try row("librarySummaryJob", paper: summary.identity.paperID))
+    XCTAssertEqual(try database.providerConfiguration().generation, configuration.generation)
+  }
+
   func testSummaryRecoveryRetainsCurrentTerminalFrozenLineageAndVisibleResult() async throws {
     let lifecycle = try await LocalLibraryLifecycle.open(database: database)
     let saved = try await StartupSummaryFixture(database: database, lifecycle: lifecycle, epoch: UUID())
@@ -221,6 +554,7 @@ final class ProductJobRecoveryTests: XCTestCase, @unchecked Sendable {
     let summary = try await StartupSummaryFixture(database: database, lifecycle: lifecycle, epoch: UUID())
     try summary.reserve()
     let oldImport = try importJob(epoch: UUID())
+    _ = try initializeJournal(oldImport)
     let oldExtraction = ExtractionIdentity(paperID: summary.identity.paperID,
       generation: summary.identity.generation, pdfSHA256: summary.identity.pdfSHA256,
       pdfReference: "papers/\(summary.identity.paperID.uuidString)/document.pdf",
@@ -409,6 +743,7 @@ final class ProductJobRecoveryTests: XCTestCase, @unchecked Sendable {
 
   func testExtractionWriteFailureRollsBackEarlierImportRecovery() throws {
     let identity = try importJob(epoch: UUID())
+    _ = try initializeJournal(identity)
     let (paper, generation) = try extractionPaper()
     let next = try extraction(paper, generation, epoch: UUID())
     try database.reserveExtraction(next)
@@ -446,6 +781,7 @@ final class ProductJobRecoveryTests: XCTestCase, @unchecked Sendable {
 
   func testMalformedDurableLineageRollsBackAllKinds() throws {
     let identity = try importJob(epoch: UUID())
+    _ = try initializeJournal(identity)
     let (paper, generation) = try extractionPaper()
     let next = try extraction(paper, generation, epoch: UUID())
     try database.reserveExtraction(next)
