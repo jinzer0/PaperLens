@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import SwiftUI
 import XCTest
 #if SWIFT_PACKAGE
 import ProviderRequest
@@ -96,6 +97,69 @@ final class ProviderSettingsTests: XCTestCase {
     try FileManager.default.removeItem(at: root)
   }
 
+  func testKeyBindingInvalidatesSharedCandidateBeforeChangedEntryWriteAndRejectsLateSuccess() async throws {
+    let f = try fixture()
+    let old = try XCTUnwrap(f.service.activeSelection)
+    let lease = try f.service.acquireLease()
+    var entry = "fixture-binding-candidate"
+    var phasesAtWrite: [APIKeyConnectionPhase] = []
+    let binding = providerSettingsKeyBinding(Binding(get: { entry }, set: { next in
+      phasesAtWrite.append(f.service.phase)
+      XCTAssertEqual(f.service.activeSelection, old)
+      XCTAssertEqual(f.selector.commits, 0)
+      entry = next
+    }), service: f.service)
+    f.service.reconnect(key: entry)
+    await waitUntil { f.transport.count == 1 }
+    binding.wrappedValue = entry // An unchanged native assignment is not an edit.
+    XCTAssertEqual(phasesAtWrite, [.probing])
+    XCTAssertTrue(f.service.isTesting)
+    binding.wrappedValue = "fixture-binding-edited"
+    XCTAssertEqual(phasesAtWrite.count, 2)
+    XCTAssertNotEqual(phasesAtWrite.last, .probing)
+    XCTAssertFalse(f.service.isTesting)
+    XCTAssertEqual(binding.wrappedValue, "fixture-binding-edited")
+    let editedPhase = f.service.phase
+    try f.transport.complete(0)
+    await waitUntil {
+      (try? FileManager.default.contentsOfDirectory(atPath: f.root.appendingPathComponent("slots").path).count) == 1
+    }
+    XCTAssertEqual(f.service.phase, editedPhase)
+    XCTAssertEqual(f.service.activeSelection, old)
+    XCTAssertEqual(f.selector.selection, old)
+    XCTAssertEqual(f.selector.commits, 0)
+    XCTAssertEqual(f.transport.count, 1) // Entry edits never send an automatic probe.
+    XCTAssertTrue(f.service.eligibleForEntry)
+    XCTAssertTrue(try f.service.mayPublish(lease))
+    XCTAssertEqual(try f.slots.read(old.slotID), "fixture-last-good")
+    try f.service.releaseAfterTermination(lease)
+    try removeFixture(f.root)
+  }
+
+  func testKeyBindingEditWithoutLastGoodCannotActivateLateSyntheticCandidate() async throws {
+    let f = try fixture(lastGood: false)
+    var entry = "fixture-unselected-candidate"
+    let binding = providerSettingsKeyBinding(Binding(get: { entry }, set: { next in
+      XCTAssertFalse(f.service.isTesting)
+      entry = next
+    }), service: f.service)
+    f.service.reconnect(key: entry)
+    await waitUntil { f.transport.count == 1 }
+    binding.wrappedValue = "fixture-unselected-edited"
+    let editedPhase = f.service.phase
+    try f.transport.complete(0)
+    await waitUntil {
+      (try? FileManager.default.contentsOfDirectory(atPath: f.root.appendingPathComponent("slots").path).count) == 0
+    }
+    XCTAssertEqual(f.service.phase, editedPhase)
+    XCTAssertNil(f.service.activeSelection)
+    XCTAssertNil(f.selector.selection)
+    XCTAssertEqual(f.selector.commits, 0)
+    XCTAssertFalse(f.service.eligibleForEntry)
+    XCTAssertEqual(f.transport.count, 1)
+    try removeFixture(f.root)
+  }
+
   func testFailedReplacementPreservesLastGoodAndExplicitRetryPromotesNewGeneration() async throws {
     let f = try fixture()
     let old = try XCTUnwrap(f.service.activeSelection)
@@ -146,6 +210,11 @@ final class ProviderSettingsTests: XCTestCase {
     f.service.reconnect(key: "fixture-cancelled")
     await waitUntil { f.transport.count == 2 }
     f.service.cancel()
+    XCTAssertEqual(f.service.phase, .failed(.cancelled))
+    var entry = "fixture-cancelled"
+    let binding = providerSettingsKeyBinding(Binding(get: { entry }, set: { entry = $0 }),
+      service: f.service)
+    binding.wrappedValue = "fixture-edit-after-cancel"
     XCTAssertEqual(f.service.phase, .failed(.cancelled))
     try f.transport.complete(1)
     try f.transport.complete(0)
@@ -214,7 +283,10 @@ final class ProviderSettingsTests: XCTestCase {
     }
     XCTAssertEqual(f.service.phase, .failed(.cleanupBlocked))
     XCTAssertFalse(f.service.eligibleForEntry)
-    f.service.candidateEdited()
+    var entry = "fixture-replacement"
+    let binding = providerSettingsKeyBinding(Binding(get: { entry }, set: { entry = $0 }),
+      service: f.service)
+    binding.wrappedValue = "fixture-edit-with-cleanup-debt"
     XCTAssertEqual(f.service.phase, .failed(.cleanupBlocked))
     XCTAssertTrue(FileManager.default.fileExists(atPath: oldURL.path))
     XCTAssertThrowsError(try f.service.acquireLease())

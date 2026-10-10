@@ -1,6 +1,21 @@
 import SwiftUI
 
 @MainActor
+func providerSettingsKeyBinding(
+  _ entry: Binding<String>, service: ProviderSettingsService
+) -> Binding<String> {
+  Binding(
+    get: { entry.wrappedValue },
+    set: { value in
+      if value != entry.wrappedValue {
+        service.candidateEdited()
+      }
+      entry.wrappedValue = value
+    }
+  )
+}
+
+@MainActor
 public struct ProviderSettingsView: View {
   @ObservedObject private var service: ProviderSettingsService
   @State private var key = ""
@@ -25,12 +40,11 @@ public struct ProviderSettingsView: View {
         Text("모델: \(service.model)")
         Text("새 키로 실제 생성 요청을 보내 연결을 확인합니다. API 사용 요금이 발생할 수 있습니다.")
           .font(.callout)
-        SecureField("새 API 키", text: $key)
+        SecureField("새 API 키", text: providerSettingsKeyBinding($key, service: service))
           .textFieldStyle(.roundedBorder)
           .focused($keyFocused)
           .accessibilityLabel("재연결할 OpenAI API 키")
           .onSubmit { submit() }
-          .onChange(of: key) { _, _ in service.candidateEdited() }
         HStack {
           Button(actionTitle) { submit() }
             .disabled(key.isEmpty || service.isTesting)

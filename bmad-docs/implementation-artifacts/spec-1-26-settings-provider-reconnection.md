@@ -67,3 +67,24 @@ does not relax profile/storage/security policy or authorize live/paid/SDK trials
 Controlled Binding/source tests are not observed SwiftUI interleaving, visible secure
 entry/keyboard/VoiceOver/focus/authenticated generation/P3/P6 or Story acceptance.
 Full Epic objective remains active0/26; no remote or protected gate promotion.
+
+### Native key binding local receipt
+
+Preimplementation `864866bac5825b4a16da05e9f86b254ddd9d6674`; executor134 implemented
+the production Binding and removed deferred onChange in the exact view file. Parent
+tested the actual helper against the existing shared Native owner/owned private slots/
+test selector/held synthetic transport. Underlying unchanged-value setter sees probing;
+changed-value setter sees already invalidated owner before entry write. Late synthetic
+success with/without last-good performs no CAS or automatic new probe; old held lease
+and selection retained where applicable. Actual helper edits preserve terminal cancel
+and cleanupBlocked/debt without permission repair or swallowed release errors.
+Focused18/zero `artifact://1474`; isolated Product451/zero `artifact://1478`;
+fresh unsigned native-bd BUILD SUCCEEDED `artifact://1479`; independent135 SOURCE-ONLY
+CLEAR / APPROVE explicitly supersedes133 HIGH/P1 BLOCK / REQUEST CHANGES for this delta,
+retaining the original source-level finding, not rewriting it as visible UI proof.
+Two-source diff SHA256:
+`e03b373c4e2798e83ef1825e9ddfadd362ea281b74f25e6343cbc2e252b6bb68`.
+Slot-count waits are cleanup observations, not independent transport termination/drain
+ACK; pre-completion slot retention not separately confirmed. Controlled Binding and
+synthetic response tests do not prove SwiftUI interleaving, authentication, SDK/P3/P6,
+VoiceOver/focus or Story. No protected/live/remote execution;0/26/Story/Epic false.

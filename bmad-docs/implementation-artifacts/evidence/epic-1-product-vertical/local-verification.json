@@ -30,14 +30,15 @@
     "Native saved annotation reveal rejects missing PDFKit rectangle fragments before replacing overlay or navigating; owned windowless multi-page/reentry regressions pass, not visible UI or canonical AI geometry certification",
     "Actual ReaderPresentation native search preserves discard after synchronous PDFKit selection clearing and fences stale results/errors; owned native search and public-notification regressions pass, not visible UI or P6 certification",
     "Next-match navigation requires current request/document plus fresh actual session validation after selection callbacks; owned newer-query preserves native page and actual-close preserves detach, not rendered navigation certification",
-    "Organization editor mounts distinct Korean saving/current-value-revalidation native progress cues from existing busy/failed state; semantic branch tests/source mount verified, rendered accessibility delivery unverified"
+    "Organization editor mounts distinct Korean saving/current-value-revalidation native progress cues from existing busy/failed state; semantic branch tests/source mount verified, rendered accessibility delivery unverified",
+    "Settings SecureField uses synchronous changed-entry Binding invalidation before forwarding key writes; actual helper/owned shared Native owner tests reject late synthetic success, not observed SwiftUI interleaving or authentication"
   ],
   "verification": {
     "productUnion": {
       "command": "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --parallel --num-workers 1 --filter ProductTests",
-      "tests": 449,
+      "tests": 451,
       "failures": 0,
-      "output": "artifact://1470",
+      "output": "artifact://1478",
       "evidence": "Real GRDB transactions, owned synthetic files and actual local FIFO IO/close/peer metadata/EPIPE; mocked provider/HTTP transport and synthetic windowless PDFKit conversions. Not authenticated provider, app UI, SDK producer or PDFium execution."
     },
     "nativeCompilation": {
@@ -45,11 +46,11 @@
       "configuration": "Release",
       "architecture": "arm64",
       "minimumOS": "15.0",
-      "derivedData": ".build/product-native-compile-20261010-bc",
+      "derivedData": ".build/product-native-compile-20261010-bd",
       "codeSigningAllowed": false,
       "result": "BUILD SUCCEEDED",
-      "rawOutput": "artifact://1471",
-      "output": "artifact://1471",
+      "rawOutput": "artifact://1479",
+      "output": "artifact://1479",
       "applicationAndHelperBinariesExecuted": false,
       "warnings": "AppIntents metadata skipped, PDFium debug-map duplicate/missing-symbol warnings and an unnecessary-await Swift warning remain; no warning suppression or debug-symbol repair claimed."
     },
@@ -303,6 +304,26 @@
     "runtimeParsingOrCalibrationVerified": false,
     "helperExecuted": false,
     "storyAccepted": false
+  },
+  "synchronousSettingsKeyEditBinding": {
+    "preImplementationSpecificationCommit": "864866bac5825b4a16da05e9f86b254ddd9d6674",
+    "initialAssessment": "agent://133-SettingsEditBoundary SUPPORTED HIGH/P1 BLOCK / REQUEST CHANGES: transient key writes preceded deferred edit invalidation; retained as source-level finding, not observed UI interleaving",
+    "implementation": "agent://134-SettingsKeyBinding: exact one-file view correction; parent tests/verification/evidence",
+    "sourceScope": "ProviderSettingsView.swift and existing ProviderSettingsTests.swift; unchanged ProviderSettingsService/Native owner/selector/storage/authorization/lease boundaries",
+    "sourceDiffSha256": "e03b373c4e2798e83ef1825e9ddfadd362ea281b74f25e6343cbc2e252b6bb68",
+    "behavior": "Production-used MainActor Binding forwards original getter and unchanged-value writes. Changed values synchronously call same service candidateEdited before forwarding transient key write. SecureField consumes helper; deferred onChange removed; existing State remains sole entry owner. No new controller/secret mirror/selector/intent or authentication policy.",
+    "focused": {"tests": 18, "failures": 0, "output": "artifact://1474"},
+    "fullProduct": {"tests": 451, "failures": 0, "output": "artifact://1478", "processMode": "--parallel --num-workers 1; every case invoked without skip or irreversible-debt quota reset"},
+    "nativeCompilation": {"result": "BUILD SUCCEEDED", "output": "artifact://1479", "derivedData": ".build/product-native-compile-20261010-bd", "codeSigningAllowed": false},
+    "review": "agent://135-SettingsBindingReview SOURCE-ONLY CLEAR / APPROVE; explicitly supersedes initial133 finding for this exact resolved delta while retaining its report",
+    "controlledCoverage": "Actual production helper with existing shared NativeAPIKeyConnection, owned private slots, test selector and held synthetic correlated transport. Underlying setter sees probing for identical value and invalidated owner before changed write. Late synthetic success with/without last-good: no CAS/no automatic probe; current selection/availability and old held lease/mayPublish preserved where applicable. Existing terminal cancellation and cleanupBlocked tests route through helper, retaining error/debt and release errors without permission repair.",
+    "limits": ["Slot-count waits are cleanup observations, not independent transport termination/drain ACK; pre-completion slot retention not separately confirmed", "Controlled Binding ordering is not observed SwiftUI interleaving or visible secure-entry/keyboard/VoiceOver/focus", "Synthetic evidence tags never prove authentication, SDK/profile P3/P6 or Story"],
+    "visibleNativeInteractionVerified": false,
+    "applicationAndHelperBinariesExecuted": false,
+    "SDKProviderRendererExecuted": false,
+    "authenticatedGenerationVerified": false,
+    "storyAccepted": false,
+    "epicAccepted": false
   },
   "organizationPendingActivityPresentation": {
     "preImplementationSpecificationCommit": "76c9fe9ee1f03afc77450d2e3bc903085ae5efd6",
