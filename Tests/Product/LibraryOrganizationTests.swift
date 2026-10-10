@@ -64,7 +64,7 @@ final class LibraryOrganizationTests: XCTestCase {
     let saga = try XCTUnwrap(database.beginDeletion(a.0))
     XCTAssertThrowsError(try database.updatePaperOrganization(paperID: a.0, generation: a.1, expected: value, value: .init()))
     XCTAssertThrowsError(try database.admitOrganizationOpen(paperID: a.0, generation: a.1))
-    try database.deletionFailed(a.0, saga: saga, reason: "fixtureFailure")
+    try database.deletionFailed(a.0, saga: saga, reason: "deletionIncomplete")
     let failed = try XCTUnwrap(database.organizationSnapshot(filter: .init()).papers.first(where: { $0.id == a.0 }))
     XCTAssertEqual(failed.status, .deletionFailed); XCTAssertFalse(failed.readable)
     let restarted = try ProductDatabase.open(at: database.root)

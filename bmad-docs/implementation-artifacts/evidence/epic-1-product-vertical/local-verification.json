@@ -28,9 +28,9 @@
   "verification": {
     "productUnion": {
       "command": "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --filter ProductTests",
-      "tests": 363,
+      "tests": 370,
       "failures": 0,
-      "output": "artifact://1165",
+      "output": "artifact://1185",
       "evidence": "Real GRDB transactions, owned synthetic files and actual local FIFO IO/close/peer metadata/EPIPE; mocked provider/HTTP transport and synthetic windowless PDFKit conversions. Not authenticated provider, app UI, SDK producer or PDFium execution."
     },
     "nativeCompilation": {
@@ -38,11 +38,11 @@
       "configuration": "Release",
       "architecture": "arm64",
       "minimumOS": "15.0",
-      "derivedData": ".build/product-native-compile-20261010-ah",
+      "derivedData": ".build/product-native-compile-20261010-ai",
       "codeSigningAllowed": false,
       "result": "BUILD SUCCEEDED",
-      "rawOutput": "artifact://1167",
-      "output": "artifact://1167",
+      "rawOutput": "artifact://1182",
+      "output": "artifact://1182",
       "applicationAndHelperBinariesExecuted": false,
       "warnings": "AppIntents metadata skipped, PDFium debug-map duplicate/missing-symbol warnings and an unnecessary-await Swift warning remain; no warning suppression or debug-symbol repair claimed."
     },
@@ -295,6 +295,25 @@
     "visibleUIOrAccessibilityVerified": false,
     "runtimeParsingOrCalibrationVerified": false,
     "helperExecuted": false,
+    "storyAccepted": false
+  },
+  "actualDeletionDiagnosticOwnership": {
+    "specificationCommit": "e71cfe9",
+    "sourceDiffAgainstSpecificationSha256": "a2624026a45da763ebf189283990c5fcbd99b99c3a076c7a2e546c147366c837",
+    "sourceScope": ["PaperLensApp/Infrastructure/ProductDatabase.swift", "Tests/Product/LocalLibraryLifecycleTests.swift", "Tests/Product/LibraryOrganizationTests.swift"],
+    "focusedTests": {"tests": 85, "failures": 0, "newLifecycleTests": 7, "output": "artifact://1176"},
+    "correctedAffectedCallerVerification": {"tests": 67, "failures": 0, "output": "artifact://1184"},
+    "preservedFailedInitialUnion": {"tests": 370, "failures": 1, "output": "artifact://1179", "cause": "Existing organization fixture used fixtureFailure, correctly rejected by the newly explicit fixed diagnostic codes; parent changed only that fixture caller to deletionIncomplete, preserving validation."},
+    "productUnion": {"tests": 370, "failures": 0, "output": "artifact://1185"},
+    "nativeCompilation": {"result": "BUILD SUCCEEDED", "output": "artifact://1182", "derivedData": ".build/product-native-compile-20261010-ai", "codeSigningAllowed": false, "applicationAndHelperBinariesExecuted": false},
+    "review": "agent://96-DeletionDiagnosticIntegrity: SOURCE-ONLY CLEAR / APPROVE, three-file source/test/Spec scope; parent separately repaired one affected fixture argument",
+    "evidence": "Actual existing deletion failure now stores fixed public saga reason on checked nullable Paper column, preserves entire import Job/cause/history/progress/lineage and saga, uses truthful diagnostic selection without fallback, clears reason on same-saga retry and contentless tombstone, and verifies full rows/affected counts. Owned GRDB/reopened actual lifecycle list and ignore/corrupt trigger rollback exercised.",
+    "actualExistingDeletionPathChangedAndVerified": true,
+    "actualAgentPurgeOrPhysicalClosureCertified": false,
+    "lateProducerAbortAdmissionRelaxed": false,
+    "productionJournaledLifecycleCutoverActivated": false,
+    "sameJobRetryUIActivated": false,
+    "helperOrRendererExecuted": false,
     "storyAccepted": false
   },
   "atomicJournaledReservationAndPublication": {

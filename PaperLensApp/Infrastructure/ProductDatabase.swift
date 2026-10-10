@@ -106,6 +106,13 @@ public final class ProductDatabase: @unchecked Sendable {
     Self.registerReaderMetadataMigrations(in: &migrator)
     Self.registerOrganizationMigrations(in: &migrator)
     Self.registerImportRecoveryMigrations(in: &migrator)
+    migrator.registerMigration("localLibraryDeletionDiagnosticV1") { db in
+      try db.execute(sql: """
+        ALTER TABLE paper ADD COLUMN deletionFailure TEXT
+          CHECK (deletionFailure IS NULL OR deletionFailure IN
+            ('agentPurgeUnavailable', 'agentClosureUnproved', 'deletionIncomplete'))
+        """)
+    }
     try migrator.migrate(queue)
     try fm.setAttributes([.posixPermissions: 0o600],
       ofItemAtPath: root.appendingPathComponent("library.sqlite").path)
@@ -152,7 +159,9 @@ public final class ProductDatabase: @unchecked Sendable {
   public func libraryRecords() throws -> [LibraryRecord] {
     try queue.read { db in
       try Row.fetchAll(db, sql: """
-        SELECT paper.id, title, status, cleanupDebt, bytesCopied, failure
+        SELECT paper.id, title, status, cleanupDebt, bytesCopied,
+          CASE WHEN status IN ('deleting', 'deletionFailed') THEN paper.deletionFailure
+            ELSE importJob.failure END AS failure
         FROM paper LEFT JOIN importJob ON importJob.paperID = paper.id
         WHERE status != 'tombstone' ORDER BY createdAt DESC, paper.id
         """).map { row in
@@ -300,43 +309,137 @@ public final class ProductDatabase: @unchecked Sendable {
 
   func beginDeletion(_ paperID: UUID) throws -> UUID? {
     try queue.write { db in
-      guard let row = try Row.fetchOne(db, sql: "SELECT status, deletionID FROM paper WHERE id = ?",
+      guard let row = try Row.fetchOne(db, sql: "SELECT * FROM paper WHERE id = ?",
         arguments: [paperID.uuidString]) else { throw ProductDatabaseError.invalidRecord }
-      let status: String = row["status"]
-      if status == "tombstone" { return nil }
+      guard let status = String.fromDatabaseValue(row["status"]),
+        let state = LibraryStatus(rawValue: status),
+        let generation = String.fromDatabaseValue(row["generation"]), !generation.isEmpty else {
+        throw ProductDatabaseError.invalidRecord
+      }
+      if state == .tombstone { return nil }
       let existing: String? = row["deletionID"]
-      let saga = existing.flatMap(UUID.init(uuidString:)) ?? UUID()
+      let saga: UUID
+      if let existing {
+        guard let parsed = UUID(uuidString: existing), parsed.uuidString == existing else {
+          throw ProductDatabaseError.invalidRecord
+        }
+        saga = parsed
+      } else {
+        guard state != .deleting, state != .deletionFailed else { throw ProductDatabaseError.invalidRecord }
+        saga = UUID()
+      }
+      let jobs = try Self.deletionJobs(paperID, in: db)
       try db.execute(sql: """
-        UPDATE paper SET status = 'deleting', deletionID = ?, pdfReference = NULL WHERE id = ?
+        UPDATE paper SET status = 'deleting', deletionID = ?, pdfReference = NULL,
+          deletionFailure = NULL WHERE id = ?
         """, arguments: [saga.uuidString, paperID.uuidString])
+      guard db.changesCount == 1 else { throw ProductDatabaseError.invalidRecord }
       try db.execute(sql: """
         UPDATE importJob SET state = 'failed', failure = 'paperDeleting'
         WHERE paperID = ? AND state = 'running'
         """, arguments: [paperID.uuidString])
+      let running = jobs.filter { String.fromDatabaseValue($0["state"]) == "running" }.count
+      guard db.changesCount == running,
+        let after = try Row.fetchOne(db, sql: "SELECT * FROM paper WHERE id = ?",
+          arguments: [paperID.uuidString]),
+        Self.sameDeletionRow(row, after, except: ["status", "deletionID", "pdfReference", "deletionFailure"]),
+        String.fromDatabaseValue(after["status"]) == "deleting",
+        String.fromDatabaseValue(after["deletionID"]) == saga.uuidString,
+        after["pdfReference"] == DatabaseValue.null, after["deletionFailure"] == DatabaseValue.null else {
+        throw ProductDatabaseError.invalidRecord
+      }
+      let readback = try Self.deletionJobs(paperID, in: db)
+      guard jobs.count == readback.count else { throw ProductDatabaseError.invalidRecord }
+      for (before, after) in zip(jobs, readback) {
+        if String.fromDatabaseValue(before["state"]) == "running" {
+          guard Self.sameDeletionRow(before, after, except: ["state", "failure"]),
+            String.fromDatabaseValue(after["state"]) == "failed",
+            String.fromDatabaseValue(after["failure"]) == "paperDeleting" else {
+            throw ProductDatabaseError.invalidRecord
+          }
+        } else if !Self.sameDeletionRow(before, after) { throw ProductDatabaseError.invalidRecord }
+      }
       return saga
     }
   }
 
   func deletionFailed(_ paperID: UUID, saga: UUID, reason: String) throws {
+    guard ["agentPurgeUnavailable", "agentClosureUnproved", "deletionIncomplete"].contains(reason) else {
+      throw ProductDatabaseError.invalidRecord
+    }
     try queue.write { db in
+      let before = try Self.deletingPaper(paperID, saga: saga, in: db)
+      let jobs = try Self.deletionJobs(paperID, in: db)
       try db.execute(sql: """
-        UPDATE paper SET status = 'deletionFailed', cleanupDebt = 1
+        UPDATE paper SET status = 'deletionFailed', cleanupDebt = 1, deletionFailure = ?
         WHERE id = ? AND deletionID = ? AND status = 'deleting'
-        """, arguments: [paperID.uuidString, saga.uuidString])
-      try db.execute(sql: "UPDATE importJob SET failure = ? WHERE paperID = ?",
-        arguments: [reason, paperID.uuidString])
+        """, arguments: [reason, paperID.uuidString, saga.uuidString])
+      guard db.changesCount == 1,
+        let after = try Row.fetchOne(db, sql: "SELECT * FROM paper WHERE id = ?",
+          arguments: [paperID.uuidString]),
+        Self.sameDeletionRow(before, after, except: ["status", "cleanupDebt", "deletionFailure"]),
+        String.fromDatabaseValue(after["status"]) == "deletionFailed",
+        Int64.fromDatabaseValue(after["cleanupDebt"]) == 1,
+        String.fromDatabaseValue(after["deletionFailure"]) == reason,
+        Self.sameDeletionJobs(jobs, try Self.deletionJobs(paperID, in: db)) else {
+        throw ProductDatabaseError.invalidRecord
+      }
     }
   }
 
   func finalizeDeletion(_ paperID: UUID, saga: UUID) throws {
     try queue.write { db in
+      let before = try Self.deletingPaper(paperID, saga: saga, in: db)
+      let jobs = try Self.deletionJobs(paperID, in: db)
       try db.execute(sql: """
-        UPDATE paper SET status = 'tombstone', title = '', pdfReference = NULL, pdfSHA256 = NULL, cleanupDebt = 0
+        UPDATE paper SET status = 'tombstone', title = '', pdfReference = NULL, pdfSHA256 = NULL,
+          cleanupDebt = 0, deletionFailure = NULL
         WHERE id = ? AND deletionID = ? AND status = 'deleting'
         """, arguments: [paperID.uuidString, saga.uuidString])
       guard db.changesCount == 1 else { throw ProductDatabaseError.invalidRecord }
       try db.execute(sql: "DELETE FROM importJob WHERE paperID = ?", arguments: [paperID.uuidString])
+      guard db.changesCount == jobs.count,
+        try Self.deletionJobs(paperID, in: db).isEmpty,
+        let after = try Row.fetchOne(db, sql: "SELECT * FROM paper WHERE id = ?",
+          arguments: [paperID.uuidString]),
+        Self.sameDeletionRow(before, after,
+          except: ["status", "title", "pdfReference", "pdfSHA256", "cleanupDebt", "deletionFailure"]),
+        String.fromDatabaseValue(after["status"]) == "tombstone",
+        String.fromDatabaseValue(after["title"]) == "",
+        Int64.fromDatabaseValue(after["cleanupDebt"]) == 0,
+        after["pdfReference"] == DatabaseValue.null, after["pdfSHA256"] == DatabaseValue.null,
+        after["deletionFailure"] == DatabaseValue.null else { throw ProductDatabaseError.invalidRecord }
     }
+  }
+
+  private static func deletingPaper(_ paperID: UUID, saga: UUID, in db: Database) throws -> Row {
+    guard let row = try Row.fetchOne(db, sql: "SELECT * FROM paper WHERE id = ?",
+      arguments: [paperID.uuidString]),
+      String.fromDatabaseValue(row["status"]) == "deleting",
+      String.fromDatabaseValue(row["deletionID"]) == saga.uuidString,
+      let generation = String.fromDatabaseValue(row["generation"]), !generation.isEmpty else {
+      throw ProductDatabaseError.invalidRecord
+    }
+    return row
+  }
+
+  private static func deletionJobs(_ paperID: UUID, in db: Database) throws -> [Row] {
+    try Row.fetchAll(db, sql: "SELECT * FROM importJob WHERE paperID = ? ORDER BY id",
+      arguments: [paperID.uuidString])
+  }
+
+  private static func sameDeletionRow(_ before: Row, _ after: Row,
+    except ignored: Set<String> = []) -> Bool {
+    guard Array(before.columnNames) == Array(after.columnNames) else { return false }
+    return before.columnNames.filter { !ignored.contains($0) }.allSatisfy { name in
+      let old: DatabaseValue = before[name]
+      let new: DatabaseValue = after[name]
+      return old.storage == new.storage
+    }
+  }
+
+  private static func sameDeletionJobs(_ before: [Row], _ after: [Row]) -> Bool {
+    before.count == after.count && zip(before, after).allSatisfy { sameDeletionRow($0.0, $0.1) }
   }
 
 }

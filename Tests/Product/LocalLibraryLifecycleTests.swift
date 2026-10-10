@@ -645,6 +645,7 @@ final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
     let db = try ProductDatabase.open(at: root)
     let lifecycle = try await LocalLibraryLifecycle.open(database: db)
     let id = try await lifecycle.importPDF(from: source())
+    let before = try deletionRows(db, id)
     do {
       try await lifecycle.delete(paperID: id)
       XCTFail("Absent Agent integration cannot prove deletion")
@@ -654,6 +655,11 @@ final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
     XCTAssertEqual(records.first?.failure, "agentPurgeUnavailable")
     XCTAssertEqual(records.first?.cleanupDebt, true)
     XCTAssertTrue(FileManager.default.fileExists(atPath: namespace(id).path))
+    let after = try deletionRows(db, id)
+    assertDeletionRowsEqual([before[1]], [after[1]])
+    let restarted = try await LocalLibraryLifecycle.open(database: ProductDatabase.open(at: root))
+    let reopened = try await restarted.list()
+    XCTAssertEqual(reopened, records)
   }
 
   func testFailedPurgeRetriesSameSagaAfterRestartWithoutResurrection() async throws {
@@ -829,6 +835,286 @@ final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
     XCTAssertTrue(FileManager.default.fileExists(atPath: stage.path))
     XCTAssertFalse(FileManager.default.fileExists(atPath: final.path))
     XCTAssertEqual(try db.libraryRecords().first?.status, .deleting)
+  }
+
+  private func deletionRows(_ db: ProductDatabase, _ id: UUID) throws -> [Row] {
+    try db.adapterRead { sql in
+      [try XCTUnwrap(Row.fetchOne(sql, sql: "SELECT * FROM paper WHERE id = ?",
+        arguments: [id.uuidString]))] + (try Row.fetchAll(sql,
+          sql: "SELECT * FROM importJob WHERE paperID = ? ORDER BY id", arguments: [id.uuidString]))
+    }
+  }
+
+  private func assertDeletionRowsEqual(_ before: [Row], _ after: [Row],
+    paperExcept ignored: Set<String> = [], file: StaticString = #filePath, line: UInt = #line) {
+    XCTAssertEqual(before.count, after.count, file: file, line: line)
+    for (index, pair) in zip(before, after).enumerated() {
+      XCTAssertEqual(Array(pair.0.columnNames), Array(pair.1.columnNames), file: file, line: line)
+      for name in pair.0.columnNames where index != 0 || !ignored.contains(name) {
+        let old: DatabaseValue = pair.0[name]
+        let new: DatabaseValue = pair.1[name]
+        XCTAssertEqual(old.storage, new.storage, "row \(index) column \(name)", file: file, line: line)
+      }
+    }
+  }
+
+  func testActualAndReopenedLifecycleListSeparatesFailedImportAndDeletionCauses() async throws {
+    let db = try ProductDatabase.open(at: root)
+    let current = identity()
+    try db.reserveImport(current, title: "owned failed import deletion")
+    try db.recordProgress(current, bytes: 9)
+    try db.failImport(current, failure: "originalImportCause", cleanupDebt: false)
+    let lifecycle = try await LocalLibraryLifecycle.open(database: db)
+    let imports = try await lifecycle.list()
+    XCTAssertEqual(imports.first?.status, .importFailed)
+    XCTAssertEqual(imports.first?.failure, "originalImportCause")
+    let before = try deletionRows(db, current.paperID)
+    do {
+      try await lifecycle.delete(paperID: current.paperID)
+      XCTFail("Absent Agent integration cannot prove deletion")
+    } catch { XCTAssertEqual(error as? LocalLibraryError, .agentPurgeUnavailable) }
+    let records = try await lifecycle.list()
+    XCTAssertEqual(records.first?.status, .deletionFailed)
+    XCTAssertEqual(records.first?.failure, "agentPurgeUnavailable")
+    assertDeletionRowsEqual([before[1]], [try deletionRows(db, current.paperID)[1]])
+    let restarted = try await LocalLibraryLifecycle.open(database: ProductDatabase.open(at: root))
+    let reopened = try await restarted.list()
+    XCTAssertEqual(reopened, records)
+  }
+
+  func testDeletionDiagnosticPreservesWholeSucceededFailedAndInterruptedJobRows() throws {
+    let db = try ProductDatabase.open(at: root)
+    for (index, terminal) in ["succeeded", "failed", "running"].enumerated() {
+      let current = identity()
+      try db.reserveImport(current, title: "owned diagnostic \(terminal)")
+      try db.recordProgress(current, bytes: 17)
+      // Opaque owned history sentinel tests byte preservation, not journal bridge activation.
+      let history = Data("owned retained history \(terminal)".utf8)
+      try db.adapterWrite { sql in
+        try sql.execute(sql: "UPDATE importJob SET recoveryJournal = ? WHERE id = ?",
+          arguments: [history, current.jobID.uuidString])
+      }
+      if terminal == "succeeded" {
+        let owned = namespace(current.paperID)
+        try FileManager.default.createDirectory(at: owned, withIntermediateDirectories: true)
+        let stage = owned.appendingPathComponent("owned.stage")
+        try Data("%PDF-1.7\nowned success".utf8).write(to: stage)
+        try db.publish(current, stage: stage, final: owned.appendingPathComponent("document.pdf"),
+          sha256: String(repeating: "a", count: 64))
+      } else if terminal == "failed" {
+        try db.failImport(current, failure: "originalImportCause", cleanupDebt: false)
+        XCTAssertEqual(try db.libraryRecords().first { $0.id == current.paperID }?.failure, "originalImportCause")
+        XCTAssertEqual(try ProductDatabase.open(at: root).libraryRecords()
+          .first { $0.id == current.paperID }?.failure, "originalImportCause")
+      }
+      let saga = try XCTUnwrap(db.beginDeletion(current.paperID))
+      let before = try deletionRows(db, current.paperID)
+      // Deleting list must not fall back to an original import failure or paperDeleting.
+      XCTAssertNil(try db.libraryRecords().first { $0.id == current.paperID }?.failure)
+      let reason = ["agentPurgeUnavailable", "agentClosureUnproved", "deletionIncomplete"][index]
+      try db.deletionFailed(current.paperID, saga: saga, reason: reason)
+      let after = try deletionRows(db, current.paperID)
+      assertDeletionRowsEqual(before, after, paperExcept: ["status", "cleanupDebt", "deletionFailure"])
+      XCTAssertEqual(String.fromDatabaseValue(after[0]["deletionFailure"]), reason)
+      XCTAssertEqual(Data.fromDatabaseValue(after[1]["recoveryJournal"]), history)
+      XCTAssertEqual(String.fromDatabaseValue(after[1]["state"]), terminal == "running" ? "failed" : terminal)
+      XCTAssertEqual(String.fromDatabaseValue(after[1]["failure"]),
+        terminal == "running" ? "paperDeleting" : terminal == "failed" ? "originalImportCause" : nil)
+      for owner in [db, try ProductDatabase.open(at: root)] {
+        let record = try XCTUnwrap(owner.libraryRecords().first { $0.id == current.paperID })
+        XCTAssertEqual(record.status, .deletionFailed)
+        XCTAssertEqual(record.failure, reason)
+        XCTAssertEqual(record.bytesCopied, 17)
+        XCTAssertTrue(record.cleanupDebt)
+      }
+      if terminal == "running" {
+        XCTAssertThrowsError(try db.recordImportAbort(current, failure: "late", cleanupDebt: true)) {
+          XCTAssertEqual($0 as? ProductDatabaseError, .staleImport)
+        }
+        assertDeletionRowsEqual(after, try deletionRows(db, current.paperID))
+      }
+      XCTAssertEqual(try db.beginDeletion(current.paperID), saga)
+      let retry = try deletionRows(db, current.paperID)
+      assertDeletionRowsEqual(after, retry, paperExcept: ["status", "deletionFailure"])
+      XCTAssertNil(String.fromDatabaseValue(retry[0]["deletionFailure"]))
+      XCTAssertEqual(String.fromDatabaseValue(retry[0]["deletionID"]), saga.uuidString)
+      XCTAssertNil(try db.libraryRecords().first { $0.id == current.paperID }?.failure)
+      if terminal == "running" {
+        try db.recordImportAbort(current, failure: "late", cleanupDebt: false)
+        assertDeletionRowsEqual(retry, try deletionRows(db, current.paperID))
+      }
+    }
+  }
+
+  func testDeletionDiagnosticRejectsInvalidReasonSagaGenerationAndStateWithoutEffects() throws {
+    let db = try ProductDatabase.open(at: root)
+    let cases = ["reason", "wrongSaga", "malformedSaga", "noncanonicalSaga", "missingSaga", "state", "unknownState", "generation"]
+    for fault in cases {
+      let current = identity()
+      try db.reserveImport(current, title: "owned invalid \(fault)")
+      let saga = try XCTUnwrap(db.beginDeletion(current.paperID))
+      try db.adapterWrite { sql in
+        if fault == "malformedSaga" || fault == "noncanonicalSaga" {
+          try sql.execute(sql: "UPDATE paper SET deletionID = ? WHERE id = ?",
+            arguments: [fault == "malformedSaga" ? "malformed" : "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", current.paperID.uuidString])
+        } else if fault == "missingSaga" {
+          try sql.execute(sql: "UPDATE paper SET deletionID = NULL WHERE id = ?", arguments: [current.paperID.uuidString])
+        } else if fault == "state" {
+          try sql.execute(sql: "UPDATE paper SET status = 'importFailed' WHERE id = ?", arguments: [current.paperID.uuidString])
+        } else if fault == "unknownState" {
+          try sql.execute(sql: "UPDATE paper SET status = 'malformed' WHERE id = ?", arguments: [current.paperID.uuidString])
+        } else if fault == "generation" {
+          try sql.execute(sql: "UPDATE paper SET generation = '' WHERE id = ?", arguments: [current.paperID.uuidString])
+        }
+      }
+      let before = try deletionRows(db, current.paperID)
+      XCTAssertThrowsError(try db.deletionFailed(current.paperID,
+        saga: fault == "wrongSaga" ? UUID() : saga, reason: fault == "reason" ? "arbitrary" : "deletionIncomplete")) {
+        XCTAssertEqual($0 as? ProductDatabaseError, .invalidRecord, fault)
+      }
+      assertDeletionRowsEqual(before, try deletionRows(db, current.paperID))
+      if ["malformedSaga", "noncanonicalSaga", "missingSaga", "unknownState", "generation"].contains(fault) {
+        XCTAssertThrowsError(try db.beginDeletion(current.paperID)) {
+          XCTAssertEqual($0 as? ProductDatabaseError, .invalidRecord, fault)
+        }
+        assertDeletionRowsEqual(before, try deletionRows(db, current.paperID))
+      }
+    }
+  }
+
+  func testDeletionDiagnosticTriggerRefusalAndFullRowCorruptionRollBack() throws {
+    let db = try ProductDatabase.open(at: root)
+    let current = identity()
+    try db.reserveImport(current, title: "owned diagnostic rollback")
+    try db.recordProgress(current, bytes: 19)
+    let saga = try XCTUnwrap(db.beginDeletion(current.paperID))
+    let before = try deletionRows(db, current.paperID)
+    let mutations = [
+      "UPDATE paper SET deletionFailure = NULL WHERE id = NEW.id;",
+      "UPDATE paper SET title = 'corrupt' WHERE id = NEW.id;",
+      "UPDATE paper SET generation = 'corrupt' WHERE id = NEW.id;",
+      "UPDATE paper SET pdfSHA256 = 'corrupt' WHERE id = NEW.id;",
+      "UPDATE importJob SET failure = 'corrupt' WHERE paperID = NEW.id;",
+      "UPDATE importJob SET state = 'succeeded' WHERE paperID = NEW.id;",
+      "UPDATE importJob SET bytesCopied = 90 WHERE paperID = NEW.id;",
+      "UPDATE importJob SET attempt = 'corrupt' WHERE paperID = NEW.id;",
+      "UPDATE importJob SET recoveryJournal = X'010203' WHERE paperID = NEW.id;",
+      "DELETE FROM importJob WHERE paperID = NEW.id;"
+    ]
+    for mutation in ["SELECT RAISE(IGNORE);"] + mutations {
+      let timing = mutation == "SELECT RAISE(IGNORE);" ? "BEFORE" : "AFTER"
+      try db.adapterWrite { sql in
+        try sql.execute(sql: """
+          CREATE TRIGGER corrupt_deletion \(timing) UPDATE OF deletionFailure ON paper
+          WHEN NEW.status = 'deletionFailed' BEGIN \(mutation) END
+          """)
+      }
+      XCTAssertThrowsError(try db.deletionFailed(current.paperID, saga: saga, reason: "agentClosureUnproved")) {
+        XCTAssertEqual($0 as? ProductDatabaseError, .invalidRecord, mutation)
+      }
+      assertDeletionRowsEqual(before, try deletionRows(db, current.paperID))
+      try db.adapterWrite { try $0.execute(sql: "DROP TRIGGER corrupt_deletion") }
+    }
+    try db.deletionFailed(current.paperID, saga: saga, reason: "agentClosureUnproved")
+    XCTAssertEqual(try db.libraryRecords().first?.failure, "agentClosureUnproved")
+  }
+
+  func testDeletionRetryDiagnosticClearingIsCheckedAndAtomic() throws {
+    let db = try ProductDatabase.open(at: root)
+    let current = identity()
+    try db.reserveImport(current, title: "owned retry rollback")
+    let saga = try XCTUnwrap(db.beginDeletion(current.paperID))
+    try db.deletionFailed(current.paperID, saga: saga, reason: "deletionIncomplete")
+    let before = try deletionRows(db, current.paperID)
+    for mutation in ["SELECT RAISE(IGNORE);",
+      "UPDATE paper SET deletionFailure = 'deletionIncomplete' WHERE id = NEW.id;",
+      "UPDATE paper SET title = 'corrupt' WHERE id = NEW.id;",
+      "UPDATE importJob SET failure = 'corrupt' WHERE paperID = NEW.id;"] {
+      let timing = mutation == "SELECT RAISE(IGNORE);" ? "BEFORE" : "AFTER"
+      try db.adapterWrite { sql in
+        try sql.execute(sql: """
+          CREATE TRIGGER corrupt_retry \(timing) UPDATE OF deletionFailure ON paper
+          WHEN NEW.status = 'deleting' BEGIN \(mutation) END
+          """)
+      }
+      XCTAssertThrowsError(try db.beginDeletion(current.paperID)) {
+        XCTAssertEqual($0 as? ProductDatabaseError, .invalidRecord, mutation)
+      }
+      assertDeletionRowsEqual(before, try deletionRows(db, current.paperID))
+      try db.adapterWrite { try $0.execute(sql: "DROP TRIGGER corrupt_retry") }
+    }
+    XCTAssertEqual(try db.beginDeletion(current.paperID), saga)
+    assertDeletionRowsEqual(before, try deletionRows(db, current.paperID), paperExcept: ["status", "deletionFailure"])
+    XCTAssertNil(try db.libraryRecords().first?.failure)
+  }
+
+  func testDeletionTombstoneClearsDiagnosticAndJobWithCheckedRollback() throws {
+    let db = try ProductDatabase.open(at: root)
+    let current = identity()
+    try db.reserveImport(current, title: "owned tombstone")
+    let saga = try XCTUnwrap(db.beginDeletion(current.paperID))
+    try db.adapterWrite { sql in
+      try sql.execute(sql: """
+        UPDATE paper SET deletionFailure = 'agentPurgeUnavailable', pdfSHA256 = ?, pdfReference = ? WHERE id = ?
+        """, arguments: [String(repeating: "a", count: 64), "owned-reference", current.paperID.uuidString])
+    }
+    let before = try deletionRows(db, current.paperID)
+    for trigger in [
+      "BEFORE UPDATE ON paper WHEN NEW.status = 'tombstone' BEGIN SELECT RAISE(IGNORE); END",
+      "AFTER UPDATE ON paper WHEN NEW.status = 'tombstone' BEGIN UPDATE paper SET deletionFailure = 'deletionIncomplete' WHERE id = NEW.id; END",
+      "AFTER UPDATE ON paper WHEN NEW.status = 'tombstone' BEGIN UPDATE paper SET title = 'corrupt' WHERE id = NEW.id; END",
+      "BEFORE DELETE ON importJob BEGIN SELECT RAISE(IGNORE); END"
+    ] {
+      try db.adapterWrite { try $0.execute(sql: "CREATE TRIGGER corrupt_tombstone \(trigger)") }
+      XCTAssertThrowsError(try db.finalizeDeletion(current.paperID, saga: saga)) {
+        XCTAssertEqual($0 as? ProductDatabaseError, .invalidRecord, trigger)
+      }
+      assertDeletionRowsEqual(before, try deletionRows(db, current.paperID))
+      try db.adapterWrite { try $0.execute(sql: "DROP TRIGGER corrupt_tombstone") }
+    }
+    try db.finalizeDeletion(current.paperID, saga: saga)
+    let after = try deletionRows(db, current.paperID)
+    XCTAssertEqual(after.count, 1)
+    assertDeletionRowsEqual([before[0]], after,
+      paperExcept: ["status", "title", "pdfReference", "pdfSHA256", "cleanupDebt", "deletionFailure"])
+    XCTAssertEqual(String.fromDatabaseValue(after[0]["status"]), "tombstone")
+    XCTAssertEqual(String.fromDatabaseValue(after[0]["title"]), "")
+    XCTAssertEqual(Int64.fromDatabaseValue(after[0]["cleanupDebt"]), 0)
+    for column in ["pdfReference", "pdfSHA256", "deletionFailure"] {
+      let value: DatabaseValue = after[0][column]
+      XCTAssertTrue(value.isNull, column)
+    }
+    XCTAssertTrue(try db.libraryRecords().isEmpty)
+    XCTAssertThrowsError(try db.finalizeDeletion(current.paperID, saga: saga))
+  }
+
+  func testDeletionAdmissionJobInterruptionRefusalRollsBackDiagnosticClearing() throws {
+    let db = try ProductDatabase.open(at: root)
+    let current = identity()
+    try db.reserveImport(current, title: "owned interruption rollback")
+    try db.recordProgress(current, bytes: 11)
+    try db.adapterWrite { sql in
+      try sql.execute(sql: "UPDATE paper SET deletionFailure = 'deletionIncomplete' WHERE id = ?",
+        arguments: [current.paperID.uuidString])
+    }
+    let before = try deletionRows(db, current.paperID)
+    try db.adapterWrite { sql in
+      try sql.execute(sql: """
+        CREATE TRIGGER refuse_deletion_interruption BEFORE UPDATE OF state ON importJob
+        WHEN NEW.failure = 'paperDeleting' BEGIN SELECT RAISE(IGNORE); END
+        """)
+    }
+    XCTAssertThrowsError(try db.beginDeletion(current.paperID)) {
+      XCTAssertEqual($0 as? ProductDatabaseError, .invalidRecord)
+    }
+    assertDeletionRowsEqual(before, try deletionRows(db, current.paperID))
+    try db.adapterWrite { try $0.execute(sql: "DROP TRIGGER refuse_deletion_interruption") }
+    _ = try XCTUnwrap(db.beginDeletion(current.paperID))
+    let after = try deletionRows(db, current.paperID)
+    XCTAssertNil(String.fromDatabaseValue(after[0]["deletionFailure"]))
+    XCTAssertEqual(String.fromDatabaseValue(after[1]["state"]), "failed")
+    XCTAssertEqual(String.fromDatabaseValue(after[1]["failure"]), "paperDeleting")
+    XCTAssertEqual(Int64.fromDatabaseValue(after[1]["bytesCopied"]), 11)
   }
 
   func testForeignFenceCannotPublishAndRenameFailureCannotCommitSuccess() throws {

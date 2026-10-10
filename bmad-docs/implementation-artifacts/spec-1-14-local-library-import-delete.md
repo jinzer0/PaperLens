@@ -678,3 +678,75 @@ history preserved, deleting/failed display uses own cause, reopen, wrong-saga/tr
 rollback, retry clearing and final tombstone erasure. Parent verifies/reviews/commits;
 worker skips gates/format/commits/SDK/helper/renderer/remote/trial execution. This prerequisite
 does not itself activate the full journaled abort/deletion bridge or same-Job Retry.
+
+### Deletion diagnostic implementation handoff (source-only, after e71cfe9)
+
+The existing production ProductDatabase methods now own the separation; there is no
+alternate helper entry point or new public API. The parent-registered sole-owner
+localLibraryDeletionDiagnosticV1 migration is unchanged. deletionFailed validates the
+fixed reason before entering its single write transaction, admits only the actual
+deleting Paper with the exact canonical saga and nonempty generation, and updates only
+status/cleanupDebt/deletionFailure. Affected-count and full-row readback compare every
+other Paper column and every retained Job column, including recoveryJournal bytes.
+Refusal, missing/wrong/malformed saga, invalid state or corrupted readback throws
+invalidRecord and rolls back the transaction. No Job failure/state/lineage/progress/history
+write remains in this failure path.
+
+libraryRecords uses an explicit CASE: deleting/deletionFailed reads paper.deletionFailure;
+all other visible states read importJob.failure, with no COALESCE or legacy inference.
+beginDeletion clears the Paper diagnostic, rejects malformed/noncanonical existing
+sagas rather than replacing them, retains valid retry sagas and interrupts only running
+Jobs. Count/readback guards cover diagnostic clearing, unchanged Paper data and the
+running-only Job transition. finalizeDeletion clears the diagnostic with its existing
+contentless fields, verifies the exact tombstone and checks Job removal; zero-row success
+is rejected. recordImportAbort's full ten-identity/failed-paperDeleting/deleting-saga
+admission remains byte-for-byte unchanged.
+
+Authored owned-GRDB tests (not executed by this worker):
+- testDeletionDiagnosticPreservesWholeSucceededFailedAndInterruptedJobRows: actual
+  owned-file success, failed import and running interruption, all three fixed codes,
+  complete Job/Paper preservation, persisted opaque history sentinel, live/reopened
+  libraryRecords cause selection, same-saga retry clearing and unchanged late-abort fence.
+- testActualAndReopenedLifecycleListSeparatesFailedImportAndDeletionCauses plus the
+  extended testMissingPurgeBlocksDeletionAndKeepsTruthfulDebt: actual lifecycle list and
+  reopen show the deletion cause without destroying failed/succeeded Job rows.
+- testDeletionDiagnosticRejectsInvalidReasonSagaGenerationAndStateWithoutEffects:
+  invalid reason, wrong/malformed/noncanonical/missing saga, wrong/unknown state and
+  empty generation reject without row changes; malformed admission cannot mint a saga.
+- testDeletionDiagnosticTriggerRefusalAndFullRowCorruptionRollBack: BEFORE RAISE(IGNORE)
+  and AFTER diagnostic/title/generation/SHA or Job failure/state/progress/attempt/history/
+  removal corruption roll back the complete SQL transaction.
+- testDeletionRetryDiagnosticClearingIsCheckedAndAtomic and
+  testDeletionAdmissionJobInterruptionRefusalRollsBackDiagnosticClearing: refused/corrupt
+  diagnostic clearing and refused running-Job interruption roll back, then same-saga
+  retry or running-only admission succeeds after removing the owned trigger.
+- testDeletionTombstoneClearsDiagnosticAndJobWithCheckedRollback: refused Paper/Job
+  effects and corrupt diagnostic/title roll back; successful tombstone erases content,
+  clears the diagnostic and removes the Job; duplicate finalization is not success.
+
+Only ProductDatabase.swift, LocalLibraryLifecycleTests.swift and this integration Spec
+were edited by the worker. Source inspection is not runtime proof. All tests/builds/
+gates/lint/format/commit/remote and physical Agent/profile/SDK/app/helper/renderer/trial
+execution are deliberately skipped under the assigned boundary; parent owns verification,
+independent review and commit. Existing actual Agent purge, known-closure and deletion
+tests remain in place and were not run. Opaque-history preservation is not journal
+validation or producer-owner cutover evidence. No same-Job Retry, journal bridge,
+architecture/privacy change or Story certification is claimed.
+
+### Parent actual deletion diagnostic verification and review
+
+Three-source binary diff against e71cfe9 SHA256:
+a2624026a45da763ebf189283990c5fcbd99b99c3a076c7a2e546c147366c837.
+Focused85/0 artifact1176; initial Product370/1 artifact1179 is preserved: the existing
+organization fixture passed fixtureFailure, correctly denied by the explicit fixed-code
+contract. Parent changed that single caller argument to deletionIncomplete, without
+weakening validation. Affected suites67/0 artifact1184 and final Product370/0 artifact1185.
+Fresh unsigned native Release arm64/macOS15 BUILD SUCCEEDED artifact1182, namespace
+product-native-compile-20261010-ai; no production source changed after compilation.
+Review96 SOURCE-ONLY CLEAR / APPROVE for database/lifecycle tests/Spec. Parent's one-line
+organization fixture caller correction is separately directly verified, not a broadened
+review claim. Actual existing deletion data ownership/real GRDB rollback/reopened list is
+proved; no actual Agent purge, app/helper/SDK/renderer/remote/trial or profile certification.
+No policy/copier/late-abort guard relaxation; no Package/project or new database/owner.
+Serialized history and opaque fixture bytes are not physical closure or Retry authority.
+Full durable actor/producer receipt bridge and same-Job Retry UI remain unfinished.
