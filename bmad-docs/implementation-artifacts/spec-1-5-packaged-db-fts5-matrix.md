@@ -100,3 +100,29 @@ durations. Export safe test identities/status/reasons/approved numeric codes and
 only. Build separately; single nonparallel actual test launch has original <=30s watchdog.
 Timeout/kill is blocked unresolved ownership, never successful drain/cleanup or fixture
 deletion permission. Actual SQL success still sqlite_origin_unverified/P2false/Storyfalse.
+
+### Parent actual local SQL test proof
+
+Committedb06050c inputs produced a byte-identical isolated driver against independently
+checked clean pinned GRDBb83108/source treeff52b3c. Build succeeded; parent's legacy SwiftPM
+bundle-location assertion then failed BEFORE runtime. Actual Xcode-backed test bundle was
+inspected; no rebuild, execution replay or safety relaxation. One separate actual XCTest
+launch under30s watchdog returned0; all17 expected named methods passed, zero failures,
+safe projectionartifact1058. Three nested suite count lines are not three launches.
+This exercises actual migrations/FTS lifecycle/M1–M2 SQL fault rollback/same-inode failing
+and successful reopen, queued-operation/interrupt-not-drain/throwing-close barriers and
+namespace/UID/device/inode/mode/ACL/foreign-sidecar preservation. Same-connection diagnostic
+values stay RAM; their tested bounds do not classify the loaded image.
+Original/copied code SHA identities: probe4ed56f9ba79425c0749ca98ff24241858136916fa03e03d75f0d4cf1818e1a92;
+fixturee07462f4809099215496c4ac01f1f02199887acf4a4fe859a722de646a55878f;
+tests2f5118cd1c1d82894ea0867fd8887ff560bc30eda2b15e73e985ecdc8e621732.
+Generated manifest5bce7b02b43459c354ef492c90c3025f61633ff0887f0efbd93e4eaa085dce77;
+actual launched arm64 test code757fb893a831fb1200bc44058a571179f9532d44f8a07c1098e5f83962f5ae2c.
+Independent81 SOURCE-ONLY RECONCILIATION CLEAR / APPROVE: stale identity resolved; the
+supplied safe receipt matches all17 source test methods, no further mismatch. This review
+does not independently recompute hashes or witness runtime; parent performed those checks.
+Parent persisted no raw compiler/XCTest logs, sourceID timestamps, SQL or runtime paths/
+durations; driver paths are not exported. RootPackage/Xcode/startup and all three actual
+probe sources remained unchanged; current305/native-z product proof is reused, not rerun.
+No app/helper/renderer/SDK/auth/paid/remote/protected trial ran. sqlite_origin_unverified,
+packagedCellPassed=false/P2false/Storyfalse/canonical0of26 remain unchanged.

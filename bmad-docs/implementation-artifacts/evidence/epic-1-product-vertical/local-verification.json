@@ -20,7 +20,10 @@
     "Mounted data-only metadata/outline controls under actual Reader admission and published extraction identity; weak PDF ownership and synchronous revocation",
     "Explicit-precision geometry, revision/FTS and metadata/outline source APIs and fixture regressions",
     "Typed secure PDFium pull producer source with original-budget consumer scope and native/sender/pin/accounting milestones; compiled, not activated or calibrated",
-    "Actual Library child-pin API on the sole lifecycle registry, readonly one-time sender FD transfer and checked per-token physical closure independent of live Reader tokens"
+    "Actual Library child-pin API on the sole lifecycle registry, readonly one-time sender FD transfer and checked per-token physical closure independent of live Reader tokens",
+    "Nonblocking nofollow selected-PDF recognition pinned by real lstat/open/fstat with actual uncertain-close FD/import-lease/security-scope retention",
+    "Mounted stored abstract and source-topic observations in both Library presentations and captured native detail, with explicit missing/conflict/provenance and query invalidation",
+    "Mounted existing-Paper Folder movement through actual captured generation/SHA/reference/prior-placement comparison, real UUID destinations and same-DB durable movement"
   ],
   "verification": {
     "productUnion": {
@@ -292,6 +295,39 @@
     "visibleUIOrAccessibilityVerified": false,
     "runtimeParsingOrCalibrationVerified": false,
     "helperExecuted": false,
+    "storyAccepted": false
+  },
+  "actualLocalGRDBProbe": {
+    "scope": "local_grdb_probe",
+    "preExecutionSpecificationCommit": "b06050c",
+    "preExecutionSpecificationCodeSha256": "0053b35c260ed7a78f812534a30fe771727eac33ffe54dec504f7e033dc3af02",
+    "driverOwnerID": "493147fe-594e-4516-b118-6d61f44e730c",
+    "grdbRevision": "b83108d10f42680d78f23fe4d4d80fc88dab3212",
+    "grdbTree": "ff52b3c22f4fc259de0adb63560b968cc4f0722a",
+    "grdbManifestSha256": "4118b6c48dcb87f91d95fe40420371b8a474a44b0b0be2bf0417e0be1ebf7853",
+    "unchangedOriginalAndCopiedSourceCodeIdentities": {
+      "PackagedDBProbe.swift": "4ed56f9ba79425c0749ca98ff24241858136916fa03e03d75f0d4cf1818e1a92",
+      "TopologyFixtures.swift": "e07462f4809099215496c4ac01f1f02199887acf4a4fe859a722de646a55878f",
+      "PackagedDBProbeTests.swift": "2f5118cd1c1d82894ea0867fd8887ff560bc30eda2b15e73e985ecdc8e621732"
+    },
+    "generatedManifestSha256": "5bce7b02b43459c354ef492c90c3025f61633ff0887f0efbd93e4eaa085dce77",
+    "actualLaunchedTestCodeBinarySha256": "757fb893a831fb1200bc44058a571179f9532d44f8a07c1098e5f83962f5ae2c",
+    "binaryCPU": "arm64",
+    "actualRuntimeExitCode": 0,
+    "tests": 17,
+    "failures": 0,
+    "allExpectedNamedTestsObservedPassed": true,
+    "output": "artifact://1058",
+    "evidence": "Actual separate isolated XCTest launch: ordered migrations/FTS create-query-delete/same-inode reopen, genuine M1/M2 duplicate-key rollback and unchanged failing reopen, actual queued-operation/interrupt-versus-drain/throwing-close barriers, namespace/UID/device/inode/mode/ACL/hardlink/symlink/foreign-sidecar rejection, same-connection RAM-only bounded diagnostics. No alternative SQLite engine or generated probe implementation.",
+    "preservedSetupFailure": "After successful build, legacy SwiftPM bundle-layout assertion failed before runtime; inspected actual Xcode-backed test bundle and launched once, no rebuild or prior runtime trial.",
+    "watchdogSeconds": 30,
+    "parentPersistedRawRuntimeOrCompilerLogs": false,
+    "review": "agent://81-LocalGRDBProbeAdmission: SOURCE-ONLY RECONCILIATION CLEAR / APPROVE; sole stale-dependency finding resolved, actual safe receipt matched all17 test methods",
+    "rootPackageProjectStartupModified": false,
+    "applicationOrHelperBinariesExecuted": false,
+    "loadedSQLiteOrigin": "sqlite_origin_unverified",
+    "packagedCellPassed": false,
+    "p2Passed": false,
     "storyAccepted": false
   },
   "capturedPaperFolderMovement": {
