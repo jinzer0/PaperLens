@@ -1678,3 +1678,58 @@ correction reviews115/116 are SOURCE-ONLY CLEAR / APPROVE, no findings. Same-Job
 Retry, production Agent purge, runtime/profile
 calibration and Story/Epic acceptance remain incomplete. No application/helper
 binaries were executed; the owned XCTest scenarios above were executed.
+
+## Fresh confirmed same-Job local Retry
+
+After45b1129, extend the existing local confirmation route, not fresh-Paper import
+masquerading as Retry. Explicit failed-Paper selection captures the exact genuine
+failed Job/history; selecting a new PDF reuses actual selected-source hashing and
+the existing confirmation sheet. Cancel reserves no new execution. Continue
+consumes one fresh pending intent, rechecks actual SHA and chosen folder, then
+asks the sole lifecycle to retry that exact captured Job. Consumed/stale intents
+cannot replay. No automatic retry, saved input reconstruction or URL replay.
+
+Eligibility requires exact Paper generation and one genuine canonical bounded
+import history, current failed execution/SQL cause correspondence, nonrevoked
+history, no permits/removal debt/pending removal, cleanupDebt0 and nondeleting
+Paper with NULL reference/deletionID. NULL legacy history, current succeeded
+unavailable bytes, unknown retained closure/debt, stale capture and deleting state
+deny. Observe actual owned namespace absence before admission; observation is not
+permission to clean a collision or acknowledge unknown obligations.
+
+Core bounded interface in existing owners:
+- ProductDatabase.captureRetryableImport(paperID:generation:) returns the exact
+  ImportRecoveryRecord; it performs no source/namespace/reservation effects.
+- ProductDatabase.reserveJournaledImportRetry(expected:identity:confirmedInput:currentEpoch:)
+  constructs retryCapture/claim/acquireWriter internally, never accepts arbitrary
+  replacement history. Preserve Paper/generation/Job and the entire old prefix,
+  executions/captures/facts/used IDs. Mint fresh attempt/fence/correlation/input/
+  writer/publication UUIDs in Main; use its actual current lifecycle epoch (not a
+  fabricated epoch renewal) and newly confirmed SHA/folder.
+  Record the actual current Main epoch observation in the same atomic suffix
+  before retryCapture when needed; retain captured old epochs/executions and the
+  existing epoch-mismatch guard. An arbitrary UUID is not observed-epoch authority.
+  Require the new capture epoch to equal the separately supplied actual Main epoch;
+  reject mismatch before mutation rather than treating capture epoch as observation.
+- The one defended transaction replaces the same importJob execution columns,
+  journal, failed state/cause and progress with the exact new running capture;
+  resets Paper availability to importing without clearing unrelated facts, and
+  validates schema, scoped writes, exact counters/readback and rollback. Ordinary
+  CAS still rejects changed capture; no codec/tag parser, backfill or new store.
+- LocalLibraryLifecycle.retryImportPDF(expected:from:expectedSHA256:destinationFolderID:)
+  installs the committed record under the existing per-Paper FIFO, acknowledges
+  writer-open before actual copier effects, and shares actual completion,
+  publication/abort/deletion/unknown-root behavior with normal import. No FIFO
+  gate spans copying/drain; failed reservation has no physical effects. Preflight
+  terminal headroom before producer admission under the unchanged metadata quota.
+
+Sequence core storage/lifecycle implementation (two existing files) before actual
+confirmation/caller integration (FolderImportService, ProductWorkspaceView and
+LibraryBrowserView). Parent owns tests, membership, independent data-integrity
+review, unsigned compile, evidence and commits. Verify same Paper/Job with fresh
+execution IDs across reopen, immutable previous failure/facts, fresh-folder/SHA
+publication, Cancel/replay/stale/delete/unknown/legacy/succeeded denials, SQL
+trigger rollback and zero effects before denied admission. Run every Product
+case in isolated processes. UI is source/owned-model verified unless separately
+authorized visible accessibility evidence exists; no app/helper/live trial or
+profile/Story acceptance is granted by this slice.
