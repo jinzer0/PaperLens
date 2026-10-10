@@ -112,6 +112,87 @@ final class CanonicalExtractionGeometryTests: XCTestCase {
                             rawPage: page ?? input.rawPage, glyphs: glyphs ?? input.glyphs)
     }
 
+    func testSummaryResolverPreservesIndependentFullExtentAndEveryHitIdentity() throws {
+        for rotation in [0, 90, 180, 270] {
+            let owner = try anchor(rotation: rotation)
+            let codec = try validator([owner])
+            let bytes = try encode(owner, with: codec).canonicalBytes
+            let hit = ExtractionSearchHit(revision: revision, page: 0, sentenceID: 7,
+                                          text: quote, canonicalGeometry: bytes)
+            let resolver: any LibrarySummaryGeometryValidating = codec
+            XCTAssertEqual(try resolver.resolve(hit, identity: owner.identity), owner)
+            let wrongHits = [
+                ExtractionSearchHit(revision: UUID(), page: 0, sentenceID: 7, text: quote, canonicalGeometry: bytes),
+                ExtractionSearchHit(revision: revision, page: 1, sentenceID: 7, text: quote, canonicalGeometry: bytes),
+                ExtractionSearchHit(revision: revision, page: 0, sentenceID: 8, text: quote, canonicalGeometry: bytes)
+            ]
+            for wrong in wrongHits {
+                assertError(LibrarySummaryError.invalidGrounding) {
+                    try resolver.resolve(wrong, identity: owner.identity)
+                }
+            }
+            assertError(PDFGeometryError.unknownSentence) {
+                try validator([]).resolve(hit, identity: owner.identity)
+            }
+        }
+    }
+
+    func testSummaryResolverRejectsTruncatedOrForgedCanonicalExtentAndHitText() throws {
+        let owner = try anchor()
+        let codec = try validator([owner])
+        let bytes = try encode(owner, with: codec).canonicalBytes
+        let truncatedQuote = try mutate(bytes) { $0["fullSourceQuote"] = "Original full sentence" }
+        let droppedQuad = try mutate(bytes) { object in
+            object["quads"] = Array((object["quads"] as! [[String: Any]]).prefix(1))
+        }
+        for changed in [truncatedQuote, droppedQuad] {
+            assertError(CanonicalExtractionGeometryError.semanticExtentMismatch) {
+                try codec.resolve(.init(revision: revision, page: 0, sentenceID: 7,
+                                        text: quote, canonicalGeometry: changed), identity: owner.identity)
+            }
+        }
+        let wrongPage = try mutate(bytes) { $0["width"] = 101 }
+        assertError(CanonicalExtractionGeometryError.pageGeometryMismatch) {
+            try codec.resolve(.init(revision: revision, page: 0, sentenceID: 7,
+                                    text: quote, canonicalGeometry: wrongPage), identity: owner.identity)
+        }
+        let stale = try mutate(bytes) { $0["extractionRevision"] = UUID().uuidString.lowercased() }
+        assertError(PDFGeometryError.staleRevision) {
+            try codec.resolve(.init(revision: revision, page: 0, sentenceID: 7,
+                                    text: quote, canonicalGeometry: stale), identity: owner.identity)
+        }
+        let composed = try anchor(quote: "é")
+        let composedCodec = try validator([composed])
+        let composedBytes = try encode(composed, with: composedCodec).canonicalBytes
+        assertError(CanonicalExtractionGeometryError.semanticExtentMismatch) {
+            try composedCodec.resolve(.init(revision: revision, page: 0, sentenceID: 7,
+                                            text: "é", canonicalGeometry: composedBytes), identity: composed.identity)
+        }
+    }
+
+    func testSummaryResolverUsesExplicitOwnerPrecisionRatherThanDecodedCoordinates() throws {
+        let owner = try anchor()
+        let boundary = try anchor(shift: 1)
+        let over = try anchor(shift: Double(16).nextUp - 15)
+        let codec = try validator([owner], tolerance: 1)
+        for candidate in [boundary, over] {
+            // Separate synthetic encoding owner; resolving authority stays the original owner.
+            let bytes = try encode(candidate, with: validator([candidate])).canonicalBytes
+            let hit = ExtractionSearchHit(revision: revision, page: 0, sentenceID: 7,
+                                          text: quote, canonicalGeometry: bytes)
+            if candidate == boundary {
+                XCTAssertEqual(try codec.resolve(hit, identity: owner.identity), boundary)
+                assertError(PDFGeometryError.roundtripExceeded) {
+                    try validator([owner]).resolve(hit, identity: owner.identity)
+                }
+            } else {
+                assertError(PDFGeometryError.roundtripExceeded) {
+                    try codec.resolve(hit, identity: owner.identity)
+                }
+            }
+        }
+    }
+
     func testNativeGeometryUsesOwningCanonicalCodecBytesAndDecoder() throws {
         let (owner, input, mapping) = try nativeFixture()
         let native = try nativeValidator(mapping).validateAndEncode(input, identity: identity(),

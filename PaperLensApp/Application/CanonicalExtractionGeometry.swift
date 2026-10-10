@@ -21,7 +21,7 @@ public enum CanonicalExtractionGeometryError: Error, Equatable {
 
 /// The caller supplies actual revision membership/full extent and its explicit precision.
 /// Neither an input anchor nor persisted bytes can establish their own membership.
-public struct CanonicalExtractionGeometryValidator: ExtractionGeometryValidating {
+public struct CanonicalExtractionGeometryValidator: ExtractionGeometryValidating, LibrarySummaryGeometryValidating {
     private let owningAnchors: [PDFSentenceIdentity: PDFSentenceAnchor]
     private let membership: Set<PDFSentenceIdentity>
     private let precision: PDFGeometryPrecision
@@ -63,6 +63,27 @@ public struct CanonicalExtractionGeometryValidator: ExtractionGeometryValidating
     /// Decode is also an ownership check, not merely syntactic JSON acceptance.
     public func decodeAndValidate(_ bytes: Data,
                                   identity: ExtractionSentenceIdentity) throws -> PDFSentenceAnchor {
+        let anchor = try Self.decodeCanonicalAnchor(bytes)
+        try validate(anchor, identity: identity)
+        return anchor
+    }
+
+    public func resolve(_ hit: ExtractionSearchHit,
+                        identity: PDFSentenceIdentity) throws -> PDFSentenceAnchor {
+        guard hit.revision.uuidString.lowercased() == identity.extractionRevision,
+              hit.page == identity.pageIndex,
+              hit.sentenceID == identity.sentenceID else {
+            throw LibrarySummaryError.invalidGrounding
+        }
+        let anchor = try Self.decodeCanonicalAnchor(hit.canonicalGeometry)
+        try validate(anchor, identity: identity)
+        guard anchor.fullSourceQuote.utf8.elementsEqual(hit.text.utf8) else {
+            throw CanonicalExtractionGeometryError.semanticExtentMismatch
+        }
+        return anchor
+    }
+
+    private static func decodeCanonicalAnchor(_ bytes: Data) throws -> PDFSentenceAnchor {
         let encoded: EncodedAnchor
         do {
             encoded = try JSONDecoder().decode(EncodedAnchor.self, from: bytes)
@@ -72,9 +93,7 @@ public struct CanonicalExtractionGeometryValidator: ExtractionGeometryValidating
         guard encoded.version == 1 else {
             throw CanonicalExtractionGeometryError.unsupportedEncodingVersion
         }
-        let anchor = try encoded.anchor()
-        try validate(anchor, identity: identity)
-        return anchor
+        return try encoded.anchor()
     }
 
     private func validate(_ anchor: PDFSentenceAnchor,
@@ -83,6 +102,11 @@ public struct CanonicalExtractionGeometryValidator: ExtractionGeometryValidating
             paperID: identity.paperID, pdfSHA256: identity.pdfSHA256,
             extractionRevision: identity.revision.uuidString.lowercased(),
             pageIndex: identity.page, sentenceID: identity.sentenceID)
+        try validate(anchor, identity: expected)
+    }
+
+    private func validate(_ anchor: PDFSentenceAnchor,
+                          identity expected: PDFSentenceIdentity) throws {
         // Domain remains the identity and membership authority.
         try anchor.validateResolution(expected: expected, publishedMembership: membership)
         guard let owner = owningAnchors[expected] else { throw PDFGeometryError.unknownSentence }

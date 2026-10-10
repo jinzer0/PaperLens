@@ -94,3 +94,18 @@ commits/remotes/workflows/trials. Production Library injection remains a separat
 integration requiring genuine complete anchors and explicit precision for saved revisions
 after restart; neither this conformance nor its tests establishes that owner, visible UI,
 calibration, certified Provider enforcement, Agent purge, StoryDone or Epic acceptance.
+
+### Parent canonical binding implementation receipt
+
+After committed44663a9, worker122 changed only the existing canonical validator;
+parent added six direct/sole-GRDB tests in the two named files. Shared decoder and
+independent complete owner comparisons are preserved; stored assertions do not become
+their own authority. Focused34/zero1419, full isolated439/zero1425 and fresh unsigned
+native-ax1427 pass. Independent123 SOURCE-ONLY CLEAR / APPROVE found no blocking gap.
+Three-Swift-file binary diff SHA256 versus44663a9 is
+`dcd86b677da461e69a0fee2ed2979828ec856a0e3a9fbaa4accc8438b7c0e6cd`.
+Reopen tests retain fixture owner objects, not a production process-restart owner.
+Correlated frozen/text/geometry forgery is directly exercised at reservation; every
+boundary checks unranked full geometry through the same core. Production saved-revision
+owner recovery/precision/injection, Library presentation, calibration/live Provider/
+Agent purge/visible UI/Story acceptance remain unproved. No binary/trial/remote execution.

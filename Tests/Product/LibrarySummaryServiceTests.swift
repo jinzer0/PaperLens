@@ -78,6 +78,164 @@ final class LibrarySummaryServiceTests: XCTestCase {
       frozen: try LibrarySummaryFrozen(request: request), result: result)
   }
 
+  private func canonicalOwners(_ f: Fixture) throws -> [PDFSentenceAnchor] {
+    // Independently constructed owned test extents, not owners recovered from stored bytes.
+    // Zero precision is fixture-only; it does not select a production profile.
+    try f.frozen.sentences.map { sentence in
+      let identity = try PDFSentenceIdentity(paperID: f.identity.paperID,
+        pdfSHA256: f.identity.pdfSHA256, extractionRevision: f.identity.revision.uuidString.lowercased(),
+        pageIndex: sentence.page, sentenceID: sentence.id)
+      let page = try PDFPageGeometry(pageIndex: sentence.page,
+        cropOrigin: .init(x: 0, y: 0), width: 100, height: 100, rotation: 0)
+      let first = try PDFQuad(topLeft: .init(x: 10, y: 80), topRight: .init(x: 80, y: 80),
+        bottomRight: .init(x: 80, y: 70), bottomLeft: .init(x: 10, y: 70), page: page)
+      let continuation = try PDFQuad(topLeft: .init(x: 10, y: 60), topRight: .init(x: 60, y: 60),
+        bottomRight: .init(x: 60, y: 50), bottomLeft: .init(x: 10, y: 50), page: page)
+      return try PDFSentenceAnchor(identity: identity, fullSourceQuote: sentence.quote,
+        page: page, quads: [first, continuation])
+    }
+  }
+
+  private func installCanonicalGeometry(_ f: Fixture, owners: [PDFSentenceAnchor]) throws
+    -> CanonicalExtractionGeometryValidator {
+    let codec = try CanonicalExtractionGeometryValidator(owningAnchors: owners,
+      precision: PDFGeometryPrecision(maximumErrorPDFPoints: 0))
+    for owner in owners {
+      let key = ExtractionSentenceIdentity(paperID: f.identity.paperID,
+        pdfSHA256: f.identity.pdfSHA256, revision: f.identity.revision,
+        page: owner.identity.pageIndex, sentenceID: owner.identity.sentenceID)
+      let bytes = try codec.validateAndEncode(CanonicalExtractionGeometryInput(anchor: owner),
+        identity: key, expectedText: owner.fullSourceQuote).canonicalBytes
+      try f.db.adapterWrite { sql in
+        try sql.execute(sql: "UPDATE extractionSentence SET geometry = ? WHERE revision = ? AND sentenceID = ?",
+          arguments: [bytes, f.identity.revision.uuidString, key.sentenceID])
+      }
+    }
+    return codec
+  }
+
+  func testCanonicalSummarySaveReopenRestoresRetainedRevisionWithoutGenerationOrProvider() throws {
+    let f = try fixture(tail: "independent unranked full extent")
+    defer { try? FileManager.default.removeItem(at: f.root) }
+    let owners = try canonicalOwners(f)
+    let codec = try installCanonicalGeometry(f, owners: owners)
+    try f.db.reserveLibrarySummary(f.identity, frozen: f.frozen, geometry: codec)
+    let saved = try f.db.publishLibrarySummary(f.identity, frozen: f.frozen, result: f.result,
+      bytes: ProviderRequest.canonicalBytes(f.result.value), permit: UUID().uuidString,
+      resultID: UUID(), geometry: codec)
+    let newer = UUID()
+    try f.db.adapterWrite { sql in
+      try sql.execute(sql: """
+        INSERT INTO extractionRevision(id, paperID, generation, pdfSHA256, pdfReference)
+        VALUES (?, ?, ?, ?, ?)
+        """, arguments: [newer.uuidString, f.identity.paperID.uuidString,
+          f.identity.generation.uuidString, f.identity.pdfSHA256,
+          "papers/\(f.identity.paperID.uuidString)/document.pdf"])
+      try sql.execute(sql: "UPDATE extractionVisible SET revision = ? WHERE paperID = ?",
+        arguments: [newer.uuidString, f.identity.paperID.uuidString])
+    }
+    _ = try f.db.compareAndSwapProviderConfiguration(expected: f.db.providerConfiguration(),
+      replacementSlotID: nil, replacementModel: "new configuration")
+    let reopened = try ProductDatabase.open(at: f.root)
+    let restored = try XCTUnwrap(LibrarySummaryService(database: reopened, geometry: codec)
+      .restore(paperID: f.identity.paperID))
+    XCTAssertEqual(restored.id, saved.id)
+    XCTAssertEqual(restored.identity, f.identity)
+    XCTAssertEqual(restored.result, f.result)
+    XCTAssertEqual(restored.evidence, saved.evidence)
+    XCTAssertEqual(restored.claimAnchors, [owners[1], owners[0]])
+    XCTAssertEqual(try reopened.adapterRead { try Int.fetchOne($0,
+      sql: "SELECT COUNT(*) FROM librarySummaryJob") }, 1)
+    XCTAssertEqual(try reopened.adapterRead { try Int.fetchOne($0,
+      sql: "SELECT COUNT(*) FROM librarySummaryResult") }, 1)
+    let missingOldOwner = try CanonicalExtractionGeometryValidator(owningAnchors: [],
+      precision: PDFGeometryPrecision(maximumErrorPDFPoints: 0))
+    XCTAssertThrowsError(try LibrarySummaryService(database: reopened, geometry: missingOldOwner)
+      .restore(paperID: f.identity.paperID)) {
+      XCTAssertEqual($0 as? PDFGeometryError, .unknownSentence)
+    }
+  }
+
+  func testCanonicalSummaryRequiresFullUnrankedOwnerAtReservePublishAndRestore() throws {
+    for boundary in ["reserve", "publish", "restore"] {
+      let f = try fixture(tail: "independent unranked full extent")
+      defer { try? FileManager.default.removeItem(at: f.root) }
+      let owners = try canonicalOwners(f)
+      let codec = try installCanonicalGeometry(f, owners: owners)
+      if boundary != "reserve" {
+        try f.db.reserveLibrarySummary(f.identity, frozen: f.frozen, geometry: codec)
+      }
+      if boundary == "restore" {
+        _ = try f.db.publishLibrarySummary(f.identity, frozen: f.frozen, result: f.result,
+          bytes: ProviderRequest.canonicalBytes(f.result.value), permit: UUID().uuidString,
+          resultID: UUID(), geometry: codec)
+      }
+      let original = try XCTUnwrap(f.db.adapterRead { try Data.fetchOne($0,
+        sql: "SELECT geometry FROM extractionSentence WHERE revision = ? AND sentenceID = 2",
+        arguments: [f.identity.revision.uuidString]) })
+      var encoded = try XCTUnwrap(JSONSerialization.jsonObject(with: original) as? [String: Any])
+      let quads = try XCTUnwrap(encoded["quads"] as? [[String: Any]])
+      encoded["quads"] = Array(quads.prefix(1))
+      let truncated = try JSONSerialization.data(withJSONObject: encoded, options: [.sortedKeys])
+      try f.db.adapterWrite { sql in
+        try sql.execute(sql: "UPDATE extractionSentence SET geometry = ? WHERE revision = ? AND sentenceID = 2",
+          arguments: [truncated, f.identity.revision.uuidString])
+      }
+      XCTAssertEqual(f.request.wire.evidenceItems.map(\.anchor.sentenceID), [1, 0])
+      XCTAssertThrowsError(try {
+        switch boundary {
+        case "reserve": try f.db.reserveLibrarySummary(f.identity, frozen: f.frozen, geometry: codec)
+        case "publish":
+          _ = try f.db.publishLibrarySummary(f.identity, frozen: f.frozen, result: f.result,
+            bytes: ProviderRequest.canonicalBytes(f.result.value), permit: UUID().uuidString,
+            resultID: UUID(), geometry: codec)
+        default:
+          _ = try LibrarySummaryService(database: f.db, geometry: codec).restore(paperID: f.identity.paperID)
+        }
+      }()) { XCTAssertEqual($0 as? CanonicalExtractionGeometryError, .semanticExtentMismatch) }
+      XCTAssertEqual(try f.db.adapterRead { try Int.fetchOne($0,
+        sql: "SELECT COUNT(*) FROM librarySummaryJob") }, boundary == "reserve" ? 0 : 1)
+      XCTAssertEqual(try f.db.adapterRead { try Int.fetchOne($0,
+        sql: "SELECT COUNT(*) FROM librarySummaryResult") }, boundary == "restore" ? 1 : 0)
+      XCTAssertEqual(try f.db.adapterRead { try Int.fetchOne($0,
+        sql: "SELECT COUNT(*) FROM librarySummaryVisible") }, boundary == "restore" ? 1 : 0)
+      if boundary == "publish" {
+        XCTAssertEqual(try f.db.adapterRead { try String.fetchOne($0,
+          sql: "SELECT state FROM librarySummaryJob") }, "running")
+      }
+    }
+  }
+
+  func testCanonicalSummaryRejectsCorrelatedFrozenTextAndGeometryForgeryBeforeReservation() throws {
+    let f = try fixture(tail: "independent unranked full extent")
+    defer { try? FileManager.default.removeItem(at: f.root) }
+    let owners = try canonicalOwners(f)
+    let codec = try installCanonicalGeometry(f, owners: owners)
+    let forgedQuote = String(repeating: "z", count: owners[2].fullSourceQuote.utf8.count)
+    var frozen = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(f.frozen))
+      as? [String: Any])
+    var sentences = try XCTUnwrap(frozen["sentences"] as? [[String: Any]])
+    sentences[2]["quote"] = forgedQuote
+    frozen["sentences"] = sentences
+    let forgedFrozen = try JSONDecoder().decode(LibrarySummaryFrozen.self,
+      from: JSONSerialization.data(withJSONObject: frozen))
+    let forgedAnchor = try PDFSentenceAnchor(identity: owners[2].identity,
+      fullSourceQuote: forgedQuote, page: owners[2].page, quads: owners[2].quads)
+    // Codec-only deliberately manufactures correlated corruption, not owner authority.
+    let forgedBytes = try CanonicalExtractionGeometryValidator.encodeCanonicalAnchor(forgedAnchor)
+    try f.db.adapterWrite { sql in
+      try sql.execute(sql: "UPDATE extractionSentence SET text = ?, geometry = ? WHERE revision = ? AND sentenceID = 2",
+        arguments: [forgedQuote, forgedBytes, f.identity.revision.uuidString])
+    }
+    let authority = try ProviderRequest()
+    XCTAssertEqual(try authority.encodeRequest(forgedFrozen.authorized(using: authority)), f.frozen.request)
+    XCTAssertThrowsError(try f.db.reserveLibrarySummary(f.identity, frozen: forgedFrozen, geometry: codec)) {
+      XCTAssertEqual($0 as? CanonicalExtractionGeometryError, .semanticExtentMismatch)
+    }
+    XCTAssertEqual(try f.db.adapterRead { try Int.fetchOne($0,
+      sql: "SELECT COUNT(*) FROM librarySummaryJob") }, 0)
+  }
+
   private func reserve(_ f: Fixture) throws {
     try f.db.reserveLibrarySummary(f.identity, frozen: f.frozen, geometry: FixtureGeometry())
   }

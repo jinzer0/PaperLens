@@ -24,14 +24,15 @@
     "Nonblocking nofollow selected-PDF recognition pinned by real lstat/open/fstat with actual uncertain-close FD/import-lease/security-scope retention",
     "Mounted stored abstract and source-topic observations in both Library presentations and captured native detail, with explicit missing/conflict/provenance and query invalidation",
     "Mounted existing-Paper Folder movement through actual captured generation/SHA/reference/prior-placement comparison, real UUID destinations and same-DB durable movement",
-    "Mounted fresh selected-PDF same-failed-Paper/ImportJob confirmation, guarded atomic capture/execution replacement and six fresh IDs; owned Workspace behavior verified, not visible app UI"
+    "Mounted fresh selected-PDF same-failed-Paper/ImportJob confirmation, guarded atomic capture/execution replacement and six fresh IDs; owned Workspace behavior verified, not visible app UI",
+    "Shared canonical summary geometry resolver with independent owning anchors, complete UTF-8 quote/quads/page validation and explicit precision; production retained-revision owner recovery/injection is not established"
   ],
   "verification": {
     "productUnion": {
       "command": "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --parallel --num-workers 1 --filter ProductTests",
-      "tests": 433,
+      "tests": 439,
       "failures": 0,
-      "output": "artifact://1409",
+      "output": "artifact://1425",
       "evidence": "Real GRDB transactions, owned synthetic files and actual local FIFO IO/close/peer metadata/EPIPE; mocked provider/HTTP transport and synthetic windowless PDFKit conversions. Not authenticated provider, app UI, SDK producer or PDFium execution."
     },
     "nativeCompilation": {
@@ -39,11 +40,11 @@
       "configuration": "Release",
       "architecture": "arm64",
       "minimumOS": "15.0",
-      "derivedData": ".build/product-native-compile-20261010-av",
+      "derivedData": ".build/product-native-compile-20261010-ax",
       "codeSigningAllowed": false,
       "result": "BUILD SUCCEEDED",
-      "rawOutput": "artifact://1410",
-      "output": "artifact://1410",
+      "rawOutput": "artifact://1427",
+      "output": "artifact://1427",
       "applicationAndHelperBinariesExecuted": false,
       "warnings": "AppIntents metadata skipped, PDFium debug-map duplicate/missing-symbol warnings and an unnecessary-await Swift warning remain; no warning suppression or debug-symbol repair claimed."
     },
@@ -297,6 +298,25 @@
     "runtimeParsingOrCalibrationVerified": false,
     "helperExecuted": false,
     "storyAccepted": false
+  },
+  "canonicalSummaryIndependentOwnerBinding": {
+    "preImplementationSpecificationCommit": "44663a9130499521cf971f900d55ead6b306d14c",
+    "assessment": "agent://121-GroundedSummaryBinding; concrete same-file conformance recommended, independent owner recovery still missing",
+    "sourceScope": "CanonicalExtractionGeometry.swift and two existing canonical/summary Product test files only; no schema, migration, membership, provider, UI or runtime owner change",
+    "sourceDiffSha256": "dcd86b677da461e69a0fee2ed2979828ec856a0e3a9fbaa4accc8438b7c0e6cd",
+    "contract": "CanonicalExtractionGeometryValidator now implements LibrarySummaryGeometryValidating using one shared decoder/version/Domain reconstruction and unchanged independent membership/page/full UTF-8 quote/ordered quad/vertex/explicit precision checks. Hit revision/page/sentence fences precede decoding; hit text must match the full anchor byte-for-byte. Existing extraction identity projection and denials preserved.",
+    "behaviorTests": "Four rotations; every hit identity; absent owner; truncated quote/continuation; page metadata and stale encoding; normalization mismatch; exact/one-over precision. Actual sole-GRDB canonical reserve/publish/reopen/restore preserves ordered claims and saved identity after newer visible revision/configuration. Unranked tail truncation denied at every boundary without partial publication; correlated frozen/text/geometry forgery cannot become independent authority.",
+    "focused": {"tests": 34, "failures": 0, "output": "artifact://1419"},
+    "fullProduct": {"tests": 439, "failures": 0, "output": "artifact://1425", "processMode": "--parallel --num-workers 1; all cases invoked, no skip or irreversible-debt quota reset"},
+    "nativeCompilation": {"result": "BUILD SUCCEEDED", "output": "artifact://1427", "derivedData": ".build/product-native-compile-20261010-ax", "codeSigningAllowed": false},
+    "review": "agent://123-CanonicalSummaryIntegrity: SOURCE-ONLY CLEAR / APPROVE; no concrete source defect or blocking test gap",
+    "limits": ["Reopen fixture reuses independently constructed in-memory owners; not production process-restart owner recovery", "Correlated three-copy forgery directly tested at reservation; publication/restore share the same owner core and have truncated-tail/frozen corruption coverage", "Malformed/version/other identity branches retain existing shared extraction coverage rather than duplicate every branch through resolve", "Actual Library injection still requires genuinely independent complete saved-revision owner anchors and explicit precision after restart; deriving owners from stored geometry is prohibited"],
+    "productionOwnerRecoveryAndInjectionEstablished": false,
+    "calibrationOrCertifiedProviderOrAgentPurgeVerified": false,
+    "visibleUIOrAccessibilityVerified": false,
+    "applicationHelperSDKProviderRendererExecuted": false,
+    "storyAccepted": false,
+    "epicAccepted": false
   },
   "koreanLocalImportConfirmation": {
     "baselineCommit": "2014434b0354c37a2efd5ad2452e77a666bbf821",
