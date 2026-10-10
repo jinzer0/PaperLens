@@ -1,5 +1,25 @@
 # Story 1.24 Build Spec — Library presentation and record revisits
 
+## Stored title and year candidate identification
+
+Baseline1408cd4f85d0fbced4688121e150838494ce1403 Library rows/cards/detail
+show the durable imported Paper name, numeric accepted year, abstract and topics,
+but omit validated stored metadata title candidates and omit year candidates/conflict
+from detail. Numeric nil displays year absence even when conflicting or nonnumeric
+actual source candidates exist. Exact source scope: LibraryBrowserView.swift only.
+Keep durable Paper name and name-sort/alert/action identity unchanged; separately show
+stored source-title preview through existing grapheme-safe/no-conflict-precedence
+LibraryMetadataPresentation.preview. Same card/list and captured detail reuse existing
+generation-filtered facts and stored metadata snapshot. Detail shows title/year through
+its existing bounded labelled candidate/provenance renderer. Conflicting years must
+remain explicit; known nonnumeric candidates are unconfirmed, not invented numeric
+years or absent source. Rename the existing detail action to include general Paper
+information without a second detail/focus owner. No rename/persistence/schema/SQL/
+query/sort/summary/provider/read-authority changes, guessed precedence, topics-as-tags
+or PDF attribute access. Parent minimum existing metadata excerpt/conflict and actual
+current-revision year facts scenarios/source compilation only; new native UI tests/
+review/full/native/rendered/accessibility gates remain deferred; acceptance stays false.
+
 ## Compact saved Summary preview versus complete detail
 
 Baseline e50a60f2f2d015a0e0365e6d3a175d44330b96fe renders full saved Summary text
