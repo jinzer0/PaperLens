@@ -195,6 +195,8 @@ public struct LibraryBrowserView: View {
     let fact = currentFacts[paper.id].flatMap { $0.generation == paper.generation ? $0 : nil }
     VStack(alignment: .leading, spacing: 8) {
       Text(paper.title).font(.headline).textSelection(.enabled)
+      Text("출처 제목 · \(LibraryMetadataPresentation.preview(fact?.metadata?.title, limit: 160))")
+        .font(.caption).textSelection(.enabled)
       Text(statusLabel(paper)).font(.caption)
       Text("\(readingLabel(paper.organization.readingStatus)) · \(paper.organization.favorite ? "즐겨찾기" : "즐겨찾기 아님")")
       HStack {
@@ -225,7 +227,13 @@ public struct LibraryBrowserView: View {
         .accessibilityValue(readingLabel(paper.organization.readingStatus))
       }.disabled(!paper.readable || busy || loading || loadFailed)
       if !paper.organization.tags.isEmpty { Text(paper.organization.tags.joined(separator: " · ")).font(.caption) }
-      if let year = fact?.publicationYear { Text("발행연도 \(String(year))").font(.caption) }
+      if fact?.metadata?.year.isConflict == true {
+        Text("발행연도 출처 간 충돌 · 상세에서 후보 확인").font(.caption)
+      } else if let year = fact?.publicationYear { Text("발행연도 \(String(year))").font(.caption) }
+      else if let year = fact?.metadata?.year, !year.candidates.isEmpty {
+        Text("발행연도 미확인 · \(LibraryMetadataPresentation.preview(year, limit: 80))")
+          .font(.caption)
+      }
       else { Text("발행연도 정보 없음").font(.caption).foregroundStyle(.secondary) }
       if let date = fact?.lastReadAt {
         Text("최근 읽음 \(date.formatted())").font(.caption)
@@ -239,12 +247,12 @@ public struct LibraryBrowserView: View {
       HStack {
         Button("열기") { perform { try await service.admitOpen(paper); try await openPaper(paper) } }
           .disabled(!paper.readable || busy)
-        Button("요약·초록·출처 주제 상세") {
+        Button("논문 정보·요약 상세") {
           guard !busy, !loading, !loadFailed else { return }
           identification = LibraryIdentification(paper: paper, metadata: fact?.metadata, summary: fact?.summary)
         }.disabled(busy || loading || loadFailed)
           .focused($focusedIdentification, equals: paper.id)
-          .accessibilityLabel("\(paper.title) 요약·초록·출처 주제 상세")
+          .accessibilityLabel("\(paper.title) 출처 제목·발행연도·요약·초록·출처 주제 상세")
         Button("폴더 이동") {
           guard paper.readable, !busy, !loading, !loadFailed else { return }
           invalidateObservation(); moving = LibraryMovement(paper: paper)
@@ -521,6 +529,8 @@ enum LibraryMetadataPresentation {
         .font(.caption)
       ScrollView {
         VStack(alignment: .leading, spacing: 16) {
+          field("출처 제목", captured.metadata?.title)
+          field("발행연도", captured.metadata?.year)
           LibraryStoredSummary(paper: captured.paper, observation: captured.summary, showEvidence: true)
           field("초록", captured.metadata?.abstract)
           field("출처 주제 · 사용자 태그 아님", captured.metadata?.topics)

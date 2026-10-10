@@ -20,6 +20,24 @@ or PDF attribute access. Parent minimum existing metadata excerpt/conflict and a
 current-revision year facts scenarios/source compilation only; new native UI tests/
 review/full/native/rendered/accessibility gates remain deferred; acceptance stays false.
 
+### Parent stored-identification source receipt
+
+Spec94dadbe14071dd0bc969e869808d88e0502eee8d preceded the sole LibraryBrowser
+change. Both presentations retain durable Paper name and separately show the stored
+source-title preview; conflict never chooses a title winner. Year conflict is explicit
+even if a supplied numeric fact exists; known nonnumeric source candidates display
+unconfirmed rather than fabricated/absent year. Existing captured detail now renders
+title/year candidates with the same bounded provenance field renderer and renamed
+accessible information/summary opener. Existing snapshot/capture/generation/focus/
+sorting/query/organization/Reader/Summary owners remain unchanged. Two existing cases
+pass exit0: grapheme-preserving/no-conflict-precedence preview and actual sole-GRDB
+current-revision/year facts; changed product/UI source compiles in4.47 seconds.
+One-source binary delta against Spec SHA256:
+`ebb91d699bd64cdb5fd3cd44919888b8ed64dbdcf1fe8531602ba7b12bf1cdb3`.
+These do not exercise new rendered title/year branches, captured detail/accessibility
+or actual restart. New tests/review/full/native/formatter remain deferred; no protected
+trial/Provider request/remote action or Story/Epic promotion.
+
 ## Compact saved Summary preview versus complete detail
 
 Baseline e50a60f2f2d015a0e0365e6d3a175d44330b96fe renders full saved Summary text
