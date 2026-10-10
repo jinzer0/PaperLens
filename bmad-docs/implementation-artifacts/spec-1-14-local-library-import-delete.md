@@ -184,3 +184,24 @@ synchronize/chmod/elapsed faults and hostile same-UID/in-place isolation remain 
 manual physical fixture teardown never acknowledges runtime unknown closure. No SDK,
 auth/paid/renderer/helper/live/remote/protected retry ran. Same-Job Retry ledger remains
 unwritten and unapproved by this receipt. Canonical0/26/Epicfalse/Storyfalse unchanged.
+
+## Exact durable import mutation fencing prerequisite
+
+Independent82 observed that current failImport guards only Job ID/state and Paper ID/status;
+recordProgress additionally compares attempt but not the complete execution. Same-Job Retry
+must not be wired until old failure/progress cannot mutate a newer execution. Repair this
+existing AD1/CAS requirement now WITHOUT claiming Retry/history implementation or changing
+policy/epochs/schema. Existing publication already checks complete lineage; factor one
+private same-transaction guard shared by progress/failure/publication over exact Paper ID/
+generation/importing/nondeleting and Job ID/owner Paper/attempt/fence/correlation/input/
+epoch/writer/publication/running. Reject with staleImport before ANY mutation/effect. Failure
+updates Paper and Job atomically and checks both affected rows; cleanupDebt never uses an
+unguarded follow-up Paper update. Progress rejects negative/decreasing bytes without updates.
+Publication remains distinct guarded rename/commit and confirmed destination validation.
+Parent changes EXACT ProductDatabase.swift, LocalLibraryLifecycleTests.swift and this Spec;
+no lifetime/copier/policy/history or public API changes. Own real GRDB table-driven tests
+mutate each identity independently, verify no Paper/progress/failure/debt change, actual
+current failure succeeds atomically, deletion/terminal/current-epoch/reopen fences remain.
+Parent focused/union/native and independent changed-source review/evidence/local commit;
+no SDK/helper/renderer/userdocs/paid/trial/remote actions or Story certification. Missing
+durable input/history ledger is STILL separate development, not inferred from current rows.
