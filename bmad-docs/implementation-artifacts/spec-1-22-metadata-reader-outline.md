@@ -1,5 +1,28 @@
 # Story 1.22 Build Spec — Metadata and Reader Contents
 
+## Synchronous presentation-publication interruption correction
+
+Baseline34071b09ac1f6accbd52ae6d80cd8d1724b567b2 binding prepares and validates
+metadata under actual Reader read access, but its initializer/refresh/observePosition
+then assign @Published state outside that access. Combine willSet subscribers can
+synchronously close/invalidate the actual session during the assignment: invalidate's
+nil write can finish before the outer assignment installs its obsolete nonnil state.
+This violates the existing synchronous presentation-erasure contract; it does not
+reopen any resolved Workspace request/revision finding. Exact source scope:
+Application/ReaderMetadataBinding.swift only. Centralize snapshot installation under
+fresh actual session.withReadAccess and existing pre/post validate; serialize its
+synchronous callbacks with one ephemeral publishing flag, rejecting recursive refresh/
+observation before effects. If installation validation throws, repair state to nil after
+the original setter finishes and rethrow the original error. No new schema, owner,
+lease API, queue, timer, fabricated closure/ACK, context CAS or navigation success.
+Use the same installer for initialization, refresh and persisted observed position;
+restored location remains a candidate, saved position precedes advertisement, and
+existing failed-observation handling cannot resurrect a cleared state. Preserve
+original Paper/generation/SHA/reference/revision, weak PDF and session validations.
+Parent only minimum existing actual outline/persistence and reentrant close/native
+mount scenarios. New publisher-interruption regressions, independent review, full/
+native/runtime checks remain deferred under implementation-first; none is acceptance.
+
 ## Authority and admission
 
 Issue#24 / issue/24-story-1-22; basef14f15f3f1c1fed02657ebf0c7ecdcb23721bfa8. PRODUCT5eac3bb9424ad893eca7d63bc319b71f580838ed; ARCHITECTURE1195c92227cc628e325f5ff24d70cc93639bf7a9; Whole-Epic https://github.com/jinzer0/PaperLens/issues/3#issuecomment-6049004229. Own Spec before source, no repeatedunchangedSHAapproval; no actualgate/live/paid/credential/remote/distribution inference.
