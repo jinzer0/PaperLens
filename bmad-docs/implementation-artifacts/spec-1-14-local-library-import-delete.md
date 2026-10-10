@@ -75,3 +75,44 @@ Architect43 COMMENT/WATCH, read-only five-source proposal, no tests/build/format
 - `AgentLibraryPurging.purgeLibraryPaper(paperID:deletionID:)` must return a matching `AgentLibraryPurgeReceipt` only after actual Agent producer closure and namespace absence. Missing implementation throws and durably remains 삭제 미완료. No default successful adapter is supplied. Main must wire the real peer; synthetic actual separate-namespace purge exists only inside tests.
 - `LibraryView(lifecycle:)` uses actual durable records, native PDF picker and confirmation/cancel, ongoing copy progress, persisted failures, Delete and Retry Deletion. It has no Open Reader or alternate connection authority. Parent owns package/Xcode/Main wiring and authenticated-entry integration.
 - Parent verification input: module `ProductLibrary` compiles the Application policy/lifecycle and Infrastructure DB sources against pinned GRDB and ProviderRequest; tests `Tests/Product/LocalLibraryLifecycleTests.swift` use `@testable import ProductLibrary`. Run `swift test --filter LocalLibraryLifecycleTests` after parent target/link/runtime wiring, with prepared framework runtime path `.build/topology/grdb-xcode-unsigned-e53f5631-f280-4d80-9b66-78c81aaa1372/products`. Also compile LibraryView in the app and exercise native cancel/confirm behind actual authenticated entry. Tests cover actual private copy independence/restart, validation exact/one-over, purge absence/failure/mismatch/drain, same-saga restart retry, interrupted/orphan/missing files, guarded late/foreign publication and real rename failure, and provider CAS restart/ABA. They have not been executed; full crash/barrier/native UI/hardware and real Agent acceptance remain unobserved. StoryDone remains false.
+
+## Actual copier physical-obligation correction — bounded prerequisite
+
+At verified845fbb5 actual copyValidatedPDF438–502 still unconditionally releases its import
+lease/security scope on producerClosureUnknown and does not retain input/output handles.
+Foundation input open follows URL attributes without pinning the actual object, so a swap
+to FIFO/symlink can precede a blocking/wrong open. Selected-recognition repairbdffce6 does
+not repair this separate actual copier. Independent82 confirmed the concrete live obligation;
+safe same-Job Retry cannot infer closure from cleanupDebt/restart or an empty restored map.
+Its separate durable input/history/Retry proposal remains unwritten, NOT authorized by this
+copier phase. Do not call fresh-Paper import Retry or change policy/epochs/shared contracts.
+
+Correct actual input admission with Darwin lstat + nonblocking readonly/nofollow/cloexec open
+and actual fstat regular/device/inode/positive bounded size checks before reads. Preserve
+PDF MIME/signature/SHA/cumulative budget/cancellation and actual copied-byte count. Stage
+creation/open must be exclusive/nofollow and actual owned regular output validated, not
+Foundation overwrite/adoption. No arbitrary-source fallback or permission repair. Same-UID
+hostile path stability is not proved merely by these checks; no such isolation claim.
+
+Capture actual input/output handles with closeOnDealloc:false, existing import resource
+lease, selected URL/security-scope acquisition and immutable copy operation before effects
+that can throw. Root physical ownership beyond local stack and lifecycle facade loss.
+One checked close per acquired endpoint; both known closed (or never acquired) before
+release of the shared actual lease/scope/root. Attempt other acquired endpoint even when
+one close fails. Unknown retains real handles/lease/scope indefinitely, returns the existing
+producerClosureUnknown and leaves the existing writer/cleanupDebt/no namespace-removal
+path intact. No ARC/fd-number probe/error swallowing/retry or synthesized closure ACK.
+No I/O, scope/lease release, callbacks or DB under ownership arbitration locks.
+Known-close failures preserve original cause and legitimately release resources.
+
+EXACT worker3 files: Application/LocalLibraryLifecycle.swift, existing
+Tests/Product/LocalLibraryLifecycleTests.swift and this Spec. Internal required effect seams
+may inject close errors while retaining actual handles and source swap before actual open;
+production still calls real FileHandle.close. Read-only debt inspection may support explicit
+owned-fixture manual cleanup, never mutate runtime unknown state/ACK. No new testing writer
+race/beforeRead API for unverified body/read faults. Parent verifies actual owned FD/GRDB
+normal/partial-open/unknown input/output close/source swaps/no ready/cleanupDebt/pool cap
+behavior and native compilation, then concrete independent review/evidence/local commit.
+Workers skip every test/build/gate/lint/formatter/commit/remote/workflow/delegation/runtime.
+No new Job/schema/root/profile/store/resource counter; untouched canonical retry/deletion/
+SDK/paid/trial/calibration/remote/Story limits remain. Prior305/native-z are prior evidence.
