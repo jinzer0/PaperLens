@@ -1218,3 +1218,41 @@ Three-source binary diff against Speced673b5 SHA256:
 Package/project, reader trigger, policy/codec, lifecycle and physical owners remain
 unchanged. This is real GRDB metadata failure acknowledgment; producer observations,
 actual actor cutover/cleanup, same-Job Retry and Story/Epic acceptance remain open.
+
+## Next bounded slice: deleting late-producer abort history acknowledgment
+
+Verifieda760a9f supplies ordinary failure acknowledgment; the future actual owner
+also needs a separate late-abort transaction after actual beginDeletion revocation.
+Add internal `recordJournaledDeletingImportAbort(expected:replacement:saga:
+cleanupDebt:)` on the existing sole GRDB owner. No generic failure fallback:
+require actual Paper.deleting, exact canonical saga, full ten captured identities,
+genuine bounded revoked history and actual Job.failed/paperDeleting. Succeeded
+or previously failed deleting histories stay eligible only for existing metadata
+helpers, not this specifically late-producer API. No new failure cause argument.
+
+Validate exact canonical expected BLOB, strict immutable event extension, unchanged
+capture/facts/executions/usedPermitIDs and revoked replacement before effects.
+No Retry/new permit/result/config or new current execution. Owner observations
+remain independent authority; encoding cannot infer closure. False cleanupDebt
+requires no retained permits/removal debt; true is conservative. Existing Paper
+debt is OR-preserved, never cleared. Preserve status/saga/generation/reference,
+Job cause/state, counters/folder and every unrelated row/column.
+
+In one adapterWrite, reuse separate deleting CAS plus exact-saga debt-only update
+when needed, typed bounded readback and whole-row comparisons. Reuse existing
+public transaction write-scope/schema/shadow guards from the ordinary failure
+boundary rather than parallel hooks; capture only exact target rows. Preserve
+the mandatory reader trigger and validate actual write count for this debt-only
+operation without assuming a status-trigger write. Refusal, corruption, trigger
+substitution or stale lineage propagates and rolls back the whole transaction.
+NULL legacy is ineligible; no retrospective reconstruction, new store, physical
+cleanup/purge ACK, actor activation or permanent tombstoned journal retention.
+
+Writable scope: ImportRecovery extension, ImportRecoveryPersistenceTests and this
+Spec. Parent owns all gates/review/evidence/commits. Test actual beginDeletion from
+genuine running journal, synthetic unknown/known-clean observations, monotonic
+debt/repeated valid prefix/reopen, strict denial of successful/previously failed
+rows, wrong saga/full identity/status/cause/NULL/type/bounds/prefix/Retry and real
+owned-GRDB ignore/corrupt/foreign-write whole rollback. All tests remain invoked
+in per-test isolated processes; no quota reset/fake ACK, SDK/app/helper/renderer,
+live/paid/protected trial/user document/credential/remote/release action admitted.
