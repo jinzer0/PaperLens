@@ -41,3 +41,29 @@ Actual native/browser/device tests with/without last-good, malformed/wrong probe
 Native Canvas semantic/Korean state+action/non-color cues, actual contrast/text scaling/resize/keyboardVoiceOver label-role-state. Dialog/drawer focus return/accessibility RetryCancelDelete, no deferred polish.
 
 Architect58's historical read-only phase is superseded only for the four local source paths by the explicit human instruction. No tests/gates/formatter/build/GUI/SDK/auth/network/credentials/commits are run in this lane. Done still requires real prerequisite owners/authenticated generation/durable CAS/private lifecycle/native UI and parent verification/independent review; source delivery is not StoryDone.
+
+## Bounded synchronous native key edit boundary
+
+Assessment133 inspected exactly this Spec, ProviderSettingsView.swift,
+ProviderSettingsService.swift and ProviderSettingsTests.swift at source55dd7c7.
+SecureField currently writes transient key before a separate onChange invalidates
+the actual shared candidate. MainActor serializes calls but does not guarantee that
+deferred change observation precedes a candidate completion. Fix the caller to enforce
+the already-required edit invalidation synchronously, not a new authorization policy.
+Exact source scope: ProviderSettingsView.swift and existing ProviderSettingsTests.swift;
+NativeAPIKeyConnection/ProviderSettingsService/selector/storage remain unchanged.
+Internal production-used providerSettingsKeyBinding accepts the existing Binding<String>
+and same service; for changed value call candidateEdited before forwarding the transient
+entry write. Same-value assignment does not invalidate. Replace SecureField binding and
+remove deferred onChange; no controller, secret mirror, selector or extra intent state.
+Parent uses existing real Native owner/owned private slots/test selector/held synthetic
+correlated transport. Test actual helper setter ordering, old successful completion after
+edit denied without CAS, last-good/held lease retained, no automatic probe, unchanged
+terminal cancellation and cleanupBlocked/debt during edits. No real key/authentication,
+network/request or permission repair. Parent focused/full isolated tests, unsigned native
+compile, independent delta review and local evidence commit remain admitted. This
+corrective caller fence preserves approved semantics and strengthens early denial; it
+does not relax profile/storage/security policy or authorize live/paid/SDK trials.
+Controlled Binding/source tests are not observed SwiftUI interleaving, visible secure
+entry/keyboard/VoiceOver/focus/authenticated generation/P3/P6 or Story acceptance.
+Full Epic objective remains active0/26; no remote or protected gate promotion.
