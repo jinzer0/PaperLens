@@ -62,6 +62,8 @@ public final class URLImportService: ObservableObject {
   private let grant: (@Sendable (URLImportConfirmation) async throws -> any URLImportWriter)?
   private var writer: (any URLImportWriter)?
   private var operation: Task<Void, Never>?
+  private var starting = false
+  private var startCancellationRequested = false
   private var lastInput: String?
   private var lastDestination = ""
   private var lastDestinationFolderID: UUID?
@@ -79,7 +81,7 @@ public final class URLImportService: ObservableObject {
 
   public func prepare(_ input: String, destination: String, possibleDuplicate: Bool,
     destinationFolderID: UUID? = nil) throws {
-    guard operation == nil else { throw URLImportError.rejected }
+    guard !starting, operation == nil else { throw URLImportError.rejected }
     let route: ValidatedRequestURL
     do { route = try adapter.route(input) } catch { throw URLImportError.rejected }
     lastInput = input
@@ -93,7 +95,7 @@ public final class URLImportService: ObservableObject {
   }
 
   public func cancelConfirmation() {
-    guard state == .confirming else { return }
+    guard !starting, state == .confirming else { return }
     confirmation?.admission.cancel()
     confirmation = nil
     lastInput = nil
@@ -101,9 +103,15 @@ public final class URLImportService: ObservableObject {
   }
 
   public func continueImport(confirmationID: UUID) {
-    guard operation == nil, state == .confirming,
+    guard !starting, operation == nil, state == .confirming,
       let intent = confirmation, intent.id == confirmationID,
       intent.admission.continueOnce() else { return }
+    starting = true
+    startCancellationRequested = false
+    defer {
+      starting = false
+      startCancellationRequested = false
+    }
     confirmation = nil // Consume once, before any suspension or effect.
     guard let grant else { state = .failed(.writerUnavailable); return }
     state = .downloading
@@ -144,9 +152,12 @@ public final class URLImportService: ObservableObject {
       writer = nil
       operation = nil
     }
+    // Published setters may synchronously request Cancel before this Task exists.
+    if startCancellationRequested { operation?.cancel() }
   }
 
   public func cancelDownload() {
+    if starting { startCancellationRequested = true }
     writer?.revoke()
     operation?.cancel()
   }

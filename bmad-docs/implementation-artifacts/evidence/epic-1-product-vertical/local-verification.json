@@ -37,6 +37,20 @@
     "Existing Library list/grid/detail consume same-snapshot validated saved Summary records with exact Paper/generation and full ordered source quotes; source compiled, not observed rendered UI",
     "Library Summary observation separates actual recent attempt from valid prior result and validation availability; semantic Summary failures do not reject the Library query, SQL/storage errors still throw, insufficient saved evidence is explicit. New error/runtime/UI branches unverified"
   ],
+  "urlStartPublicationCancellationFence": {
+    "baselineCommit": "d82abc85135af4b7860b5a46284990a65bcec64b",
+    "preImplementationSpecificationCommit": "8bdefd08e31fbf6819faec781ab320aa4bbc506e",
+    "sourceScope": ["PaperLensApp/Application/URLImportService.swift"],
+    "sourceDiffSHA256": "3cdbbeeae66d8a8b537fb336d5e9509003434631ccf2be02ab461d094773ea7f",
+    "behavior": "Ephemeral start fence precedes consumed-confirmation/state publication; deny recursive prepare/Continue and obsolete confirmation Cancel while starting. Synchronous download Cancel before Task registration survives and cancels the exact newly installed Task before returning, preserving existing pregrant no-effect cancellation check. Existing immediate writer revocation, postgrant validation/abort, actual download registration/drain, publication/cleanup debt remain unchanged. Flags are scheduling fences, never physical closure/admission/history authority.",
+    "minimumExistingScenarios": {"output": "artifact://1558", "command": "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --parallel --num-workers 1 --filter 'testCancelBeforeContinueAndMissingCapabilityHaveZeroGrantEffects|testContinueConsumesOnceAndRetryRequiresFreshConfirmation|testPrepareCancelAndUnconsumedFactoryCannotReserve'", "exitCode": 0, "tests": 3, "buildSeconds": 4.43, "changedSourceCompiled": true, "scope": "Existing pre-Continue cancellation/missing capability, once-Continue/fresh-confirmation and actual GRDB lifecycle prepared/cancelled no-reservation checks; not new synchronous subscriber branches"},
+    "warnings": "Existing URLImportView deprecated onChange declarations and test unused validation result retained; no suppression",
+    "newSubscriberCancellationRecursivePrepareContinueAndDismissBranchesVerified": false,
+    "newTestsIndependentReviewBroadNativeFormatter": "Deferred under implementation-first; source delivery is not acceptance",
+    "newClosureAuthoritySchemaHistoryResourceOrProducerCapability": false,
+    "protectedTrialOrRemoteOperationExecuted": false,
+    "storyAccepted": false
+  },
   "libraryStoredTitleAndYearCandidatePresentation": {
     "baselineCommit": "1408cd4f85d0fbced4688121e150838494ce1403",
     "preImplementationSpecificationCommit": "94dadbe14071dd0bc969e869808d88e0502eee8d",

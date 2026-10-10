@@ -22,6 +22,25 @@ Parent minimum existing Cancel/once-Continue/fresh-confirmation and lifecycle no
 admission cases/source compilation only. New publisher-callback regressions, independent
 review/full/native/visible/protected trials remain deferred, not waived or accepted.
 
+### Parent URL start-publication source receipt
+
+Spec8bdefd08e31fbf6819faec781ab320aa4bbc506e preceded URLImportService-only
+implementation. starting is set before published confirmation/state setters; pending
+download cancellation survives until the exact new Task is installed and cancelled.
+Recursive prepare/Continue and obsolete confirmation Cancel deny in this interval.
+No Task/grant/producer/physical closure authority comes from these ephemeral flags.
+Existing before-grant Task cancellation check, actual postgrant capability cleanup and
+download registration/drain/publication logic remain unchanged. Existing3 admission
+scenarios pass exit0/build4.43s, artifact://1558: Cancel-before-Continue/missing writer
+zero effects; once-Continue/fresh confirmation; actual lifecycle denies prepared and
+cancelled grants without reserving any Paper. They do not exercise the new synchronous
+subscriber-cancellation/recursive-start branch or actual download/closure runtime.
+Source delta SHA256 against Spec:
+`3cdbbeeae66d8a8b537fb336d5e9509003434631ccf2be02ab461d094773ea7f`.
+Existing deprecated onChange and unused validation-result warnings remain unsuppressed.
+New regressions/independent review/full/native/formatter/visible/protected trials stay
+deferred. Canonical Story/Epic unaccepted; no remote action.
+
 ## Current source phase — actual HTTPS physical ownership repair
 
 Explicit assigned source-only order reuses Spec 46711a8 and baseline 28a43e1
