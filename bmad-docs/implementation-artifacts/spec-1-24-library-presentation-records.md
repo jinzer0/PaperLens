@@ -247,3 +247,22 @@ No fake Retry button: genuine dispatch/closure/Input/profile prerequisites remai
 User implementation-first: no new/correction tests, broad/native gate or independent review;
 parent minimum existing confirmation only. Real new branch/rendering/Provider/profile/Story
 proof remains deferred; canonical completion0/26 unchanged.
+
+### Availability implementation receipt
+
+Worker144 replaced the observation enum with independent immutable record/recent-attempt/
+availability facts in the three scoped files. Same-snapshot actual Job state and complete
+typed identity/lineage/PDF binding are observed without new authority. Valid prior text and
+ordered full quotes remain independently renderable during later running/failed attempts.
+Semantic restore/identity/state failures become explicit Summary verification-failure;
+DatabaseError/RowDecodingError still propagate. Empty saved claim anchors explicitly show
+insufficient evidence. Parent moved unknown semantic Job state inside that failure isolation.
+Binary source diff against7264014 SHA256:
+`f85ffda7469318e85877faef1e29aff4cac128377c5353e42bd82f5f4336298d`.
+Minimum existing atomic year/metadata fact case passed (artifact1525 and final source
+rerun exit0; changed source/UI compiled). This case has no Summary Job and does NOT prove
+new failed/running/corrupt/prior-result or UI branches. No new/correction tests, broad/native
+gate, formatter or independent review. Worker reported reading the root Spec without the
+new section; explicit assignment contained the full contract, and parent uses this committed
+integration Spec. Actual rendering, semantic-error reading continuity, insufficient-evidence
+delivery and genuine Provider/owner/profile activation remain unverified; 0/26 unchanged.

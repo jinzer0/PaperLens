@@ -34,8 +34,23 @@
     "Settings SecureField uses synchronous changed-entry Binding invalidation before forwarding key writes; actual helper/owned shared Native owner tests reject late synthetic success, not observed SwiftUI interleaving or authentication",
     "Organization Save/Revalidate/Cancel synchronously admit before effects through one ephemeral phase; closing has no fake saving cue and denies obsolete completion. Owned interaction/GRDB regressions, not actual overlapping native callbacks.",
     "Native PaperMovementSheet renders Korean labelled progress during actual pending Folder save; one literal cue, no movement/admission/CAS/load/cancellation change or rendered accessibility proof",
-    "Existing Library list/grid/detail consume same-snapshot validated saved Summary records with exact Paper/generation and full ordered source quotes; source compiled, not observed rendered UI"
+    "Existing Library list/grid/detail consume same-snapshot validated saved Summary records with exact Paper/generation and full ordered source quotes; source compiled, not observed rendered UI",
+    "Library Summary observation separates actual recent attempt from valid prior result and validation availability; semantic Summary failures do not reject the Library query, SQL/storage errors still throw, insufficient saved evidence is explicit. New error/runtime/UI branches unverified"
   ],
+  "summaryAvailabilityIsolation": {
+    "preImplementationSpecificationCommit": "7264014",
+    "sourceDiffSHA256": "f85ffda7469318e85877faef1e29aff4cac128377c5353e42bd82f5f4336298d",
+    "sourceScope": ["PaperLensApp/Application/LibraryOrganizationService.swift", "PaperLensApp/Infrastructure/ProductDatabase+LibraryFacts.swift", "PaperLensApp/Features/Library/LibraryBrowserView.swift"],
+    "implementer": "agent://144-SummaryAvailabilityIsolation",
+    "behavior": "Same sole-DB snapshot reads latest inserted attempt with exact typed Paper/generation/SHA/lineage matching; passive insertion order never authorizes action. Prior valid saved result remains independently available; semantic Summary failures become explicit availability failure, storage/SQL errors propagate. Empty accepted claim anchors render insufficient evidence. No new Retry/Provider/navigation/persistence authority.",
+    "minimumExistingScenario": {"test": "testYearFactsOnlyUseCurrentRevisionWithNoConflictPrecedence", "exitCode": 0, "initialOutput": "artifact://1525", "finalSourceRerun": "Exit0; product source rebuilt in2.71 seconds; one existing no-Summary-Job case, not new error/attempt coverage."},
+    "newCorrectionTestsBroadNativeGateFormatterAndReview": "Deferred per user implementation-first on every lane",
+    "priorResultDuringFailureCorruptionAndSQLPropagationRuntimeVerified": false,
+    "visiblePDFReadingContinuityAndInsufficientEvidenceVerified": false,
+    "workerReadSpecLimit": "Reported root Spec lacking new section; explicit assignment supplied contract, parent uses committed integration Spec.",
+    "providerOrProtectedTrialExecuted": false,
+    "storyAccepted": false
+  },
   "originalSummaryOwnerArchiveAndLibraryDisplay": {
     "specificationCommits": ["17c1d03", "4bb1a7b"],
     "sourceDiffBase": "4bb1a7b87bd675dcbb984f3e799712377c2766ca",

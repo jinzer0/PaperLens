@@ -370,23 +370,40 @@ private struct LibraryIdentification: Identifiable {
   var id: UUID { paper.id }
   let paper: OrganizedPaper
   let metadata: ReaderMetadataSnapshot?
-  let summary: AcceptedSummaryObservation?
+  let summary: LibrarySummaryObservation?
 }
 
 @MainActor private struct LibraryStoredSummary: View {
   let paper: OrganizedPaper
-  let observation: AcceptedSummaryObservation?
+  let observation: LibrarySummaryObservation?
   let showEvidence: Bool
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
       Text("저장된 요약").font(.headline)
-      switch observation {
-      case .restored(let record):
-        if record.identity.paperID == paper.id, record.identity.generation == paper.generation,
+      if let observation {
+        if let attempt = observation.recentAttempt,
+          attempt.identity.paperID == paper.id, attempt.identity.generation == paper.generation {
+          switch attempt.activity {
+          case .running: Text("최근 요약 시도 · 준비 중")
+          case .failed: Text("최근 요약 시도 · 실패")
+          case .succeeded: Text("최근 요약 시도 · 완료 (저장 요약의 사용 가능 여부와 별개)")
+          }
+        }
+        switch observation.availability {
+        case .available: EmptyView()
+        case .unavailable:
+          Text("요약 사용 불가 · 검증된 저장 요약 또는 원문 근거 검증 소유자를 사용할 수 없습니다.")
+        case .verificationFailed:
+          Text("요약 검증 실패 · 저장된 요약 또는 최근 시도 정보를 안전하게 확인할 수 없습니다.")
+        }
+        if let record = observation.record,
+          record.identity.paperID == paper.id, record.identity.generation == paper.generation,
           case .librarySummary(let summary, _) = record.result.result {
           Text(summary.text).textSelection(.enabled)
-          if showEvidence {
+          if record.claimAnchors.isEmpty {
+            Text("근거 부족 · 근거 위치 없음")
+          } else if showEvidence {
             Text("저장된 요약의 원문 근거").font(.headline)
             ForEach(record.claimAnchors.indices, id: \.self) { index in
               let anchor = record.claimAnchors[index]
@@ -396,12 +413,10 @@ private struct LibraryIdentification: Identifiable {
               }
             }
           }
-        } else {
-          Text("미확인 · 현재 논문의 저장된 요약을 확인할 수 없습니다.")
+        } else if observation.record != nil {
+          Text("요약 검증 실패 · 현재 논문의 저장된 요약을 확인할 수 없습니다.")
         }
-      case .unavailable:
-        Text("미확인 · 원문 근거의 검증 소유자를 사용할 수 없어 저장된 요약을 확인할 수 없습니다.")
-      case nil:
+      } else {
         Text("미확인 · 확인된 저장 요약 정보가 없습니다.")
       }
     }

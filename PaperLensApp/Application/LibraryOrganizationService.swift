@@ -27,9 +27,22 @@ public struct OrganizationFilter: Equatable, Sendable {
   public var favoritesOnly = false
   public init() {}
 }
-public enum AcceptedSummaryObservation: Sendable {
-  case unavailable
-  case restored(LibrarySummaryRecord)
+public enum LibrarySummaryAvailability: Sendable {
+  case available, unavailable, verificationFailed
+}
+public enum LibrarySummaryAttemptActivity: Sendable {
+  case running, failed, succeeded
+}
+public struct LibrarySummaryRecentAttempt: Sendable {
+  public let identity: LibrarySummaryIdentity
+  public let activity: LibrarySummaryAttemptActivity
+}
+/// Passive facts from one database read, never dispatch or publication authority.
+public struct LibrarySummaryObservation: Sendable {
+  public let record: LibrarySummaryRecord?
+  /// Most recently inserted attempt for the exact Paper/generation/PDF, not current input/configuration.
+  public let recentAttempt: LibrarySummaryRecentAttempt?
+  public let availability: LibrarySummaryAvailability
 }
 
 /// Parent supplies only accepted Reader/metadata values, bound to this exact Paper generation.
@@ -41,9 +54,9 @@ public struct OrganizationSortFacts: Sendable {
   /// Validated stored observation at query time, not publication or read authority.
   public let metadata: ReaderMetadataSnapshot?
   /// Nil means no delivered Summary fact, not known absence or successful generation.
-  public let summary: AcceptedSummaryObservation?
+  public let summary: LibrarySummaryObservation?
   public init(paperID: UUID, generation: UUID, lastReadAt: Date?, publicationYear: Int?,
-    metadata: ReaderMetadataSnapshot?, summary: AcceptedSummaryObservation? = nil) {
+    metadata: ReaderMetadataSnapshot?, summary: LibrarySummaryObservation? = nil) {
     self.paperID = paperID; self.generation = generation
     self.lastReadAt = lastReadAt; self.publicationYear = publicationYear
     self.metadata = metadata
@@ -121,8 +134,12 @@ public actor LibraryOrganizationService {
         fact.lastReadAt?.timeIntervalSince1970.isFinite != false,
         fact.publicationYear.map({ (1...9999).contains($0) }) != false
       else { throw OrganizationError.invalidSortFacts }
-      if case .restored(let record) = fact.summary {
+      if let record = fact.summary?.record {
         guard record.identity.paperID == fact.paperID, record.identity.generation == fact.generation
+        else { throw OrganizationError.invalidSortFacts }
+      }
+      if let attempt = fact.summary?.recentAttempt {
+        guard attempt.identity.paperID == fact.paperID, attempt.identity.generation == fact.generation
         else { throw OrganizationError.invalidSortFacts }
       }
     }
