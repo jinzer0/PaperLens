@@ -136,3 +136,22 @@ Two-source binary diff SHA256:
 Not every late-success/error branch is independently forced; guards source-reviewed.
 No visible UI/keyboard/VoiceOver/focus/physical restart/P6/Story acceptance certification.
 Protected gates unfinished; canonical completion0/26, Story/Epic false, no remote action.
+
+## Bounded native match-navigation continuation
+
+The same public selection notification can interrupt showMatch after installing the
+selection, before go(to:). A synchronously requested newer query or actual session close
+must prevent the obsolete selection from navigating. Capture current search generation
+and document in the existing pin, install selection, then require opened/current
+generation/same mounted document and reacquire the actual ReaderSession read validation
+before navigation. Fences do not substitute for durable session/read authority. Keep
+position/selection/database/lifecycle ownership unchanged; no PDFView injection or fake
+navigation implementation. NativeReaderView.swift is the sole implementation scope.
+Parent adds existing ReaderAnnotationBindingTests.swift actual-presentation regressions
+using the public selection notification: newer missing query during next-match selection
+preserves prior native page; closing during selection leaves document and selection
+detached without subsequent navigation. Reuse owned selectable PDF/GRDB/lifecycle fixture
+and existing test settlement, no app/helper/SDK/provider/renderer trial. Isolated affected
+and full tests, unsigned native compile, independent delta review and local evidence
+commit remain admitted. Visible navigation/accessibility/physical restart/P6 and Story
+acceptance remain unproved. No material architecture, persistent schema or gate change.
