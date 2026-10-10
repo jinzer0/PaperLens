@@ -68,3 +68,18 @@ Also cover complete reveal and session revocation during reconstruction. Parent 
 focused/full isolated tests, fresh unsigned build, independent review and local evidence.
 No visible renderer/accessibility/clipboard trial, live request, remote operation or
 Story acceptance is admitted or inferred; existing protected gates remain unfinished.
+
+### Complete-reveal local receipt
+
+After preimplementation Spec `b4a209d5b280029a37ee5d1b42d980c517453926`, missing
+PDFKit rectangle selection throws before overlay installation/navigation. Owned real
+multi-page capture verifies complete reveal, later-fragment refusal preserving prior
+overlay/page/records/imported bytes, and a later successful complete reveal. Actual
+session close during reconstruction denies presentation and retains the saved record.
+Focused17/zero `artifact://1440`; isolated full Product443/zero `artifact://1445`;
+fresh unsigned native-az `artifact://1446` BUILD SUCCEEDED. Independent126 SOURCE-ONLY
+CLEAR / APPROVE, no actionable delta findings. Two-source binary diff SHA256:
+`8c3a76173418e9d9fc473d1dd15092f3439dbc0f97903adfa5030e4936fe437d`.
+Windowless tests and source review do not establish visible native interaction,
+VoiceOver/focus, clipboard success, application restart or calibrated AI geometry.
+No protected execution/remote action; Story/Epic false, canonical completion0/26.

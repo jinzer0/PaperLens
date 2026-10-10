@@ -132,7 +132,8 @@ import SwiftUI
           AnnotationRectangle(page.bounds(for: .cropBox)) == location.cropBox
         else { throw AnnotationError.invalidSelection }
         for rectangle in location.rectangles {
-          guard let part = page.selection(for: rectangle.cgRect) else { continue }
+          guard let part = page.selection(for: rectangle.cgRect)
+          else { throw AnnotationError.invalidSelection }
           overlay.add(part)
         }
       }

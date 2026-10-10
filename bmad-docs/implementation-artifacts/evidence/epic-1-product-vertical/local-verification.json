@@ -26,14 +26,15 @@
     "Mounted existing-Paper Folder movement through actual captured generation/SHA/reference/prior-placement comparison, real UUID destinations and same-DB durable movement",
     "Mounted fresh selected-PDF same-failed-Paper/ImportJob confirmation, guarded atomic capture/execution replacement and six fresh IDs; owned Workspace behavior verified, not visible app UI",
     "Shared canonical summary geometry resolver with independent owning anchors, complete UTF-8 quote/quads/page validation and explicit precision; production retained-revision owner recovery/injection is not established",
-    "Mounted nonmodal floating parsing-failure overlay derived from the existing accepted persisted status, with safe Korean reason and no separate failure authority; rendered visibility and immediate delivery unverified"
+    "Mounted nonmodal floating parsing-failure overlay derived from the existing accepted persisted status, with safe Korean reason and no separate failure authority; rendered visibility and immediate delivery unverified",
+    "Native saved annotation reveal rejects missing PDFKit rectangle fragments before replacing overlay or navigating; owned windowless multi-page/reentry regressions pass, not visible UI or canonical AI geometry certification"
   ],
   "verification": {
     "productUnion": {
       "command": "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --parallel --num-workers 1 --filter ProductTests",
-      "tests": 441,
+      "tests": 443,
       "failures": 0,
-      "output": "artifact://1438",
+      "output": "artifact://1445",
       "evidence": "Real GRDB transactions, owned synthetic files and actual local FIFO IO/close/peer metadata/EPIPE; mocked provider/HTTP transport and synthetic windowless PDFKit conversions. Not authenticated provider, app UI, SDK producer or PDFium execution."
     },
     "nativeCompilation": {
@@ -41,11 +42,11 @@
       "configuration": "Release",
       "architecture": "arm64",
       "minimumOS": "15.0",
-      "derivedData": ".build/product-native-compile-20261010-ay",
+      "derivedData": ".build/product-native-compile-20261010-az",
       "codeSigningAllowed": false,
       "result": "BUILD SUCCEEDED",
-      "rawOutput": "artifact://1439",
-      "output": "artifact://1439",
+      "rawOutput": "artifact://1446",
+      "output": "artifact://1446",
       "applicationAndHelperBinariesExecuted": false,
       "warnings": "AppIntents metadata skipped, PDFium debug-map duplicate/missing-symbol warnings and an unnecessary-await Swift warning remain; no warning suppression or debug-symbol repair claimed."
     },
@@ -299,6 +300,22 @@
     "runtimeParsingOrCalibrationVerified": false,
     "helperExecuted": false,
     "storyAccepted": false
+  },
+  "completeNativeAnnotationReveal": {
+    "preImplementationSpecificationCommit": "b4a209d5b280029a37ee5d1b42d980c517453926",
+    "sourceScope": "AnnotationInspector.swift and existing ReaderAnnotationBindingTests.swift only; no Reader mount, persistence, lifecycle, lease, canonical geometry or provider change",
+    "sourceDiffSha256": "8c3a76173418e9d9fc473d1dd15092f3439dbc0f97903adfa5030e4936fe437d",
+    "behavior": "Previously skipped nil saved-rectangle selection now throws invalidSelection before overlay installation or navigation. Previously reconstructed fragments remain local; existing session/document/durable membership/native page-geometry guards retained. Prior complete overlay, viewport and saved record survive a missing later fragment; a later complete attempt remains possible.",
+    "focused": {"tests": 17, "failures": 0, "output": "artifact://1440"},
+    "fullProduct": {"tests": 443, "failures": 0, "output": "artifact://1445", "processMode": "--parallel --num-workers 1; every case invoked without skip or irreversible-debt quota reset"},
+    "nativeCompilation": {"result": "BUILD SUCCEEDED", "output": "artifact://1446", "derivedData": ".build/product-native-compile-20261010-az", "codeSigningAllowed": false},
+    "review": "agent://126-CompleteAnnotationReveal: SOURCE-ONLY CLEAR / APPROVE; no actionable delta findings",
+    "actualOwnedCoverage": "Generated owned PDF with actual PDFKit multi-page text capture, guarded GRDB saved record, complete reveal, public test-only PDFDocumentDelegate page-class hook denying later rectangle, unchanged prior overlay/page/navigation/records/immutable imported bytes, subsequent successful two-page reconstruction. Synchronous hook closes actual ReaderSession during reconstruction; stale context cannot install overlay or navigate, saved record retained.",
+    "limits": ["Windowless owned reconstruction is not actual SwiftUI mount or rendered visibility", "Same-context later reveal is not application restart", "Native PDFKit annotation coordinates are not calibrated canonical AI Anchors", "No VoiceOver/focus/clipboard-success certification"],
+    "visibleNativeInteractionVerified": false,
+    "applicationHelperSDKProviderRendererExecuted": false,
+    "storyAccepted": false,
+    "epicAccepted": false
   },
   "acceptedParsingFailureFloatingPresentation": {
     "preImplementationSpecificationCommit": "745e395477b24d99bff1929e3ef5b9077ab75d73",

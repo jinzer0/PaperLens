@@ -9,6 +9,7 @@ import XCTest
 @MainActor private final class AnnotationReentrantPDFView: PDFView {
   var onSelectionRead: (() -> Void)?
   var onNavigation: (() -> Void)?
+  var navigationCalls = 0
   override var currentSelection: PDFSelection? {
     get {
       let selection = super.currentSelection
@@ -20,11 +21,32 @@ import XCTest
     set { super.currentSelection = newValue }
   }
   override func go(to destination: PDFDestination) {
+    navigationCalls += 1
     super.go(to: destination)
     let callback = onNavigation
     onNavigation = nil
     callback?()
   }
+}
+
+/// Public page-class delegate hook; ordinary PDFKit selections unless explicitly denied.
+private final class AnnotationControlledPDFPage: PDFPage {
+  var rejectRectangleSelection = false
+  var rectangleSelectionCalls = 0
+  var onRectangleSelection: (() -> Void)?
+
+  override func selection(for rect: CGRect) -> PDFSelection? {
+    rectangleSelectionCalls += 1
+    let callback = onRectangleSelection
+    onRectangleSelection = nil
+    callback?()
+    guard !rejectRectangleSelection else { return nil }
+    return super.selection(for: rect)
+  }
+}
+
+private final class AnnotationPageDelegate: NSObject, PDFDocumentDelegate {
+  func classForPage() -> AnyClass { AnnotationControlledPDFPage.self }
 }
 
 /// Mirrors presentation ownership: context resets before document detach and lease close.
@@ -33,6 +55,7 @@ import XCTest
   let view = AnnotationReentrantPDFView(frame: CGRect(x: 0, y: 0, width: 800, height: 600))
   var context: ReaderAnnotationContext?
   var discards = 0
+  private let pageDelegate = AnnotationPageDelegate()
 
   init(database: ProductDatabase, lifecycle: LocalLibraryLifecycle) {
     session = ReaderSession(database: database, leaseProvider: LibraryReadLeaseProvider(lifecycle: lifecycle))
@@ -42,6 +65,7 @@ import XCTest
     let identity = try database.annotationIdentity(paperID: paperID)
     try session.open(paperID: paperID, validateDocument: { url in
       let document = try XCTUnwrap(PDFDocument(url: url))
+      document.delegate = self.pageDelegate
       self.view.document = document
       return document.pageCount
     }, discard: { [weak self] in self?.discard() })
@@ -136,6 +160,59 @@ import XCTest
     try fresh.reveal(edited)
     try fresh.delete(edited)
     XCTAssertEqual(try fresh.records(), [highlight])
+  }
+
+  func testIncompleteMultipageRevealHasNoPartialOverlayNavigationOrRecordLoss() async throws {
+    let (_, db, _, id, binding) = try await fixture()
+    defer { binding.session.close() }
+    let context = try binding.open(database: db, paperID: id)
+    let document = try XCTUnwrap(binding.view.document)
+    let reference = try db.readerSnapshot(paperID: id).pdfReference
+    let original = try Data(contentsOf: db.root.appendingPathComponent(reference))
+    let matches = document.findString("alpha", withOptions: [])
+    XCTAssertEqual(matches.count, 2)
+    let complete = PDFSelection(document: document)
+    complete.add(matches[0]); complete.add(matches[1])
+    binding.view.currentSelection = complete
+    let highlight = try context.createHighlight()
+    XCTAssertEqual(highlight.selection.locations.map(\.pageIndex), [0, 1])
+    try context.reveal(highlight)
+    let priorOverlay = try XCTUnwrap(binding.view.highlightedSelections?.first)
+    let priorPage = binding.view.currentPage
+    let priorNavigation = binding.view.navigationCalls
+    let laterPage = try XCTUnwrap(document.page(at: 1) as? AnnotationControlledPDFPage)
+    let priorCalls = laterPage.rectangleSelectionCalls
+    laterPage.rejectRectangleSelection = true
+    XCTAssertThrowsError(try context.reveal(highlight)) {
+      XCTAssertEqual($0 as? AnnotationError, .invalidSelection)
+    }
+    XCTAssertGreaterThan(laterPage.rectangleSelectionCalls, priorCalls)
+    XCTAssertTrue(binding.view.highlightedSelections?.first === priorOverlay)
+    XCTAssertTrue(binding.view.currentPage === priorPage)
+    XCTAssertEqual(binding.view.navigationCalls, priorNavigation)
+    XCTAssertEqual(try context.records(), [highlight])
+    XCTAssertTrue(context.isActive)
+    XCTAssertEqual(try Data(contentsOf: db.root.appendingPathComponent(reference)), original)
+    laterPage.rejectRectangleSelection = false
+    try context.reveal(highlight)
+    XCTAssertEqual(binding.view.highlightedSelections?.first?.pages.count, 2)
+    XCTAssertEqual(binding.view.navigationCalls, priorNavigation + 1)
+  }
+
+  func testReconstructionReentryCannotInstallOverlayOrNavigateAfterSessionClose() async throws {
+    let (_, db, _, id, binding) = try await fixture()
+    defer { binding.session.close() }
+    let context = try binding.open(database: db, paperID: id)
+    let saved = try context.createHighlight()
+    let page = try XCTUnwrap(binding.view.document?.page(at: 1) as? AnnotationControlledPDFPage)
+    let navigation = binding.view.navigationCalls
+    page.onRectangleSelection = { binding.session.close() }
+    XCTAssertThrowsError(try context.reveal(saved))
+    XCTAssertFalse(context.isActive)
+    XCTAssertNil(binding.view.document)
+    XCTAssertNil(binding.view.highlightedSelections)
+    XCTAssertEqual(binding.view.navigationCalls, navigation)
+    XCTAssertEqual(try AnnotationService(database: db).records(for: context.identity), [saved])
   }
 
   func testCancelDataOnlyDraftDoesNotWriteAndCloseResetsAllEditorState() async throws {
