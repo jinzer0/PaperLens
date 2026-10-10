@@ -384,15 +384,18 @@ import SwiftUI
   @State private var annotationOrigin: AnnotationOpener = .browse
   private let paperID: UUID
   private let metadataIdentity: ReaderMetadataIdentity?
+  private let parsingStatus: ParsingStatusView
   private let onReturn: () -> Void
   private let onSaveFailure: (Error) -> Void
   public init(paperID: UUID, session: ReaderSession,
     annotationIdentity: AnnotationPaperIdentity, annotationService: AnnotationService,
     metadataService: ReaderMetadataService, metadataIdentity: ReaderMetadataIdentity?,
+    parsingStatus: ParsingStatusView,
     onReturn: @escaping () -> Void,
     onSaveFailure: @escaping (Error) -> Void) {
     self.paperID = paperID
     self.metadataIdentity = metadataIdentity
+    self.parsingStatus = parsingStatus
     self.onReturn = onReturn
     self.onSaveFailure = onSaveFailure
     _presentation = StateObject(wrappedValue: ReaderPresentation(session: session,
@@ -479,18 +482,20 @@ import SwiftUI
       HSplitView {
         NativePDFSurface(pdfView: presentation.pdfView)
           .frame(minWidth: 240, maxWidth: .infinity, maxHeight: .infinity)
-        if presentation.metadataBinding != nil || presentation.metadataFailure != nil {
-          VStack(alignment: .leading) {
-            if let binding = presentation.metadataBinding {
-              MetadataOutlineView(binding: binding)
-            }
-            if let failure = presentation.metadataFailure {
-              Label(failure, systemImage: "exclamationmark.triangle")
-                .foregroundStyle(.secondary).padding().textSelection(.enabled)
-            }
+        VStack(alignment: .leading) {
+          parsingStatus.padding(12)
+          if presentation.metadataBinding != nil || presentation.metadataFailure != nil {
+            Divider()
           }
-          .frame(minWidth: 200, idealWidth: 300, maxWidth: 420, maxHeight: .infinity, alignment: .topLeading)
+          if let binding = presentation.metadataBinding {
+            MetadataOutlineView(binding: binding)
+          }
+          if let failure = presentation.metadataFailure {
+            Label(failure, systemImage: "exclamationmark.triangle")
+              .foregroundStyle(.secondary).padding().textSelection(.enabled)
+          }
         }
+        .frame(minWidth: 240, idealWidth: 320, maxWidth: 480, maxHeight: .infinity, alignment: .topLeading)
         if let context = presentation.annotationContext {
           AnnotationInspector(context: context, onClose: { presentation.closeAnnotations() })
             .frame(minWidth: 240, idealWidth: 340, maxWidth: 480, maxHeight: .infinity)

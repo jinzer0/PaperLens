@@ -380,18 +380,13 @@ public struct ProductWorkspaceView: View {
   public var body: some View {
     VStack(spacing: 0) {
       if let reader = workspace.reader {
-        VStack(spacing: 0) {
-          ParsingStatusView(database: workspace.database, paperID: reader.id,
-            onUsableRevisionChange: { await workspace.refreshPublishedMetadata(for: reader) })
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-          Divider()
-          NativeReaderView(paperID: reader.id, session: reader.session,
-            annotationIdentity: reader.annotationIdentity, annotationService: workspace.annotations,
-            metadataService: workspace.metadata, metadataIdentity: reader.metadataIdentity,
-            onReturn: { workspace.returnToLibrary() },
-            onSaveFailure: { workspace.reportSaveFailure($0) })
-        }
+        NativeReaderView(paperID: reader.id, session: reader.session,
+          annotationIdentity: reader.annotationIdentity, annotationService: workspace.annotations,
+          metadataService: workspace.metadata, metadataIdentity: reader.metadataIdentity,
+          parsingStatus: ParsingStatusView(database: workspace.database, paperID: reader.id,
+            onUsableRevisionChange: { await workspace.refreshPublishedMetadata(for: reader) }),
+          onReturn: { workspace.returnToLibrary() },
+          onSaveFailure: { workspace.reportSaveFailure($0) })
         .id(reader.mountIdentity)
       } else {
         HStack {

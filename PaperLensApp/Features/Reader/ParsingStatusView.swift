@@ -63,12 +63,17 @@ public struct ParsingStatusView: View {
 
   public var body: some View {
     VStack(alignment: .leading, spacing: 8) {
+      Text("파싱 상태와 복구").font(.headline)
       Label(title, systemImage: icon)
         .accessibilityLabel(title)
       if status?.usableRevision != nil {
         Text("이전에 완성된 원문을 계속 사용할 수 있습니다.")
           .font(.caption)
       }
+      Text("AI 기능 가용성").font(.subheadline)
+      Text(aiPreparationReason).font(.caption)
+      Text("Translation·Paper Chat·Brief 생성은 아직 구현되지 않았습니다.")
+        .font(.caption).foregroundStyle(.secondary)
       if let retryFailure {
         Text(retryFailure)
           .accessibilityLabel(retryFailure)
@@ -94,7 +99,7 @@ public struct ParsingStatusView: View {
           .overlay(RoundedRectangle(cornerRadius: 10).stroke(.secondary.opacity(0.4)))
           .shadow(radius: 3)
           .fixedSize(horizontal: false, vertical: true)
-          // Float below the header, not over its existing refresh/Retry controls.
+          // Float below the status block, not over its existing refresh/Retry controls.
           .alignmentGuide(.bottom) { $0[.top] - 8 }
           .allowsHitTesting(false)
           .accessibilityElement(children: .ignore)
@@ -113,6 +118,16 @@ public struct ParsingStatusView: View {
         do { try await Task.sleep(for: .seconds(1)) } catch { return }
       } while !Task.isCancelled
     }
+  }
+
+  private var aiPreparationReason: String {
+    guard !unavailable, let status else {
+      return "파싱 상태를 확인하기 전에는 AI용 원문의 준비 여부를 판단할 수 없습니다."
+    }
+    guard status.usableRevision != nil else {
+      return "사용 가능한 추출 원문이 없어 번역·논문 대화·Brief 생성을 위한 원문이 준비되지 않았습니다."
+    }
+    return "사용 가능한 추출 원문이 있습니다. 원문 준비가 AI 기능의 실행 또는 완료를 의미하지는 않습니다."
   }
 
   private var title: String {

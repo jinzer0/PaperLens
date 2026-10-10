@@ -23,6 +23,27 @@ Reader search scenarios; new tests/review/full/native/formatter/rendered gates r
 deferred per implementation-first. Scope does not certify immediate/visible notice,
 focus/VoiceOver, real process restart, calibrated parsing/Retry or Story/Epic acceptance.
 
+### Right-panel source delivery receipt
+
+Spec8e4de0e00506cb3605766d671b699b220388b9c3 preceded three-source edits.
+The sole NativeReaderView callsite passes the original ParsingStatusView/database/
+Paper ID/metadata reconciliation callback; it mounts once in the right metadata pane,
+retaining reader.mountIdentity (Paper/generation/actual session) and actual presentation.
+Availability copy distinguishes nil/read-unavailable, missing usable revision and
+accepted retained revision, independently stating all three AI features unimplemented.
+No enabled generation action, fake producer/coordinator/Job or provider dispatch.
+Existing notice and refresh/Retry guards, persistence, metadata and annotation actions
+stay unchanged. The prior no-blank-metadata-panel layout now contains actual recovery
+status even without metadata; no fourth pane or duplicate polling was introduced.
+Parent existing persisted notice/retry/reopen/retained-revision fixture and actual
+windowless Reader search/latest/no-results cases both pass exit0; SwiftPM compiled
+changed sources in4.27 seconds. Only a notice-layout comment changed afterward;
+executable source did not. Final three-source binary diff SHA256 against Spec:
+`e24bf23c179db866f45d13aea03143d70a42b77aa81951bd93f34444f2e33019`.
+Fixtures do not exercise new availability Text branches, actual panel layout/notice
+position/focus/VoiceOver, immediate delivery, process restart or genuine parser/Retry.
+New tests/review/full/native/formatter/protected trials remain deferred; Story/Epic false.
+
 ## Authority and admission
 
 Issue#23 / issue/23-story-1-21, basef14f15f3f1c1fed02657ebf0c7ecdcb23721bfa8. PRODUCT5eac3bb9424ad893eca7d63bc319b71f580838ed; ARCHITECTURE1195c92227cc628e325f5ff24d70cc93639bf7a9; Whole-Epic https://github.com/jinzer0/PaperLens/issues/3#issuecomment-6049004229. Own committed Spec before source; no repeated unchanged-scope SHA approval (parent reconciled proposal's generic per-SHA wording). No actual gates/live/paid/credential/remote/distribution permission inferred.
