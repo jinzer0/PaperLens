@@ -19,6 +19,21 @@ builds/gates/formatters or independent review for this presentation-only slice.
 Deferred required proof remains required; authored source is not compilation,
 rendered Korean/accessibility/privacy proof, Story completion or Epic acceptance.
 
+### Source-only parallel delivery
+
+Executor149-ReaderKoreanFailurePresentation (agent://149-ReaderKoreanFailurePresentation)
+authored only NativeReaderView.swift under committed Spec5ac9505e02a1ec6f90900b4e63daea54909112ca.
+The native banner keeps its existing failure-presence condition and actual actions,
+but shows a fixed Korean failure/next action rather than the internal original String.
+Metadata construction failure displays Korean unavailable/continued-PDF text without
+arbitrary caught error text. Model failure values, thrown errors, save/discard ordering,
+session/pins/PDF/search/annotation/metadata admission are unchanged. Source delta SHA256:
+`a26988511754dc38b509739814857f98c840cc2fce1ec1969198d38d913b99cb`.
+No tests/test modifications/build/gates/formatter/independent review/visible runtime
+were performed; explicit human implementation-first deferral applies to parent and
+all parallel lanes. This is authored source only, not compilation or privacy/UX/Story
+acceptance. All full-Epic runtime/architecture/privacy requirements remain outstanding.
+
 ## Adaptable native Reader controls and panes
 
 Baseline e50a60f2f2d015a0e0365e6d3a175d44330b96fe has a single wide English

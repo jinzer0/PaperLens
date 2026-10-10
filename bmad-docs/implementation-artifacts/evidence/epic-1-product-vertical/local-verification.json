@@ -37,6 +37,27 @@
     "Existing Library list/grid/detail consume same-snapshot validated saved Summary records with exact Paper/generation and full ordered source quotes; source compiled, not observed rendered UI",
     "Library Summary observation separates actual recent attempt from valid prior result and validation availability; semantic Summary failures do not reject the Library query, SQL/storage errors still throw, insufficient saved evidence is explicit. New error/runtime/UI branches unverified"
   ],
+  "parallelKoreanFailurePresentationSourceOnly": {
+    "baselineCommit": "33979f9f42085100a5387a03f53461de7a05ea42",
+    "preImplementationSpecificationCommit": "5ac9505e02a1ec6f90900b4e63daea54909112ca",
+    "humanInstruction": "지금부터 검증, 수정 테스트 모두 생략하고 구현먼저 한다 실시 모든 병렬작업에도 같은 정책 적용한다 실시",
+    "sourceScope": ["PaperLensApp/Features/Reader/NativeReaderView.swift", "PaperLensApp/Features/Library/ProductWorkspaceView.swift"],
+    "combinedSourceDiffSHA256": "b1f4478da9228585c709698731d599e1cb31581991b007dc599a1dd41dcbb400",
+    "readerSourceDiffSHA256": "a26988511754dc38b509739814857f98c840cc2fce1ec1969198d38d913b99cb",
+    "workspaceSourceDiffSHA256": "a7c72ba47752327854f0205809e7967c6a13debb8bc10071ed7908789ec46b3e",
+    "implementationReceipts": ["agent://149-ReaderKoreanFailurePresentation", "agent://150-WorkspaceKoreanFailurePresentation"],
+    "authoredBehavior": "Reader native banner substitutes Korean generic failure/next action for internal English arbitrary-error String while retaining genuine model error values and actual actions. Metadata construction catch uses safe unavailable text. Seven workspace presentation assignments use operation-specific Korean failure/next action rather than arbitrary caught Error descriptions. No error-description parsing or inferred cause, rollback, successful Retry or closure claim.",
+    "unchanged": "Original throws/forwarded errors and model failure truth; actual PDF/session/pins/search/annotations; scope cancellation; same-Job Retry purpose; current Reader/read/metadata request fences and committed CAS/action flow. No new field/helper/API/store/schema/queue/producer/physical authority.",
+    "verificationExecuted": [],
+    "testsAuthoredOrModified": false,
+    "sourceCompiled": false,
+    "independentReviewExecuted": false,
+    "nativeVisibleKeyboardVoiceOverRestartOrPrivacyGateProved": false,
+    "deferral": "Explicit human implementation-first instruction applies to parent and both parallel workers. Tests/correction regressions/build/gates/lint/formatter/independent review/runtime not run. Historical checks do not certify these source revisions. Required proof remains deferred, not waived.",
+    "protectedTrialOrRemoteOperationExecuted": false,
+    "storyAccepted": false,
+    "epicAccepted": false
+  },
   "urlStartPublicationCancellationFence": {
     "baselineCommit": "d82abc85135af4b7860b5a46284990a65bcec64b",
     "preImplementationSpecificationCommit": "8bdefd08e31fbf6819faec781ab320aa4bbc506e",

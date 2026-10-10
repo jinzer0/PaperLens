@@ -20,6 +20,23 @@ presentation-only source slice. Existing tests stay unchanged pending that defer
 verification. Compilation/rendered error/keyboard/VoiceOver/restart proof is unrun;
 all required acceptance/runtime/privacy gates stay open, Story/Epic false.
 
+### Source-only parallel delivery
+
+Executor150-WorkspaceKoreanFailurePresentation (agent://150-WorkspaceKoreanFailurePresentation)
+authored only ProductWorkspaceView.swift under committed Spec5ac9505e02a1ec6f90900b4e63daea54909112ca.
+Seven existing presentation assignments now use operation-specific Korean failure and
+next-action literals: picker/drop preparation, same-Job Retry preparation, imported
+Reader open, imported-state read, published metadata failure and position-save report.
+No arbitrary caught Error text appears in those values; original throws/forwarding,
+actual source-scope cancellation, admission/session/request fences and CAS/action
+flow are unchanged. Source delta SHA256:
+`a7c72ba47752327854f0205809e7967c6a13debb8bc10071ed7908789ec46b3e`.
+Parent and both workers skipped tests/test changes/builds/gates/formatter/independent
+review/visible runtime per explicit human implementation-first instruction. No new
+closure/store/producer/privacy authority, credential/protected trial/remote action or
+acceptance promotion. Source-only delivery does not prove privacy-safe rendering,
+compilation, actual recovery actions or Story/Epic completion; required proof deferred.
+
 ## Authority and admission
 
 Issue#16 / `issue/16-story-1-14`, base119a28aa9cc941b2bf88851228a67c0bfec88f5a. PRODUCT5eac3bb9424ad893eca7d63bc319b71f580838ed; ARCHITECTURE1195c92227cc628e325f5ff24d70cc93639bf7a9; Whole-Epic https://github.com/jinzer0/PaperLens/issues/3#issuecomment-6049004229. Commit own Spec before source; unchanged-scope local work requires no repeated SHA approval. Material scope changes still require governance. Authority does not pass gates or permit credentials/paid/live/remote/distribution.

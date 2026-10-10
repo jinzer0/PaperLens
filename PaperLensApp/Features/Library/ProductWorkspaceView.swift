@@ -108,7 +108,7 @@ public final class ProductWorkspace: ObservableObject {
     guard picker.runModal() == .OK, let source = picker.url else { return }
     Task {
       do { try await prepareImport(source: source) }
-      catch { failure = "PDF 확인 실패. 원본과 저장소 상태를 확인하세요: \(error)" }
+      catch { failure = "PDF 가져오기를 준비하지 못했습니다. 원본 PDF를 다시 선택하세요." }
     }
   }
 
@@ -147,7 +147,7 @@ public final class ProductWorkspace: ObservableObject {
     guard picker.runModal() == .OK, let source = picker.url else { return }
     Task {
       do { try await prepareRetry(source: source, paperID: paperID, generation: generation) }
-      catch { failure = "PDF 재시도 확인 실패. 새 파일과 실패한 작업의 현재 상태를 확인하세요: \(error)" }
+      catch { failure = "PDF 재시도를 준비하지 못했습니다. 작업 상태를 확인하고 PDF를 다시 선택하세요." }
     }
   }
 
@@ -166,7 +166,7 @@ public final class ProductWorkspace: ObservableObject {
   public func acceptDroppedPDF(_ source: URL) {
     Task {
       do { try await prepareImport(source: source) }
-      catch { failure = "PDF 확인 실패: \(error)" }
+      catch { failure = "PDF 가져오기를 준비하지 못했습니다. 원본 PDF를 다시 선택하세요." }
     }
   }
 
@@ -179,7 +179,7 @@ public final class ProductWorkspace: ObservableObject {
           throw OrganizationError.stalePaper
         }
         try await open(paper)
-      } catch { failure = "가져온 PDF를 열지 못했습니다: \(error)" }
+      } catch { failure = "가져온 PDF를 열지 못했습니다. 라이브러리에서 현재 상태를 확인하세요." }
     }
   }
 
@@ -192,7 +192,7 @@ public final class ProductWorkspace: ObservableObject {
         return
       }
       failure = nil
-    } catch { failure = "가져온 PDF의 저장 상태를 확인하지 못했습니다: \(error)" }
+    } catch { failure = "PDF 가져오기 상태를 확인하지 못했습니다. 라이브러리에서 현재 상태를 다시 확인하세요." }
   }
 
   public func open(_ paper: OrganizedPaper) async throws {
@@ -280,7 +280,7 @@ public final class ProductWorkspace: ObservableObject {
       reader = OpenReader(id: observed.id, session: observed.session,
         annotationIdentity: observed.annotationIdentity, metadataIdentity: nil)
     }
-    failure = "현재 논문의 메타데이터를 확인하지 못했습니다: \(failed.error)"
+    failure = "논문 정보를 확인하지 못했습니다. 라이브러리에서 논문을 다시 열어 확인하세요."
     return true
   }
 
@@ -353,7 +353,7 @@ public final class ProductWorkspace: ObservableObject {
   }
 
   public func reportSaveFailure(_ error: Error) {
-    failure = "읽기 위치를 저장하지 못했습니다: \(error)"
+    failure = "읽기 위치를 저장하지 못했습니다. 논문을 다시 열 때 위치를 확인하세요."
   }
 }
 

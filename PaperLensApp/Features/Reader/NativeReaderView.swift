@@ -176,7 +176,7 @@ import SwiftUI
       metadataBinding = binding
       metadataFailure = nil
     } catch {
-      metadataFailure = "논문 정보를 사용할 수 없습니다: \(error)"
+      metadataFailure = "논문 정보와 목차를 사용할 수 없습니다. PDF는 계속 읽을 수 있습니다."
     }
   }
 
@@ -472,9 +472,9 @@ import SwiftUI
           Spacer()
         }.accessibilityElement(children: .contain)
       }
-      if let failure = presentation.failure {
+      if presentation.failure != nil {
         HStack {
-          Label(failure, systemImage: "exclamationmark.triangle")
+          Label("작업을 완료하지 못했습니다. 돌아가기를 시도하거나 저장하지 않고 돌아가세요.", systemImage: "exclamationmark.triangle")
             .foregroundStyle(.red).textSelection(.enabled)
           Button("저장하지 않고 돌아가기") { presentation.session.close(); onReturn() }
         }
