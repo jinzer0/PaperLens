@@ -1735,3 +1735,26 @@ trigger rollback and zero effects before denied admission. Run every Product
 case in isolated processes. UI is source/owned-model verified unless separately
 authorized visible accessibility evidence exists; no app/helper/live trial or
 profile/Story acceptance is granted by this slice.
+
+### Same-Job Retry implementation receipt
+
+The exact six existing source owners and two parent test files implement the
+contract above. Main uses six fresh IDs plus its real current epoch; the same
+Paper/generation/Job and complete prior failed history survive successful Retry.
+Service purpose is explicit newPaper versus retry(captured genuine record), never
+derived from display UUID or missing history. Actual Library picker and confirmation
+are mounted in compiled product source. Counter3 accounts for the Job/Paper updates
+and existing revokeReaderPosition Paper update; row/shadow/schema/readback defenses
+remain required and do not certify arbitrary invisible SQLite effects.
+
+Review119 is SOURCE-ONLY CLEAR. Review120 found two concrete caller cancellation
+gaps: post-service stale confirmation installation and Cancel/Continue scheduling.
+Parent implemented token/task freshness and returned-intent cleanup plus synchronous
+connected confirmation-action consumption. The pre-install owned-fixture callback
+is observation/veto only, not authority. Six caller regressions pass1405; full433
+isolated Product cases pass1409, no skips/reset/fake ACK. Fresh unsigned native-av
+BUILD SUCCEEDED1410; no application/helper binaries executed. Initial passing429/
+430 suites, native-au, review120 and final source hash are preserved in evidence.
+Final caller correction review120 is SOURCE-ONLY CLEAR / APPROVE, both P2 findings
+resolved and no residual findings. Visible accessibility/runtime,
+production Agent purge, calibration/profile and Story/Epic acceptance remain false.

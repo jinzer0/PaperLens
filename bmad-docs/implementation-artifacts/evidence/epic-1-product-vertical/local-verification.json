@@ -23,14 +23,15 @@
     "Actual Library child-pin API on the sole lifecycle registry, readonly one-time sender FD transfer and checked per-token physical closure independent of live Reader tokens",
     "Nonblocking nofollow selected-PDF recognition pinned by real lstat/open/fstat with actual uncertain-close FD/import-lease/security-scope retention",
     "Mounted stored abstract and source-topic observations in both Library presentations and captured native detail, with explicit missing/conflict/provenance and query invalidation",
-    "Mounted existing-Paper Folder movement through actual captured generation/SHA/reference/prior-placement comparison, real UUID destinations and same-DB durable movement"
+    "Mounted existing-Paper Folder movement through actual captured generation/SHA/reference/prior-placement comparison, real UUID destinations and same-DB durable movement",
+    "Mounted fresh selected-PDF same-failed-Paper/ImportJob confirmation, guarded atomic capture/execution replacement and six fresh IDs; owned Workspace behavior verified, not visible app UI"
   ],
   "verification": {
     "productUnion": {
       "command": "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --parallel --num-workers 1 --filter ProductTests",
-      "tests": 418,
+      "tests": 433,
       "failures": 0,
-      "output": "artifact://1360",
+      "output": "artifact://1409",
       "evidence": "Real GRDB transactions, owned synthetic files and actual local FIFO IO/close/peer metadata/EPIPE; mocked provider/HTTP transport and synthetic windowless PDFKit conversions. Not authenticated provider, app UI, SDK producer or PDFium execution."
     },
     "nativeCompilation": {
@@ -38,11 +39,11 @@
       "configuration": "Release",
       "architecture": "arm64",
       "minimumOS": "15.0",
-      "derivedData": ".build/product-native-compile-20261010-at",
+      "derivedData": ".build/product-native-compile-20261010-av",
       "codeSigningAllowed": false,
       "result": "BUILD SUCCEEDED",
-      "rawOutput": "artifact://1369",
-      "output": "artifact://1369",
+      "rawOutput": "artifact://1410",
+      "output": "artifact://1410",
       "applicationAndHelperBinariesExecuted": false,
       "warnings": "AppIntents metadata skipped, PDFium debug-map duplicate/missing-symbol warnings and an unnecessary-await Swift warning remain; no warning suppression or debug-symbol repair claimed."
     },
@@ -296,6 +297,36 @@
     "runtimeParsingOrCalibrationVerified": false,
     "helperExecuted": false,
     "storyAccepted": false
+  },
+  "freshConfirmedSameJobLocalRetry": {
+    "preImplementationSpecificationCommits": ["6d26eb6ac871b8a20210c9c3e4e96d8ba191a841", "12e1d24cd2f2013958a3b879497b395f4eb8c402"],
+    "sourceDiffAgainstFinalSpecificationSha256": "d7b595ccf18b0a66c5163b61e8c9ffe225139c17632e26181fdaa705465e4f54",
+    "sourceScope": "Exact six production and two Product test paths; Spec/evidence excluded",
+    "actualContract": "One genuine failed canonical Job with exact SQL/capture/cause, no debt/permits/revoke/removal and actual namespace absence. Same Paper/generation/Job, six fresh IDs and separately observed actual Main epoch. Typed epoch observation/retryCapture/claim/writer admission and exact execution-column CAS commit together under sole-GRDB row/shadow/schema/WR/counter/readback defenses. Full old prefix/captures/facts/used IDs remain immutable; ordinary CAS still denies changed capture. Existing actual producer/receipt/publication/abort/deletion paths are shared.",
+    "mountedCaller": "Real Library required callback opens a fresh PDF picker. Workspace/FolderImportService retain explicit newPaper versus retry(captured failed record) purpose, rehash actual selected bytes and chosen folder and consume Continue once before validation. retryPaperID is display-only. Same-Job confirmation disclosure, Cancel and stale input/destination/capture cannot replay or create another Paper.",
+    "cancellationCorrection": "Workspace token and post-service task/current-interaction/sheet/reader checks cancel uninstalled returned IDs and release only local source scope. Dismiss invalidates synchronously; conditional defer cannot clobber a newer request. Real confirmation action consumes before actor Cancel and guards Continue itself. Owned-fixture pre-install callback is observation/veto-only, never positive authority.",
+    "focusedCore": {"tests": 6, "failures": 0, "output": "artifact://1394"},
+    "affectedConfirmationAndFolder": {"tests": 28, "failures": 0, "output": "artifact://1395"},
+    "focusedCallerCancellation": {"tests": 6, "failures": 0, "output": "artifact://1405"},
+    "productUnion": {"tests": 433, "failures": 0, "output": "artifact://1409", "processMode": "SwiftPM --parallel --num-workers 1; every Product case invoked", "testsSkipped": 0},
+    "nativeCompilation": {"result": "BUILD SUCCEEDED", "output": "artifact://1410", "derivedData": ".build/product-native-compile-20261010-av", "codeSigningAllowed": false, "applicationAndHelperBinariesExecuted": false},
+    "preservedIntermediateVerification": ["artifact://1380: three actual core cases passed", "artifact://1401:429 Product cases passed before quota case", "artifact://1402: unsigned native-au before caller corrections", "artifact://1404:430 Product cases passed before caller corrections", "agent://120-SameJobRetryCallerIntegrity: initial REQUEST CHANGES, two P2 caller cancellation fences corrected and tested1405"],
+    "coreReview": "agent://119-SameJobRetryIntegrity: SOURCE-ONLY CLEAR / APPROVE; no findings",
+    "callerCorrectionReview": "agent://120-SameJobRetryCallerIntegrity: final SOURCE-ONLY CLEAR / APPROVE; both P2 postawait-publication and synchronous Cancel/Continue findings resolved, no residual findings",
+    "evidence": "Actual failed copy then same-Job fresh SHA/folder success/reopen/current Main epoch preserves old failure/full prefix. Generation/epoch/reused IDs/missing SHA, stale capture, namespace collision, SQL ignore/corruption/foreign compensating writes/user-WR, changed source/deleted destination, legacy/succeeded/missing-PDF succeeded/deleting and near-quota history deny without new execution. Original unknown input/output/both FD cases deny Retry before and after numeric teardown, without quota/scope ACK. Real windowless Workspace Cancel requires fresh confirmation; consumed/stale intents cannot replay. Deterministic post-service dismissal/task cancellation and connected UI-state same-tick Cancel->Continue guard cover the two caller races.",
+    "sameFailedPaperAndJobVerified": true,
+    "mountedInCompiledProduct": true,
+    "savedInputOrAutomaticRetryActivated": false,
+    "legacyHistoryReconstructed": false,
+    "ordinaryCASCaptureReplacementAllowed": false,
+    "physicalQuotaOrUnknownACKRelaxed": false,
+    "visibleUIOrAccessibilityRuntimeVerified": false,
+    "sameUIDRaceABAOrGlobalClosureProved": false,
+    "productionAgentPurgeAvailable": false,
+    "certifiedEnforcementOrCalibrationVerified": false,
+    "helperRendererSDKOrAuthenticatedProviderExecuted": false,
+    "storyAccepted": false,
+    "epicAccepted": false
   },
   "coordinatedJournaledImportLifecycle": {
     "specificationCommit": "1aa47fda2a013115b58c3ae015a11acf131b3e1b",

@@ -1,5 +1,23 @@
 import SwiftUI
 
+struct ImportConfirmationActionState {
+  private(set) var consumed = false
+
+  mutating func beginContinue(destinationsLoaded: Bool, working: Bool) -> Bool {
+    guard destinationsLoaded, !working, !consumed else { return false }
+    consumed = true
+    return true
+  }
+
+  mutating func beginCancel(working: Bool) -> Bool {
+    guard !working else { return false }
+    consumed = true
+    return true
+  }
+
+  mutating func invalidate() { consumed = true }
+}
+
 @MainActor
 public struct ImportConfirmationView: View {
   private let confirmation: LocalImportConfirmation
@@ -10,7 +28,7 @@ public struct ImportConfirmationView: View {
   @State private var destination: UUID?
   @State private var working = false
   @State private var destinationsLoaded = false
-  @State private var consumed = false
+  @State private var action = ImportConfirmationActionState()
   @State private var errorMessage: String?
 
   public init(confirmation: LocalImportConfirmation, service: FolderImportService,
@@ -23,7 +41,12 @@ public struct ImportConfirmationView: View {
 
   public var body: some View {
     VStack(alignment: .leading, spacing: 16) {
-      Text("Confirm local PDF import").font(.headline)
+      Text(confirmation.retryPaperID == nil
+        ? "Confirm local PDF import" : "Confirm failed local PDF Retry").font(.headline)
+      if let paperID = confirmation.retryPaperID {
+        Text("Retry the same failed Paper and import Job using this freshly selected PDF and the confirmed destination. No separate Paper is created.")
+        LabeledContent("Failed Paper", value: paperID.uuidString)
+      }
       LabeledContent("Selected filename", value: confirmation.filename)
       Text("Title, author and identifiers: not extracted").foregroundStyle(.secondary)
       if destinationsLoaded {
@@ -34,18 +57,25 @@ public struct ImportConfirmationView: View {
       } else {
         Text("Loading selected destination…")
       }
-      Text(confirmation.matchingPaperIDs.isEmpty
-        ? "Content hash checked: no matching ready PDF. Other duplicate signals are unavailable."
-        : "Possible duplicate: \(confirmation.matchingPaperIDs.count) ready PDF(s) have the same content hash. Continue creates a separate Paper and PDF copy.")
+      if confirmation.matchingPaperIDs.isEmpty {
+        Text("Content hash checked: no matching ready PDF. Other duplicate signals are unavailable.")
+      } else {
+        Text(confirmation.retryPaperID == nil
+          ? "Possible duplicate: \(confirmation.matchingPaperIDs.count) ready PDF(s) have the same content hash. Continue creates a separate Paper and PDF copy."
+          : "Possible duplicate: \(confirmation.matchingPaperIDs.count) ready PDF(s) have the same content hash. Continue retries only the captured failed Paper and Job; matching Papers are not replaced.")
+      }
       if let errorMessage { Text(errorMessage).foregroundStyle(.red) }
       HStack {
         Button("Cancel") {
+          guard action.beginCancel(working: working) else { return }
+          working = true
           Task { await service.cancel(confirmation.id); dismiss() }
         }.disabled(working)
         Spacer()
-        Button(confirmation.matchingPaperIDs.isEmpty ? "Import" : "Continue importing") {
+        Button(confirmation.retryPaperID != nil ? "Continue Retry"
+          : (confirmation.matchingPaperIDs.isEmpty ? "Import" : "Continue importing")) {
+          guard action.beginContinue(destinationsLoaded: destinationsLoaded, working: working) else { return }
           working = true
-          consumed = true
           Task {
             do {
               let id = try await service.continueImport(confirmation.id,
@@ -57,7 +87,7 @@ public struct ImportConfirmationView: View {
             }
             working = false
           }
-        }.disabled(!destinationsLoaded || working || consumed)
+        }.disabled(!destinationsLoaded || working || action.consumed)
       }
     }
     .padding(24)
@@ -68,14 +98,17 @@ public struct ImportConfirmationView: View {
         folders = try await service.folders()
         if let destination, !folders.contains(where: { $0.id == destination }) {
           errorMessage = "The selected destination no longer exists. Select the PDF again."
-          consumed = true
+          action.invalidate()
         } else {
           destinationsLoaded = true
         }
       }
-      catch { errorMessage = "Unable to load destinations."; consumed = true }
+      catch { errorMessage = "Unable to load destinations."; action.invalidate() }
     }
-    .onDisappear { Task { await service.cancel(confirmation.id) } }
+    .onDisappear {
+      action.invalidate()
+      Task { await service.cancel(confirmation.id) }
+    }
   }
 }
 

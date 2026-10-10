@@ -412,19 +412,70 @@ public actor LocalLibraryLifecycle {
       writer: UUID(), publication: UUID())
     let cancellation = ImportCancellation()
     cancellations[identity.paperID] = cancellation
-    let database = database
-    let namespace = Self.namespace(database.root, identity.paperID)
-    let stage = namespace.appendingPathComponent("\(identity.attempt.uuidString).stage")
-    let copyEffects = copyEffects
-    var reserved = false
-    var producerStarted = false
-    var completion: ActualCopyCompletion?
     do {
       // Source title metadata is not accessed here; only the picker-supplied URL spelling.
       let title = String(source.deletingPathExtension().lastPathComponent.prefix(240))
       try await reserve(identity, title: title,
         facts: .init(expectedSHA256: expectedSHA256, destinationFolderID: destinationFolderID))
-      reserved = true
+    } catch {
+      finishProducer(identity.paperID)
+      throw error
+    }
+    return try await runLocalImport(identity, source: source, expectedSHA256: expectedSHA256,
+      cancellation: cancellation)
+  }
+
+  /// Only a consumed fresh local confirmation may call this; old facts are never replayed.
+  func retryImportPDF(expected: ImportRecoveryRecord, from source: URL,
+    expectedSHA256: String, destinationFolderID: UUID?) async throws -> UUID {
+    let previous = try expected.journal.currentCapture().identity
+    let identity = ImportIdentity(paperID: previous.paperID, generation: previous.generation,
+      jobID: previous.jobID, attempt: UUID(), fence: UUID(), correlation: UUID(), input: UUID(),
+      epoch: epoch, writer: UUID(), publication: UUID())
+    let cancellation = ImportCancellation()
+    await enterTransition(identity.paperID)
+    do {
+      guard cancellations[identity.paperID] == nil, !deletionInFlight.contains(identity.paperID),
+        deletionSagas[identity.paperID] == nil else { throw LocalLibraryError.deletionInProgress }
+      let database = database
+      let namespace = Self.namespace(database.root, identity.paperID)
+      guard try await Task.detached(operation: { try Self.checkedNamespace(namespace) == nil }).value else {
+        throw LocalLibraryError.cleanupFailed
+      }
+      guard !deletionInFlight.contains(identity.paperID) else { throw LocalLibraryError.deletionInProgress }
+      cancellations[identity.paperID] = cancellation
+      let actualEpoch = epoch
+      let acknowledged: ImportRecoveryRecord
+      do {
+        acknowledged = try await Task.detached {
+          try database.reserveJournaledImportRetry(expected: expected, identity: identity,
+            confirmedInput: .init(expectedSHA256: expectedSHA256, destinationFolderID: destinationFolderID),
+            currentEpoch: actualEpoch)
+        }.value
+      } catch {
+        finishProducer(identity.paperID)
+        throw error
+      }
+      records[identity.paperID] = acknowledged
+      leaveTransition(identity.paperID)
+    } catch {
+      leaveTransition(identity.paperID)
+      throw error
+    }
+    return try await runLocalImport(identity, source: source, expectedSHA256: expectedSHA256,
+      cancellation: cancellation)
+  }
+
+  /// Ordinary import and same-Job Retry share the actual producer and every terminal path.
+  private func runLocalImport(_ identity: ImportIdentity, source: URL, expectedSHA256: String?,
+    cancellation: ImportCancellation) async throws -> UUID {
+    let database = database
+    let namespace = Self.namespace(database.root, identity.paperID)
+    let stage = namespace.appendingPathComponent("\(identity.attempt.uuidString).stage")
+    let copyEffects = copyEffects
+    var producerStarted = false
+    var completion: ActualCopyCompletion?
+    do {
       try await writerOpened(identity)
       producerStarted = true
       let actualCompletion = await withTaskCancellationHandler {
@@ -452,14 +503,11 @@ public actor LocalLibraryLifecycle {
       let closureKnown = !producerStarted || (completion?.matches(identity) == true &&
         completion?.closureKnown == true)
       defer { finishProducer(identity.paperID) }
-      if reserved {
-        let failure: ImportAbortFailure
-        if (error as? FolderImportError) == .sourceChanged { failure = .sourceChanged }
-        else if (error as? LocalLibraryError) == .cancelled { failure = .cancelled }
-        else { failure = ActualCopyOwnership.shared.publication(identity) != nil ? .publicationRejected : .importFailed }
-        try await abortClosed(identity, closureKnown: closureKnown, failure: failure)
-      }
-      if !reserved { throw error }
+      let failure: ImportAbortFailure
+      if (error as? FolderImportError) == .sourceChanged { failure = .sourceChanged }
+      else if (error as? LocalLibraryError) == .cancelled { failure = .cancelled }
+      else { failure = ActualCopyOwnership.shared.publication(identity) != nil ? .publicationRejected : .importFailed }
+      try await abortClosed(identity, closureKnown: closureKnown, failure: failure)
       return identity.paperID
     }
   }

@@ -7,6 +7,7 @@ public struct LibraryBrowserView: View {
   private let sortFacts: @Sendable () async throws -> [OrganizationSortFacts]
   private let openPaper: @MainActor (OrganizedPaper) async throws -> Void
   private let importPDF: @MainActor () -> Void
+  private let retryImportPDF: @MainActor (UUID, UUID) -> Void
   private let refreshRevision: Int
   @State private var query = OrganizationQueryState()
   @State private var currentFacts: [UUID: OrganizationSortFacts] = [:]
@@ -29,10 +30,12 @@ public struct LibraryBrowserView: View {
     filter: Binding<OrganizationFilter>, refreshRevision: Int,
     sortFacts: @escaping @Sendable () async throws -> [OrganizationSortFacts],
     openPaper: @escaping @MainActor (OrganizedPaper) async throws -> Void,
-    importPDF: @escaping @MainActor () -> Void) {
+    importPDF: @escaping @MainActor () -> Void,
+    retryImportPDF: @escaping @MainActor (UUID, UUID) -> Void) {
     self.service = service; self.folderService = folderService; self.sortFacts = sortFacts
     _filter = filter; self.refreshRevision = refreshRevision
     self.openPaper = openPaper; self.importPDF = importPDF
+    self.retryImportPDF = retryImportPDF
   }
 
   public var body: some View {
@@ -186,6 +189,10 @@ public struct LibraryBrowserView: View {
           .focused($focusedMovement, equals: paper.id)
           .accessibilityLabel("\(paper.title) 폴더 이동")
         Menu("더 보기") {
+          if paper.status == .importFailed {
+            Button("새 PDF 선택 후 같은 작업 재시도") { requestRetry(paper) }
+              .disabled(busy || loading || loadFailed)
+          }
           Button("태그·읽기 상태·즐겨찾기 편집") {
             invalidateObservation(); editing = paper
           }.disabled(!paper.readable)
@@ -204,6 +211,12 @@ public struct LibraryBrowserView: View {
   private func requestImport() {
     invalidateObservation()
     importPDF()
+    refresh()
+  }
+  private func requestRetry(_ paper: OrganizedPaper) {
+    guard paper.status == .importFailed, !busy, !loading, !loadFailed else { return }
+    invalidateObservation()
+    retryImportPDF(paper.id, paper.generation)
     refresh()
   }
   private func perform(_ operation: @escaping @MainActor () async throws -> Void) {
@@ -244,7 +257,7 @@ public struct LibraryBrowserView: View {
     switch paper.status {
     case .ready: return paper.readable ? "PDF 읽기 가능" : "PDF 사용 불가 · 새로고침 또는 삭제"
     case .importing: return "가져오는 중"
-    case .importFailed: return "가져오기 실패 · 삭제로 정리"
+    case .importFailed: return "가져오기 실패 · 새 PDF로 같은 작업 재시도 또는 삭제"
     case .deleting: return "삭제 중 · 열기 불가"
     case .deletionFailed: return "삭제 미완료 · 삭제 다시 시도"
     case .tombstone: return "삭제됨"

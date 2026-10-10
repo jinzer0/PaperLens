@@ -44,6 +44,8 @@ public final class ProductWorkspace: ObservableObject {
   private let readLeases: LibraryReadLeaseProvider
   private var scopedSource: URL?
   private var pendingConfirmation: UUID?
+  private var importPreparation: UUID?
+  internal var beforeImportConfirmationInstallForOwnedFixtures: (@MainActor (LocalImportConfirmation) -> Void)?
   private var metadataReadRequest: UUID?
   @Published public var sheet: Sheet?
   @Published public var libraryFilter = OrganizationFilter()
@@ -74,17 +76,25 @@ public final class ProductWorkspace: ObservableObject {
 
   public func prepareImport(source: URL) async throws {
     guard !preparing, !opening, sheet == nil, reader == nil else { throw ProductWorkspaceError.busy }
+    let request = UUID()
+    importPreparation = request
     preparing = true
-    defer { preparing = false }
+    defer { if importPreparation == request { importPreparation = nil; preparing = false } }
     let scoped = source.startAccessingSecurityScopedResource()
+    var returnedConfirmation: UUID?
     do {
       let confirmation = try await imports.prepare(source: source)
+      returnedConfirmation = confirmation.id
+      beforeImportConfirmationInstallForOwnedFixtures?(confirmation)
+      try Task.checkCancellation()
+      guard importPreparation == request, !opening, sheet == nil, reader == nil else { throw CancellationError() }
       if scoped { scopedSource = source }
       pendingConfirmation = confirmation.id
       sheet = .confirmation(confirmation)
       failure = nil
     } catch {
       if scoped { source.stopAccessingSecurityScopedResource() }
+      if let returnedConfirmation { await imports.cancel(returnedConfirmation) }
       throw error
     }
   }
@@ -102,7 +112,48 @@ public final class ProductWorkspace: ObservableObject {
     }
   }
 
+  public func prepareRetry(source: URL, paperID: UUID, generation: UUID) async throws {
+    guard !preparing, !opening, sheet == nil, reader == nil else { throw ProductWorkspaceError.busy }
+    let request = UUID()
+    importPreparation = request
+    preparing = true
+    defer { if importPreparation == request { importPreparation = nil; preparing = false } }
+    let scoped = source.startAccessingSecurityScopedResource()
+    var returnedConfirmation: UUID?
+    do {
+      let confirmation = try await imports.prepareRetry(source: source,
+        paperID: paperID, generation: generation)
+      returnedConfirmation = confirmation.id
+      beforeImportConfirmationInstallForOwnedFixtures?(confirmation)
+      try Task.checkCancellation()
+      guard importPreparation == request, !opening, sheet == nil, reader == nil else { throw CancellationError() }
+      if scoped { scopedSource = source }
+      pendingConfirmation = confirmation.id
+      sheet = .confirmation(confirmation)
+      failure = nil
+    } catch {
+      if scoped { source.stopAccessingSecurityScopedResource() }
+      if let returnedConfirmation { await imports.cancel(returnedConfirmation) }
+      throw error
+    }
+  }
+
+  public func pickRetryPDF(paperID: UUID, generation: UUID) {
+    guard !preparing, !opening, sheet == nil, reader == nil else { return }
+    let picker = NSOpenPanel()
+    picker.allowedContentTypes = [.pdf]
+    picker.canChooseDirectories = false
+    picker.allowsMultipleSelection = false
+    guard picker.runModal() == .OK, let source = picker.url else { return }
+    Task {
+      do { try await prepareRetry(source: source, paperID: paperID, generation: generation) }
+      catch { failure = "PDF 재시도 확인 실패. 새 파일과 실패한 작업의 현재 상태를 확인하세요: \(error)" }
+    }
+  }
+
   public func dismissSheet() {
+    importPreparation = nil
+    preparing = false
     if let pendingConfirmation {
       Task { await imports.cancel(pendingConfirmation) }
     }
@@ -357,7 +408,8 @@ public struct ProductWorkspaceView: View {
             LibraryBrowserView(service: workspace.organization, folderService: workspace.imports,
               filter: $workspace.libraryFilter, refreshRevision: workspace.revision,
               sortFacts: { try await workspace.sortFacts() },
-              openPaper: { try await workspace.open($0) }, importPDF: { workspace.pickPDF() })
+              openPaper: { try await workspace.open($0) }, importPDF: { workspace.pickPDF() },
+              retryImportPDF: { workspace.pickRetryPDF(paperID: $0, generation: $1) })
           }
           .onChange(of: urls.state) {
             if case .ready(let paper) = urls.state { workspace.imported(paper) }

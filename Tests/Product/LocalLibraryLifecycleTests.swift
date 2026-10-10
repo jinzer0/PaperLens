@@ -755,6 +755,9 @@ final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
     XCTAssertEqual(failed.permits.count, 1)
     XCTAssertTrue(failed.usedOperationIDs.isEmpty, "Unknown producer cannot authorize cleanup")
     assertActualPoolDenial(pool, authority: authority)
+    XCTAssertThrowsError(try db.captureRetryableImport(paperID: id, generation: observation.identity.generation)) {
+      XCTAssertEqual($0 as? ImportRecoveryPersistenceError, .invalidHistory)
+    }
     tornDown = true
     try effects.physicallyTearDown(debt)
     XCTAssertEqual(pool.active, baseline + 1, "Numeric teardown must not return runtime quota")
@@ -763,6 +766,9 @@ final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
     XCTAssertTrue(LocalLibraryLifecycle.actualCopyDebts.contains { $0.identity.attempt == debt.identity.attempt })
     XCTAssertTrue(FileManager.default.fileExists(atPath: debt.stage.path))
     XCTAssertTrue(try XCTUnwrap(db.libraryRecords().first { $0.id == id }).cleanupDebt)
+    XCTAssertThrowsError(try db.captureRetryableImport(paperID: id, generation: observation.identity.generation)) {
+      XCTAssertEqual($0 as? ImportRecoveryPersistenceError, .invalidHistory)
+    }
   }
 
   func testActualPartialOpenUnknownRetainsOnlyAcquiredInputAndPreservesCollision() async throws {
@@ -1308,6 +1314,287 @@ final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
     XCTAssertEqual(final.count, 1, "Finalization must erase importJob and full history")
     XCTAssertEqual(String.fromDatabaseValue(final[0]["status"]), "tombstone")
     XCTAssertFalse(FileManager.default.fileExists(atPath: namespace(id).path))
+  }
+
+  private func actualRetryFixture() async throws
+    -> (ProductDatabase, LocalLibraryLifecycle, ImportRecoveryRecord, URL) {
+    let db = try ProductDatabase.open(at: root)
+    let lifecycle = try await LocalLibraryLifecycle.open(database: db)
+    let selected = try source("initial-confirmed.pdf")
+    let confirmed = try Data(contentsOf: selected)
+    let digest = SHA256.hash(data: confirmed).map { String(format: "%02x", $0) }.joined()
+    var changed = confirmed
+    changed[changed.count - 1] = 88
+    try changed.write(to: selected)
+    let paperID = try await lifecycle.importPDF(from: selected, expectedSHA256: digest)
+    let rows = try deletionRows(db, paperID)
+    XCTAssertEqual(String.fromDatabaseValue(rows[0]["status"]), "importFailed")
+    XCTAssertEqual(String.fromDatabaseValue(rows[1]["failure"]), "sourceChanged")
+    XCTAssertEqual(Int64.fromDatabaseValue(rows[0]["cleanupDebt"]), 0)
+    let generation = try XCTUnwrap(UUID(uuidString: XCTUnwrap(String.fromDatabaseValue(rows[0]["generation"]))))
+    let capture = try db.captureRetryableImport(paperID: paperID, generation: generation)
+    XCTAssertEqual(try capture.journal.currentCapture().confirmedInput.expectedSHA256, digest)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: namespace(paperID).path))
+    return (db, lifecycle, capture, selected)
+  }
+
+  func testSameJobRetryPublishesFreshInputAndFolderWithImmutableOldFailureAcrossReopen() async throws {
+    let (db, lifecycle, old, original) = try await actualRetryFixture()
+    let prior = try old.journal.currentCapture()
+    let priorSnapshot = try old.journal.snapshot()
+    let originalBytes = try Data(contentsOf: original)
+    let folder = try db.createFolder(name: "Fresh Retry destination")
+    let bytes = Data("%PDF-1.7\nfresh confirmed retry bytes\n%%EOF\n".utf8)
+    let selected = try source("fresh-retry.pdf", bytes: bytes)
+    let digest = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+    let paperID = try await lifecycle.retryImportPDF(expected: old, from: selected,
+      expectedSHA256: digest, destinationFolderID: folder.id)
+    XCTAssertEqual(paperID, prior.identity.paperID)
+    let rows = try deletionRows(db, paperID)
+    let encoded = try XCTUnwrap(Data.fromDatabaseValue(rows[1]["recoveryJournal"]))
+    let journal = try ImportRecoveryJournal.decode(encoded,
+      maximumBytes: ProductJobRecovery.maximumImportRecoveryJournalBytes)
+    let next = try journal.currentCapture()
+    XCTAssertEqual(next.identity.paperID, prior.identity.paperID)
+    XCTAssertEqual(next.identity.generation, prior.identity.generation)
+    XCTAssertEqual(next.identity.jobID, prior.identity.jobID)
+    XCTAssertEqual(next.identity.epoch, lifecycle.epoch)
+    let fresh = [next.identity.attempt, next.identity.fence, next.identity.correlation,
+      next.identity.input, next.identity.writer, next.identity.publication]
+    let previous = [prior.identity.attempt, prior.identity.fence, prior.identity.correlation,
+      prior.identity.input, prior.identity.writer, prior.identity.publication]
+    XCTAssertEqual(Set(fresh).count, 6)
+    XCTAssertTrue(Set(fresh).isDisjoint(with: previous))
+    XCTAssertEqual(next.confirmedInput, .init(expectedSHA256: digest, destinationFolderID: folder.id))
+    XCTAssertTrue(try journal.extends(old.journal, maximumBytes: ProductJobRecovery.maximumImportRecoveryJournalBytes))
+    XCTAssertEqual(Array(try journal.snapshot().executions.dropLast()), priorSnapshot.executions)
+    XCTAssertEqual(try journal.snapshot().current.state, .succeeded)
+    XCTAssertEqual(String.fromDatabaseValue(rows[1]["state"]), "succeeded")
+    XCTAssertEqual(Int64.fromDatabaseValue(rows[1]["bytesCopied"]), Int64(bytes.count))
+    XCTAssertEqual(try db.folderID(for: paperID), folder.id)
+    XCTAssertEqual(try Data(contentsOf: namespace(paperID).appendingPathComponent("document.pdf")), bytes)
+    XCTAssertEqual(try Data(contentsOf: original), originalBytes)
+    let reopened = try ProductDatabase.open(at: root)
+    assertDeletionRowsEqual(rows, try deletionRows(reopened, paperID))
+    XCTAssertEqual(try reopened.adapterRead { sql in try Int.fetchOne(sql, sql: "SELECT COUNT(*) FROM importJob") }, 1)
+    XCTAssertThrowsError(try reopened.captureRetryableImport(paperID: paperID, generation: next.identity.generation))
+  }
+
+  func testSameJobRetryAfterRestartUsesActualCurrentEpochWithoutRewritingOldCapture() async throws {
+    let (db, priorOwner, old, _) = try await actualRetryFixture()
+    let captured = try old.journal.currentCapture()
+    let reopened = try ProductDatabase.open(at: db.root)
+    let current = try await LocalLibraryLifecycle.open(database: reopened)
+    XCTAssertNotEqual(current.epoch, priorOwner.epoch)
+    let fresh = try source("restart-retry.pdf")
+    let bytes = try Data(contentsOf: fresh)
+    let digest = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+    let paperID = try await current.retryImportPDF(expected: old, from: fresh,
+      expectedSHA256: digest, destinationFolderID: nil)
+    let rows = try deletionRows(reopened, paperID)
+    let journal = try ImportRecoveryJournal.decode(XCTUnwrap(Data.fromDatabaseValue(rows[1]["recoveryJournal"])),
+      maximumBytes: ProductJobRecovery.maximumImportRecoveryJournalBytes)
+    XCTAssertEqual(try journal.currentCapture().identity.epoch, current.epoch)
+    XCTAssertEqual(try journal.snapshot().executions.first?.lineage.captured.epoch, captured.identity.epoch.uuidString)
+    XCTAssertTrue(try journal.extends(old.journal, maximumBytes: ProductJobRecovery.maximumImportRecoveryJournalBytes))
+    XCTAssertEqual(try journal.snapshot().current.state, .succeeded)
+  }
+
+  func testStaleSameJobRetryHasNoActualCopierScopeDescriptorOrNamespaceEffects() async throws {
+    let (db, _, old, _) = try await actualRetryFixture()
+    let identity = try old.journal.currentCapture().identity
+    let updated = try db.appendJournaledImport(expected: old,
+      replacement: old.journal.recording(.authorityChanged(old.journal.snapshot().authority)))
+    let before = try deletionRows(db, identity.paperID)
+    let effects = OwnedCopyEffects()
+    let lifecycle = try await LocalLibraryLifecycle.openForOwnedCopyFixtures(database: db, effects: effects.effects)
+    let selected = try source("stale-retry.pdf")
+    let bytes = try Data(contentsOf: selected)
+    let digest = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+    do {
+      _ = try await lifecycle.retryImportPDF(expected: old, from: selected,
+        expectedSHA256: digest, destinationFolderID: nil)
+      XCTFail("Stale full history admitted Retry")
+    } catch { XCTAssertEqual(error as? ImportRecoveryPersistenceError, .staleHistory) }
+    XCTAssertTrue(effects.census.isEmpty)
+    XCTAssertTrue(effects.observations.isEmpty)
+    XCTAssertEqual(effects.scopeCensus, [0, 0])
+    assertDeletionRowsEqual(before, try deletionRows(db, identity.paperID))
+    XCTAssertEqual(try db.captureRetryableImport(paperID: identity.paperID,
+      generation: identity.generation).encoded, updated.encoded)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: namespace(identity.paperID).path))
+  }
+
+  private func freshRetryIdentity(_ previous: ImportIdentity, epoch: UUID,
+    attempt: UUID = UUID()) -> ImportIdentity {
+    ImportIdentity(paperID: previous.paperID, generation: previous.generation, jobID: previous.jobID,
+      attempt: attempt, fence: UUID(), correlation: UUID(), input: UUID(), epoch: epoch,
+      writer: UUID(), publication: UUID())
+  }
+
+  func testRetryCaptureRejectsWrongGenerationEpochReusedIDsAndMissingConfirmedHashWithoutWrites() async throws {
+    let (db, lifecycle, old, _) = try await actualRetryFixture()
+    let previous = try old.journal.currentCapture().identity
+    let before = try deletionRows(db, previous.paperID)
+    XCTAssertThrowsError(try db.captureRetryableImport(paperID: previous.paperID, generation: UUID()))
+    let facts = ImportRecoveryJournal.ConfirmedInput(expectedSHA256: String(repeating: "a", count: 64),
+      destinationFolderID: nil)
+    XCTAssertThrowsError(try db.reserveJournaledImportRetry(expected: old,
+      identity: freshRetryIdentity(previous, epoch: UUID()), confirmedInput: facts, currentEpoch: lifecycle.epoch))
+    XCTAssertThrowsError(try db.reserveJournaledImportRetry(expected: old,
+      identity: freshRetryIdentity(previous, epoch: lifecycle.epoch, attempt: previous.attempt),
+      confirmedInput: facts, currentEpoch: lifecycle.epoch))
+    XCTAssertThrowsError(try db.reserveJournaledImportRetry(expected: old,
+      identity: freshRetryIdentity(previous, epoch: lifecycle.epoch),
+      confirmedInput: .init(expectedSHA256: nil, destinationFolderID: nil), currentEpoch: lifecycle.epoch))
+    assertDeletionRowsEqual(before, try deletionRows(db, previous.paperID))
+    assertDeletionRowsEqual(before, try deletionRows(ProductDatabase.open(at: root), previous.paperID))
+    XCTAssertFalse(FileManager.default.fileExists(atPath: namespace(previous.paperID).path))
+  }
+
+  func testSameJobRetryNamespaceCollisionRetainsOwnedBytesAndHasNoCopierEffects() async throws {
+    let (db, _, old, _) = try await actualRetryFixture()
+    let identity = try old.journal.currentCapture().identity
+    let collision = namespace(identity.paperID)
+    try FileManager.default.createDirectory(at: collision, withIntermediateDirectories: true,
+      attributes: [.posixPermissions: 0o700])
+    let sentinel = collision.appendingPathComponent("existing-owned-obligation")
+    let retained = Data("not cleanup authority".utf8)
+    try retained.write(to: sentinel)
+    let before = try deletionRows(db, identity.paperID)
+    let effects = OwnedCopyEffects()
+    let lifecycle = try await LocalLibraryLifecycle.openForOwnedCopyFixtures(database: db, effects: effects.effects)
+    let selected = try source("collision-retry.pdf")
+    let digest = try SHA256.hash(data: Data(contentsOf: selected)).map { String(format: "%02x", $0) }.joined()
+    do {
+      _ = try await lifecycle.retryImportPDF(expected: old, from: selected,
+        expectedSHA256: digest, destinationFolderID: nil)
+      XCTFail("Retry admission erased a namespace collision")
+    } catch { XCTAssertEqual(error as? LocalLibraryError, .cleanupFailed) }
+    XCTAssertEqual(try Data(contentsOf: sentinel), retained)
+    XCTAssertTrue(effects.census.isEmpty)
+    XCTAssertEqual(effects.scopeCensus, [0, 0])
+    assertDeletionRowsEqual(before, try deletionRows(db, identity.paperID))
+  }
+
+  func testRetryReservationIgnoresCorruptionForeignWritesAndUserWithoutRowidAllRollBack() async throws {
+    let (db, lifecycle, old, _) = try await actualRetryFixture()
+    let previous = try old.journal.currentCapture().identity
+    let before = try deletionRows(db, previous.paperID)
+    let fixtures = [
+      ("CREATE TRIGGER rejectRetry BEFORE UPDATE OF state ON importJob WHEN NEW.state = 'running' BEGIN SELECT RAISE(IGNORE); END", "DROP TRIGGER rejectRetry"),
+      ("CREATE TRIGGER rejectRetry BEFORE UPDATE OF status ON paper WHEN NEW.status = 'importing' BEGIN SELECT RAISE(IGNORE); END", "DROP TRIGGER rejectRetry"),
+      ("CREATE TRIGGER rejectRetry AFTER UPDATE OF state ON importJob WHEN NEW.state = 'running' BEGIN UPDATE importJob SET bytesCopied = 7 WHERE id = NEW.id; END", "DROP TRIGGER rejectRetry"),
+      ("CREATE TABLE unrelatedRetry (id INTEGER PRIMARY KEY); CREATE TRIGGER rejectRetry AFTER UPDATE OF state ON importJob WHEN NEW.state = 'running' BEGIN INSERT INTO unrelatedRetry VALUES (1); DELETE FROM unrelatedRetry; END", "DROP TRIGGER rejectRetry; DROP TABLE unrelatedRetry"),
+      ("CREATE TABLE invisibleRetry (id TEXT PRIMARY KEY) WITHOUT ROWID", "DROP TABLE invisibleRetry")
+    ]
+    for (setup, teardown) in fixtures {
+      try db.adapterWrite { try $0.execute(sql: setup) }
+      XCTAssertThrowsError(try db.reserveJournaledImportRetry(expected: old,
+        identity: freshRetryIdentity(previous, epoch: lifecycle.epoch),
+        confirmedInput: .init(expectedSHA256: String(repeating: "a", count: 64), destinationFolderID: nil),
+        currentEpoch: lifecycle.epoch), setup)
+      assertDeletionRowsEqual(before, try deletionRows(db, previous.paperID))
+      assertDeletionRowsEqual(before, try deletionRows(ProductDatabase.open(at: root), previous.paperID))
+      XCTAssertFalse(FileManager.default.fileExists(atPath: namespace(previous.paperID).path))
+      try db.adapterWrite { try $0.execute(sql: teardown) }
+    }
+  }
+
+  func testFreshRetrySourceOrDestinationChangeConsumesIntentWithoutNewExecution() async throws {
+    for changeSource in [true, false] {
+      let (db, lifecycle, old, _) = try await actualRetryFixture()
+      let identity = try old.journal.currentCapture().identity
+      let service = FolderImportService(database: db, lifecycle: lifecycle)
+      let folder = try db.createFolder(name: "Fresh chosen destination")
+      let selected = try source("confirmation-guard.pdf")
+      let confirmed = try await service.prepareRetry(source: selected, paperID: identity.paperID,
+        generation: identity.generation, destinationFolderID: folder.id)
+      let before = try deletionRows(db, identity.paperID)
+      if changeSource {
+        try Data("%PDF-1.7\nchanged after fresh confirmation\n%%EOF\n".utf8).write(to: selected)
+      } else { try db.deleteFolder(id: folder.id) }
+      do {
+        _ = try await service.continueImport(confirmed.id, destinationFolderID: folder.id)
+        XCTFail("Changed fresh Retry prerequisites admitted")
+      } catch { XCTAssertEqual(error as? FolderImportError, changeSource ? .sourceChanged : .missingFolder) }
+      assertDeletionRowsEqual(before, try deletionRows(db, identity.paperID))
+      XCTAssertFalse(FileManager.default.fileExists(atPath: namespace(identity.paperID).path))
+      do { _ = try await service.continueImport(confirmed.id, destinationFolderID: nil); XCTFail("Failed consumed Retry replayed") }
+      catch { XCTAssertEqual(error as? FolderImportError, .consumedIntent) }
+    }
+  }
+
+  func testRetryPreparationRejectsLegacySucceededUnavailableAndDeletingJobsWithoutReconstruction() async throws {
+    let (db, lifecycle, old, _) = try await actualRetryFixture()
+    let service = FolderImportService(database: db, lifecycle: lifecycle)
+    let legacy = identity()
+    try reserveLegacyImportFixture(in: db, identity: legacy, title: "owned NULL-history fixture")
+    try db.failImport(legacy, failure: "sourceChanged", cleanupDebt: false)
+    let legacyBefore = try deletionRows(db, legacy.paperID)
+    do {
+      _ = try await service.prepareRetry(source: source("legacy-selected.pdf"),
+        paperID: legacy.paperID, generation: legacy.generation)
+      XCTFail("Legacy NULL history reconstructed for Retry")
+    } catch { XCTAssertEqual(error as? ImportRecoveryPersistenceError, .invalidHistory) }
+    assertDeletionRowsEqual(legacyBefore, try deletionRows(db, legacy.paperID))
+    let oldIdentity = try old.journal.currentCapture().identity
+    _ = try db.beginDeletion(oldIdentity.paperID)
+    let deletingBefore = try deletionRows(db, oldIdentity.paperID)
+    do {
+      _ = try await service.prepareRetry(source: source("deleting-selected.pdf"),
+        paperID: oldIdentity.paperID, generation: oldIdentity.generation)
+      XCTFail("Deleting Job admitted Retry")
+    } catch { XCTAssertEqual(error as? ImportRecoveryPersistenceError, .invalidHistory) }
+    assertDeletionRowsEqual(deletingBefore, try deletionRows(db, oldIdentity.paperID))
+    let ready = try await lifecycle.importPDF(from: source("ready-not-retry.pdf"))
+    let readyRows = try deletionRows(db, ready)
+    let generation = try XCTUnwrap(UUID(uuidString: XCTUnwrap(String.fromDatabaseValue(readyRows[0]["generation"]))))
+    XCTAssertThrowsError(try db.captureRetryableImport(paperID: ready, generation: generation))
+    try FileManager.default.removeItem(at: namespace(ready).appendingPathComponent("document.pdf"))
+    let reopened = try ProductDatabase.open(at: root)
+    _ = try await LocalLibraryLifecycle.open(database: reopened)
+    let unavailable = try deletionRows(reopened, ready)
+    XCTAssertEqual(String.fromDatabaseValue(unavailable[0]["status"]), "importFailed")
+    XCTAssertEqual(String.fromDatabaseValue(unavailable[1]["state"]), "succeeded")
+    XCTAssertThrowsError(try reopened.captureRetryableImport(paperID: ready, generation: generation))
+    assertDeletionRowsEqual(unavailable, try deletionRows(reopened, ready))
+  }
+
+  func testSameJobRetryJournalQuotaRefusalHasNoExecutionOrPhysicalEffects() async throws {
+    let (db, _, original, _) = try await actualRetryFixture()
+    let identity = try original.journal.currentCapture().identity
+    let maximum = ProductJobRecovery.maximumImportRecoveryJournalBytes
+    let observed = try original.journal.recording(.authorityChanged(original.journal.snapshot().authority))
+      .encoded(maximumBytes: maximum)
+    let increment = observed.count - original.encoded.count
+    XCTAssertGreaterThan(increment, 0)
+    var document = try XCTUnwrap(JSONSerialization.jsonObject(with: original.encoded) as? [String: Any])
+    var events = try XCTUnwrap(document["events"] as? [Any])
+    let extended = try XCTUnwrap(JSONSerialization.jsonObject(with: observed) as? [String: Any])
+    let observation = try XCTUnwrap((extended["events"] as? [Any])?.last)
+    events += Array(repeating: observation, count: (maximum - original.encoded.count) / increment)
+    document["events"] = events
+    let bytes = try JSONSerialization.data(withJSONObject: document, options: [.sortedKeys])
+    let padded = try ImportRecoveryJournal.decode(bytes, maximumBytes: maximum)
+    XCTAssertEqual(try padded.encoded(maximumBytes: maximum), bytes)
+    let current = try db.appendJournaledImport(expected: original, replacement: padded)
+    let before = try deletionRows(db, identity.paperID)
+    let effects = OwnedCopyEffects()
+    let lifecycle = try await LocalLibraryLifecycle.openForOwnedCopyFixtures(database: db, effects: effects.effects)
+    let selected = try source("quota-retry.pdf")
+    let digest = try SHA256.hash(data: Data(contentsOf: selected)).map { String(format: "%02x", $0) }.joined()
+    do {
+      _ = try await lifecycle.retryImportPDF(expected: current, from: selected,
+        expectedSHA256: digest, destinationFolderID: nil)
+      XCTFail("Retry consumed terminal metadata headroom")
+    } catch { XCTAssertEqual(error as? ImportRecoveryJournal.JournalError, .byteLimitExceeded) }
+    XCTAssertTrue(effects.census.isEmpty)
+    XCTAssertTrue(effects.observations.isEmpty)
+    XCTAssertEqual(effects.scopeCensus, [0, 0])
+    assertDeletionRowsEqual(before, try deletionRows(db, identity.paperID))
+    assertDeletionRowsEqual(before, try deletionRows(ProductDatabase.open(at: root), identity.paperID))
+    XCTAssertFalse(FileManager.default.fileExists(atPath: namespace(identity.paperID).path))
   }
 
   func testDurableRevocationRejectsLatePublicationWithoutRename() throws {

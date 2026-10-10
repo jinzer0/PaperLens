@@ -125,6 +125,147 @@ import ProviderRequest
     return try XCTUnwrap(f.database.publishedMetadataPaperIdentity(paperID: id))
   }
 
+  private func failedImportForRetry(_ f: Fixture) async throws -> ImportRecoveryRecord {
+    let id = try await f.lifecycle.importPDF(from: f.source, expectedSHA256: String(repeating: "0", count: 64))
+    let observed = try await paper(f, id: id)
+    XCTAssertEqual(observed.status, .importFailed)
+    return try f.database.captureRetryableImport(paperID: id, generation: observed.generation)
+  }
+
+  func testWorkspaceFreshRetryConfirmationPublishesSameJobAndCannotReplay() async throws {
+    let f = try await fixture()
+    let old = try await failedImportForRetry(f)
+    let identity = try old.journal.currentCapture().identity
+    let folder = try f.database.createFolder(name: "Retry folder")
+    try await f.workspace.prepareRetry(source: f.source, paperID: identity.paperID, generation: identity.generation)
+    let confirmed = try confirmation(f.workspace)
+    XCTAssertEqual(confirmed.retryPaperID, identity.paperID)
+    XCTAssertEqual(try f.database.captureRetryableImport(paperID: identity.paperID,
+      generation: identity.generation).encoded, old.encoded, "Preparing a sheet reserves no execution")
+    let id = try await f.workspace.imports.continueImport(confirmed.id, destinationFolderID: folder.id)
+    XCTAssertEqual(id, identity.paperID)
+    let journal = try f.database.adapterRead { sql in
+      try ImportRecoveryJournal.decode(XCTUnwrap(Data.fetchOne(sql,
+        sql: "SELECT recoveryJournal FROM importJob WHERE id = ?", arguments: [identity.jobID.uuidString])),
+        maximumBytes: ProductJobRecovery.maximumImportRecoveryJournalBytes)
+    }
+    XCTAssertTrue(try journal.extends(old.journal, maximumBytes: ProductJobRecovery.maximumImportRecoveryJournalBytes))
+    XCTAssertEqual(try journal.currentCapture().identity.jobID, identity.jobID)
+    XCTAssertEqual(try journal.currentCapture().confirmedInput.expectedSHA256, confirmed.sha256)
+    XCTAssertEqual(try journal.snapshot().current.state, .succeeded)
+    XCTAssertEqual(try f.database.folderID(for: id), folder.id)
+    do { _ = try await f.workspace.imports.continueImport(confirmed.id, destinationFolderID: nil); XCTFail("Consumed Retry replayed") }
+    catch { XCTAssertEqual(error as? FolderImportError, .consumedIntent) }
+    XCTAssertEqual(try f.database.adapterRead { try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM importJob") }, 1)
+    f.workspace.sheet = nil
+    f.workspace.dismissSheet()
+  }
+
+  func testWorkspaceCancelRetryLeavesExactFailedHistoryAndRequiresFreshConfirmation() async throws {
+    let f = try await fixture()
+    let old = try await failedImportForRetry(f)
+    let identity = try old.journal.currentCapture().identity
+    try await f.workspace.prepareRetry(source: f.source, paperID: identity.paperID, generation: identity.generation)
+    let cancelled = try confirmation(f.workspace)
+    await f.workspace.imports.cancel(cancelled.id)
+    f.workspace.sheet = nil
+    f.workspace.dismissSheet()
+    XCTAssertEqual(try f.database.captureRetryableImport(paperID: identity.paperID,
+      generation: identity.generation).encoded, old.encoded)
+    do { _ = try await f.workspace.imports.continueImport(cancelled.id, destinationFolderID: nil); XCTFail("Cancelled Retry replayed") }
+    catch { XCTAssertEqual(error as? FolderImportError, .consumedIntent) }
+    try await f.workspace.prepareRetry(source: f.source, paperID: identity.paperID, generation: identity.generation)
+    let fresh = try confirmation(f.workspace)
+    XCTAssertNotEqual(fresh.id, cancelled.id)
+    let id = try await f.workspace.imports.continueImport(fresh.id, destinationFolderID: nil)
+    XCTAssertEqual(id, identity.paperID)
+    XCTAssertEqual(try f.database.libraryRecords().first?.status, .ready)
+    f.workspace.sheet = nil
+    f.workspace.dismissSheet()
+  }
+
+  func testWorkspaceStaleRetryConsumesOnlyFreshIntentWithoutCreatingAnotherJob() async throws {
+    let f = try await fixture()
+    let old = try await failedImportForRetry(f)
+    let identity = try old.journal.currentCapture().identity
+    try await f.workspace.prepareRetry(source: f.source, paperID: identity.paperID, generation: identity.generation)
+    let confirmed = try confirmation(f.workspace)
+    let updated = try f.database.appendJournaledImport(expected: old,
+      replacement: old.journal.recording(.authorityChanged(old.journal.snapshot().authority)))
+    do { _ = try await f.workspace.imports.continueImport(confirmed.id, destinationFolderID: nil); XCTFail("Stale Retry admitted") }
+    catch { XCTAssertEqual(error as? ImportRecoveryPersistenceError, .staleHistory) }
+    XCTAssertEqual(try f.database.captureRetryableImport(paperID: identity.paperID,
+      generation: identity.generation).encoded, updated.encoded)
+    do { _ = try await f.workspace.imports.continueImport(confirmed.id, destinationFolderID: nil); XCTFail("Failed consumed Retry replayed") }
+    catch { XCTAssertEqual(error as? FolderImportError, .consumedIntent) }
+    XCTAssertEqual(try f.database.adapterRead { try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM importJob") }, 1)
+    f.workspace.sheet = nil
+    f.workspace.dismissSheet()
+  }
+
+  func testWorkspaceDismissAfterRetryServiceReturnCannotPublishOrReplayOldConfirmation() async throws {
+    let f = try await fixture()
+    let old = try await failedImportForRetry(f)
+    let identity = try old.journal.currentCapture().identity
+    var returnedID: UUID?
+    f.workspace.beforeImportConfirmationInstallForOwnedFixtures = { confirmation in
+      returnedID = confirmation.id
+      f.workspace.dismissSheet()
+    }
+    do {
+      try await f.workspace.prepareRetry(source: f.source, paperID: identity.paperID, generation: identity.generation)
+      XCTFail("Dismissed preparation installed its returned confirmation")
+    } catch { XCTAssertTrue(error is CancellationError) }
+    XCTAssertNil(f.workspace.sheet)
+    XCTAssertFalse(f.workspace.preparing)
+    let pending = await f.workspace.imports.pendingConfirmationCount
+    XCTAssertEqual(pending, 0)
+    XCTAssertEqual(try f.database.captureRetryableImport(paperID: identity.paperID,
+      generation: identity.generation).encoded, old.encoded)
+    let stale = try XCTUnwrap(returnedID)
+    do { _ = try await f.workspace.imports.continueImport(stale, destinationFolderID: nil); XCTFail("Dismissed returned intent replayed") }
+    catch { XCTAssertEqual(error as? FolderImportError, .consumedIntent) }
+  }
+
+  func testWorkspaceTaskCancelledAfterRetryServiceReturnCancelsUninstalledIntent() async throws {
+    let f = try await fixture()
+    let old = try await failedImportForRetry(f)
+    let identity = try old.journal.currentCapture().identity
+    var returnedID: UUID?
+    f.workspace.beforeImportConfirmationInstallForOwnedFixtures = { confirmation in
+      returnedID = confirmation.id
+      withUnsafeCurrentTask { $0?.cancel() }
+    }
+    let operation = Task {
+      try await f.workspace.prepareRetry(source: f.source, paperID: identity.paperID, generation: identity.generation)
+    }
+    do { try await operation.value; XCTFail("Cancelled preparation installed its returned intent") }
+    catch { XCTAssertTrue(error is CancellationError) }
+    XCTAssertNil(f.workspace.sheet)
+    XCTAssertFalse(f.workspace.preparing)
+    let pending = await f.workspace.imports.pendingConfirmationCount
+    XCTAssertEqual(pending, 0)
+    XCTAssertEqual(try f.database.captureRetryableImport(paperID: identity.paperID,
+      generation: identity.generation).encoded, old.encoded)
+    let stale = try XCTUnwrap(returnedID)
+    do { _ = try await f.workspace.imports.continueImport(stale, destinationFolderID: nil); XCTFail("Cancelled returned intent replayed") }
+    catch { XCTAssertEqual(error as? FolderImportError, .consumedIntent) }
+  }
+
+  func testConfirmationCancelDeniesContinueBeforeAsynchronousActorCancellation() {
+    var action = ImportConfirmationActionState()
+    XCTAssertTrue(action.beginCancel(working: false))
+    XCTAssertFalse(action.beginContinue(destinationsLoaded: true, working: false),
+      "Cancel must fence Continue even before the view's task runs")
+    XCTAssertFalse(action.beginCancel(working: true))
+    var imported = ImportConfirmationActionState()
+    XCTAssertFalse(imported.beginContinue(destinationsLoaded: false, working: false))
+    XCTAssertTrue(imported.beginContinue(destinationsLoaded: true, working: false))
+    XCTAssertFalse(imported.beginContinue(destinationsLoaded: true, working: false),
+      "A failed consumed Continue cannot replay after working clears")
+    XCTAssertTrue(imported.beginCancel(working: false), "Failed confirmation can still be dismissed")
+  }
+
   func testFirstNilAndErrorOutcomesReconcileOpenTimeMetadata() async throws {
     for queryFailure in [false, true] {
       let f = try await fixture()

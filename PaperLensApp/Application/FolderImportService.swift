@@ -12,6 +12,8 @@ public struct LocalImportConfirmation: Identifiable, Equatable, Sendable {
   public let sha256: String
   public let matchingPaperIDs: [UUID]
   public let destinationFolderID: UUID?
+  /// Display only; the retained pending intent owns the exact failed Job capture.
+  public let retryPaperID: UUID?
 }
 
 /// Quiescent sheet observation state. Invalidated requests cannot publish late results.
@@ -105,9 +107,14 @@ private final class SelectedSourceReadRoots: @unchecked Sendable {
 
 /// Only pending user intent is ephemeral. Folder and Paper visibility lives in ProductDatabase.
 public actor FolderImportService {
+  private enum Purpose: Sendable {
+    case newPaper
+    case retry(ImportRecoveryRecord)
+  }
   private struct Pending {
     let source: URL
     let digest: String
+    let purpose: Purpose
   }
   private let database: ProductDatabase
   private let lifecycle: LocalLibraryLifecycle
@@ -172,6 +179,23 @@ public actor FolderImportService {
 
   /// The URL is picker-selected. No bookmark, owned copy, Job or Paper is created here.
   public func prepare(source: URL, destinationFolderID: UUID? = nil) async throws -> LocalImportConfirmation {
+    try await prepareConfirmation(source: source, destinationFolderID: destinationFolderID,
+      purpose: .newPaper, retryPaperID: nil)
+  }
+
+  public func prepareRetry(source: URL, paperID: UUID, generation: UUID,
+    destinationFolderID: UUID? = nil) async throws -> LocalImportConfirmation {
+    let database = database
+    let captured = try await Task.detached {
+      try database.captureRetryableImport(paperID: paperID, generation: generation)
+    }.value
+    try Task.checkCancellation()
+    return try await prepareConfirmation(source: source, destinationFolderID: destinationFolderID,
+      purpose: .retry(captured), retryPaperID: paperID)
+  }
+
+  private func prepareConfirmation(source: URL, destinationFolderID: UUID?,
+    purpose: Purpose, retryPaperID: UUID?) async throws -> LocalImportConfirmation {
     let database = database
     let closeSelectedSource = closeSelectedSource
     let beforeOpen = beforeOpen
@@ -182,9 +206,10 @@ public actor FolderImportService {
     }.value
     try Task.checkCancellation()
     let id = UUID()
-    pending[id] = Pending(source: source, digest: facts.0)
+    pending[id] = Pending(source: source, digest: facts.0, purpose: purpose)
     return LocalImportConfirmation(id: id, filename: source.lastPathComponent,
-      sha256: facts.0, matchingPaperIDs: facts.1, destinationFolderID: destinationFolderID)
+      sha256: facts.0, matchingPaperIDs: facts.1, destinationFolderID: destinationFolderID,
+      retryPaperID: retryPaperID)
   }
 
   public func cancel(_ confirmationID: UUID) {
@@ -199,17 +224,25 @@ public actor FolderImportService {
     let database = database
     let closeSelectedSource = closeSelectedSource
     let beforeOpen = beforeOpen
-    try await Task.detached {
+    let digest = try await Task.detached {
       try database.validateFolderDestination(destinationFolderID)
-      guard try Self.hashSelectedSource(intent.source, close: closeSelectedSource,
-        beforeOpen: beforeOpen) == intent.digest else {
+      let digest = try Self.hashSelectedSource(intent.source, close: closeSelectedSource,
+        beforeOpen: beforeOpen)
+      guard digest == intent.digest else {
         throw FolderImportError.sourceChanged
       }
+      return digest
     }.value
     try Task.checkCancellation()
     // Existing owner must compare the digest of its actual copied bytes again before publish.
-    return try await lifecycle.importPDF(from: intent.source, expectedSHA256: intent.digest,
-      destinationFolderID: destinationFolderID)
+    switch intent.purpose {
+    case .newPaper:
+      return try await lifecycle.importPDF(from: intent.source, expectedSHA256: digest,
+        destinationFolderID: destinationFolderID)
+    case .retry(let captured):
+      return try await lifecycle.retryImportPDF(expected: captured, from: intent.source,
+        expectedSHA256: digest, destinationFolderID: destinationFolderID)
+    }
   }
 
   private nonisolated static func hashSelectedSource(_ source: URL,

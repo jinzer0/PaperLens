@@ -104,6 +104,126 @@ private final class ImportFailureShadowWriteScope: TransactionObserver {
 }
 
 extension ProductDatabase {
+  func captureRetryableImport(paperID: UUID, generation: UUID) throws -> ImportRecoveryRecord {
+    try adapterRead { db in
+      try Self.retryableImport(paperID: paperID, generation: generation, in: db)
+    }
+  }
+
+  private static func retryableImport(paperID: UUID, generation: UUID,
+    in db: Database) throws -> ImportRecoveryRecord {
+    let jobs = try boundedDeletionJobs(paperID, in: db)
+    guard jobs.count == 1, let jobID = recoveryString(jobs[0], "id"),
+      UUID(uuidString: jobID)?.uuidString == jobID,
+      let record = try readImportRecoveryForAdmission(jobID: jobID, saga: nil, in: db) else {
+      throw ImportRecoveryPersistenceError.invalidHistory
+    }
+    let identity = try record.journal.currentCapture().identity
+    guard identity.paperID == paperID, identity.generation == generation else {
+      throw ImportRecoveryPersistenceError.staleHistory
+    }
+    try validateExpectedRecovery(record)
+    let snapshot = try record.journal.snapshot()
+    let row = try recoveryRow(identity,
+      maximumBytes: ProductJobRecovery.maximumImportRecoveryJournalBytes, in: db)
+    guard case .failed = snapshot.current.state, !snapshot.revoked,
+      snapshot.permits.isEmpty, snapshot.removalDebt == nil, snapshot.pendingRemoval == nil,
+      recoveryString(row, "paperStatus") == "importFailed",
+      recoveryString(row, "jobState") == "failed",
+      Int64.fromDatabaseValue(row["cleanupDebt"]) == 0,
+      nullColumns(row, ["deletionID", "pdfReference"]) else {
+      throw ImportRecoveryPersistenceError.invalidHistory
+    }
+    return record
+  }
+
+  func reserveJournaledImportRetry(expected: ImportRecoveryRecord, identity: ImportIdentity,
+    confirmedInput: ImportRecoveryJournal.ConfirmedInput, currentEpoch: UUID) throws -> ImportRecoveryRecord {
+    guard identity.epoch == currentEpoch, confirmedInput.expectedSHA256 != nil else {
+      throw ImportRecoveryPersistenceError.invalidHistory
+    }
+    return try adapterWrite { db in
+      let maximum = ProductJobRecovery.maximumImportRecoveryJournalBytes
+      try Self.validateExpectedRecovery(expected)
+      let oldIdentity = try expected.journal.currentCapture().identity
+      guard identity.paperID == oldIdentity.paperID, identity.generation == oldIdentity.generation,
+        identity.jobID == oldIdentity.jobID else { throw ImportRecoveryPersistenceError.staleHistory }
+      let current = try Self.retryableImport(paperID: identity.paperID, generation: identity.generation, in: db)
+      guard current.encoded == expected.encoded else { throw ImportRecoveryPersistenceError.staleHistory }
+      try Self.validateImportDestination(confirmedInput.destinationFolderID, in: db)
+      var journal = expected.journal
+      if try journal.snapshot().authority.epoch != currentEpoch.uuidString {
+        journal = try journal.recording(.startup(currentEpoch: currentEpoch.uuidString))
+      }
+      journal = try journal.retrying(identity: identity, confirmedInput: confirmedInput)
+      let lineage = try journal.snapshot().current.lineage
+      journal = try journal.recording(.claim(lineage))
+      journal = try journal.recording(.acquireWriter(lineage, permit: identity.writer.uuidString))
+      let opened = try journal.recording(.writerClosure(lineage, permit: identity.writer.uuidString, .open))
+      try LocalLibraryLifecycle.preflight(opened)
+      guard try journal.extends(expected.journal, maximumBytes: maximum) else {
+        throw ImportRecoveryPersistenceError.invalidHistory
+      }
+      let bytes = try Self.recoveryEncode(journal, maximumBytes: maximum)
+      let before = try Self.importRows(oldIdentity, in: db)
+      let folder = try Self.importFolder(identity.paperID, in: db)
+      guard let schemaVersion = try Int64.fetchOne(db, sql: "PRAGMA main.schema_version"),
+        let paperRowID = try Int64.fetchOne(db, sql: "SELECT rowid FROM main.paper WHERE id = ?",
+          arguments: [identity.paperID.uuidString]),
+        let jobRowID = try Int64.fetchOne(db, sql: "SELECT rowid FROM main.importJob WHERE id = ?",
+          arguments: [identity.jobID.uuidString]) else { throw ImportRecoveryPersistenceError.invalidHistory }
+      let databases = try Row.fetchAll(db, sql: "PRAGMA database_list")
+      let scope = ImportFailureWriteScope(paperRowID: paperRowID, jobRowID: jobRowID)
+      let shadowScope = ImportFailureShadowWriteScope(shadowTables:
+        try Self.importRecoveryShadowTables(databases: databases, in: db))
+      db.add(transactionObserver: scope, extent: .nextTransaction)
+      db.add(transactionObserver: shadowScope, extent: .nextTransaction)
+      let changesBefore = try Int64.fetchOne(db, sql: "SELECT total_changes()")
+      let old = Self.recoveryIDs(oldIdentity)
+      let fresh = Self.recoveryIDs(identity)
+      try db.execute(sql: """
+        UPDATE importJob SET attempt = ?, fence = ?, correlation = ?, input = ?, epoch = ?,
+          writer = ?, publication = ?, recoveryJournal = ?, state = 'running', failure = NULL, bytesCopied = 0
+        WHERE id = ? AND paperID = ? AND attempt = ? AND fence = ? AND correlation = ?
+          AND input = ? AND epoch = ? AND writer = ? AND publication = ? AND recoveryJournal IS ?
+          AND state = 'failed' AND failure IS ?
+          AND EXISTS (SELECT 1 FROM paper p WHERE p.id = importJob.paperID AND p.generation = ?
+            AND p.status = 'importFailed' AND p.cleanupDebt = 0 AND p.deletionID IS NULL AND p.pdfReference IS NULL)
+        """, arguments: [fresh[3], fresh[4], fresh[5], fresh[6], fresh[7], fresh[8], fresh[9], bytes,
+          old[2], old[0], old[3], old[4], old[5], old[6], old[7], old[8], old[9], expected.encoded,
+          Self.recoveryString(before.1, "failure"), old[1]])
+      guard db.changesCount == 1 else { throw ImportRecoveryPersistenceError.staleHistory }
+      try db.execute(sql: """
+        UPDATE paper SET status = 'importing' WHERE id = ? AND generation = ?
+          AND status = 'importFailed' AND cleanupDebt = 0 AND deletionID IS NULL AND pdfReference IS NULL
+        """, arguments: [old[0], old[1]])
+      guard db.changesCount == 1 else { throw ImportRecoveryPersistenceError.staleHistory }
+      let readback = try Self.readImportRecovery(identity, maximumBytes: maximum, in: db)
+      try Self.validateRecoveryExecution(readback.journal,
+        row: Self.recoveryRow(identity, maximumBytes: maximum, in: db), identity: identity, revoked: false)
+      let after = try Self.importRows(identity, in: db)
+      let changesAfter = try Int64.fetchOne(db, sql: "SELECT total_changes()")
+      try scope.validate()
+      try shadowScope.validate()
+      guard Self.sameRow(before.0, after.0, except: ["status"]),
+        Self.sameRow(before.1, after.1, except: ["attempt", "fence", "correlation", "input", "epoch",
+          "writer", "publication", "recoveryJournal", "state", "failure", "bytesCopied"]),
+        Self.recoveryString(after.0, "status") == "importing",
+        Self.recoveryString(after.1, "state") == "running", Self.nullColumns(after.1, ["failure"]),
+        Int64.fromDatabaseValue(after.1["bytesCopied"]) == 0,
+        try Self.importFolder(identity.paperID, in: db) == folder,
+        try Int64.fetchOne(db, sql: "PRAGMA main.schema_version") == schemaVersion,
+        try Row.fetchAll(db, sql: "PRAGMA database_list") == databases,
+        // Job CAS, Paper availability and revokeReaderPosition's same-Paper update.
+        let changesBefore, let changesAfter, changesAfter - changesBefore == 3,
+        readback.encoded == bytes, try readback.journal.snapshot() == journal.snapshot() else {
+        throw ImportRecoveryPersistenceError.invalidHistory
+      }
+      _ = try Self.guardRunningImport(identity, in: db)
+      return readback
+    }
+  }
+
   func reserveJournaledImport(_ identity: ImportIdentity, title: String,
     confirmedInput: ImportRecoveryJournal.ConfirmedInput) throws -> ImportRecoveryRecord {
     try adapterWrite { db in
