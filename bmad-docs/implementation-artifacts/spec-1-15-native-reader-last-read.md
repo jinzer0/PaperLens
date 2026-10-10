@@ -118,3 +118,21 @@ native compile and independent review. Windowless PDFKit/application tests do no
 rendered visibility, keyboard/VoiceOver/focus, physical runtime restart or P6 timing.
 No user document, credential, helper/SDK/provider/renderer trial, remote operation or
 acceptance promotion is admitted. This preserves the full Epic objective and gate limits.
+
+### Search discard local receipt
+
+Preimplementation `ae3297a6353f1e2fe32fe9e5cf4fd88ec6ee11fc` precedes the
+post-selection-clear opened/request guard and obsolete success/error guards. Actual
+owned ReaderPresentation/GRDB/PDFKit tests cover matches/no-results/empty/latest query,
+public selection-clearing notification that synchronously closes ReaderSession, and
+discard before scheduled search. Immediate idle/discard state survives later scheduler
+turns; document/selection remain detached and owned imported bytes remain unchanged.
+Initial test compile `artifact://1448` failed wrong Foundation addObserver label;
+corrected `forName:` without permission/test suppression. Focused28/zero `artifact://1449`,
+isolated full Product446/zero `artifact://1453`; unsigned native-ba BUILD SUCCEEDED
+`artifact://1454`. Independent127 SOURCE-ONLY CLEAR / APPROVE, no delta findings.
+Two-source binary diff SHA256:
+`260da88b0e80b6fde26784e90765c5737126e116c500671a7cb7b2ec8cdf172c`.
+Not every late-success/error branch is independently forced; guards source-reviewed.
+No visible UI/keyboard/VoiceOver/focus/physical restart/P6/Story acceptance certification.
+Protected gates unfinished; canonical completion0/26, Story/Epic false, no remote action.

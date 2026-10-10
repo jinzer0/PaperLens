@@ -206,7 +206,11 @@ import SwiftUI
     matches.removeAll()
     matchIndex = 0
     do { try session.withReadAccess { pdfView.clearSelection() } }
-    catch { failure = "Search unavailable: \(error)"; searchState = .idle; return }
+    catch {
+      guard opened, searchGeneration == generation else { return }
+      failure = "Search unavailable: \(error)"; searchState = .idle; return
+    }
+    guard opened, searchGeneration == generation else { return }
     guard !query.isEmpty else { searchState = .idle; return }
     searchState = .searching
     let text = query
@@ -218,11 +222,14 @@ import SwiftUI
           guard let document = self.pdfView.document else { throw ReaderError.notOpen }
           return document.findString(text, withOptions: [.caseInsensitive])
         }
-        guard !Task.isCancelled, self.searchGeneration == generation else { return }
+        guard !Task.isCancelled, self.opened, self.searchGeneration == generation else { return }
         self.matches = found
         self.searchState = found.isEmpty ? .noResults : .matches(found.count)
         if !found.isEmpty { self.showMatch(delta: 0) }
-      } catch { self.failure = "Search unavailable: \(error)"; self.searchState = .idle }
+      } catch {
+        guard !Task.isCancelled, self.opened, self.searchGeneration == generation else { return }
+        self.failure = "Search unavailable: \(error)"; self.searchState = .idle
+      }
     }
   }
 

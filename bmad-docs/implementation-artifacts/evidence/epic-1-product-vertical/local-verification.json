@@ -27,14 +27,15 @@
     "Mounted fresh selected-PDF same-failed-Paper/ImportJob confirmation, guarded atomic capture/execution replacement and six fresh IDs; owned Workspace behavior verified, not visible app UI",
     "Shared canonical summary geometry resolver with independent owning anchors, complete UTF-8 quote/quads/page validation and explicit precision; production retained-revision owner recovery/injection is not established",
     "Mounted nonmodal floating parsing-failure overlay derived from the existing accepted persisted status, with safe Korean reason and no separate failure authority; rendered visibility and immediate delivery unverified",
-    "Native saved annotation reveal rejects missing PDFKit rectangle fragments before replacing overlay or navigating; owned windowless multi-page/reentry regressions pass, not visible UI or canonical AI geometry certification"
+    "Native saved annotation reveal rejects missing PDFKit rectangle fragments before replacing overlay or navigating; owned windowless multi-page/reentry regressions pass, not visible UI or canonical AI geometry certification",
+    "Actual ReaderPresentation native search preserves discard after synchronous PDFKit selection clearing and fences stale results/errors; owned native search and public-notification regressions pass, not visible UI or P6 certification"
   ],
   "verification": {
     "productUnion": {
       "command": "DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer /usr/bin/xcrun swift test --parallel --num-workers 1 --filter ProductTests",
-      "tests": 443,
+      "tests": 446,
       "failures": 0,
-      "output": "artifact://1445",
+      "output": "artifact://1453",
       "evidence": "Real GRDB transactions, owned synthetic files and actual local FIFO IO/close/peer metadata/EPIPE; mocked provider/HTTP transport and synthetic windowless PDFKit conversions. Not authenticated provider, app UI, SDK producer or PDFium execution."
     },
     "nativeCompilation": {
@@ -42,11 +43,11 @@
       "configuration": "Release",
       "architecture": "arm64",
       "minimumOS": "15.0",
-      "derivedData": ".build/product-native-compile-20261010-az",
+      "derivedData": ".build/product-native-compile-20261010-ba",
       "codeSigningAllowed": false,
       "result": "BUILD SUCCEEDED",
-      "rawOutput": "artifact://1446",
-      "output": "artifact://1446",
+      "rawOutput": "artifact://1454",
+      "output": "artifact://1454",
       "applicationAndHelperBinariesExecuted": false,
       "warnings": "AppIntents metadata skipped, PDFium debug-map duplicate/missing-symbol warnings and an unnecessary-await Swift warning remain; no warning suppression or debug-symbol repair claimed."
     },
@@ -300,6 +301,24 @@
     "runtimeParsingOrCalibrationVerified": false,
     "helperExecuted": false,
     "storyAccepted": false
+  },
+  "nativeSearchDiscardReentry": {
+    "preImplementationSpecificationCommit": "ae3297a6353f1e2fe32fe9e5cf4fd88ec6ee11fc",
+    "sourceScope": "NativeReaderView.swift and existing ReaderAnnotationBindingTests.swift only; unchanged ReaderSession/lease/lifecycle/database owners",
+    "sourceDiffSha256": "260da88b0e80b6fde26784e90765c5737126e116c500671a7cb7b2ec8cdf172c",
+    "behavior": "After pinned native selection clearing, require opened/current search generation before setting searching or scheduling work. Preserve synchronous discard instead of reviving searching forever. Guard cancellation/opened/current generation before results or errors; generation is stale-result fencing, never read authority. Existing session pins and document ownership unchanged.",
+    "failedAttempt": {"output": "artifact://1448", "cause": "Incorrect Foundation addObserver name: argument label", "repair": "Use public forName: label; no gate suppression, private API or permission change"},
+    "focused": {"tests": 28, "failures": 0, "output": "artifact://1449"},
+    "fullProduct": {"tests": 446, "failures": 0, "output": "artifact://1453", "processMode": "--parallel --num-workers 1; all cases invoked, no skip or irreversible-debt quota reset"},
+    "nativeCompilation": {"result": "BUILD SUCCEEDED", "output": "artifact://1454", "derivedData": ".build/product-native-compile-20261010-ba", "codeSigningAllowed": false},
+    "review": "agent://127-NativeSearchDiscard: SOURCE-ONLY CLEAR / APPROVE; no actionable delta findings",
+    "actualOwnedCoverage": "Real selectable two-page PDF generated in owned fixture, imported through actual LocalLibraryLifecycle/sole GRDB. Actual ReaderPresentation/ReaderSession real read lease, native case-insensitive matches/no-results/empty/latest-query and unchanged imported bytes. Public PDFViewSelectionChanged notification synchronously closes session during preceding-match clearing: immediate idle, discard failure, detached document/selection and later scheduler-turn stability. Close before scheduled search cannot publish matches.",
+    "limits": ["Late success/error branches not each independently forced; guards source-reviewed", "Windowless actual presentation is not rendered SwiftUI/visible interaction", "No keyboard/VoiceOver/focus, physical application restart or P6 certification"],
+    "visibleNativeInteractionVerified": false,
+    "applicationAndHelperBinariesExecuted": false,
+    "SDKProviderRendererExecuted": false,
+    "storyAccepted": false,
+    "epicAccepted": false
   },
   "completeNativeAnnotationReveal": {
     "preImplementationSpecificationCommit": "b4a209d5b280029a37ee5d1b42d980c517453926",

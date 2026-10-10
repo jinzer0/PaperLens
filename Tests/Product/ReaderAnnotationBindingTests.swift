@@ -162,6 +162,108 @@ private final class AnnotationPageDelegate: NSObject, PDFDocumentDelegate {
     XCTAssertEqual(try fresh.records(), [highlight])
   }
 
+  private func presentation(database: ProductDatabase, lifecycle: LocalLibraryLifecycle,
+    paperID: UUID) throws -> ReaderPresentation {
+    let session = ReaderSession(database: database,
+      leaseProvider: LibraryReadLeaseProvider(lifecycle: lifecycle))
+    let reader = ReaderPresentation(session: session,
+      annotationIdentity: try database.annotationIdentity(paperID: paperID),
+      annotationService: AnnotationService(database: database),
+      metadataService: ReaderMetadataService(database: database), metadataIdentity: nil)
+    reader.open(paperID: paperID)
+    XCTAssertTrue(reader.opened)
+    return reader
+  }
+
+  private func settleSearch(_ reader: ReaderPresentation) async {
+    for _ in 0..<1000 {
+      if reader.searchState != .searching { return }
+      await Task.yield()
+    }
+    XCTFail("Owned native search did not settle within the bounded scheduler pass")
+  }
+
+  func testActualPresentationSearchMatchesNoResultsEmptyQueryAndLatestRequest() async throws {
+    let (_, db, lifecycle, id, _) = try await fixture()
+    let reader = try presentation(database: db, lifecycle: lifecycle, paperID: id)
+    defer { reader.session.close() }
+    let reference = try db.readerSnapshot(paperID: id).pdfReference
+    let original = try Data(contentsOf: db.root.appendingPathComponent(reference))
+    reader.query = "ALPHA"
+    reader.search()
+    XCTAssertEqual(reader.searchState, .searching)
+    await settleSearch(reader)
+    XCTAssertEqual(reader.searchState, .matches(2))
+    XCTAssertEqual(reader.pdfView.currentSelection?.string, "alpha")
+    reader.showMatch(delta: 1)
+    XCTAssertEqual(reader.pdfView.currentSelection?.string, "alpha")
+    reader.query = "not present in this owned PDF"
+    reader.search()
+    await settleSearch(reader)
+    XCTAssertEqual(reader.searchState, .noResults)
+    XCTAssertNil(reader.pdfView.currentSelection)
+    reader.query = "alpha"
+    reader.search()
+    reader.query = "absent latest query"
+    reader.search()
+    await settleSearch(reader)
+    XCTAssertEqual(reader.searchState, .noResults)
+    XCTAssertNil(reader.pdfView.currentSelection)
+    reader.query = ""
+    reader.search()
+    XCTAssertEqual(reader.searchState, .idle)
+    XCTAssertTrue(reader.opened)
+    XCTAssertEqual(try Data(contentsOf: db.root.appendingPathComponent(reference)), original)
+  }
+
+  func testNativeSelectionClearingReentryPreservesDiscardInsteadOfSearchingForever() async throws {
+    let (_, db, lifecycle, id, _) = try await fixture()
+    let reader = try presentation(database: db, lifecycle: lifecycle, paperID: id)
+    defer { reader.session.close() }
+    reader.query = "alpha"
+    reader.search()
+    await settleSearch(reader)
+    XCTAssertEqual(reader.searchState, .matches(2))
+    XCTAssertNotNil(reader.pdfView.currentSelection)
+    var observations = 0
+    let token = NotificationCenter.default.addObserver(forName: .PDFViewSelectionChanged,
+      object: reader.pdfView, queue: .main) { _ in
+      MainActor.assumeIsolated {
+        observations += 1
+        if observations == 1 { reader.session.close() }
+      }
+    }
+    defer { NotificationCenter.default.removeObserver(token) }
+    reader.search()
+    XCTAssertGreaterThan(observations, 0)
+    XCTAssertFalse(reader.opened)
+    XCTAssertNil(reader.pdfView.document)
+    XCTAssertEqual(reader.searchState, .idle)
+    let discardFailure = reader.failure
+    XCTAssertNotNil(discardFailure)
+    for _ in 0..<20 { await Task.yield() }
+    XCTAssertEqual(reader.searchState, .idle)
+    XCTAssertEqual(reader.failure, discardFailure)
+    XCTAssertNil(reader.pdfView.currentSelection)
+  }
+
+  func testActualPresentationDiscardBeforeScheduledSearchCannotPublishMatches() async throws {
+    let (_, db, lifecycle, id, _) = try await fixture()
+    let reader = try presentation(database: db, lifecycle: lifecycle, paperID: id)
+    defer { reader.session.close() }
+    reader.query = "alpha"
+    reader.search()
+    XCTAssertEqual(reader.searchState, .searching)
+    reader.session.close()
+    let discardFailure = reader.failure
+    for _ in 0..<20 { await Task.yield() }
+    XCTAssertFalse(reader.opened)
+    XCTAssertNil(reader.pdfView.document)
+    XCTAssertEqual(reader.searchState, .idle)
+    XCTAssertEqual(reader.failure, discardFailure)
+    XCTAssertNil(reader.pdfView.currentSelection)
+  }
+
   func testIncompleteMultipageRevealHasNoPartialOverlayNavigationOrRecordLoss() async throws {
     let (_, db, _, id, binding) = try await fixture()
     defer { binding.session.close() }
