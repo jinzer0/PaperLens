@@ -1,5 +1,33 @@
 # Story 1.17 Build Spec — Folder arrangement and duplicate local import
 
+## Native opener-focus source continuation (baseline a22d139)
+
+The existing Workspace toolbar's 폴더 관리 button gains native FocusState. Its
+accepted presentation captures a fresh UI receipt and the original Workspace mount,
+not current Library selection. Only that receipt's actual folders-sheet onAppear
+marks it presented. The existing native sheet onDismiss first invokes unchanged
+presentationDidDismiss cleanup, then restores the original toolbar control only
+while the same receipt/mount remains, Library is mounted, no Reader/new sheet exists,
+and cleanup/preparation/opening fences are clear. Browser-origin folder management
+does not synthesize a toolbar opener. Receipt invalidation on unmount/Reader entry
+denies late restoration. These values are UI identity only, not resource authority.
+
+Local PDF confirmation focus return remains unimplemented. Existing dismissSheet
+launches imports.cancel in an unawaited Task and clears sheetCleanupPending before
+that Task returns. Consequently neither binding nil, Cancel acceptance nor the
+existing dismissal callback proves completion of existing input cleanup. A future
+existing-owner API would need a matching confirmation/presentation identity and an
+actual-dismissal plus awaited-cancellation completion receipt before restoring a
+captured opener; cancellation completion would still not certify physical closure
+or ACK. Parent explicitly declined that API change in this source lane. Existing
+ImportConfirmationView, workspace published admission/cleanup guards, Retry,
+security scope, lease and schemas remain unchanged. External NSOpenPanel return
+and Browser/Reader control restoration are not fabricated or changed.
+
+No tests, test authoring, builds, gates, formatters or runtime actions ran for this
+continuation. Parent owns permitted source review/checks. Native keyboard focus,
+VoiceOver and sheet scheduling remain unverified; no Story/Epic acceptance claim.
+
 ## Current native import presentation continuation (baseline 2c855ee)
 
 Story1.17/Issue19 remains on the Epic integration branch
@@ -22,7 +50,7 @@ does not claim publication or physical closure. Existing URL controls retain the
 independent state gates; no shared concurrency fix is attempted.
 
 Remaining prerequisites: parent source review and permitted compiler checks; actual
-native keyboard/VoiceOver role-state reading, dialog opener-focus restoration, text
+native keyboard/VoiceOver role-state reading, local confirmation opener-focus restoration, text
 scaling/contrast/resize, Cancel/Continue scheduling and physical duplicate-copy/delete/
 restart/publication-failure behavior at the current source revision. This worker runs
 no tests, builds, formatters, gates, UI/runtime/network or protected trials and authors

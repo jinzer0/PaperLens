@@ -19,6 +19,29 @@ public struct URLImportView<LibraryContent: View>: View {
   @State private var destinationFolderID: UUID?
   @State private var folderLoadFailed = false
   @FocusState private var inputFocused: Bool
+  @FocusState private var openerFocused: Opener?
+  @State private var inputPresentation: InputPresentation?
+  @State private var confirmationPresentation: ConfirmationPresentation?
+
+  private enum Opener: Hashable { case add, paste }
+
+  private struct ConfirmationPresentation {
+    let id: UUID
+    let opener: Opener
+    let mount: UUID?
+    var interaction: UUID
+    var appeared = false
+    var cancelled = false
+    var invalidated = false
+  }
+
+  private struct InputPresentation {
+    let id = UUID()
+    let mount: UUID?
+    var interaction: UUID
+    var submittedText: String?
+    var appeared = false
+  }
 
   public init(service: URLImportService, folderService: FolderImportService,
     possibleDuplicate: @escaping (String) -> Bool,
@@ -39,19 +62,25 @@ public struct URLImportView<LibraryContent: View>: View {
     let mount = drag.mount
     let interaction = drag.interaction
     let confirmationID = service.confirmation?.id
+    let inputPresentationID = inputPresentation?.id
+    let confirmationPresentationID = confirmationPresentation?.id
     VStack {
       HStack {
         Button("URL 추가") {
-          guard drag.isCurrent(mount, interaction) else { return }
+          guard drag.isCurrent(mount, interaction), inputPresentation == nil,
+            confirmationPresentation == nil, service.confirmation == nil,
+            service.state != .confirming, service.state != .downloading, !invalidInput else { return }
           drag.interrupt()
+          inputPresentation = InputPresentation(mount: drag.mount, interaction: drag.interaction)
           inputSheet = true
-        }
+        }.focused($openerFocused, equals: .add)
         Button("URL 붙여넣기") {
-          guard drag.isCurrent(mount, interaction) else { return }
+          guard drag.isCurrent(mount, interaction), inputPresentation == nil,
+            confirmationPresentation == nil else { return }
           drag.interrupt()
-          if let text = NSPasteboard.general.string(forType: .string) { prepare(text) }
+          if let text = NSPasteboard.general.string(forType: .string) { prepare(text, opener: .paste) }
           else { invalidInput = true }
-        }
+        }.focused($openerFocused, equals: .paste)
         Button("PDF 선택") {
           guard drag.isCurrent(mount, interaction) else { return }
           drag.interrupt()
@@ -98,7 +127,8 @@ public struct URLImportView<LibraryContent: View>: View {
           delegate: URLImportDropDelegate(state: drag,
             supportsURL: { service.supports($0) },
             canAccept: {
-              !inputSheet && !invalidInput && service.confirmation == nil
+              !inputSheet && inputPresentation == nil && confirmationPresentation == nil
+                && !invalidInput && service.confirmation == nil
                 && service.state != .confirming && service.state != .downloading
             },
             accept: { url in
@@ -107,10 +137,14 @@ public struct URLImportView<LibraryContent: View>: View {
       status
     }
     .sheet(isPresented: Binding(get: { inputSheet }, set: { value in
-      guard drag.isCurrent(mount, interaction) else { return }
+      guard drag.isCurrent(mount, interaction), let inputPresentationID,
+        let presentation = inputPresentation, presentation.id == inputPresentationID,
+        drag.isCurrent(presentation.mount, presentation.interaction) else { return }
       drag.interrupt()
       inputSheet = value
-    })) {
+      if !value { inputPresentation?.interaction = drag.interaction }
+    }), onDismiss: { inputDidDismiss(inputPresentationID, mount: mount) }) {
+      let presentationID = inputPresentation?.id
       VStack(alignment: .leading, spacing: 16) {
         Text("HTTPS PDF 또는 arXiv URL").font(.headline)
         TextField("URL", text: Binding(get: { input }, set: { value in
@@ -119,33 +153,28 @@ public struct URLImportView<LibraryContent: View>: View {
         })).accessibilityLabel("가져올 HTTPS URL")
           .focused($inputFocused)
           .onSubmit {
-            guard drag.isCurrent(mount, interaction) else { return }
-            drag.interrupt()
-            inputSheet = false
-            prepare(input)
+            closeInput(presentationID, mount: mount, interaction: interaction, submit: true)
           }
         HStack {
           Button("취소") {
-            guard drag.isCurrent(mount, interaction) else { return }
-            drag.interrupt()
-            inputSheet = false
+            closeInput(presentationID, mount: mount, interaction: interaction, submit: false)
           }.keyboardShortcut(.cancelAction)
           Button("확인") {
-            guard drag.isCurrent(mount, interaction) else { return }
-            drag.interrupt()
-            inputSheet = false
-            prepare(input)
+            closeInput(presentationID, mount: mount, interaction: interaction, submit: true)
           }.keyboardShortcut(.defaultAction)
         }
       }.padding().frame(minWidth: 420)
-        .onAppear { inputFocused = true }
+        .onAppear {
+          guard let presentationID, inputPresentation?.id == presentationID else { return }
+          inputPresentation?.appeared = true
+          inputFocused = true
+        }
     }
     .sheet(item: Binding(get: { service.confirmation }, set: { value in
       guard value == nil, drag.isCurrent(mount, interaction),
         let confirmationID, service.confirmation?.id == confirmationID else { return }
-      drag.interrupt()
-      service.cancelConfirmation()
-    })) { intent in
+      cancelConfirmation(confirmationID)
+    }), onDismiss: { confirmationDidDismiss(confirmationPresentationID, mount: mount) }) { intent in
       VStack(alignment: .leading, spacing: 16) {
         if case .retry = intent.purpose {
           Text("URL 가져오기 다시 시도 확인").font(.headline)
@@ -166,8 +195,7 @@ public struct URLImportView<LibraryContent: View>: View {
         HStack {
           Button("취소") {
             guard drag.isCurrent(mount, interaction), service.confirmation?.id == intent.id else { return }
-            drag.interrupt()
-            service.cancelConfirmation()
+            cancelConfirmation(intent.id)
           }.keyboardShortcut(.cancelAction)
           Button("계속") {
             guard drag.isCurrent(mount, interaction), service.confirmation?.id == intent.id else { return }
@@ -177,6 +205,10 @@ public struct URLImportView<LibraryContent: View>: View {
             .keyboardShortcut(.defaultAction)
         }
       }.padding().frame(minWidth: 420)
+        .onAppear {
+          guard confirmationPresentation?.id == intent.id else { return }
+          confirmationPresentation?.appeared = true
+        }
     }
     .alert("지원하지 않는 URL", isPresented: $invalidInput) {
       Button("확인", role: .cancel) {}
@@ -187,9 +219,79 @@ public struct URLImportView<LibraryContent: View>: View {
       let loadInteraction = drag.interaction
       Task { await reloadFolders(mount: loadMount, interaction: loadInteraction) }
     }
-    .onDisappear { drag.disappear() }
-    .onChange(of: service.confirmation?.id) { _ in drag.interrupt() }
-    .onChange(of: service.state) { _ in drag.interrupt() }
+    .onDisappear {
+      inputPresentation = nil
+      confirmationPresentation = nil
+      drag.disappear()
+    }
+    .onChange(of: service.confirmation?.id) { _ in serviceInterrupted() }
+    .onChange(of: service.state) { _ in serviceInterrupted() }
+  }
+
+  private func closeInput(_ id: UUID?, mount: UUID?, interaction: UUID, submit: Bool) {
+    guard let id, let presentation = inputPresentation, presentation.id == id, inputSheet,
+      drag.isCurrent(presentation.mount, presentation.interaction),
+      drag.isCurrent(mount, interaction) else { return }
+    drag.interrupt()
+    inputPresentation?.interaction = drag.interaction
+    inputPresentation?.submittedText = submit ? input : nil
+    inputSheet = false
+  }
+
+  private func inputDidDismiss(_ id: UUID?, mount: UUID?) {
+    guard let id, let presentation = inputPresentation,
+      presentation.id == id, presentation.mount == mount else { return }
+    inputPresentation = nil
+    guard presentation.appeared, !inputSheet,
+      drag.isCurrent(presentation.mount, presentation.interaction),
+      service.confirmation == nil, !invalidInput else { return }
+    // Entry owns no import resources. Prepare only after its actual dismissal;
+    // a resulting confirmation or alert must not receive the opener's focus.
+    if let text = presentation.submittedText { prepare(text, opener: .add) }
+    guard service.confirmation == nil, !invalidInput else { return }
+    openerFocused = .add
+  }
+
+  private func cancelConfirmation(_ id: UUID) {
+    guard service.confirmation?.id == id else { return }
+    let wasCurrent = confirmationPresentation.map {
+      !$0.invalidated && $0.id == id && drag.isCurrent($0.mount, $0.interaction)
+    } ?? false
+    drag.interrupt()
+    if wasCurrent {
+      confirmationPresentation?.cancelled = true
+      confirmationPresentation?.interaction = drag.interaction
+    } else {
+      confirmationPresentation?.invalidated = true
+    }
+    service.cancelConfirmation()
+  }
+
+  private func serviceInterrupted() {
+    let wasCurrent = confirmationPresentation.map {
+      !$0.invalidated && drag.isCurrent($0.mount, $0.interaction)
+    } ?? false
+    drag.interrupt()
+    guard let presentation = confirmationPresentation else { return }
+    if wasCurrent && (service.confirmation?.id == presentation.id
+      || (presentation.cancelled && service.confirmation == nil && service.state == .idle)) {
+      confirmationPresentation?.interaction = drag.interaction
+    } else {
+      confirmationPresentation?.invalidated = true
+    }
+  }
+
+  private func confirmationDidDismiss(_ id: UUID?, mount: UUID?) {
+    guard let id, let presentation = confirmationPresentation,
+      presentation.id == id, presentation.mount == mount else { return }
+    confirmationPresentation = nil
+    guard presentation.appeared, presentation.cancelled, !presentation.invalidated,
+      drag.isCurrent(presentation.mount, presentation.interaction),
+      service.confirmation == nil, service.state == .idle,
+      !inputSheet, inputPresentation == nil, !invalidInput else { return }
+    // Cancelled URL recognition has no grant, writer, stage or network cleanup.
+    // Continue is deliberately excluded: service state is not a closure receipt.
+    openerFocused = presentation.opener
   }
 
   @ViewBuilder private var status: some View {
@@ -228,7 +330,7 @@ public struct URLImportView<LibraryContent: View>: View {
     }
   }
 
-  private func prepare(_ text: String) {
+  private func prepare(_ text: String, opener: Opener? = nil) {
     do {
       guard drag.mount != nil, service.confirmation == nil,
         service.state != .confirming, service.state != .downloading else { throw URLImportError.rejected }
@@ -236,6 +338,10 @@ public struct URLImportView<LibraryContent: View>: View {
       guard destinationFolderID == nil || folder != nil else { throw URLImportError.rejected }
       try service.prepare(text, destination: folder?.name ?? "Unfiled",
         possibleDuplicate: possibleDuplicate(text), destinationFolderID: destinationFolderID)
+      if let opener, let confirmation = service.confirmation {
+        confirmationPresentation = ConfirmationPresentation(id: confirmation.id,
+          opener: opener, mount: drag.mount, interaction: drag.interaction)
+      }
     }
     catch { invalidInput = true }
   }

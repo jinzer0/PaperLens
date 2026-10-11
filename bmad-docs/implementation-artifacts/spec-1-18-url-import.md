@@ -1,5 +1,37 @@
 # Story 1.18 Build Spec — URL Import and shared Library entry
 
+## Native opener-focus source continuation (baseline a22d139)
+
+URLImportView uses native FocusState on its existing URL 추가/URL 붙여넣기
+buttons. Opening URL entry captures a fresh UI presentation identity, original
+mount and existing interaction fence. The matching content onAppear records actual
+presentation; native onDismiss, never binding false alone, consumes the receipt.
+Cancel restores URL 추가 only with matching mount/interaction and no new input,
+confirmation or invalid-input alert. Submit captures the entered text and invokes
+the unchanged recognition path only after entry actually dismisses. If recognition
+presents confirmation/alert, entry dismissal does not restore focus through it.
+
+Recognized URL confirmation captures that original add/paste opener and its actual
+confirmation UUID. Matching onAppear plus explicit/interactive pre-admission
+Cancel and actual native onDismiss are required for restoration. Cancel's existing
+owner synchronously cancels recognition admission and returns to idle without any
+grant, writer, stage, network or durable import effect. UUID replacement, unmount,
+unrelated interaction, non-idle state, another dialog or alert deny restoration.
+Existing service-publication interruptions advance the receipt's interaction only
+when it was current and still belongs to the same confirmation or its cancelled
+idle transition; they cannot revive an invalidated receipt. Continue has no focus
+return: download/service state is not physical cleanup/closure proof. Drop has no
+button opener; Retry's original failed-state control disappears on confirmation
+and is not replaced by a newer control. Invalid-input alerts and external PDF
+pickers lack an admitted dismissal callback in this scope and are unchanged.
+
+This is UI identity bookkeeping, not new admission/cleanup/resource authority.
+Destination, Retry, reservations, writer, network/durable schemas and Workspace
+published fences are unchanged. Initial input focus remains native. No tests/test
+authoring/builds/gates/formatters/runtime/network were run; parent owns source
+checks/review. Actual native focus timing, keyboard/VoiceOver and Story/Epic
+acceptance remain unproved.
+
 ## Current URL presentation continuation (baseline 2c855ee)
 
 Story1.18/Issue20 reuses `issue/epic-1-product-vertical-integration-20261010` and the
@@ -24,8 +56,9 @@ field gains initial native focus; the picker uses Korean 미분류 default wordi
 folder-load failure gains an icon alongside its text. All existing drag/input fences
 and service effect paths are unchanged.
 
-Remaining product/runtime prerequisites: actual focus return to each opener (not
-implemented or claimed here), keyboard and VoiceOver interaction across entry/confirm/
+Remaining product/runtime prerequisites: actual focus return to each opener (the
+historical continuation below did not implement it; source extension above is not
+runtime proof), keyboard and VoiceOver interaction across entry/confirm/
 Retry/Cancel, resize/contrast/scaling and drop feedback; current actual HTTPS download,
 independent-copy publication, same-Job retry/republication, cancellation/drain/debt,
 delete/restart/crash barriers; admitted P6 measurement/profile evidence separately.

@@ -416,8 +416,20 @@ public enum ProductWorkspaceError: Error { case busy }
 public struct ProductWorkspaceView: View {
   @ObservedObject private var workspace: ProductWorkspace
   @ObservedObject private var urls: URLImportService
+  @FocusState private var folderOpenerFocused: Bool
+  @State private var mount: UUID?
+  @State private var folderPresentation: FolderPresentation?
+
+  private struct FolderPresentation {
+    let id = UUID()
+    let mount: UUID
+    var appeared = false
+  }
+
   public init(workspace: ProductWorkspace) { self.workspace = workspace; urls = workspace.urls }
   public var body: some View {
+    let viewMount = mount
+    let folderPresentationID = folderPresentation?.id
     VStack(spacing: 0) {
       if let reader = workspace.reader {
         NativeReaderView(paperID: reader.id, session: reader.session,
@@ -430,7 +442,14 @@ public struct ProductWorkspaceView: View {
         .id(reader.mountIdentity)
       } else {
         HStack {
-          Button("폴더 관리") { workspace.sheet = .folders }
+          Button("폴더 관리") {
+            guard let mount, folderPresentation == nil, workspace.sheet == nil,
+              !workspace.sheetCleanupPending, !workspace.preparing, !workspace.opening,
+              workspace.reader == nil else { return }
+            folderPresentation = FolderPresentation(mount: mount)
+            workspace.sheet = .folders
+            if workspace.sheet?.id != "folders" { folderPresentation = nil }
+          }.focused($folderOpenerFocused)
           Button("Settings") { workspace.sheet = .settings }
           if workspace.preparing { ProgressView("PDF 확인 중") }
           Spacer()
@@ -463,17 +482,41 @@ public struct ProductWorkspaceView: View {
       Text("Codex 연결은 아직 연결되지 않았습니다. Agent 삭제 연결이 없어 삭제는 미완료 상태로 남습니다.")
         .font(.caption).foregroundStyle(.secondary).padding(8)
     }
-    .sheet(item: $workspace.sheet, onDismiss: { workspace.presentationDidDismiss() }) { sheet in
+    .onAppear { mount = UUID() }
+    .onDisappear { mount = nil; folderPresentation = nil }
+    .onChange(of: workspace.reader?.mountIdentity) { _, reader in
+      if reader != nil { folderPresentation = nil }
+    }
+    .sheet(item: $workspace.sheet, onDismiss: {
+      let presentation = folderPresentation
+      workspace.presentationDidDismiss()
+      guard let presentation, presentation.id == folderPresentationID,
+        presentation.mount == viewMount, folderPresentation?.id == presentation.id else { return }
+      folderPresentation = nil
+      guard presentation.appeared, mount == presentation.mount,
+        workspace.reader == nil, workspace.sheet == nil,
+        !workspace.sheetCleanupPending, !workspace.preparing, !workspace.opening else { return }
+      // Folder management has no pending import input/security scope to drain.
+      // Local import confirmation deliberately has no focus receipt here.
+      folderOpenerFocused = true
+    }) { sheet in
       switch sheet {
       case .confirmation(let confirmation):
         ImportConfirmationView(confirmation: confirmation, service: workspace.imports,
           imported: { workspace.imported($0) })
           .interactiveDismissDisabled()
       case .folders:
+        let presentationID = folderPresentation?.id
         VStack {
           FolderManagementView(service: workspace.imports)
           Button("닫기") { workspace.sheet = nil }
         }.padding().frame(minWidth: 420)
+          .onAppear {
+            guard let presentationID, folderPresentation?.id == presentationID,
+              workspace.sheet?.id == "folders",
+              folderPresentation?.mount == mount else { return }
+            folderPresentation?.appeared = true
+          }
       case .settings:
         VStack {
           ProviderSettingsView(service: workspace.settings)
