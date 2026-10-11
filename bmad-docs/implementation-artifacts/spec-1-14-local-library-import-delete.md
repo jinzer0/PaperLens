@@ -1838,3 +1838,15 @@ committed before source mutation under the existing Story-range execution scope.
 Tests, native execution, independent review and acceptance remain deferred by the
 current implementation-first instruction; no user documents, SDK/provider/renderer
 trial, new permission, remote or distribution action is authorized here.
+
+### Owned startup integrity regression
+
+Three new ProductJobRecoveryTests use actual owned local imports and checked-close
+startup hashing. Matching bytes preserve all Paper/ImportJob fields, full succeeded
+journal and document bytes. A changed regular nonsymlink owned document downgrades
+only availability/reference/debt while retaining original generation/SHA and exact
+succeeded history; a second startup does not replay it. Old captured generation,
+SHA or reference cannot mutate a changed row: recoveryConflict preserves both rows
+and jobs. Six focused startup/folder cases passed, then full isolated Product475
+passed artifact1668. No user PDF, provider/SDK/renderer request or unknown-close
+injection; no aggregate/RSS, hostile mutation or actual cleanup/purge proof.

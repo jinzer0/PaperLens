@@ -175,3 +175,15 @@ changed source/UI compiled in6.62 seconds. These are storage/service checks, not
 native Toggle/Menu/sidebar interaction, focus/resize/VoiceOver or app restart proof.
 Implementation-first keeps new/regression tests, broad/native gate, formatter and
 independent review deferred. No protected execution/remote operation; Story/Epic false.
+
+### Persisted folder query regression
+
+Three new LibraryOrganizationTests exercise actual sole-GRDB service projections:
+all/unfiled/two UUID folders through durable moves and reopen, whole-Library count
+and independent Paper-generation/PDF references, combined title-or-tag search AND
+exact tag/status/favorite with decoys, list/grid equality, missing/deleted selected
+folder returning none instead of all, tombstone exclusion and obsolete query fence.
+Six focused folder/startup cases passed; current full isolated Product475 passed
+artifact1668. Database reopen is not native app restart or visible focus/VoiceOver;
+no Summary/provider/Agent/purge/renderer authority is inferred. Story/Epic gates stay
+unaccepted and no trials or remote actions were renewed.

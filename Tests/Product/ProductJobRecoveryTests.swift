@@ -181,6 +181,124 @@ final class ProductJobRecoveryTests: XCTestCase, @unchecked Sendable {
     }
   }
 
+  private func ownedStartupImport(_ label: String) async throws -> UUID {
+    let source = root.appendingPathComponent("startup-integrity-\(UUID().uuidString).pdf")
+    try Data("%PDF-1.7\nsynthetic owned startup integrity \(label)\n%%EOF\n".utf8).write(to: source)
+    defer { try? FileManager.default.removeItem(at: source) }
+    let lifecycle = try await LocalLibraryLifecycle.open(database: database)
+    return try await lifecycle.importPDF(from: source)
+  }
+
+  func testStartupSHAObservationPreservesMatchingPublishedPaperAndSucceededHistory() async throws {
+    let paper = try await ownedStartupImport("matching")
+    let beforePaper = try row("paper", paper: paper)
+    let beforeJob = try row("importJob", paper: paper)
+    XCTAssertEqual(beforePaper["status"] as String, "ready")
+    XCTAssertEqual(beforeJob["state"] as String, "succeeded")
+    let bytes = try XCTUnwrap(Data.fromDatabaseValue(beforeJob["recoveryJournal"]))
+    let history = try ImportRecoveryJournal.decode(bytes, maximumBytes: journalBound)
+    XCTAssertEqual(try history.snapshot().current.state, .succeeded)
+    let reference = try XCTUnwrap(String.fromDatabaseValue(beforePaper["pdfReference"]))
+    XCTAssertEqual(reference, "papers/\(paper.uuidString)/document.pdf")
+    let document = root.appendingPathComponent(reference)
+    let values = try document.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+    XCTAssertEqual(values.isRegularFile, true)
+    XCTAssertEqual(values.isSymbolicLink, false)
+    let original = try Data(contentsOf: document)
+
+    database = nil
+    database = try ProductDatabase.open(at: root)
+    _ = try await LocalLibraryLifecycle.open(database: database)
+
+    assertUnchanged(beforePaper, try row("paper", paper: paper))
+    assertUnchanged(beforeJob, try row("importJob", paper: paper))
+    XCTAssertEqual(try Data(contentsOf: document), original)
+    XCTAssertEqual(try row("importJob", paper: paper)["recoveryJournal"] as Data, bytes)
+  }
+
+  func testStartupSHAObservationDowngradesChangedOwnedBytesWithoutRewritingSucceededHistory() async throws {
+    let paper = try await ownedStartupImport("original")
+    let beforePaper = try row("paper", paper: paper)
+    let beforeJob = try row("importJob", paper: paper)
+    XCTAssertEqual(beforePaper["status"] as String, "ready")
+    XCTAssertEqual(beforeJob["state"] as String, "succeeded")
+    let bytes = try XCTUnwrap(Data.fromDatabaseValue(beforeJob["recoveryJournal"]))
+    let history = try ImportRecoveryJournal.decode(bytes, maximumBytes: journalBound)
+    XCTAssertEqual(try history.snapshot().current.state, .succeeded)
+    let reference = try XCTUnwrap(String.fromDatabaseValue(beforePaper["pdfReference"]))
+    XCTAssertEqual(reference, "papers/\(paper.uuidString)/document.pdf")
+    let document = root.appendingPathComponent(reference)
+    let values = try document.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+    XCTAssertEqual(values.isRegularFile, true)
+    XCTAssertEqual(values.isSymbolicLink, false)
+    let replacement = Data("%PDF-1.7\nchanged synthetic owned startup bytes\n%%EOF\n".utf8)
+    XCTAssertNotEqual(try Data(contentsOf: document), replacement)
+    guard reference == "papers/\(paper.uuidString)/document.pdf",
+      values.isRegularFile == true, values.isSymbolicLink == false else {
+      throw LocalLibraryError.invalidPDF
+    }
+    // The actual importer seals this fixture's own final file read-only. Change only that file.
+    try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: document.path)
+    try replacement.write(to: document)
+    try FileManager.default.setAttributes([.posixPermissions: 0o400], ofItemAtPath: document.path)
+
+    database = nil
+    database = try ProductDatabase.open(at: root)
+    _ = try await LocalLibraryLifecycle.open(database: database)
+
+    let after = try row("paper", paper: paper)
+    assertUnchanged(beforePaper, after, except: ["status", "pdfReference", "cleanupDebt"])
+    XCTAssertEqual(after["status"] as String, "importFailed")
+    XCTAssertTrue((after["pdfReference"] as DatabaseValue).isNull)
+    XCTAssertEqual(after["cleanupDebt"] as Int, 1)
+    assertUnchanged(beforeJob, try row("importJob", paper: paper))
+    XCTAssertEqual(try row("importJob", paper: paper)["recoveryJournal"] as Data, bytes)
+    XCTAssertEqual(try Data(contentsOf: document), replacement)
+    // A second Main startup cannot replay publication or rewrite the committed history.
+    _ = try await LocalLibraryLifecycle.open(database: database)
+    assertUnchanged(after, try row("paper", paper: paper))
+    assertUnchanged(beforeJob, try row("importJob", paper: paper))
+  }
+
+  func testUnavailableImportCASRejectsStaleCapturedGenerationSHAAndReference() async throws {
+    let paper = try await ownedStartupImport("old capture")
+    let newerPaper = try await ownedStartupImport("newer metadata")
+    let captured = try row("paper", paper: paper)
+    let newer = try row("paper", paper: newerPaper)
+    let generation = try XCTUnwrap(UUID(uuidString: captured["generation"] as String))
+    let sha: String = captured["pdfSHA256"]
+    let reference: String = captured["pdfReference"]
+    let job = try row("importJob", paper: paper)
+    let newerJob = try row("importJob", paper: newerPaper)
+    // Model intervening metadata changes using independently captured actual import facts.
+    // This is not a Retry or permission to publish under another Paper's identity.
+    for column in ["generation", "pdfSHA256", "pdfReference"] {
+      let replacement: DatabaseValue = newer[column]
+      let original: DatabaseValue = captured[column]
+      XCTAssertNotEqual(replacement.storage, original.storage)
+      try database.adapterWrite {
+        try $0.execute(sql: "UPDATE paper SET \(column) = ? WHERE id = ?",
+          arguments: [replacement, paper.uuidString])
+      }
+      let intervening = try row("paper", paper: paper)
+      XCTAssertThrowsError(try database.adapterWrite {
+        try ProductDatabase.reconcileUnavailableImport(paper, generation: generation,
+          sha256: sha, reference: reference, in: $0)
+      }) {
+        XCTAssertEqual($0 as? ProductJobRecoveryError, .recoveryConflict)
+      }
+      assertUnchanged(intervening, try row("paper", paper: paper))
+      assertUnchanged(job, try row("importJob", paper: paper))
+      assertUnchanged(newer, try row("paper", paper: newerPaper))
+      assertUnchanged(newerJob, try row("importJob", paper: newerPaper))
+      try database.adapterWrite {
+        try $0.execute(sql: "UPDATE paper SET \(column) = ? WHERE id = ?",
+          arguments: [original, paper.uuidString])
+      }
+    }
+    assertUnchanged(captured, try row("paper", paper: paper))
+  }
+
   private let journalBound = ProductJobRecovery.maximumImportRecoveryJournalBytes
   private let journalFacts = ImportRecoveryJournal.ConfirmedInput(
     expectedSHA256: String(repeating: "a", count: 64), destinationFolderID: UUID())

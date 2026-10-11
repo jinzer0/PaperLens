@@ -190,6 +190,177 @@ final class LibraryOrganizationTests: XCTestCase {
     XCTAssertEqual(try reopened.organizationSnapshot(filter: filter).totalCount, 2)
   }
 
+  func testFolderUnionAndDurableMovesReopenWithoutDuplicatingPaperIdentities() async throws {
+    let location = try root()
+    let database = try ProductDatabase.open(at: location)
+    let a = try seed(database, title: "Same bytes A")
+    let b = try seed(database, title: "Same bytes B")
+    let unfiled = try seed(database, title: "Never assigned")
+    let first = try database.createFolder(name: "First")
+    let second = try database.createFolder(name: "Second")
+    let original = try database.capturePaperPlacement(paperID: a.0, generation: a.1)
+    try database.movePaper(original, to: first.id)
+    try database.movePaper(database.capturePaperPlacement(paperID: b.0, generation: b.1), to: second.id)
+    let lifecycle = try await LocalLibraryLifecycle.open(database: database)
+    let service = LibraryOrganizationService(database: database, lifecycle: lifecycle)
+    let allIDs: Set<UUID> = [a.0, b.0, unfiled.0]
+    let selections: [(LibraryFolderSelection, Set<UUID>)] = [
+      (.all, allIDs), (.unfiled, [unfiled.0]), (.folder(first.id), [a.0]), (.folder(second.id), [b.0])
+    ]
+    for (selection, expected) in selections {
+      var filter = OrganizationFilter(); filter.folder = selection
+      let snapshot = try await service.snapshot(filter: filter, facts: [])
+      XCTAssertEqual(Set(snapshot.papers.map(\.id)), expected)
+      XCTAssertEqual(snapshot.papers.count, expected.count)
+      XCTAssertEqual(snapshot.totalCount, 3)
+      XCTAssertTrue(snapshot.papers.allSatisfy(\.readable))
+    }
+    let reopened = try ProductDatabase.open(at: location)
+    XCTAssertEqual(try reopened.folders(), [first, second])
+    XCTAssertEqual(try reopened.folderID(for: a.0), first.id)
+    XCTAssertEqual(try reopened.folderID(for: b.0), second.id)
+    XCTAssertNil(try reopened.folderID(for: unfiled.0))
+    let captured = try reopened.capturePaperPlacement(paperID: a.0, generation: a.1)
+    XCTAssertEqual(captured.sha256, original.sha256)
+    XCTAssertEqual(captured.pdfReference, original.pdfReference)
+    try reopened.movePaper(captured, to: second.id)
+    try reopened.movePaper(reopened.capturePaperPlacement(paperID: b.0, generation: b.1), to: nil)
+    let restarted = try ProductDatabase.open(at: location)
+    let restartedLifecycle = try await LocalLibraryLifecycle.open(database: restarted)
+    let restartedService = LibraryOrganizationService(database: restarted, lifecycle: restartedLifecycle)
+    for (selection, expected) in [
+      (LibraryFolderSelection.all, allIDs), (.unfiled, Set([b.0, unfiled.0])),
+      (.folder(first.id), Set<UUID>()), (.folder(second.id), Set([a.0]))
+    ] {
+      var filter = OrganizationFilter(); filter.folder = selection
+      let snapshot = try await restartedService.snapshot(filter: filter, facts: [])
+      XCTAssertEqual(Set(snapshot.papers.map(\.id)), expected)
+      XCTAssertEqual(snapshot.papers.count, expected.count)
+      XCTAssertEqual(snapshot.totalCount, 3)
+      for paper in snapshot.papers {
+        XCTAssertEqual(paper.generation, paper.id == a.0 ? a.1 : paper.id == b.0 ? b.1 : unfiled.1)
+      }
+    }
+    try restarted.adapterRead { db in
+      XCTAssertEqual(try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM paper"), 3)
+      XCTAssertEqual(try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM paperFolder"), 1)
+      XCTAssertEqual(try Int.fetchOne(db, sql: "SELECT COUNT(DISTINCT pdfReference) FROM paper"), 3)
+    }
+    let namespaces = try FileManager.default.contentsOfDirectory(
+      at: location.appendingPathComponent("papers"), includingPropertiesForKeys: nil)
+    XCTAssertEqual(Set(namespaces.map(\.lastPathComponent)), Set(allIDs.map(\.uuidString)))
+    for id in allIDs {
+      let bytes = try Data(contentsOf: location.appendingPathComponent("papers/\(id.uuidString)/document.pdf"))
+      XCTAssertEqual(bytes, Data("%PDF-1.7\norganization synthetic fixture\n%%EOF\n".utf8))
+    }
+  }
+
+  func testFolderSelectionComposesTitleOrTagSearchWithExactTagStatusAndFavorite() async throws {
+    let database = try ProductDatabase.open(at: root())
+    let first = try database.createFolder(name: "Composed")
+    let second = try database.createFolder(name: "Elsewhere")
+    let titleMatch = try seed(database, title: "Résumé title", createdAt: 20)
+    let tagMatch = try seed(database, title: "Tag search only", createdAt: 10)
+    let wrongTag = try seed(database, title: "Resume wrong tag")
+    let wrongStatus = try seed(database, title: "Resume wrong status")
+    let wrongFavorite = try seed(database, title: "Resume not favorite")
+    let otherFolder = try seed(database, title: "Resume other folder")
+    let unfiled = try seed(database, title: "Resume unfiled")
+    for paper in [titleMatch, tagMatch, wrongTag, wrongStatus, wrongFavorite] {
+      try database.movePaper(database.capturePaperPlacement(paperID: paper.0, generation: paper.1), to: first.id)
+    }
+    try database.movePaper(database.capturePaperPlacement(paperID: otherFolder.0, generation: otherFolder.1), to: second.id)
+    let lifecycle = try await LocalLibraryLifecycle.open(database: database)
+    let service = LibraryOrganizationService(database: database, lifecycle: lifecycle)
+    let initial = try await service.snapshot(filter: .init(), facts: [])
+    for paper in initial.papers {
+      var value = PaperOrganization(readingStatus: .reading, favorite: true, tags: ["Methods"])
+      if paper.id == tagMatch.0 { value.tags.append("Résumé topic") }
+      if paper.id == wrongTag.0 { value.tags = ["Other"] }
+      if paper.id == wrongStatus.0 { value.readingStatus = .read }
+      if paper.id == wrongFavorite.0 { value.favorite = false }
+      try await service.save(value, for: paper)
+    }
+    var filter = OrganizationFilter()
+    filter.search = "  RÉSUMÉ\n"; filter.tag = "méthods"
+    filter.readingStatus = .reading; filter.favoritesOnly = true
+    let selections: [(LibraryFolderSelection, Set<UUID>)] = [
+      (.all, [titleMatch.0, tagMatch.0, otherFolder.0, unfiled.0]),
+      (.unfiled, [unfiled.0]), (.folder(first.id), [titleMatch.0, tagMatch.0]),
+      (.folder(second.id), [otherFolder.0])
+    ]
+    for (selection, expected) in selections {
+      filter.folder = selection
+      try await service.savePreferences(.init(presentation: .list, sort: .recentlyAdded))
+      let list = try await service.snapshot(filter: filter, facts: [])
+      try await service.savePreferences(.init(presentation: .grid, sort: .recentlyAdded))
+      let grid = try await service.snapshot(filter: filter, facts: [])
+      XCTAssertEqual(Set(list.papers.map(\.id)), expected)
+      XCTAssertEqual(list.papers.count, expected.count)
+      XCTAssertEqual(list.totalCount, 7)
+      XCTAssertEqual(grid.totalCount, 7)
+      XCTAssertEqual(grid.papers, list.papers)
+      if selection == .folder(first.id) { XCTAssertEqual(list.papers.map(\.id), [titleMatch.0, tagMatch.0]) }
+    }
+    filter.folder = .folder(first.id); filter.search = "absent"
+    let noMatch = try await service.snapshot(filter: filter, facts: [])
+    XCTAssertTrue(noMatch.papers.isEmpty)
+    XCTAssertEqual(noMatch.totalCount, 7)
+  }
+
+  func testMissingAndDeletedFolderNeverFallBackToAllOrRestoreTombstonedPaper() async throws {
+    let database = try ProductDatabase.open(at: root())
+    let folder = try database.createFolder(name: "Removed selection")
+    let survivor = try seed(database, title: "Survives folder deletion")
+    let deleted = try seed(database, title: "Deleted Paper")
+    let unfiled = try seed(database, title: "Unmapped Paper")
+    for paper in [survivor, deleted] {
+      try database.movePaper(database.capturePaperPlacement(paperID: paper.0, generation: paper.1), to: folder.id)
+    }
+    let lifecycle = try await LocalLibraryLifecycle.open(database: database)
+    let service = LibraryOrganizationService(database: database, lifecycle: lifecycle)
+    var filter = OrganizationFilter(); filter.folder = .folder(UUID())
+    let missing = try await service.snapshot(filter: filter, facts: [])
+    XCTAssertTrue(missing.papers.isEmpty)
+    XCTAssertEqual(missing.totalCount, 3)
+    filter.folder = .folder(folder.id)
+    var query = OrganizationQueryState()
+    let oldRequest = query.begin(filter: filter)
+    let old = try await service.snapshot(filter: filter, facts: [])
+    XCTAssertEqual(Set(old.papers.map(\.id)), [survivor.0, deleted.0])
+    let saga = try XCTUnwrap(database.beginDeletion(deleted.0)).saga
+    let deleting = try await service.snapshot(filter: filter, facts: [])
+    XCTAssertEqual(Set(deleting.papers.map(\.id)), [survivor.0, deleted.0])
+    XCTAssertFalse(try XCTUnwrap(deleting.papers.first(where: { $0.id == deleted.0 })).readable)
+    try database.finalizeDeletion(deleted.0, saga: saga)
+    let afterDeletion = try await service.snapshot(filter: filter, facts: [])
+    XCTAssertEqual(afterDeletion.papers.map(\.id), [survivor.0])
+    XCTAssertEqual(afterDeletion.totalCount, 2)
+    query.invalidate()
+    try database.deleteFolder(id: folder.id)
+    let currentRequest = query.begin(filter: filter)
+    let current = try await service.snapshot(filter: filter, facts: [])
+    XCTAssertTrue(query.accept(current, request: currentRequest, currentFilter: filter))
+    XCTAssertFalse(query.accept(old, request: oldRequest, currentFilter: filter))
+    XCTAssertTrue(query.snapshot?.papers.isEmpty == true)
+    XCTAssertEqual(query.snapshot?.totalCount, 2)
+    let reopened = try ProductDatabase.open(at: database.root)
+    let reopenedLifecycle = try await LocalLibraryLifecycle.open(database: reopened)
+    let reopenedService = LibraryOrganizationService(database: reopened, lifecycle: reopenedLifecycle)
+    for (selection, expected) in [
+      (LibraryFolderSelection.folder(folder.id), Set<UUID>()),
+      (.all, Set([survivor.0, unfiled.0])), (.unfiled, Set([survivor.0, unfiled.0]))
+    ] {
+      filter.folder = selection
+      let snapshot = try await reopenedService.snapshot(filter: filter, facts: [])
+      XCTAssertEqual(Set(snapshot.papers.map(\.id)), expected)
+      XCTAssertEqual(snapshot.totalCount, 2)
+      XCTAssertTrue(snapshot.papers.allSatisfy(\.readable))
+    }
+    XCTAssertTrue(try reopened.folders().isEmpty)
+    XCTAssertNil(try reopened.folderID(for: survivor.0))
+  }
+
   func testGuardFailuresLeavePreviousRecordsAndTombstoneCascades() throws {
     let database = try ProductDatabase.open(at: root())
     let a = try seed(database, title: "A"), b = try seed(database, title: "B")
