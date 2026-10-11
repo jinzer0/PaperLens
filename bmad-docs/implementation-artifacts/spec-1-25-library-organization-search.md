@@ -1,5 +1,27 @@
 # Story 1.25 Build Spec — Library organization, search and filters
 
+## Paired detail lifecycle integration; retained tag source contract
+
+Spec1.24's bounded detail continuation extends the existing concrete immutable slot
+and retained lifecycle to exactly tag-editor and identification payloads on the same
+root native presenter. Shared pending admission blocks replacement Browser work
+until either kind's matching native receipt. Return remains control-specific: tag
+targets the original More Menu, detail its dedicated native detail Button. No second
+lifecycle owner/controller, query/focus counter or generic presentation framework.
+
+Tag draft, whole-record service CAS, guarded interaction phases/Cancel/Save/revalidation,
+failure preservation and exact appearance/close/native-receipt/query-Request handshake
+remain equivalent. Both Save outcomes refresh the current mounted root, preserving
+only the same matching pre-dismissal tag slot; unmounted completion never queries.
+Detail invalidation does not use this preservation exception. Retain prior tag receipts
+and corrected source review as historical evidence, not newly observed native proof.
+
+Sole source scope is LibraryBrowserView.swift after both Spec amendments are committed.
+No folder-movement/deletion-alert correction, new data/resource authority or service/
+schema/store change. Parent owns source/review/permitted syntax-diff checks/local commit.
+Tests/test fixes, type/build/compiler/gates/formatter/native/runtime/keyboard/VoiceOver
+proof remain deferred; Story/Epic acceptance stays0/26.
+
 ## Bounded tag-editor native focus-return source continuation (baseline c9ad83a)
 
 Spec1.25 already requires returning the tag dialog to its opener or valid Library

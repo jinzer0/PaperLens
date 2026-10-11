@@ -1,5 +1,57 @@
 # Story 1.24 Build Spec — Library presentation and record revisits
 
+## Bounded native detail dismissal and opener-return continuation (baseline 1ef847c)
+
+Architect200 finds the explicit detail focus-return criterion executable within
+LibraryBrowserView.swift. The current wrapper onDisappear and clearObservation
+focus assignment are not actual native-close/current-opener proof. Commit this
+contract and paired Spec1.25 amendment before changing that sole source file.
+
+Extend the existing root's retained concrete lifecycle to exactly tag-editor and
+identification payloads, one slot-keyed native presenter and one presentation record.
+Immutable slot UUID, original mount, observed Paper/generation, filter/revision and
+frozen generation-matching metadata/Summary identify its UI capture only. Remove the
+parallel item-presented identification and its Paper-ID presentation identity.
+Admission uses the current accepted/rendered Paper and facts, the real dedicated
+detail Button and existing native focus binding; no asynchronous admission/reopen.
+
+Matching appearance, visibility setter, private Close and native onDismiss carry
+the exact slot. Requested close changes closing before visibility and has no focus/
+query effect. Consume actual native receipt once before effects; wrong/duplicate/
+still-presented callbacks do nothing. Keep pending callback identity after detail
+observation invalidation or root loss, while visibility and payload/reading eligibility
+are revoked. Old-root receipt may retire only that matching capture, never query or
+focus a remounted root. Replacement Browser work stays blocked until its receipt.
+Root appearance never retargets or erases a pending old detail slot.
+
+Normal query/work/filter/revision invalidation permanently closes detail and revokes
+its payload eligibility, without focus effects or fabricated dismissal. Ordinary
+invalidate/begin discards post-dismissal continuation before a newer query. Own-save
+preservation stays exclusive to a matching pre-dismissal tag slot. Tag phases/drafts/
+CAS, guarded close and both-outcome current-mounted-root refresh remain unchanged;
+unmounted save completion never queries. Movement/deletion close semantics are excluded.
+
+Unsuperseded same-mount native dismissal returns through the exact existing query
+Request. Consume after current projection/folder/tag/facts installation or matching
+failure. Return to the current rendered/enabled same-generation dedicated detail
+Button, or existing search fallback without changing conditions or inferring deletion.
+Distinguish detail versus More Menu focus even on the same Paper; any different
+current focus/work/modal/alert permanently interrupts. Release before focus assignment.
+
+Private detail receives required Close, rendered eligibility and a live MainActor
+eligibility closure. Eligibility fences every captured metadata/Summary/reading render,
+read start, both post-await outcomes and Retry, alongside existing closed/task/token/
+request/result identity guards. Include eligibility in task identity; false eligibility
+terminally invalidates reading state, never rearms. Close invalidates records before
+requesting root closure. Subtree disappearance only invalidates, never returns focus.
+These remain passive stored observations: no current publication, PDF/read/navigation,
+mutation, fresh Summary or authentication authority is acquired or fabricated.
+
+Parent owns source, permitted syntax/diff checks, independent review and local commit.
+Tests/test fixes, type/build/native/runtime/gates/formatter/keyboard/VoiceOver proof
+remain deferred; no service/schema/store/controller/query-counter/resource changes,
+credentials/network/protected execution or remote operations. Acceptance remains0/26.
+
 ## Stored title and year candidate identification
 
 Baseline1408cd4f85d0fbced4688121e150838494ce1403 Library rows/cards/detail
@@ -160,7 +212,9 @@ sourceID for candidates and bounded Unicode-safe excerpts; do not invent confide
 PDF Subject into abstract, infer topic tags from user tags, or display Brief/summary success.
 Reusing the existing generation-filtered facts is mandatory. Capture actual selected Paper
 identity/data-only facts; invalidate stale detail on query invalidation, work, or disappearance
-and return focus to its captured opener. No async callback may reopen stale detail.
+and return focus to its captured opener. Under the native continuation above, payload
+eligibility/visibility invalidation retains only the original pending callback identity;
+focus requires its actual receipt and current query. No async callback may reopen stale detail.
 
 Worker EXACT five files: Application/LibraryOrganizationService.swift,
 Features/Library/LibraryBrowserView.swift, Tests/Product/LibraryOrganizationTests.swift,
@@ -189,6 +243,10 @@ the existing query invalidation on refresh/filter, mutation/preferences/editor w
 intent and disappearance. Only accepted query completions install generation-matching facts;
 no asynchronous completion opens detail. Dismissal targets the captured detail button's
 dedicated native focus binding, not the existing more-actions opener.
+
+That item-clearing/disappearance mechanism is historical source intent, not observed
+native return proof. The bounded native continuation supersedes it with retained
+slot-keyed cleanup, revoked payload eligibility and exact current-query return.
 
 Authored tests: `testMetadataExcerptsPreserveGraphemesAndPreviewNeverChoosesConflictingCandidate`;
 extended `testYearFactsOnlyUseCurrentRevisionWithNoConflictPrecedence` using the existing owned
