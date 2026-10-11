@@ -52,7 +52,7 @@ final class LibraryURLImportWriterTests: XCTestCase, @unchecked Sendable {
     while service.state == .downloading { await Task.yield() }
     XCTAssertEqual(service.state, .failed(.rejected))
     try service.retry()
-    let retry = try XCTUnwrap(service.confirmation)
+    var retry = try XCTUnwrap(service.confirmation)
     guard case .retry(let firstRecord) = retry.purpose else {
       return XCTFail("Actual failed execution must authorize same-Job intent")
     }
@@ -60,6 +60,36 @@ final class LibraryURLImportWriterTests: XCTestCase, @unchecked Sendable {
     XCTAssertNotEqual(retry.id, firstConfirmation)
     service.continueImport(confirmationID: firstConfirmation)
     XCTAssertEqual(service.state, .confirming)
+    let cancelledConfirmation = retry.id
+    service.continueImport(confirmationID: cancelledConfirmation)
+    service.cancelDownload() // Same MainActor turn, before the grant child runs.
+    while service.state == .downloading { await Task.yield() }
+    XCTAssertEqual(service.state, .failed(.cancelled))
+    XCTAssertEqual(try db.captureRetryableImport(paperID: first.paperID,
+      generation: first.generation).encoded, firstRecord.encoded)
+    try service.retry()
+    retry = try XCTUnwrap(service.confirmation)
+    XCTAssertNotEqual(retry.id, cancelledConfirmation)
+    try db.adapterWrite { database in
+      try database.execute(sql: """
+        CREATE TRIGGER rejectURLRetry BEFORE UPDATE OF recoveryJournal ON importJob
+        BEGIN SELECT RAISE(IGNORE); END
+        """)
+    }
+    let refusedConfirmation = retry.id
+    service.continueImport(confirmationID: refusedConfirmation)
+    while service.state == .downloading { await Task.yield() }
+    XCTAssertEqual(service.state, .failed(.rejected))
+    XCTAssertEqual(try db.captureRetryableImport(paperID: first.paperID,
+      generation: first.generation).encoded, firstRecord.encoded)
+    try service.retry()
+    retry = try XCTUnwrap(service.confirmation)
+    XCTAssertNotEqual(retry.id, refusedConfirmation)
+    guard case .retry(let retainedRecord) = retry.purpose else {
+      return XCTFail("Pre-acknowledgment cancellation/refusal stranded genuine Retry")
+    }
+    XCTAssertEqual(retainedRecord.encoded, firstRecord.encoded)
+    try db.adapterWrite { try $0.execute(sql: "DROP TRIGGER rejectURLRetry") }
     service.continueImport(confirmationID: retry.id)
     while service.state == .downloading { await Task.yield() }
     XCTAssertEqual(service.state, .failed(.rejected))

@@ -478,3 +478,16 @@ binding, failed capture must never restore prior history or create another Job.
 Keep the original error and no automatic execution. This bounded correction edits
 URLImportService only, with owned pre-grant cancellation/refusal regressions in
 LibraryURLImportWriterTests. No new owner/schema/profile/permission/trial.
+
+Correction verification: artifact1622 passed the actual Main/GRDB same-Job case
+extended with synchronous pre-grant Cancel and an owned RAISE(IGNORE) reservation
+refusal. Both preserve the original exact encoded failed history, allow another
+fresh confirmation, and then complete a genuinely reserved same-Job abort. Review163
+follow-up returned SOURCE-ONLY CLEAR and resolved P2; acknowledged query binding
+remains sticky when capture is consumed, so post-ack failure cannot restore old
+history. Post-ack capture-denial runtime and actual HTTPS publication remain unproved.
+Artifact1625 passed20 current focused cases: complete ReaderMetadataBindingTests
+(including three synchronous publication interruption cases) and three URL cases.
+Metadata's first new-case build failed on a throwing Combine subscriber (artifact1619);
+explicit do/catch fixed only test assertions; artifact1620 then passed all three.
+No warning suppression, trial renewal or canonical acceptance promotion.

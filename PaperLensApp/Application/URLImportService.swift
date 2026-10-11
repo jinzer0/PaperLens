@@ -26,6 +26,7 @@ private final class URLImportAdmission: @unchecked Sendable {
   private var failedQuery: (@Sendable () async throws -> ImportRecoveryRecord)?
   private var queryBound = false
   var granted: Bool { lock.withLock { phase == .granted } }
+  var reservationAcknowledged: Bool { lock.withLock { queryBound } }
   func bindFailedQuery(_ query: @escaping @Sendable () async throws -> ImportRecoveryRecord) throws {
     try lock.withLock {
       guard phase == .granted, !queryBound else { throw URLImportError.writerUnavailable }
@@ -190,6 +191,12 @@ public final class URLImportService: ObservableObject {
         // Main's query is bound to the acknowledged execution, never to an error
         // label. It runs only after the real writer's abort/drain has returned.
         retryRecord = try? await intent.admission.captureFailed()
+        if retryRecord == nil, ownedWriter == nil, !intent.admission.reservationAcknowledged,
+          case .retry(let expected) = intent.purpose {
+          // No replacement execution was acknowledged. The next Continue still
+          // revalidates the genuine original history with the exact durable CAS.
+          retryRecord = expected
+        }
         state = .failed(safe)
       }
       writer = nil
