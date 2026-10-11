@@ -211,3 +211,37 @@ APPROVE, no actionable delta findings. Two-source binary diff SHA256 versus745e3
 Rendered visibility/pointer behavior, VoiceOver/focus, immediate producer delivery,
 process relaunch and genuine calibrated parser/Retry remain unverified. No protected
 binary/renderer/SDK/provider/remote operation ran; canonical0/26 and Story/Epic false.
+
+## Commit-driven parsing presentation source phase
+
+Current source inspection confirms that mounted status refresh waits on a one-second
+polling loop. This leaves the canonical immediate failure-presentation requirement
+without producer-driven delivery. Replace polling with the pinned GRDB7.11.1 public
+ValueObservation async sequence on the existing sole ProductDatabase queue; do not
+add a global notification bus, timer, database, persistent mirror or producer owner.
+Exact source scope: Infrastructure/ProductDatabase.swift,
+Infrastructure/ProductDatabase+Extraction.swift and Features/Reader/ParsingStatusView.swift.
+
+Factor the existing extractionStatus SQL/readback into one shared transaction-local
+fetch helper without changing its semantics. ProductDatabase.extractionStatuses(paperID:)
+returns AsyncValueObservation<ExtractionStatus> from tracking that helper on its own
+queue, with bufferingNewest(1). This is latest presentation-state coalescing, not a
+physical resource limit, publication authority or cleanup ACK. Use the maintained
+GRDB iterator cancellation rather than a new observer/continuation owner. No nested
+queue reads, filesystem/PDF/transport effects or callbacks inside SQL transactions.
+
+The existing Paper-scoped SwiftUI task consumes observations and invokes its current
+guarded refresh/recovery-context/reconciliation path. Remove the one-second sleep;
+keep explicit Refresh and Retry unchanged. Observation errors clear stale status and
+recovery context and reconcile unavailable using fresh existing request and task
+cancellation fences. A removed Reader must not receive late presentation effects;
+the existing Paper/generation/session mount and actual metadata pins remain intact.
+No extraction reservation, retry lineage, provider/config generation, accepted
+revision, schema or calibrated parser contract changes.
+
+Commit this contract before source because the change crosses the shared read-query
+and presentation boundary. Implementation-first/test deferral still applies: no new
+tests, runtime/native/SDK/helper/renderer or protected trials in the source lane.
+Parent owns source checks and independent review; real commit-driven delivery,
+rollback/no-change/read-error/replacement/cancellation behavior and native immediate
+notice remain verification obligations, not source-only Story acceptance.
