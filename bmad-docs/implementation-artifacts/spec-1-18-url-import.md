@@ -449,3 +449,17 @@ privacy/permission/profile/architecture relaxation, remote or release action.
 Tests/builds/independent review/formatters/runtime and acceptance remain deferred
 under the implementation-first instruction. This amendment precedes source edits
 and does not promote Story/Epic acceptance or certify physical runtime behavior.
+
+### Focused owned regression after source commit99ca2f7
+
+The two existing confirmation tests and the new
+`testActualAbortedURLRetryRetainsJobAndRequiresFreshConfirmationWithoutNetwork`
+passed with SwiftPM `--parallel --num-workers 1` (artifacts1608/1609).
+The new case uses a temporary sole-GRDB database and actual Main URL writer
+reservation/abort, then verifies fresh confirmation, rejection of old confirmation,
+same Paper/generation/Job, six fresh execution IDs, one failed Library record and
+Cancel preserving the exact failed journal. It throws before download; no live
+network, provider, SDK, user PDF or closure-uncertainty trial is performed.
+Compilation and these three cases do not prove HTTPS download/republication,
+restart, denied-history branches, UI/accessibility, independent review or canonical
+acceptance. Existing unused-result/weak-mutability warnings remain unsuppressed.

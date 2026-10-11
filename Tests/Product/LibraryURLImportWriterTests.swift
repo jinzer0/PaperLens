@@ -37,6 +37,56 @@ final class LibraryURLImportWriterTests: XCTestCase, @unchecked Sendable {
       configuration: configuration, effects: effects)
   }
 
+  @MainActor
+  func testActualAbortedURLRetryRetainsJobAndRequiresFreshConfirmationWithoutNetwork() async throws {
+    let db = try database()
+    let lifecycle = try await LocalLibraryLifecycle.open(database: db)
+    let service = URLImportService(authority: try ProviderRequest(), grantWriter: { intent in
+      let writer = try await lifecycle.grantURLImportWriter(for: intent)
+      try await writer.abort(reason: .rejected)
+      throw URLImportError.rejected // No download is started by this owned fixture.
+    })
+    try service.prepare("https://writer.invalid/pdf", destination: "Library", possibleDuplicate: false)
+    let firstConfirmation = try XCTUnwrap(service.confirmation).id
+    service.continueImport(confirmationID: firstConfirmation)
+    while service.state == .downloading { await Task.yield() }
+    XCTAssertEqual(service.state, .failed(.rejected))
+    try service.retry()
+    let retry = try XCTUnwrap(service.confirmation)
+    guard case .retry(let firstRecord) = retry.purpose else {
+      return XCTFail("Actual failed execution must authorize same-Job intent")
+    }
+    let first = try firstRecord.journal.currentCapture().identity
+    XCTAssertNotEqual(retry.id, firstConfirmation)
+    service.continueImport(confirmationID: firstConfirmation)
+    XCTAssertEqual(service.state, .confirming)
+    service.continueImport(confirmationID: retry.id)
+    while service.state == .downloading { await Task.yield() }
+    XCTAssertEqual(service.state, .failed(.rejected))
+    try service.retry()
+    let next = try XCTUnwrap(service.confirmation)
+    guard case .retry(let secondRecord) = next.purpose else {
+      return XCTFail("Fresh failed execution must retain its genuine history")
+    }
+    let second = try secondRecord.journal.currentCapture().identity
+    XCTAssertEqual(second.paperID, first.paperID)
+    XCTAssertEqual(second.generation, first.generation)
+    XCTAssertEqual(second.jobID, first.jobID)
+    XCTAssertEqual(second.epoch, first.epoch)
+    XCTAssertNotEqual(second.attempt, first.attempt)
+    XCTAssertNotEqual(second.fence, first.fence)
+    XCTAssertNotEqual(second.correlation, first.correlation)
+    XCTAssertNotEqual(second.input, first.input)
+    XCTAssertNotEqual(second.writer, first.writer)
+    XCTAssertNotEqual(second.publication, first.publication)
+    XCTAssertEqual(try db.libraryRecords().count, 1)
+    XCTAssertEqual(try db.libraryRecords().first?.status, .importFailed)
+    service.cancelConfirmation()
+    XCTAssertEqual(service.state, .idle)
+    XCTAssertEqual(try db.captureRetryableImport(paperID: first.paperID,
+      generation: first.generation).encoded, secondRecord.encoded)
+  }
+
   func testActualValidationClosesOnceReleasesQuotaAndCanPublishReopen() async throws {
     let db = try database()
     let pool = try RequestResourcePool(authority: ProviderRequest(), kind: "import")
