@@ -1,5 +1,71 @@
 # Story 1.17 Build Spec — Folder arrangement and duplicate local import
 
+## Direct PDF-button Cancel focus integration (baseline b8b3bd3)
+
+Review190 resolves the next source input: URLImportView's existing PDF 선택 Button
+survives over Library. The earlier five-file missing-opener finding was scoped and
+does not describe this actual child control. Commit this contract before the shared
+UI/model change. Exact sources: ProductWorkspaceView.swift, URLImportView.swift and
+ImportConfirmationView.swift; paired Spec1.18 records the child wiring. No new files,
+controller, database, resource owner or generic focus framework.
+
+Revise existing discardable prepareImport(source:) to return the real prepared and
+installed confirmation UUID, and pickPDF() to return the selected preparation
+Task<UUID?, Never>? (nil on rejected/cancelled picker or failed preparation). Preserve
+all original hash/scope/preparation/installation/error guards. No fixture veto hook
+is production authority. Browser/drop ignored-return callers remain source-valid;
+explicitly discard results in value-inferred Void closures where needed.
+
+presentationDidDismiss(confirmationID: UUID? = nil) must key confirmation cleanup
+against its actual pending UUID or retained cancellation tuple before mutation.
+Mismatches do nothing; matching duplicates join existing b8b3bd3 completion. Nil
+supports only nonconfirmation cleanup, not an identity-less confirmation fallback.
+Existing dismissal/preparation/installation fences and dismissSheet remain intact.
+
+The existing root view owns native FocusState for only the direct PDF button and a
+UI intent with unique UUID, original mount and monotonic invalidation. Supply required
+native focus and keyed invalidation bindings plus chooseLocalPDF(UUID) to the one
+production URLImportView constructor. Every accepted child interruption/unmount
+reports its own retained intent UUID before advancing the drag fence; equality may
+invalidate only that intent, never a newer one. Extend existing drag state, not an
+independent owner. LibraryBrowser/Retry/drop do not acquire a direct-button intent.
+
+Retain one UI-only native presentation slot in the existing root presenter. Its
+immutable slot UUID/mount/owner Sheet payload/confirmation UUID closes over the
+native visibility setter and onDismiss. Keep payload/presenter until actual native
+dismissal; do not remove/rekey on binding nil or overwrite an undismissed slot.
+Latch owner sheet independently of picker-result timing. Matching onAppear proves
+appearance. Token-checked visibility changes cannot clear another owner sheet. The
+slot is presentation scheduling/projection only, never admission or physical ACK.
+
+ImportConfirmationView requires slot-keyed cancelled/continued UUID bindings. Write
+only after its existing successful synchronous action guard, before suspension.
+Continue permanently disqualifies Cancel focus, even if it later fails. Disappearance
+alone is not Cancel. Direct-origin interactive cancellation is eligible only after
+appearance, before Continue and while not working; other origins retain current
+disabled interactive dismissal. Keep all existing service/actions/imported callbacks.
+
+Actual native onDismiss invokes keyed Workspace cleanup before all focus guards,
+captures that returned task once, and records the matching event. Await that exact
+task, never invoke cleanup again after suspension. Buffer native appearance/dismissal,
+Cancel/Continue and cancellation UUID independently of picker preparation UUID: fast
+native events may precede pickerTask.value. Both completions attempt the same one-shot
+reconciliation. Require every identity to match, actual appearance AND dismissal,
+Cancel but never Continue, matching cancellation completion, original live root mount
+and child control, uninvalidated intent, no Reader/slot/new sheet and clear preparation/
+opening/cleanup fences. Consume only that intent. Cancelled waiters do not restore or
+cancel owner cleanup. Lost tasks/callbacks are not completion. Existing folder/URL
+focus and cleanup-first behavior remain unchanged.
+
+No actor cancellation, task UUID or picker result certifies consumed Continue abort,
+FD/scope/lease/writer/publication/purge/physical closure. No lifecycle/schema/profile/
+selector/permission/trial change. External panel controls, Retry and drop focus are
+excluded, not replaced by another control. Test authoring/fixes/execution and native
+trials stay deferred; constructor callers must be updated without no-op defaults.
+Parent source checks/independent review precede delivery. Both event/task orders,
+interruption/replacement/unmount, Continue-error-Cancel, native scheduling, keyboard
+and VoiceOver remain verification obligations; no Story/Epic promotion.
+
 ## Native opener-focus source continuation (baseline a22d139)
 
 The existing Workspace toolbar's 폴더 관리 button gains native FocusState. Its

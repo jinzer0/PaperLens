@@ -1,5 +1,27 @@
 # Story 1.18 Build Spec — URL Import and shared Library entry
 
+## Existing direct PDF-button focus wiring (baseline b8b3bd3)
+
+The next paired Story1.17 phase uses the surviving PDF 선택 Button, not the closed
+NSOpenPanel or a substitute toolbar. Required URLImportView inputs are the root's
+FocusState<Bool>.Binding, a keyed Binding<UUID?> for local-intent invalidation and
+chooseLocalPDF(UUID). Attach native focus to that existing button. Its accepted action
+captures a fresh UI intent after the current-control guard/interruption, retains it
+in existing drag state and calls the root with that UUID. Every later accepted child
+interruption—including URL input, paste, destinations, service events, drag/drop and
+disappearance—reports its own retained UUID before advancing the drag fence, then
+clears it. Equality-only root invalidation cannot revive old or invalidate new intent.
+
+The one production constructor in ProductWorkspaceView supplies real bindings; no
+no-op default or synthetic dismissal/completion. The existing root joins actual
+prepared confirmation UUID, immutable native-slot appearance/dismissal identity and
+awaited existing-owner cancellation task before one-shot Cancel-only focus return.
+Native events may precede the picker task result. Continue permanently disqualifies
+restoration. Detailed shared model/presenter contract is in the paired Spec1.17 phase,
+committed before source. Existing URL Add/Paste focus, service owner, Retry, destination,
+network and physical obligations stay unchanged. No local-opener intent for drop or
+LibraryBrowser/Retry; no tests/native keyboard/VoiceOver or physical-ACK claim.
+
 ## Native opener-focus source continuation (baseline a22d139)
 
 URLImportView uses native FocusState on its existing URL 추가/URL 붙여넣기
