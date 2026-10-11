@@ -290,3 +290,15 @@ artifact1632: false opened, detached PDF, no session/metadata, zero pages after 
 then successful later explicit genuine reopen. It is not scale/navigation notification
 interruption or visible-frame proof. Saved-zoom2.5 notification branch, navigation
 notification, physical restart/accessibility/P6/native matrix remain outstanding.
+
+Commit56d2c24 adds genuine synchronous public PDFViewScaleChanged at persisted
+zoom2.5 and PDFViewPageChanged at actual page1 restoration interruption. Both close
+the actual session, preserve exact prior durable position/timestamp and original
+access-ended failure, and assert false opened/detached PDF/zero pages/no session or
+metadata. No fake PDFView or manually posted notification. Missing witnesses fail
+instead of skipping. Artifact1634 passed those two plus two Summary storage cases;
+artifact1637 passed the complete current20 ReaderMetadataBindingTests. Page-change
+delivery may arise during layout/scale rather than specifically go(to:) internals;
+these are windowless public callback facts, not rendered movement/calibration.
+Bounded interruption regression/source-review work is complete; physical restart,
+visible/accessibility/P6/OS×CPU/canonical Story acceptance remain outstanding.
