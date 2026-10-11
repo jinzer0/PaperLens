@@ -329,3 +329,18 @@ or acceptance promotion. No tests, gates, formatter, build or runtime are run in
 this lane; parent owns source review and permitted verification. Native shortcut
 delivery (including multiline editing and pending/failed states), VoiceOver
 label-role-state/focus, contrast/resize/scaling and actual restart remain unproved.
+
+### Shared native sheet source-only receipt
+
+After paired contract cd1401c, LibraryBrowserView uses one immutable two-case sheet
+slot and retained presentation for tag editor and detail, with shared pending-native
+admission and exact receipt/query-return handling. Tag draft/interaction/CAS/private
+close/revalidation remain unchanged. Own-save preservation is still matching
+pre-dismissal tag-only; both success and original rethrown failure refresh the current
+mounted root after busy clears, including remount, while unmounted completion does
+not query. Detail invalidation never preserves payload eligibility or synthesizes
+dismissal/focus. Movement/deletion close semantics remain unchanged. Source inspection
+plus parent Browser syntax parsing/git diff --check pass and independent202 SOURCE CLEAR
+verify the bounded source paths, not native delivery. Tests/type/build/native/runtime/
+keyboard/VoiceOver proof remain deferred. No services, tests, public APIs or
+schema changed, and canonical acceptance remains0/26.

@@ -390,3 +390,21 @@ gate, formatter or independent review. Worker reported reading the root Spec wit
 new section; explicit assignment contained the full contract, and parent uses this committed
 integration Spec. Actual rendering, semantic-error reading continuity, insufficient-evidence
 delivery and genuine Provider/owner/profile activation remain unverified; 0/26 unchanged.
+
+### Native detail continuation source-only receipt
+
+Committed paired contract cd1401c preceded this LibraryBrowserView-only implementation.
+The dedicated detail Button now freezes the current accepted Paper and matching facts
+into the same concrete two-case slot/presentation lifecycle as tags. Exact native
+receipts retain pending detail identity across invalidation/unmount/remount; old-root
+cleanup only retires its capture. Requested close and observation/subtree/root loss
+do not assign focus. Same-mount return uses the existing exact query Request, releases
+the record before dedicated-Button/search focus, and respects control-kind interruption.
+Rendered and live root-slot eligibility fence captured payloads, reading start/replies
+and Retry; false eligibility terminally invalidates the private reading observation.
+No new read/publication/PDF/mutation authority or service/schema owner was added.
+Parent Browser syntax parsing and git diff --check pass; independent202 SOURCE CLEAR
+traces close/query return, late read success/failure/Retry, old-root cleanup and tag
+save remount/unmount outcomes. Tests/type/build/formatter/gates/native/runtime/
+keyboard/VoiceOver proof remain deferred and were not run;
+this is authored behavior, not native proof or acceptance promotion. Acceptance stays0/26.
