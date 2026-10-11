@@ -19,7 +19,7 @@ existing dismissal callback proves completion of existing input cleanup. A futur
 existing-owner API would need a matching confirmation/presentation identity and an
 actual-dismissal plus awaited-cancellation completion receipt before restoring a
 captured opener; cancellation completion would still not certify physical closure
-or ACK. Parent explicitly declined that API change in this source lane. Existing
+or ACK. That API change was excluded from the earlier focus-only lane. Existing
 ImportConfirmationView, workspace published admission/cleanup guards, Retry,
 security scope, lease and schemas remain unchanged. External NSOpenPanel return
 and Browser/Reader control restoration are not fabricated or changed.
@@ -27,6 +27,48 @@ and Browser/Reader control restoration are not fabricated or changed.
 No tests, test authoring, builds, gates, formatters or runtime actions ran for this
 continuation. Parent owns permitted source review/checks. Native keyboard focus,
 VoiceOver and sheet scheduling remain unverified; no Story/Epic acceptance claim.
+
+### Existing Workspace confirmation-cancellation completion
+
+Review187 identifies that current cleanup admission reopens before the matching
+actor cancellation returns. FolderImportService.cancel only removes its matching
+ephemeral pending intent; Continue consumes that intent before asynchronous work,
+so cancelling an absent intent is not producer cancellation or physical cleanup.
+Implement the completion boundary in ProductWorkspaceView.swift only, after this
+contract is committed. FolderImportService and ImportConfirmationView stay unchanged.
+
+Revise existing dismissSheet and presentationDidDismiss to return an optional
+retained Task<UUID, Never>, marked discardable. It yields the exact captured
+confirmation UUID after awaiting the same imports.cancel and Workspace finalization.
+No new receipt schema, operation UUID, await API, queue or resource owner. Duplicate
+observations may join this one task, not start another cleanup. Retain the completed
+handle until the next accepted presentation/input operation, invalidating it before
+replacement; stale callbacks during installation/preparation remain inert.
+
+Keep the synchronous cleanup front half and the current original security-scope
+stop position unchanged. Assert cleaningSheet before published mutations; invalidate
+preparation, clear the captured confirmation, increment revision once. With a captured
+confirmation, keep cleaningSheet and sheetCleanupPending asserted across cancellation
+await, and let only that retained operation finish them. No new input, sheet, Reader
+opening or task replacement during this interval. No-confirmation cleanup finishes
+synchronously, retaining current folder/settings and preparation-interruption behavior.
+Always invoke Workspace cleanup before existing focus guards. Cancelling a UI waiter
+must not abort retained owner cleanup. Lost Task/callback/process is not completion.
+
+This task/UUID proves only matching UI-intent cancellation completion, never FD,
+security-scope, lease, writer, publication, purge or physical ACK. No local opener is
+captured in the current five-file boundary: picker controls have closed, drop has no
+opener, and child control callbacks carry no surviving control receipt. Therefore
+local confirmation focus stays unfinished, not redirected to the folder toolbar or
+fabricated from Paper/generation IDs. A separately bounded child-control integration
+would have to supply the real surviving opener and native dismissal receipt.
+
+Existing Workspace tests that reenter after confirmation dismissal must await its
+returned task; settings/folders and uninstalled preparation interruption remain
+synchronous. Old failure/history/no-replay and stale-callback assertions must not be
+weakened. Test edits/execution remain deferred by the implementation-first instruction;
+their old synchronous timing is not current verification. Parent source checks and
+independent review precede source delivery, without native/physical/Story promotion.
 
 ## Current native import presentation continuation (baseline 2c855ee)
 
