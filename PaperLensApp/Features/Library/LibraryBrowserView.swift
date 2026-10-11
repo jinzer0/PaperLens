@@ -359,6 +359,7 @@ public struct LibraryBrowserView: View {
       HStack {
         Button("열기") { perform { try await service.admitOpen(paper); try await openPaper(paper) } }
           .disabled(!paper.readable || busy)
+          .accessibilityLabel("\(paper.title) 열기")
         Button("논문 정보·요약·읽기 기록 상세") {
           guard !busy, !loading, !loadFailed else { return }
           identification = LibraryIdentification(paper: paper, metadata: fact?.metadata, summary: fact?.summary)
@@ -385,6 +386,7 @@ public struct LibraryBrowserView: View {
             Button("삭제", role: .destructive) { deleting = paper }.disabled(paper.status == .deleting)
           }
         }.disabled(busy).focused($focusedPaper, equals: paper.id)
+          .accessibilityLabel("\(paper.title) 더 보기")
       }
     }.accessibilityElement(children: .contain)
   }
@@ -921,7 +923,7 @@ struct OrganizationEditorInteraction {
         Button("취소", role: .cancel) {
           guard interaction.beginCancel() else { return }
           dismiss()
-        }
+        }.keyboardShortcut(.cancelAction)
         Button("저장") {
           guard interaction.beginSave() else { return }
           var draft = value
@@ -933,7 +935,7 @@ struct OrganizationEditorInteraction {
               dismiss()
             } catch { _ = interaction.finishSave(succeeded: false) }
           }
-        }.disabled(interaction.failed)
+        }.keyboardShortcut(.defaultAction).disabled(interaction.failed)
       }.disabled(interaction.blocksInteraction)
     }.padding().frame(minWidth: 400).interactiveDismissDisabled(interaction.blocksInteraction)
       .onDisappear { interaction.invalidate() }

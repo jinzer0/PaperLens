@@ -217,3 +217,22 @@ passed, full current isolated Product480 passed3238, fresh unsigned native four-
 arm64 build3239 SUCCEEDED. Review172 follow-up SOURCE CLEAR resolves P2. Old failures
 are retained; no model guard weakened. Native dismissal timing, scope-stop/FD proof,
 rendered keyboard/focus/VoiceOver, process restart and canonical gates remain unproved.
+
+## Current Library keyboard and action-label source continuation
+
+Current inspection of Specs1.24/1.25, LibraryBrowserView.swift,
+LibraryOrganizationService.swift and ProductDatabase+Organization.swift finds an
+ordinary native UI gap: OrganizationEditor has guarded Save/Cancel callbacks but
+does not mount the default/cancel keyboard actions already used by the movement
+sheet and information detail. Repeated row/card Open and More controls also lack
+Paper-specific accessibility labels, unlike Favorite, Reading Status, details and
+movement. Change only LibraryBrowserView.swift: bind native default/cancel shortcuts
+to the existing guarded editor buttons and label Open/More with the durable Paper
+title. Keep native multiline TextEditor handling, existing disabled-state/phase
+admission, explicit revalidation after failed save, focus owners and visible Korean
+copy. No new shortcut dispatcher, write/query/CAS/deletion/resource authority or
+schema. This is existing keyboard/VoiceOver acceptance implementation, not polish
+or acceptance promotion. No tests, gates, formatter, build or runtime are run in
+this lane; parent owns source review and permitted verification. Native shortcut
+delivery (including multiline editing and pending/failed states), VoiceOver
+label-role-state/focus, contrast/resize/scaling and actual restart remain unproved.
