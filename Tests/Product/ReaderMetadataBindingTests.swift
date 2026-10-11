@@ -537,6 +537,120 @@ import XCTest
     XCTAssertNotNil(presentation.metadataBinding)
   }
 
+  func testNativeRestoredScaleNotificationClosePreservesAccessEndedAndSavedPosition() async throws {
+    let (db, lifecycle, identity, owner) = try await fixture()
+    try owner.session.save(ReaderPosition(pageIndex: 1, zoom: 2.5))
+    owner.session.close()
+    let saved = try XCTUnwrap(db.adapterRead {
+      try Row.fetchOne($0, sql: "SELECT lastReadPage, lastReadZoom, lastReadAt FROM paper WHERE id = ?",
+        arguments: [identity.paperID.uuidString])
+    })
+    let session = ReaderSession(database: db,
+      leaseProvider: LibraryReadLeaseProvider(lifecycle: lifecycle))
+    let presentation = ReaderPresentation(session: session,
+      annotationIdentity: try db.annotationIdentity(paperID: identity.paperID),
+      annotationService: AnnotationService(database: db),
+      metadataService: ReaderMetadataService(database: db), metadataIdentity: identity)
+    defer { session.close() }
+    var interrupted = false
+    var accessEnded: String?
+    let observer = NotificationCenter.default.addObserver(forName: .PDFViewScaleChanged,
+      object: presentation.pdfView, queue: nil) { @Sendable _ in
+      // PDFKit delivers synchronously from the MainActor restoration setter.
+      MainActor.assumeIsolated {
+        guard !interrupted, case .admitted = session.admissionState,
+          presentation.pdfView.scaleFactor == 2.5 else { return }
+        interrupted = true
+        XCTAssertEqual(session.restoredPosition, ReaderPosition(pageIndex: 1, zoom: 2.5))
+        session.close()
+        accessEnded = presentation.failure
+      }
+    }
+    defer { NotificationCenter.default.removeObserver(observer) }
+
+    presentation.open(paperID: identity.paperID)
+    guard interrupted else {
+      guard presentation.opened, session.currentPaper != nil, presentation.pdfView.document != nil else {
+        XCTFail("Restoration failed before the actual scale notification: \(presentation.failure ?? "missing failure")")
+        return
+      }
+      XCTFail("Windowless PDFKit did not synchronously emit PDFViewScaleChanged at restored zoom 2.5; no synthetic notification substitute")
+      return
+    }
+    XCTAssertFalse(presentation.opened)
+    XCTAssertNil(presentation.pdfView.document)
+    XCTAssertEqual(presentation.pageCount, 0)
+    XCTAssertNil(session.currentPaper)
+    XCTAssertNil(presentation.metadataBinding)
+    XCTAssertEqual(accessEnded, "Reader access ended. The Paper may have been deleted or replaced.")
+    XCTAssertEqual(presentation.failure, accessEnded)
+    XCTAssertThrowsError(try session.withReadAccess { XCTFail("Interrupted Reader admitted a read") }) {
+      XCTAssertEqual($0 as? ReaderError, .notOpen)
+    }
+    let after = try XCTUnwrap(db.adapterRead {
+      try Row.fetchOne($0, sql: "SELECT lastReadPage, lastReadZoom, lastReadAt FROM paper WHERE id = ?",
+        arguments: [identity.paperID.uuidString])
+    })
+    XCTAssertEqual(after, saved)
+  }
+
+  func testNativeRestoredPageNotificationClosePreservesAccessEndedAndSavedPosition() async throws {
+    let (db, lifecycle, identity, owner) = try await fixture()
+    try owner.session.save(ReaderPosition(pageIndex: 1, zoom: 2.5))
+    owner.session.close()
+    let saved = try XCTUnwrap(db.adapterRead {
+      try Row.fetchOne($0, sql: "SELECT lastReadPage, lastReadZoom, lastReadAt FROM paper WHERE id = ?",
+        arguments: [identity.paperID.uuidString])
+    })
+    let session = ReaderSession(database: db,
+      leaseProvider: LibraryReadLeaseProvider(lifecycle: lifecycle))
+    let presentation = ReaderPresentation(session: session,
+      annotationIdentity: try db.annotationIdentity(paperID: identity.paperID),
+      annotationService: AnnotationService(database: db),
+      metadataService: ReaderMetadataService(database: db), metadataIdentity: identity)
+    defer { session.close() }
+    var interrupted = false
+    var accessEnded: String?
+    let observer = NotificationCenter.default.addObserver(forName: .PDFViewPageChanged,
+      object: presentation.pdfView, queue: nil) { @Sendable _ in
+      MainActor.assumeIsolated {
+        guard !interrupted, case .admitted = session.admissionState,
+          let document = presentation.pdfView.document,
+          let page = presentation.pdfView.currentPage, document.index(for: page) == 1 else { return }
+        interrupted = true
+        XCTAssertEqual(session.restoredPosition, ReaderPosition(pageIndex: 1, zoom: 2.5))
+        session.close()
+        accessEnded = presentation.failure
+      }
+    }
+    defer { NotificationCenter.default.removeObserver(observer) }
+
+    presentation.open(paperID: identity.paperID)
+    guard interrupted else {
+      guard presentation.opened, session.currentPaper != nil, presentation.pdfView.document != nil else {
+        XCTFail("Restoration failed before the actual page notification: \(presentation.failure ?? "missing failure")")
+        return
+      }
+      XCTFail("Windowless PDFKit did not synchronously emit PDFViewPageChanged for restoration to page 1; no synthetic notification substitute")
+      return
+    }
+    XCTAssertFalse(presentation.opened)
+    XCTAssertNil(presentation.pdfView.document)
+    XCTAssertEqual(presentation.pageCount, 0)
+    XCTAssertNil(session.currentPaper)
+    XCTAssertNil(presentation.metadataBinding)
+    XCTAssertEqual(accessEnded, "Reader access ended. The Paper may have been deleted or replaced.")
+    XCTAssertEqual(presentation.failure, accessEnded)
+    XCTAssertThrowsError(try session.withReadAccess { XCTFail("Interrupted Reader admitted a read") }) {
+      XCTAssertEqual($0 as? ReaderError, .notOpen)
+    }
+    let after = try XCTUnwrap(db.adapterRead {
+      try Row.fetchOne($0, sql: "SELECT lastReadPage, lastReadZoom, lastReadAt FROM paper WHERE id = ?",
+        arguments: [identity.paperID.uuidString])
+    })
+    XCTAssertEqual(after, saved)
+  }
+
   func testActualReaderMountMissingContextAndIdentityReplacement() async throws {
     let (db, lifecycle, identity, owner) = try await fixture()
     owner.session.close()

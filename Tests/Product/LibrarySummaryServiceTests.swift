@@ -298,6 +298,93 @@ final class LibrarySummaryServiceTests: XCTestCase {
       sql: "SELECT COUNT(*) FROM librarySummaryResult") }, 1)
   }
 
+  func testOriginalOwnerArchiveSQLPaperDeleteCascadesSummaryRowsOnly() throws {
+    let f = try fixture(tail: "independent unranked full extent")
+    defer { try? FileManager.default.removeItem(at: f.root) }
+    let codec = try installCanonicalGeometry(f, owners: canonicalOwners(f))
+    try f.db.reserveLibrarySummary(f.identity, frozen: f.frozen, geometry: codec)
+    let saved = try f.db.publishLibrarySummary(f.identity, frozen: f.frozen, result: f.result,
+      bytes: ProviderRequest.canonicalBytes(f.result.value), permit: UUID().uuidString,
+      resultID: UUID(), geometry: codec)
+    XCTAssertEqual(try LibrarySummaryService(database: f.db)
+      .restore(paperID: f.identity.paperID)?.id, saved.id)
+    let tables = ["librarySummaryJob", "librarySummaryResult", "librarySummaryVisible",
+      "librarySummaryOwner", "librarySummaryOwnerAnchor"]
+    for table in tables {
+      XCTAssertEqual(try f.db.adapterRead { try Int.fetchOne($0,
+        sql: "SELECT COUNT(*) FROM \(table)") }, table == "librarySummaryOwnerAnchor" ? 3 : 1)
+    }
+    try f.db.adapterWrite { sql in
+      XCTAssertEqual(try Int.fetchOne(sql, sql: "PRAGMA foreign_keys"), 1)
+      // Owned SQL fixture deletion only: not application deletion, purge or FD closure.
+      try sql.execute(sql: "DELETE FROM paper WHERE id = ?",
+        arguments: [f.identity.paperID.uuidString])
+    }
+    let reopened = try ProductDatabase.open(at: f.root)
+    XCTAssertEqual(try reopened.adapterRead { try Int.fetchOne($0,
+      sql: "SELECT COUNT(*) FROM paper WHERE id = ?",
+      arguments: [f.identity.paperID.uuidString]) }, 0)
+    for table in tables {
+      XCTAssertEqual(try reopened.adapterRead { try Int.fetchOne($0,
+        sql: "SELECT COUNT(*) FROM \(table)") }, 0, table)
+    }
+    XCTAssertNil(try LibrarySummaryService(database: reopened).restore(paperID: f.identity.paperID))
+  }
+
+  func testOriginalOwnerArchiveRejectsOversizedRowAndAggregateBeforeAnchorDecode() throws {
+    let f = try fixture(tail: "independent unranked full extent")
+    defer { try? FileManager.default.removeItem(at: f.root) }
+    let codec = try installCanonicalGeometry(f, owners: canonicalOwners(f))
+    try f.db.reserveLibrarySummary(f.identity, frozen: f.frozen, geometry: codec)
+    let saved = try f.db.publishLibrarySummary(f.identity, frozen: f.frozen, result: f.result,
+      bytes: ProviderRequest.canonicalBytes(f.result.value), permit: UUID().uuidString,
+      resultID: UUID(), geometry: codec)
+    XCTAssertEqual(try LibrarySummaryService(database: f.db)
+      .restore(paperID: f.identity.paperID)?.id, saved.id)
+    let maximumBytes = SummaryOwnerArchive.maximumBytes
+    // The real row CHECK forbids a single oversized BLOB. The failed replacement is
+    // transactional, so it cannot remove the previously registered original tail.
+    XCTAssertThrowsError(try f.db.adapterWrite { sql in
+      try sql.execute(sql: "DELETE FROM librarySummaryOwnerAnchor WHERE job = ? AND page = 0 AND sentenceID = 2",
+        arguments: [f.identity.job.uuidString])
+      try sql.execute(sql: "INSERT INTO librarySummaryOwnerAnchor(job, page, sentenceID, anchor) VALUES (?, 0, 2, ?)",
+        arguments: [f.identity.job.uuidString, Data(repeating: 0, count: maximumBytes + 1)])
+    }) { error in
+      XCTAssertEqual((error as? DatabaseError)?.resultCode, .SQLITE_CONSTRAINT)
+    }
+    XCTAssertEqual(try LibrarySummaryService(database: f.db)
+      .restore(paperID: f.identity.paperID)?.id, saved.id)
+    try f.db.adapterWrite { sql in
+      // Individually permitted BLOB length, but total archive bytes now exceed the
+      // existing metadata bound. Immutable UPDATE triggers remain untouched.
+      try sql.execute(sql: "DELETE FROM librarySummaryOwnerAnchor WHERE job = ? AND page = 0 AND sentenceID = 2",
+        arguments: [f.identity.job.uuidString])
+      try sql.execute(sql: "INSERT INTO librarySummaryOwnerAnchor(job, page, sentenceID, anchor) VALUES (?, 0, 2, ?)",
+        arguments: [f.identity.job.uuidString, Data(repeating: 0, count: maximumBytes)])
+    }
+    let reopened = try ProductDatabase.open(at: f.root)
+    XCTAssertEqual(try reopened.adapterRead { try Int.fetchOne($0,
+      sql: "SELECT COUNT(*) FROM librarySummaryOwnerAnchor WHERE job = ?",
+      arguments: [f.identity.job.uuidString]) }, 3)
+    let bytes = try XCTUnwrap(reopened.adapterRead { try Int.fetchOne($0,
+      sql: "SELECT SUM(length(anchor)) FROM librarySummaryOwnerAnchor WHERE job = ?",
+      arguments: [f.identity.job.uuidString]) })
+    XCTAssertGreaterThan(bytes, maximumBytes)
+    // Invalid JSON would produce invalidEncoding if fetched/decoded. The aggregate
+    // guard must instead deny with invalidGrounding before anchor decoding.
+    XCTAssertThrowsError(try LibrarySummaryService(database: reopened)
+      .restore(paperID: f.identity.paperID)) {
+      XCTAssertEqual($0 as? LibrarySummaryError, .invalidGrounding)
+    }
+    XCTAssertEqual(try LibrarySummaryService(database: reopened, geometry: codec)
+      .restore(paperID: f.identity.paperID)?.id, saved.id)
+    XCTAssertEqual(try reopened.adapterRead { try Int.fetchOne($0,
+      sql: "SELECT COUNT(*) FROM librarySummaryJob") }, 1)
+    XCTAssertEqual(try reopened.adapterRead { try Data.fetchOne($0,
+      sql: "SELECT result FROM librarySummaryResult WHERE id = ?",
+      arguments: [saved.id.uuidString]) }, try ProviderRequest.canonicalBytes(f.result.value))
+  }
+
   func testCanonicalSummaryRequiresFullUnrankedOwnerAtReservePublishAndRestore() throws {
     for boundary in ["reserve", "publish", "restore"] {
       let f = try fixture(tail: "independent unranked full extent")
