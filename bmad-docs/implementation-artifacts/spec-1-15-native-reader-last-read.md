@@ -302,3 +302,14 @@ delivery may arise during layout/scale rather than specifically go(to:) internal
 these are windowless public callback facts, not rendered movement/calibration.
 Bounded interruption regression/source-review work is complete; physical restart,
 visible/accessibility/P6/OS×CPU/canonical Story acceptance remain outstanding.
+
+### Current Reader accessible-state source continuation
+
+Current source inspection found that page and zoom text replaced their accessible
+content with generic labels without explicit values. NativeReaderView now supplies
+the same current page/total (including no-page state) and zoom percentage as
+accessibility values. No navigation, timing, session, persistence or geometry
+contract changes. Parent reviewed the exact delta and the changed Reader/Library
+SwiftUI files passed compiler syntax parsing and git diff --check. No new tests,
+native interaction, VoiceOver, rendering, build or Story acceptance proof follows;
+prior Product480/native receipts remain tied to source7858da6, not this delta.

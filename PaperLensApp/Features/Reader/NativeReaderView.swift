@@ -539,6 +539,8 @@ import SwiftUI
         Text(presentation.pageCount == 0 ? "페이지 없음" :
           "\(presentation.pageIndex + 1) / \(presentation.pageCount)쪽")
           .accessibilityLabel("현재 PDF 페이지")
+          .accessibilityValue(presentation.pageCount == 0 ? "페이지 없음" :
+            "전체 \(presentation.pageCount)쪽 중 \(presentation.pageIndex + 1)쪽")
         Button("다음 페이지") { presentation.navigate(delta: 1) }
           .disabled(!presentation.opened || presentation.pageIndex + 1 >= presentation.pageCount)
           .keyboardShortcut(.rightArrow, modifiers: [.command])
@@ -584,6 +586,7 @@ import SwiftUI
         .keyboardShortcut("-", modifiers: [.command])
       Text("\(Int(presentation.zoom * 100))%")
         .accessibilityLabel("PDF 확대 비율")
+        .accessibilityValue("\(Int(presentation.zoom * 100))%")
       Button("확대") { presentation.changeZoom(factor: 1.2) }
         .disabled(!presentation.opened || presentation.zoom >= 10)
         .keyboardShortcut("+", modifiers: [.command])
