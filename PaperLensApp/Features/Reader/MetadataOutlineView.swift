@@ -41,9 +41,15 @@ public struct MetadataOutlineView: View {
                 catch { report(error) }
               } label: {
                 HStack(alignment: .top) {
-                  if state.activeSectionID == section.id { Image(systemName: "location.fill") }
+                  if state.activeSectionID == section.id {
+                    Image(systemName: "location.fill").accessibilityHidden(true)
+                  }
                   Text(section.title).multilineTextAlignment(.leading)
-                  if section.location == nil { Text("위치 미확인").foregroundStyle(.secondary) }
+                  if let location = section.location {
+                    Text("\(location.pageIndex + 1)페이지").foregroundStyle(.secondary)
+                  } else {
+                    Text("위치 미확인").foregroundStyle(.secondary)
+                  }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.leading, CGFloat(section.depth) * 12)
@@ -51,8 +57,10 @@ public struct MetadataOutlineView: View {
               .buttonStyle(.borderless)
               .disabled(section.location == nil)
               .accessibilityLabel(section.title)
-              .accessibilityValue(state.activeSectionID == section.id ? "현재 읽는 섹션" :
-                (section.location == nil ? "위치 미확인" : "PDF 위치로 이동"))
+              .accessibilityValue(contentsValue(section, active: state.activeSectionID == section.id))
+              .accessibilityAddTraits(state.activeSectionID == section.id ? .isSelected : [])
+              .accessibilityHint(section.location == nil ? "확인된 PDF 위치가 없어 이동할 수 없습니다." :
+                "이 섹션의 PDF 위치로 이동을 요청합니다.")
             }
             if state.activeSectionID == nil { Text("현재 섹션 미확인").foregroundStyle(.secondary) }
           } else {
@@ -76,6 +84,11 @@ public struct MetadataOutlineView: View {
   private func report(_ error: Error) {
     navigationError = (error as? ReaderMetadataError)?.message
       ?? "현재 논문의 위치를 확인할 수 없습니다. PDF는 계속 읽을 수 있습니다."
+  }
+
+  private func contentsValue(_ section: ReaderMetadataOutlineRow, active: Bool) -> String {
+    let location = section.location.map { "\($0.pageIndex + 1)페이지" } ?? "위치 미확인"
+    return "\(section.depth + 1)단계, \(location)" + (active ? ", 현재 읽는 섹션" : "")
   }
 
   private func field(_ label: String, _ field: ReaderMetadataField) -> some View {

@@ -1,5 +1,23 @@
 # Story 1.22 Build Spec — Metadata and Reader Contents
 
+## Current-source Contents location and accessibility
+
+Scope: MetadataOutlineView.swift only. Contents currently exposes title/current-state
+copy and visual indentation but omits the validated destination's page from its row and
+its accessibility value; it also lacks the selected trait for the observed active row.
+Show one-based page numbers only from existing confirmed row locations, expose section
+depth/page/current-or-unconfirmed state, and mark only the actually observed active row
+selected. Hide the decorative current-location icon from duplicate accessibility reading.
+Navigation hints describe intent rather than claiming arrival; native Buttons retain
+keyboard/focus behavior, with unlocated rows disabled and no automatic focus movement.
+No new PDF operation, guessed geometry, destination, restoration, persistence or
+publication contract. ReaderMetadataBinding.swift remains unchanged, including its
+existing interruption guards. Existing candidate provenance/conflict/missing fields
+remain unchanged. No tests, builds, formatters, gates or runtime execution in this slice.
+Parent source review and permitted checks remain required; rendered hierarchy/page
+copy, keyboard/VoiceOver, actual navigation/observation and restart remain unproved.
+Canonical acceptance is unchanged.
+
 ## Synchronous presentation-publication interruption correction
 
 Baseline34071b09ac1f6accbd52ae6d80cd8d1724b567b2 binding prepares and validates
