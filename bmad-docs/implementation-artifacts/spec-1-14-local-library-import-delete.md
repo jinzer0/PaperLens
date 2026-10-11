@@ -1850,3 +1850,18 @@ SHA or reference cannot mutate a changed row: recoveryConflict preserves both ro
 and jobs. Six focused startup/folder cases passed, then full isolated Product475
 passed artifact1668. No user PDF, provider/SDK/renderer request or unknown-close
 injection; no aggregate/RSS, hostile mutation or actual cleanup/purge proof.
+
+### Review171 required startup cancellation propagation
+
+Source BLOCK/P1 identifies unstructured detached startup work not receiving caller
+cancellation; awaiting alone can still expose a producer-capable lifecycle after
+Cancel. Check the caller before starting, retain the existing detached worker and
+forward cancellation with withTaskCancellationHandler calling worker.cancel().
+Keep awaiting its completion. Check worker cancellation before/after atomic recovery,
+at reconciliation entry, between files and after checked-close observation before
+consumption/update, plus final completion. Check caller again before return. Signal
+handlers must not close FD, stop scope, release leases, erase roots or fabricate ACK;
+the original checked-close owner alone determines known/unknown physical closure.
+Scope only LocalLibraryLifecycle.swift/ProductJobRecovery.swift and owned cancellation
+regressions; no additional owner/pool/profile/quota/store or alternate recovery path.
+This bounded amendment precedes source mutation and does not renew protected trials.
