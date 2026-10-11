@@ -70,6 +70,65 @@ weakened. Test edits/execution remain deferred by the implementation-first instr
 their old synchronous timing is not current verification. Parent source checks and
 independent review precede source delivery, without native/physical/Story promotion.
 
+### Source implementation receipt (contract ef105354d68a116057d6ac3eadec0ecbd76d29d2)
+
+Implemented the existing-owner completion boundary in ProductWorkspaceView.swift.
+The earlier focus-only section above records its historical baseline, not the
+current cancellation timing. Both existing methods are now `@discardableResult`
+and return `Task<UUID, Never>?`; ignored-return statement callers remain unchanged.
+No compatibility alias, additional API, operation UUID or receipt schema was added.
+
+Workspace retains one tuple of captured confirmation UUID and cancellation task.
+`dismissSheet` asserts cleaning before published mutations, sets pending, clears
+the active sheet, invalidates preparation/preparing, captures and clears the
+confirmation, stops the original security scope at its unchanged position, then
+increments revision once. With a captured confirmation it creates and retains
+exactly one task, returning that handle. The task awaits the same actor's
+`imports.cancel(capturedUUID)`; only a matching retained UUID can finalize cleanup.
+Cleaning and pending remain asserted across that await. Finalization clears
+cleaning, then publishes pending=false as its last mutation, so synchronous
+subscriber reentry cannot be followed by old-task mutation of a newer operation.
+The task yields the exact captured UUID after cancellation and owner finalization.
+
+Duplicate method observations return the retained handle without another cancel,
+revision increment or cleanup. Installation, preparation and current-presentation
+guards gate observations; native callbacks during those states remain inert.
+Explicit dismissal of an uninstalled preparation still invalidates it synchronously.
+No-confirmation dismissal, including settings/folders, also remains synchronous
+and returns nil. A retained completed handle is not automatically discarded:
+the next accepted sheet presentation, local preparation/Retry, picker operation
+or Reader open invalidates it before replacement or published admission. Rejected
+admission does not invalidate it. Existing pending guards block new sheet/input/open
+admission during cancellation. Matching finalization never clears a newer operation.
+
+The retained task is unstructured owner cleanup, not a child of an observing waiter.
+Cancelling a waiter or the returned task does not skip actor cancellation or
+finalization: there is no cancellation check or throwing cancellation boundary in
+this path, and the existing synchronous actor cancel is not cancellation-aware.
+Lost task/callback/process is not completion evidence. UUID equality names only the
+one-shot ephemeral confirmation intent; Continue may already have consumed it.
+This does not cancel that producer or certify FD/scope/lease/writer/publication,
+purge or physical ACK. Security-scope stop remains the original synchronous action,
+not newly certified physical closure.
+
+The native onDismiss still invokes Workspace cleanup before all existing folder
+focus guards. The 42c8 folder-toolbar focus behavior is unchanged. There is no
+surviving local opener in this boundary, so local confirmation focus remains
+unfinished; neither toolbar focus nor NSOpenPanel reopening is fabricated.
+FolderImportService, ImportConfirmationView, URLImportView and tests are unchanged.
+
+The worker performed only source inspection and diff review. All tests, new tests,
+test fixes, gates, formatters, compiler/build/runtime/PDF/SDK/helper/provider,
+signing, network/credentials, staging and commits were skipped as instructed.
+Existing confirmation-dismissal tests that immediately reenter must eventually
+await the returned task before asserting reopened admission; their old synchronous
+timing is intentionally deferred, not passing evidence. Preserve existing failure,
+history/no-replay and stale-callback assertions. Settings/folders and explicit
+preparation-interruption timing remain synchronous. Parent Swift syntax parsing
+and git diff --check pass; independent189 is SOURCE CLEAR. Behavioral/type/native
+verification remains deferred; no current test-count, native focus, physical
+cleanup, Story or Epic acceptance is claimed.
+
 ## Current native import presentation continuation (baseline 2c855ee)
 
 Story1.17/Issue19 remains on the Epic integration branch

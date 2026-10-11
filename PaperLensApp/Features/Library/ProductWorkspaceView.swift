@@ -44,6 +44,7 @@ public final class ProductWorkspace: ObservableObject {
   private let readLeases: LibraryReadLeaseProvider
   private var scopedSource: URL?
   private var pendingConfirmation: UUID?
+  private var confirmationCancellation: (id: UUID, task: Task<UUID, Never>)?
   private var importPreparation: UUID?
   internal var beforeImportConfirmationInstallForOwnedFixtures: (@MainActor (LocalImportConfirmation) -> Void)?
   private var metadataReadRequest: UUID?
@@ -64,6 +65,7 @@ public final class ProductWorkspace: ObservableObject {
         }
         installingSheet = true
         defer { installingSheet = false }
+        confirmationCancellation = nil
         sheetCleanupPending = true
         activeSheet = newValue
       } else {
@@ -99,6 +101,7 @@ public final class ProductWorkspace: ObservableObject {
 
   public func prepareImport(source: URL) async throws {
     guard !preparing, !opening, !sheetCleanupPending, sheet == nil, reader == nil else { throw ProductWorkspaceError.busy }
+    confirmationCancellation = nil
     let destinationFolderID: UUID?
     switch libraryFilter.folder {
     case .folder(let id): destinationFolderID = id
@@ -130,6 +133,7 @@ public final class ProductWorkspace: ObservableObject {
 
   public func pickPDF() {
     guard !preparing, !opening, !sheetCleanupPending, sheet == nil, reader == nil else { return }
+    confirmationCancellation = nil
     let picker = NSOpenPanel()
     picker.allowedContentTypes = [.pdf]
     picker.canChooseDirectories = false
@@ -143,6 +147,7 @@ public final class ProductWorkspace: ObservableObject {
 
   public func prepareRetry(source: URL, paperID: UUID, generation: UUID) async throws {
     guard !preparing, !opening, !sheetCleanupPending, sheet == nil, reader == nil else { throw ProductWorkspaceError.busy }
+    confirmationCancellation = nil
     let request = UUID()
     importPreparation = request
     preparing = true
@@ -169,6 +174,7 @@ public final class ProductWorkspace: ObservableObject {
 
   public func pickRetryPDF(paperID: UUID, generation: UUID) {
     guard !preparing, !opening, !sheetCleanupPending, sheet == nil, reader == nil else { return }
+    confirmationCancellation = nil
     let picker = NSOpenPanel()
     picker.allowedContentTypes = [.pdf]
     picker.canChooseDirectories = false
@@ -180,27 +186,47 @@ public final class ProductWorkspace: ObservableObject {
     }
   }
 
-  public func dismissSheet() {
-    guard !cleaningSheet else { return }
+  @discardableResult public func dismissSheet() -> Task<UUID, Never>? {
+    if !installingSheet, !preparing, importPreparation == nil, activeSheet == nil,
+      let confirmationCancellation {
+      return confirmationCancellation.task
+    }
+    guard !cleaningSheet else { return nil }
     cleaningSheet = true
-    defer { cleaningSheet = false }
     sheetCleanupPending = true
     activeSheet = nil
     importPreparation = nil
     preparing = false
-    if let pendingConfirmation {
-      Task { await imports.cancel(pendingConfirmation) }
-    }
+    let confirmationID = pendingConfirmation
     pendingConfirmation = nil
     scopedSource?.stopAccessingSecurityScopedResource()
     scopedSource = nil
     revision += 1
+    if let confirmationID {
+      // Cancellation acknowledges only this ephemeral intent, not a consumed producer.
+      // Do not abandon owner cleanup when a caller cancels this retained task.
+      let task = Task { @MainActor in
+        await imports.cancel(confirmationID)
+        if confirmationCancellation?.id == confirmationID {
+          cleaningSheet = false
+          // Last mutation: synchronous subscribers may now admit a new operation.
+          sheetCleanupPending = false
+        }
+        return confirmationID
+      }
+      confirmationCancellation = (confirmationID, task)
+      return task
+    }
     sheetCleanupPending = false
+    cleaningSheet = false
+    return nil
   }
 
-  public func presentationDidDismiss() {
-    guard sheetCleanupPending, activeSheet == nil, !installingSheet, !cleaningSheet else { return }
-    dismissSheet()
+  @discardableResult public func presentationDidDismiss() -> Task<UUID, Never>? {
+    guard activeSheet == nil, !installingSheet, !preparing, importPreparation == nil else { return nil }
+    if let confirmationCancellation { return confirmationCancellation.task }
+    guard sheetCleanupPending, !cleaningSheet else { return nil }
+    return dismissSheet()
   }
 
   public func acceptDroppedPDF(_ source: URL) {
@@ -237,6 +263,7 @@ public final class ProductWorkspace: ObservableObject {
 
   public func open(_ paper: OrganizedPaper) async throws {
     guard reader == nil, sheet == nil, !sheetCleanupPending, !preparing, !opening else { throw ProductWorkspaceError.busy }
+    confirmationCancellation = nil
     opening = true
     defer { opening = false }
     try await organization.admitOpen(paper)
