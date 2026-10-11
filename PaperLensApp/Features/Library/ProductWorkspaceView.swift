@@ -76,6 +76,11 @@ public final class ProductWorkspace: ObservableObject {
 
   public func prepareImport(source: URL) async throws {
     guard !preparing, !opening, sheet == nil, reader == nil else { throw ProductWorkspaceError.busy }
+    let destinationFolderID: UUID?
+    switch libraryFilter.folder {
+    case .folder(let id): destinationFolderID = id
+    case .all, .unfiled: destinationFolderID = nil
+    }
     let request = UUID()
     importPreparation = request
     preparing = true
@@ -83,7 +88,8 @@ public final class ProductWorkspace: ObservableObject {
     let scoped = source.startAccessingSecurityScopedResource()
     var returnedConfirmation: UUID?
     do {
-      let confirmation = try await imports.prepare(source: source)
+      let confirmation = try await imports.prepare(source: source,
+        destinationFolderID: destinationFolderID)
       returnedConfirmation = confirmation.id
       beforeImportConfirmationInstallForOwnedFixtures?(confirmation)
       try Task.checkCancellation()
