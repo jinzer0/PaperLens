@@ -1795,3 +1795,46 @@ BUILD SUCCEEDED1410; no application/helper binaries executed. Initial passing429
 Final caller correction review120 is SOURCE-ONLY CLEAR / APPROVE, both P2 findings
 resolved and no residual findings. Visible accessibility/runtime,
 production Agent purge, calibration/profile and Story/Epic acceptance remain false.
+
+### Pre-admission owned-PDF integrity observation
+
+Extend existing startup reconciliation to sequential SHA observation of canonical
+app-owned PDFs before `LocalLibraryLifecycle.open` exposes its owners. Reuse the
+existing `FolderImportService.hashSelectedSource(_:close:beforeOpen:)`, made
+internal, and its original `SelectedSourceReadOwner`, import lease/budget,
+incremental hash, checked close and rooted unknown-closure obligations. Production
+uses actual `FileHandle.close()` and no observation callback. Do not create a
+second pool, owner, profile, quota, store, import Job or physical publication.
+
+Capture each ready Paper's canonical UUID, generation, lowercase 64-hex SHA and
+reference on the sole GRDB queue. Keep deleting-to-deletionFailed reconciliation
+and the existing missing/nonregular/symlink branch. Observe bytes outside database
+transactions, one file at a time, using the existing import PDF-size, read-buffer,
+body-byte and elapsed-time limits. The metadata journal quota is not physical
+admission. Do not claim an aggregate startup/RSS bound or same-UID hostile-mutation
+isolation; this is an observation before Main producer admission, not a file pin
+or an everlasting attestation of file contents.
+
+Consume SHA only after the existing owner reports successful checked FD closure.
+A matching digest writes nothing. A successfully observed mismatch uses the
+existing unavailable transition, defended by exact pre-observation Paper
+UUID/generation/SHA/reference/ready/nondeleting validation and UPDATE predicates.
+Missing/type/symlink downgrades use the same captured predicates. Stale captures
+throw without recapturing or applying their evidence to a different generation.
+Retain genuine succeeded Job/history byte-exact and keep generation/SHA; downgrade
+only Paper availability to importFailed, NULL reference and cleanupDebt1. Preserve
+the separate legacy-NULL-history handling without backfill or Retry authority.
+
+Any hash failure, cancellation, exhausted budget/capacity or unknown closure stops
+reconciliation and lifecycle exposure. Do not classify uncertainty as missing,
+continue with another file, retry the read, release unknown obligations or invent
+cleanup/history evidence. An existing nonempty `unknownSelectedSourceReads()` set
+also denies a new scan before integrity effects; it is never cleared as admission.
+
+Implementation scope is exactly FolderImportService.swift, ProductJobRecovery.swift
+and ProductDatabase+ImportRecovery.swift. LocalLibraryLifecycle.open already owns
+the required pre-exposure placement and remains unchanged. This amendment is
+committed before source mutation under the existing Story-range execution scope.
+Tests, native execution, independent review and acceptance remain deferred by the
+current implementation-first instruction; no user documents, SDK/provider/renderer
+trial, new permission, remote or distribution action is authorized here.
