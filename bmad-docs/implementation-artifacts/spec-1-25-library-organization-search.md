@@ -1,5 +1,50 @@
 # Story 1.25 Build Spec — Library organization, search and filters
 
+## Bounded tag-editor native focus-return source continuation (baseline c9ad83a)
+
+Spec1.25 already requires returning the tag dialog to its opener or valid Library
+focus if deleted. Architect197 identifies a dependency-ready source slice:
+LibraryBrowserView's editor subtree onDisappear unconditionally requests its Paper's
+More Menu, separately from native onDismiss and the refreshed visible projection.
+Implement only LibraryBrowserView.swift after this amendment is committed.
+
+Capture the actual per-Paper More Menu at guarded tag admission in one immutable UI
+slot: presentation UUID, original root mount, observed Paper/generation, filter and
+refreshRevision. Retain it independently of requested visibility through matching
+actual native dismissal and its continuation. A stable slot-keyed local presenter
+on the existing Library root carries that exact capture in appearance, Bool binding,
+private editor close and native onDismiss callbacks. Disappearance is neither
+dismissal nor focus proof. Closing does not unlock replacement Browser presentations,
+Reader/import/retry or ordinary mutations before the exact native receipt. Consume
+that receipt once before effects; mismatched, still-presented and duplicate callbacks
+do nothing. No second controller, focus candidate, query counter or resource owner.
+
+Root unmount, changed filter/revision, newer query/work, another modal/alert or
+different current Library focus permanently interrupt return. Use the existing
+native focus projection for currently untracked sidebar/toolbar/Open controls too;
+no key interception. Root appearance establishes its mount before initial refresh;
+revision changes refresh without assuming task/appearance ordering. Own editor save
+invalidations/requeries may preserve only a matching pre-dismissal slot, never rearm
+it. Admission consumes older organization/movement focus continuations.
+
+An unsuperseded matching dismissal starts the existing query and binds return to its
+exact OrganizationQueryState.Request. Consume only after current acceptance and
+installation of folders/tags/facts, or its matching current rejection. Every later
+invalidate/begin first discards the awaiting continuation. Return to the original
+More Menu only when the same Paper/generation is in the current rendered/enabled
+list/card branch, including selected-folder visibility. Otherwise request the
+existing search field without changing conditions or inferring deletion from failure.
+Preserve different current focus; release the matching slot before focus assignment.
+
+Keep public Browser API, query/service/CAS, observed whole-record draft, guarded
+interaction phases, explicit revalidation, failure/draft preservation and Cancel
+no-write unchanged. A required private editor close callback replaces only guarded
+Cancel/successful-Save dismiss effects; interaction disappearance invalidation remains.
+Parent owns source review, permitted syntax/diff checks and local evidence commit.
+Tests/test fixes, type/build/native runtime, gates, formatters and keyboard/VoiceOver
+delivery remain deferred. No protected execution, credentials/network, new architecture,
+store/schema or remote operations; source is not Story/Epic acceptance, still0/26.
+
 ## Authority and admission
 
 Issue#27 / `issue/27-story-1-25`; base `f14f15f3f1c1fed02657ebf0c7ecdcb23721bfa8`. PRODUCT `5eac3bb9424ad893eca7d63bc319b71f580838ed`; ARCHITECTURE `1195c92227cc628e325f5ff24d70cc93639bf7a9`; Whole-Epic https://github.com/jinzer0/PaperLens/issues/3#issuecomment-6049004229. Own Spec before source, no repeated unchanged-scope SHA approval; no gate/live/paid/credential/remote/distribution permission. Parent reconciled proposal's per-SHA wording; absent predecessor is an admission fact, not a new source defect.
