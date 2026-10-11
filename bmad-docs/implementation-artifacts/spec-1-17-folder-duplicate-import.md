@@ -1,5 +1,18 @@
 # Story 1.17 Build Spec — Folder arrangement and duplicate local import
 
+## Shared toolbar focus continuation (baseline 0ee17ee)
+
+Spec1.26's Settings opener phase reuses this root's existing folder presentation
+receipt as one typed folders/settings toolbar receipt, captured by actual accepted
+Buttons and latched by identity into the immutable native slot. Both kinds retain
+actual appearance/dismissal, original live mount and clear owner fences; existing
+cleanup precedes focus guards and exact matching receipt consumption. Reader entry,
+unmount or unrelated presentation denies return. Folder focus still targets its
+original surviving Button. Direct PDF Cancel-only event/UUID/task reconciliation
+is untouched. Commit this shared contract before the sole Workspace source change;
+native/type/runtime/tests remain deferred, no provider/resource/physical ACK or
+Story promotion. No new focus controller or parallel presentation owner.
+
 ## Direct PDF-button Cancel focus integration (baseline b8b3bd3)
 
 Review190 resolves the next source input: URLImportView's existing PDF 선택 Button

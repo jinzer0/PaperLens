@@ -1,5 +1,36 @@
 # Story 1.26 Build Spec — Settings Provider reconnection
 
+## Existing Settings opener return (baseline 0ee17ee)
+
+Review194 resolves one finite source input, not an observed native failure:
+the Workspace Settings Button survives over Library but has no native FocusState
+or retained opener receipt. Existing source returns only folder/PDF opener focus.
+Implement this UI-only continuation after this contract is committed, in
+ProductWorkspaceView.swift; this Spec and paired Spec1.17 are the affected records.
+No authentication/service/model/selector/resource changes or new controller.
+
+Reuse the existing folder toolbar receipt as one typed toolbar presentation
+(folders/settings), retaining its fresh identity and original root mount. Both
+real Buttons require clear native slot/toolbar receipt/owner sheet, no Reader,
+preparation/opening/cleanup before capture and existing sheet assignment. Rejected
+assignment consumes only its matching receipt. Attach native Settings FocusState
+to the actual existing Button, not a replacement control.
+
+Latch the toolbar receipt identity into the existing immutable native slot only
+when its kind and mount match the actual owner sheet. Unrelated presentation
+consumes toolbar eligibility rather than retargeting it. Actual native appearance
+records the matching receipt; unmount/Reader entry invalidates it. Actual onDismiss
+calls existing owner cleanup before focus guards, then consumes the exact matching
+toolbar receipt once. Return to that receipt's real Button only after actual
+appearance/dismissal, live original mount, no Reader/new sheet/native slot and
+clear preparation/opening/cleanup fences. Stale callbacks cannot consume a newer
+receipt. Folder return semantics and direct-PDF Cancel-only reconciliation remain
+unchanged. UI identities grant no provider, cancellation or physical-ACK authority.
+
+Tests/test fixes, type/build/native runtime and keyboard/VoiceOver verification
+remain deferred under the current instruction. Parent owns permitted source checks
+and independent review; no Story/Epic acceptance or authenticated reconnect claim.
+
 ## Authority and admission
 
 Issue#28 / `issue/28-story-1-26`; base `f14f15f3f1c1fed02657ebf0c7ecdcb23721bfa8`. PRODUCT `5eac3bb9424ad893eca7d63bc319b71f580838ed`; ARCHITECTURE `1195c92227cc628e325f5ff24d70cc93639bf7a9`; Whole-Epic https://github.com/jinzer0/PaperLens/issues/3#issuecomment-6049004229. Own committed Spec before source; no repeated unchanged-scope SHA approval (parent reconciled generic proposal wording), no actual gates/credentials/live/paid/remote/distribution permission.
