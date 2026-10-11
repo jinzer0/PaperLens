@@ -5,6 +5,7 @@ public struct LibraryBrowserView: View {
   private let service: LibraryOrganizationService
   private let folderService: FolderImportService
   private let sortFacts: @Sendable () async throws -> [OrganizationSortFacts]
+  private let readReadingRecords: @Sendable (UUID, UUID) async throws -> LibraryReadingRecords
   private let openPaper: @MainActor (OrganizedPaper) async throws -> Void
   private let importPDF: @MainActor () -> Void
   private let retryImportPDF: @MainActor (UUID, UUID) -> Void
@@ -36,11 +37,13 @@ public struct LibraryBrowserView: View {
   public init(service: LibraryOrganizationService, folderService: FolderImportService,
     filter: Binding<OrganizationFilter>, refreshRevision: Int,
     sortFacts: @escaping @Sendable () async throws -> [OrganizationSortFacts],
+    readReadingRecords: @escaping @Sendable (UUID, UUID) async throws -> LibraryReadingRecords,
     openPaper: @escaping @MainActor (OrganizedPaper) async throws -> Void,
     importPDF: @escaping @MainActor () -> Void,
     retryImportPDF: @escaping @MainActor (UUID, UUID) -> Void,
     manageFolders: @escaping @MainActor () -> Void) {
     self.service = service; self.folderService = folderService; self.sortFacts = sortFacts
+    self.readReadingRecords = readReadingRecords
     _filter = filter; self.refreshRevision = refreshRevision
     self.openPaper = openPaper; self.importPDF = importPDF
     self.retryImportPDF = retryImportPDF
@@ -286,7 +289,8 @@ public struct LibraryBrowserView: View {
       .onDisappear { focusedPaper = paper.id }
     }
     .sheet(item: $identification) { captured in
-      LibraryIdentificationDetail(captured: captured)
+      LibraryIdentificationDetail(captured: captured, readReadingRecords: readReadingRecords)
+        .id(captured.paper.generation)
         .onDisappear { focusedIdentification = captured.paper.id }
     }
     .sheet(item: $moving, onDismiss: { refresh() }) { captured in
@@ -355,12 +359,12 @@ public struct LibraryBrowserView: View {
       HStack {
         Button("열기") { perform { try await service.admitOpen(paper); try await openPaper(paper) } }
           .disabled(!paper.readable || busy)
-        Button("논문 정보·요약 상세") {
+        Button("논문 정보·요약·읽기 기록 상세") {
           guard !busy, !loading, !loadFailed else { return }
           identification = LibraryIdentification(paper: paper, metadata: fact?.metadata, summary: fact?.summary)
         }.disabled(busy || loading || loadFailed)
           .focused($focusedIdentification, equals: paper.id)
-          .accessibilityLabel("\(paper.title) 출처 제목·발행연도·요약·초록·출처 주제 상세")
+          .accessibilityLabel("\(paper.title) 출처 제목·발행연도·요약·초록·출처 주제·저장된 읽기 기록 상세")
         Button("폴더 이동") {
           guard paper.readable, !busy, !loading, !loadFailed else { return }
           invalidateObservation(); moving = LibraryMovement(paper: paper)
@@ -655,7 +659,24 @@ enum LibraryMetadataPresentation {
 
 @MainActor private struct LibraryIdentificationDetail: View {
   let captured: LibraryIdentification
+  let readReadingRecords: @Sendable (UUID, UUID) async throws -> LibraryReadingRecords
   @Environment(\.dismiss) private var dismiss
+  private enum ReadingRecordsObservation {
+    case loading, unavailable, failed
+    case loaded(LibraryReadingRecords)
+  }
+  private struct ReadingRecordsRequest: Hashable {
+    let paperID: UUID
+    let generation: UUID
+    let retry: UUID
+  }
+  @State private var readingRecords: ReadingRecordsObservation = .loading
+  @State private var retry = UUID()
+  @State private var activeRequest: UUID?
+  @State private var closed = false
+  private var request: ReadingRecordsRequest {
+    ReadingRecordsRequest(paperID: captured.paper.id, generation: captured.paper.generation, retry: retry)
+  }
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
       Text(captured.paper.title).font(.headline).textSelection(.enabled)
@@ -666,12 +687,119 @@ enum LibraryMetadataPresentation {
           field("출처 제목", captured.metadata?.title)
           field("발행연도", captured.metadata?.year)
           LibraryStoredSummary(paper: captured.paper, observation: captured.summary, showEvidence: true)
+          storedReadingRecords
           field("초록", captured.metadata?.abstract)
           field("출처 주제 · 사용자 태그 아님", captured.metadata?.topics)
         }.frame(maxWidth: .infinity, alignment: .leading)
       }
-      Button("닫기", role: .cancel) { dismiss() }.keyboardShortcut(.cancelAction)
+      Button("닫기", role: .cancel) {
+        invalidateReadingRecords()
+        dismiss()
+      }.keyboardShortcut(.cancelAction)
     }.padding().frame(minWidth: 420, idealWidth: 560, minHeight: 280, idealHeight: 480)
+      .task(id: request) { await loadReadingRecords(request) }
+      .onDisappear { invalidateReadingRecords() }
+  }
+
+  private func invalidateReadingRecords() {
+    closed = true
+    activeRequest = nil
+    readingRecords = .unavailable
+  }
+
+  private func loadReadingRecords(_ capturedRequest: ReadingRecordsRequest) async {
+    guard !closed, !Task.isCancelled else { return }
+    let token = UUID()
+    activeRequest = token
+    readingRecords = .loading
+    guard captured.paper.readable else {
+      readingRecords = .unavailable
+      return
+    }
+    do {
+      let result = try await readReadingRecords(capturedRequest.paperID, capturedRequest.generation)
+      guard !closed, !Task.isCancelled, activeRequest == token, request == capturedRequest else { return }
+      guard result.identity.id == capturedRequest.paperID,
+        result.identity.generation == capturedRequest.generation,
+        result.annotations.allSatisfy({ $0.selection.paper == result.identity }) else {
+        readingRecords = .unavailable
+        return
+      }
+      readingRecords = .loaded(result)
+    } catch {
+      guard !closed, !Task.isCancelled, activeRequest == token, request == capturedRequest else { return }
+      if let error = error as? AnnotationError, error == .stalePaper {
+        readingRecords = .unavailable
+      } else {
+        readingRecords = .failed
+      }
+    }
+  }
+
+  @ViewBuilder private var storedReadingRecords: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      Text("저장된 읽기 기록").font(.headline)
+      Text("개인 기록의 수동 조회입니다. PDF 열기·페이지 이동·선택 캡처·파일 공개·복사·주석 변경 권한을 부여하지 않습니다. 저장된 페이지가 현재 PDF에 존재하는지는 확인하지 않았습니다. 실제 읽기는 Library의 열기에서 다시 승인받아야 합니다.")
+        .font(.caption)
+      switch readingRecords {
+      case .loading:
+        ProgressView("저장된 읽기 기록 불러오는 중")
+      case .unavailable:
+        Text("읽기 기록 조회 불가 · 현재 읽을 수 있는 동일 세대 논문을 확인할 수 없습니다. 기록이 없다는 뜻은 아닙니다.")
+      case .failed:
+        Text("읽기 기록 불러오기 실패 · 저장된 위치와 주석의 유무를 확인하지 못했습니다.")
+        Button("읽기 기록 다시 불러오기") {
+          guard !closed else { return }
+          activeRequest = nil
+          readingRecords = .loading
+          retry = UUID()
+        }
+      case .loaded(let records):
+        if let position = records.position {
+          Text("저장 당시 위치").font(.headline)
+          Text(savedPageLabel(position.pageIndex))
+          if position.zoom.isFinite, (0.1...10).contains(position.zoom) {
+            Text("저장 당시 확대 배율: \(position.zoom.formatted())배")
+          } else {
+            Text("저장 당시 확대 배율 확인 불가")
+          }
+        } else {
+          Text("저장된 마지막 읽기 위치 없음")
+        }
+        if records.annotations.isEmpty {
+          Text("저장된 Highlight/Note 없음")
+        } else {
+          Text("저장된 Highlight/Note").font(.headline)
+          ForEach(records.annotations) { record in
+            VStack(alignment: .leading, spacing: 6) {
+              Text(record.kind == .highlight ? "Highlight" : "Note").font(.headline)
+              if record.selection.locations.isEmpty {
+                Text("저장된 페이지 위치 확인 불가").font(.caption)
+              } else {
+                ForEach(record.selection.locations.indices, id: \.self) { index in
+                  Text(savedPageLabel(record.selection.locations[index].pageIndex)).font(.caption)
+                }
+              }
+              Text(verbatim: record.selection.originalText)
+              if let note = record.note {
+                Text("개인 노트").font(.caption)
+                Text(verbatim: note)
+              } else if record.kind == .note {
+                Text("개인 노트 본문 확인 불가")
+              }
+            }
+            Divider()
+          }
+        }
+      }
+    }
+  }
+
+  private func savedPageLabel(_ pageIndex: Int) -> String {
+    guard pageIndex >= 0 else { return "저장된 페이지 위치 확인 불가" }
+    let (page, overflow) = pageIndex.addingReportingOverflow(1)
+    guard !overflow else { return "저장된 페이지 위치 확인 불가" }
+    return "저장 당시 PDF \(page)쪽"
   }
   @ViewBuilder private func field(_ title: String, _ value: ReaderMetadataField?) -> some View {
     VStack(alignment: .leading, spacing: 8) {

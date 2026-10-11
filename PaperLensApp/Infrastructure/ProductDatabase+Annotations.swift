@@ -2,6 +2,57 @@ import Foundation
 import GRDB
 
 extension ProductDatabase {
+  /// One historical observation on the sole queue; does not admit or claim a Reader.
+  public func libraryReadingRecords(paperID: UUID, generation: UUID) throws -> LibraryReadingRecords {
+    try adapterRead { db in
+      guard let row = try Row.fetchOne(db, sql: """
+        SELECT pdfSHA256, lastReadPage, lastReadZoom FROM paper
+        WHERE id = ? AND generation = ? AND status = 'ready'
+          AND deletionID IS NULL AND pdfReference = ?
+        """, arguments: [paperID.uuidString, generation.uuidString,
+          "papers/\(paperID.uuidString)/document.pdf"]),
+        let hash = String.fromDatabaseValue(row["pdfSHA256"]), hash.count == 64,
+        hash.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) })
+      else { throw AnnotationError.stalePaper }
+      let identity = AnnotationPaperIdentity(id: paperID, generation: generation, pdfSHA256: hash)
+      let pageValue: DatabaseValue = row["lastReadPage"]
+      let zoomValue: DatabaseValue = row["lastReadZoom"]
+      let position: ReaderPosition?
+      if pageValue.isNull && zoomValue.isNull {
+        position = nil
+      } else {
+        guard case .int64(let storedPage) = pageValue.storage,
+          let page = Int(exactly: storedPage), page >= 0, page < Int.max
+        else { throw ReaderError.invalidStoredPosition }
+        let zoom: Double
+        switch zoomValue.storage {
+        case .double(let value): zoom = value
+        case .int64(let value): zoom = Double(value)
+        default: throw ReaderError.invalidStoredPosition
+        }
+        guard zoom.isFinite, (0.1...10).contains(zoom)
+        else { throw ReaderError.invalidStoredPosition }
+        position = ReaderPosition(pageIndex: page, zoom: zoom)
+      }
+      let annotations = try Row.fetchAll(db, sql: """
+        SELECT * FROM personalAnnotation WHERE paperID = ? AND generation = ? ORDER BY createdAt, id
+        """, arguments: [paperID.uuidString, generation.uuidString]).map { row in
+          let noteValue: DatabaseValue = row["note"]
+          guard String.fromDatabaseValue(row["id"]) != nil,
+            String.fromDatabaseValue(row["kind"]) != nil,
+            Data.fromDatabaseValue(row["selection"]) != nil,
+            Int64.fromDatabaseValue(row["revision"]) != nil,
+            noteValue.isNull || String.fromDatabaseValue(noteValue) != nil
+          else { throw AnnotationError.corruptRecord }
+          let record = try decodeAnnotation(row, identity: identity)
+          guard record.selection.locations.allSatisfy({ $0.pageIndex < Int.max })
+          else { throw AnnotationError.corruptRecord }
+          return record
+        }
+      return LibraryReadingRecords(identity: identity, position: position, annotations: annotations)
+    }
+  }
+
   /// Durable identity only; file admission and lifetime remain ReaderSession's responsibility.
   public func annotationIdentity(paperID: UUID) throws -> AnnotationPaperIdentity {
     try adapterRead { db in

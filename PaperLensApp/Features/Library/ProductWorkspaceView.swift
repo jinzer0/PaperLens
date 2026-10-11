@@ -403,6 +403,11 @@ public struct ProductWorkspaceView: View {
             LibraryBrowserView(service: workspace.organization, folderService: workspace.imports,
               filter: $workspace.libraryFilter, refreshRevision: workspace.revision,
               sortFacts: { try await workspace.sortFacts() },
+              readReadingRecords: { [annotations = workspace.annotations] paperID, generation in
+                try await Task.detached {
+                  try annotations.libraryReadingRecords(paperID: paperID, generation: generation)
+                }.value
+              },
               openPaper: { try await workspace.open($0) }, importPDF: { workspace.pickPDF() },
               retryImportPDF: { workspace.pickRetryPDF(paperID: $0, generation: $1) },
               manageFolders: { workspace.sheet = .folders })

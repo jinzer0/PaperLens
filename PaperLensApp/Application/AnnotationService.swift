@@ -104,10 +104,20 @@ public struct AnnotationRecord: Identifiable, Equatable, Sendable {
   public let revision: Int64
 }
 
+/// Historical records only; no PDF admission, Reader ownership, or page-count authority.
+public struct LibraryReadingRecords: Sendable {
+  public let identity: AnnotationPaperIdentity
+  public let position: ReaderPosition?
+  public let annotations: [AnnotationRecord]
+}
+
 /// Local personal records only. No Provider dependency, AI context, or PDF writes.
 public struct AnnotationService: Sendable {
   private let database: ProductDatabase
   public init(database: ProductDatabase) { self.database = database }
+  public func libraryReadingRecords(paperID: UUID, generation: UUID) throws -> LibraryReadingRecords {
+    try database.libraryReadingRecords(paperID: paperID, generation: generation)
+  }
   public func records(for paper: AnnotationPaperIdentity) throws -> [AnnotationRecord] {
     try database.annotationRecords(for: paper)
   }
