@@ -227,26 +227,49 @@ public struct ProductJobRecovery: Sendable {
   /// Library reconciliation follows atomic job recovery, still before owner admission.
   /// Neither missing files nor process restart attest Agent drain or namespace absence.
   func reconcileLibraryStartup() throws {
+    guard FolderImportService.unknownSelectedSourceReads().isEmpty else {
+      throw LocalLibraryError.producerClosureUnknown
+    }
     try database.adapterWrite { db in
       try db.execute(sql: """
         UPDATE paper SET status = 'deletionFailed', cleanupDebt = 1 WHERE status = 'deleting'
         """)
     }
-    let references: [(String, String)] = try database.adapterRead { db in
-      try Row.fetchAll(db, sql: "SELECT id, pdfReference FROM paper WHERE status = 'ready'").map {
-        ($0["id"], $0["pdfReference"])
+    let references: [(id: UUID, generation: UUID, sha256: String, reference: String)] = try database.adapterRead { db in
+      try Row.fetchAll(db, sql: """
+        SELECT id, generation, pdfSHA256, pdfReference FROM paper WHERE status = 'ready' ORDER BY id
+        """).map { row in
+        let id = try Self.uuid(row, "id")
+        let generation = try Self.uuid(row, "generation")
+        let shaValue: DatabaseValue = row["pdfSHA256"]
+        let referenceValue: DatabaseValue = row["pdfReference"]
+        guard case .string(let sha256) = shaValue.storage,
+          sha256.utf8.count == 64,
+          sha256.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }),
+          case .string(let reference) = referenceValue.storage else {
+          throw ProductJobRecoveryError.invalidLineage
+        }
+        return (id, generation, sha256, reference)
       }
     }
-    for (id, reference) in references {
-      let expected = "papers/\(id)/document.pdf"
-      let url = database.root.appendingPathComponent(reference)
+    for capture in references {
+      let expected = "papers/\(capture.id.uuidString)/document.pdf"
+      let url = database.root.appendingPathComponent(capture.reference)
       let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
-      if reference != expected || values?.isRegularFile != true || values?.isSymbolicLink == true {
+      let unavailable: Bool
+      if capture.reference != expected || values?.isRegularFile != true || values?.isSymbolicLink == true {
+        unavailable = true
+      } else {
+        // A post-close byte observation, not a physical pin or lasting integrity attestation.
+        let digest = try FolderImportService.hashSelectedSource(url,
+          close: { try $0.close() }, beforeOpen: nil)
+        unavailable = digest != capture.sha256
+      }
+      if unavailable {
         try database.adapterWrite { db in
-          guard let paperID = UUID(uuidString: id), paperID.uuidString == id else {
-            throw ProductJobRecoveryError.invalidLineage
-          }
-          try ProductDatabase.reconcileUnavailableImport(paperID, reference: reference, in: db)
+          try ProductDatabase.reconcileUnavailableImport(capture.id,
+            generation: capture.generation, sha256: capture.sha256,
+            reference: capture.reference, in: db)
         }
       }
     }

@@ -245,7 +245,7 @@ public actor FolderImportService {
     }
   }
 
-  private nonisolated static func hashSelectedSource(_ source: URL,
+  nonisolated static func hashSelectedSource(_ source: URL,
     close: @Sendable (FileHandle) throws -> Void,
     beforeOpen: (@Sendable (URL) throws -> Void)?) throws -> String {
     guard source.isFileURL else { throw FolderImportError.invalidSource }

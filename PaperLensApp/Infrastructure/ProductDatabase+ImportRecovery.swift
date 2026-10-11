@@ -792,12 +792,14 @@ extension ProductDatabase {
     return record
   }
 
-  /// Missing bytes change availability, not the committed execution. NULL legacy
+  /// Missing or changed bytes change availability, not the committed execution. NULL legacy
   /// history remains a separate path and is never reconstructed from these rows.
-  static func reconcileUnavailableImport(_ paperID: UUID, reference: String,
+  static func reconcileUnavailableImport(_ paperID: UUID, generation: UUID, sha256: String, reference: String,
     in db: Database) throws {
     guard let before = try Row.fetchOne(db, sql: "SELECT * FROM paper WHERE id = ?",
-      arguments: [paperID.uuidString]), recoveryString(before, "status") == "ready",
+      arguments: [paperID.uuidString]), recoveryString(before, "id") == paperID.uuidString,
+      recoveryString(before, "generation") == generation.uuidString,
+      recoveryString(before, "pdfSHA256") == sha256, recoveryString(before, "status") == "ready",
       recoveryString(before, "pdfReference") == reference, nullColumns(before, ["deletionID"]) else {
       throw ProductJobRecoveryError.recoveryConflict
     }
@@ -817,8 +819,9 @@ extension ProductDatabase {
     let folder = try importFolder(paperID, in: db)
     try db.execute(sql: """
       UPDATE paper SET status = 'importFailed', pdfReference = NULL, cleanupDebt = 1
-      WHERE id = ? AND status = 'ready' AND pdfReference = ? AND deletionID IS NULL
-      """, arguments: [paperID.uuidString, reference])
+      WHERE id = ? AND generation = ? AND pdfSHA256 = ? AND status = 'ready'
+        AND pdfReference = ? AND deletionID IS NULL
+      """, arguments: [paperID.uuidString, generation.uuidString, sha256, reference])
     guard db.changesCount == 1 else { throw ProductJobRecoveryError.recoveryConflict }
     try db.execute(sql: """
       UPDATE importJob SET state = 'failed', failure = 'missingPDF'
@@ -828,6 +831,9 @@ extension ProductDatabase {
       let after = try Row.fetchOne(db, sql: "SELECT * FROM paper WHERE id = ?",
         arguments: [paperID.uuidString]),
       sameRow(before, after, except: ["status", "pdfReference", "cleanupDebt"]),
+      recoveryString(after, "id") == paperID.uuidString,
+      recoveryString(after, "generation") == generation.uuidString,
+      recoveryString(after, "pdfSHA256") == sha256,
       recoveryString(after, "status") == "importFailed", nullColumns(after, ["pdfReference"]),
       Int64.fromDatabaseValue(after["cleanupDebt"]) == 1,
       try importFolder(paperID, in: db) == folder else {
