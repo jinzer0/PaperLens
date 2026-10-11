@@ -232,9 +232,15 @@ queue reads, filesystem/PDF/transport effects or callbacks inside SQL transactio
 
 The existing Paper-scoped SwiftUI task consumes observations and invokes its current
 guarded refresh/recovery-context/reconciliation path. Remove the one-second sleep;
-keep explicit Refresh and Retry unchanged. Observation errors clear stale status and
-recovery context and reconcile unavailable using fresh existing request and task
-cancellation fences. A removed Reader must not receive late presentation effects;
+keep Retry admission and its dispatch unchanged. Observation errors clear stale status
+and recovery context and reconcile unavailable using fresh existing request and task
+cancellation fences. A terminal observation error also records that mounted tracking
+ended. Explicit Refresh and post-Retry readback rearm one ended iterator for the same
+mount; ordinary observation-triggered reads never restart tracking. Use a view-local
+restart token with Paper ID in the task key, capture that actual key in the body, and
+fence initial/terminal state and rearming against it. A replacement task must not erase
+successful same-Paper presentation merely to restart observation. No automatic restart
+loop, replay, timer or polling fallback. A removed Reader receives no late effects;
 the existing Paper/generation/session mount and actual metadata pins remain intact.
 No extraction reservation, retry lineage, provider/config generation, accepted
 revision, schema or calibrated parser contract changes.
@@ -245,3 +251,27 @@ tests, runtime/native/SDK/helper/renderer or protected trials in the source lane
 Parent owns source checks and independent review; real commit-driven delivery,
 rollback/no-change/read-error/replacement/cancellation behavior and native immediate
 notice remain verification obligations, not source-only Story acceptance.
+
+### Commit-driven source implementation notes
+
+Contract0d822c9 precedes the three-source implementation. The synchronous status
+adapter and sole-queue GRDB observation now share fetchExtractionStatus(paperID:in:),
+with the original joins, ready-state mapping, missing-revision mapping and UUID
+readback unchanged. Observation uses bufferingNewest(1); its payload only invalidates
+presentation and invokes the existing guarded refresh, recovery-context read and
+metadata reconciliation callback. The Paper-scoped task no longer sleeps or polls.
+Initial consumption and every observation reject cancelled tasks; each observation
+also rejects a changed Paper before refreshing. Stream errors first reject cancelled
+or stale-Paper tasks, then allocate a fresh reconciliation request, clear status and
+recovery context, mark unavailable and reconcile that outcome without exposing raw
+diagnostics. No stream error is converted into a polling fallback. GRDB's maintained
+iterator owns observation cancellation. Review186 found the initial implementation
+leaves tracking terminated after an error even if explicit readback later succeeds;
+that combined presentation replacement is BLOCK until the recovery contract above
+is implemented. The shared SQL/sole-queue boundary is source-clear. Existing workspace
+generation/session mount and actual metadata callback remain unchanged.
+
+No tests, builds, compiler commands, gates, formatter or runtime trials ran in this
+source lane. Parent checks and independent source review remain pending, including
+commit/rollback/no-change/error, superseding request and removed-task behavior;
+immediate native presentation and canonical Story/Epic acceptance remain unproved.
