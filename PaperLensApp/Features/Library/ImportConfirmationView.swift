@@ -54,8 +54,8 @@ public struct ImportConfirmationView: View {
           Text("미분류 (기본값)").tag(nil as UUID?)
           ForEach(folders) { folder in Text(folder.name).tag(Optional(folder.id)) }
         }
-      } else {
-        Text("저장 폴더를 불러오는 중…")
+      } else if errorMessage == nil {
+        ProgressView("저장 폴더를 불러오는 중…")
       }
       if confirmation.matchingPaperIDs.isEmpty {
         Text("내용 해시 확인 결과, 같은 내용의 준비된 PDF가 없습니다. 다른 중복 단서는 확인하지 못했습니다.")
@@ -64,13 +64,16 @@ public struct ImportConfirmationView: View {
           ? "중복 가능성: 준비된 PDF \(confirmation.matchingPaperIDs.count)개와 내용 해시가 같습니다. 계속하면 별도 논문과 독립 PDF 복사본을 추가합니다."
           : "중복 가능성: 준비된 PDF \(confirmation.matchingPaperIDs.count)개와 내용 해시가 같습니다. 계속하면 선택한 논문의 실패한 작업만 다시 시도하며, 같은 내용의 기존 논문은 교체하지 않습니다.")
       }
-      if let errorMessage { Text(errorMessage).foregroundStyle(.red) }
+      if working { ProgressView("선택한 PDF 요청을 처리하는 중…") }
+      if let errorMessage {
+        Label(errorMessage, systemImage: "exclamationmark.triangle").foregroundStyle(.red)
+      }
       HStack {
         Button("취소") {
           guard action.beginCancel(working: working) else { return }
           working = true
           Task { await service.cancel(confirmation.id); dismiss() }
-        }.disabled(working)
+        }.keyboardShortcut(.cancelAction).disabled(working)
         Spacer()
         Button(confirmation.retryPaperID != nil ? "다시 시도"
           : (confirmation.matchingPaperIDs.isEmpty ? "가져오기" : "계속 가져오기")) {
@@ -87,7 +90,8 @@ public struct ImportConfirmationView: View {
             }
             working = false
           }
-        }.disabled(!destinationsLoaded || working || action.consumed)
+        }.keyboardShortcut(.defaultAction)
+          .disabled(!destinationsLoaded || working || action.consumed)
       }
     }
     .padding(24)

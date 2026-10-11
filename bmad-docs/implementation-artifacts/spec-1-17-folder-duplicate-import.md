@@ -1,5 +1,34 @@
 # Story 1.17 Build Spec — Folder arrangement and duplicate local import
 
+## Current native import presentation continuation (baseline 2c855ee)
+
+Story1.17/Issue19 remains on the Epic integration branch
+`issue/epic-1-product-vertical-integration-20261010`; the explicit implementation-first
+assignment permits only the two existing Specs and three Library presentation files.
+Current ImportConfirmationView displays the selected filename, explicitly unavailable
+extracted metadata, actual UUID-backed folders/default, and evaluated SHA match versus
+unavailable other duplicate signals. New import warns of independent Paper/PDF copies;
+local Retry identifies the existing Paper and does not promise another Paper. Cancel
+and Continue still use the existing synchronous action gate and service owner, with
+Continue unavailable until destinations load and after intent consumption. Workspace
+still uses native PDF selection and prepares without admission, remains Library after
+import and retains its existing sheet cleanup/security-scope/publisher fences.
+
+This continuation adds native Escape/Return actions to local confirmation, labelled
+destination-load/request progress and icon-plus-text failure states in confirmation and
+Workspace. It does not change command admission, cleanup, Retry identity, default
+destination, lifecycle, schema or resource ownership. The request progress deliberately
+does not claim publication or physical closure. Existing URL controls retain their
+independent state gates; no shared concurrency fix is attempted.
+
+Remaining prerequisites: parent source review and permitted compiler checks; actual
+native keyboard/VoiceOver role-state reading, dialog opener-focus restoration, text
+scaling/contrast/resize, Cancel/Continue scheduling and physical duplicate-copy/delete/
+restart/publication-failure behavior at the current source revision. This worker runs
+no tests, builds, formatters, gates, UI/runtime/network or protected trials and authors
+no tests. Historical verification below is not evidence for this continuation.
+StoryDone=false, canonical acceptance and Epic acceptance remain unchanged.
+
 ## Exact product implementation phase (latest explicit source-order instruction)
 
 This phase supersedes the historical planning-only admission below. Exactly five files:
