@@ -5,21 +5,6 @@ import ProviderRequest
 @testable import PaperLensProduct
 
 final class LibrarySummaryServiceTests: XCTestCase {
-  // Controlled storage fixture only. This decoder validates a known test encoding;
-  // it is not PDFium calibration, certified live enforcement or closure acceptance.
-  private struct FixtureGeometry: LibrarySummaryGeometryValidating {
-    func resolve(_ hit: ExtractionSearchHit, identity: PDFSentenceIdentity) throws -> PDFSentenceAnchor {
-      guard hit.canonicalGeometry == Data("fixture-quad".utf8) else {
-        throw LibrarySummaryError.invalidGrounding
-      }
-      let page = try PDFPageGeometry(pageIndex: identity.pageIndex,
-        cropOrigin: .init(x: 0, y: 0), width: 100, height: 100, rotation: 0)
-      let quad = try PDFQuad(topLeft: .init(x: 10, y: 20), topRight: .init(x: 20, y: 20),
-        bottomRight: .init(x: 20, y: 10), bottomLeft: .init(x: 10, y: 10), page: page)
-      return try PDFSentenceAnchor(identity: identity, fullSourceQuote: hit.text,
-        page: page, quads: [quad])
-    }
-  }
   private struct Fixture {
     let db: ProductDatabase
     let root: URL
@@ -55,7 +40,7 @@ final class LibrarySummaryServiceTests: XCTestCase {
       for (id, quote) in quotes.enumerated() {
         try sql.execute(sql: """
           INSERT INTO extractionSentence(revision, page, sentenceID, text, geometry) VALUES (?, 0, ?, ?, ?)
-          """, arguments: [revision.uuidString, id, quote, Data("fixture-quad".utf8)])
+          """, arguments: [revision.uuidString, id, quote, Data([0])])
       }
     }
     let authority = try ProviderRequest()
@@ -74,8 +59,10 @@ final class LibrarySummaryServiceTests: XCTestCase {
       "summary": ["text": "Grounded summary", "kind": "paper", "evidenceIndices": [0, 1]],
       "insufficiency": bundle.insufficiency
     ]), request: request)
-    return Fixture(db: db, root: root, identity: identity, request: request,
+    let f = Fixture(db: db, root: root, identity: identity, request: request,
       frozen: try LibrarySummaryFrozen(request: request), result: result)
+    _ = try installCanonicalGeometry(f, owners: canonicalOwners(f))
+    return f
   }
 
   private func canonicalOwners(_ f: Fixture) throws -> [PDFSentenceAnchor] {
@@ -466,12 +453,19 @@ final class LibrarySummaryServiceTests: XCTestCase {
   }
 
   private func reserve(_ f: Fixture) throws {
-    try f.db.reserveLibrarySummary(f.identity, frozen: f.frozen, geometry: FixtureGeometry())
+    try f.db.reserveLibrarySummary(f.identity, frozen: f.frozen, geometry: originalGeometry(f))
   }
   private func publish(_ f: Fixture) throws -> LibrarySummaryRecord {
     try f.db.publishLibrarySummary(f.identity, frozen: f.frozen, result: f.result,
       bytes: ProviderRequest.canonicalBytes(f.result.value), permit: UUID().uuidString,
-      resultID: UUID(), geometry: FixtureGeometry())
+      resultID: UUID(), geometry: originalGeometry(f))
+  }
+
+  private func originalGeometry(_ f: Fixture) throws -> CanonicalExtractionGeometryValidator {
+    // Only immutable original fixture context supplies these synthetic extents.
+    // Never read candidate SQL/frozen/result corruption or rewrite storage at a boundary.
+    try CanonicalExtractionGeometryValidator(owningAnchors: canonicalOwners(f),
+      precision: PDFGeometryPrecision(maximumErrorPDFPoints: 0))
   }
 
   private func assertForgedTailRejected(tail: String, rankTail: Bool) throws {
@@ -493,7 +487,7 @@ final class LibrarySummaryServiceTests: XCTestCase {
       XCTAssertEqual(try authority.encodeRequest(forged.authorized(using: authority)), f.frozen.request)
       XCTAssertEqual(f.request.wire.evidenceItems.map(\.anchor.sentenceID), [1, 0])
       XCTAssertThrowsError(try f.db.reserveLibrarySummary(f.identity, frozen: forged,
-        geometry: FixtureGeometry())) {
+        geometry: originalGeometry(f))) {
         XCTAssertEqual($0 as? LibrarySummaryError, .invalidGrounding)
       }
       XCTAssertEqual(try f.db.adapterRead { try Int.fetchOne($0,
@@ -508,7 +502,7 @@ final class LibrarySummaryServiceTests: XCTestCase {
       }
       XCTAssertThrowsError(try f.db.publishLibrarySummary(f.identity, frozen: forged,
         result: f.result, bytes: ProviderRequest.canonicalBytes(f.result.value),
-        permit: UUID().uuidString, resultID: UUID(), geometry: FixtureGeometry())) {
+        permit: UUID().uuidString, resultID: UUID(), geometry: originalGeometry(f))) {
         XCTAssertEqual($0 as? LibrarySummaryError, .invalidGrounding)
       }
       XCTAssertEqual(try f.db.adapterRead { try Int.fetchOne($0,
@@ -520,7 +514,7 @@ final class LibrarySummaryServiceTests: XCTestCase {
           arguments: [originalBytes, f.identity.job.uuidString])
       }
       let saved = try publish(f)
-      let service = LibrarySummaryService(database: f.db, geometry: FixtureGeometry())
+      let service = try LibrarySummaryService(database: f.db, geometry: originalGeometry(f))
       XCTAssertEqual(try service.restore(paperID: f.identity.paperID)?.id, saved.id)
       try f.db.adapterWrite { sql in
         try sql.execute(sql: "UPDATE librarySummaryJob SET frozen = ? WHERE job = ?",
@@ -553,7 +547,7 @@ final class LibrarySummaryServiceTests: XCTestCase {
         arguments: [Data([0]), f.identity.revision.uuidString])
     }
     XCTAssertThrowsError(try reserve(f)) {
-      XCTAssertEqual($0 as? LibrarySummaryError, .invalidGrounding)
+      XCTAssertEqual($0 as? CanonicalExtractionGeometryError, .invalidEncoding)
     }
     XCTAssertEqual(try f.db.adapterRead { try Int.fetchOne($0,
       sql: "SELECT COUNT(*) FROM librarySummaryJob") }, 0)
@@ -566,7 +560,7 @@ final class LibrarySummaryServiceTests: XCTestCase {
     let saved = try publish(f)
     let reopened = try ProductDatabase.open(at: f.root)
     let restored = try XCTUnwrap(LibrarySummaryService(database: reopened,
-      geometry: FixtureGeometry()).restore(paperID: f.identity.paperID))
+      geometry: originalGeometry(f)).restore(paperID: f.identity.paperID))
     XCTAssertEqual(restored.id, saved.id)
     XCTAssertEqual(restored.identity, f.identity)
     XCTAssertEqual(restored.result, f.result)
@@ -581,22 +575,28 @@ final class LibrarySummaryServiceTests: XCTestCase {
     defer { try? FileManager.default.removeItem(at: f.root) }
     try reserve(f)
     _ = try publish(f)
-    let service = LibrarySummaryService(database: f.db, geometry: FixtureGeometry())
+    let service = try LibrarySummaryService(database: f.db, geometry: originalGeometry(f))
     try f.db.adapterWrite { sql in
       try sql.execute(sql: "UPDATE extractionSentence SET text = 'unrelated' WHERE revision = ? AND sentenceID = 1",
         arguments: [f.identity.revision.uuidString])
     }
-    XCTAssertThrowsError(try service.restore(paperID: f.identity.paperID))
+    XCTAssertThrowsError(try service.restore(paperID: f.identity.paperID)) {
+      XCTAssertEqual($0 as? LibrarySummaryError, .invalidGrounding)
+    }
     try f.db.adapterWrite { sql in
       try sql.execute(sql: "UPDATE extractionSentence SET text = 'results conclusion beta', geometry = ? WHERE revision = ? AND sentenceID = 1",
         arguments: [Data([0]), f.identity.revision.uuidString])
     }
-    XCTAssertThrowsError(try service.restore(paperID: f.identity.paperID))
+    XCTAssertThrowsError(try service.restore(paperID: f.identity.paperID)) {
+      XCTAssertEqual($0 as? CanonicalExtractionGeometryError, .invalidEncoding)
+    }
     try f.db.adapterWrite { sql in
       try sql.execute(sql: "DELETE FROM extractionSentence WHERE revision = ? AND sentenceID = 1",
         arguments: [f.identity.revision.uuidString])
     }
-    XCTAssertThrowsError(try service.restore(paperID: f.identity.paperID))
+    XCTAssertThrowsError(try service.restore(paperID: f.identity.paperID)) {
+      XCTAssertEqual($0 as? LibrarySummaryError, .invalidGrounding)
+    }
   }
 
   func testGuardedCommitRejectsConfigurationChangeWithoutPartialResult() throws {
@@ -648,7 +648,7 @@ final class LibrarySummaryServiceTests: XCTestCase {
       replacementSlotID: nil, replacementModel: "changed")
     try f.db.failLibrarySummary(f.identity)
     let restored = try XCTUnwrap(LibrarySummaryService(database: f.db,
-      geometry: FixtureGeometry()).restore(paperID: f.identity.paperID))
+      geometry: originalGeometry(f)).restore(paperID: f.identity.paperID))
     XCTAssertEqual(restored.id, saved.id)
     XCTAssertEqual(restored.identity.configurationGeneration, 0)
   }
@@ -660,7 +660,7 @@ final class LibrarySummaryServiceTests: XCTestCase {
     _ = try f.db.beginDeletion(f.identity.paperID)
     XCTAssertThrowsError(try publish(f))
     XCTAssertNil(try LibrarySummaryService(database: f.db,
-      geometry: FixtureGeometry()).restore(paperID: f.identity.paperID))
+      geometry: originalGeometry(f)).restore(paperID: f.identity.paperID))
   }
 
   func testFrozenContextRoundTripAndInvalidSummaryAreValidatedLocally() throws {
@@ -721,11 +721,14 @@ final class LibrarySummaryServiceTests: XCTestCase {
     }
   }
 
-  func testMissingGeometryDeniesRestoreRatherThanDisplayingUngroundedData() throws {
+  func testAbsentSavedSummaryRestoresNilWithoutGeometryOrDurableEffects() throws {
     let f = try fixture()
     defer { try? FileManager.default.removeItem(at: f.root) }
-    XCTAssertThrowsError(try LibrarySummaryService(database: f.db).restore(paperID: f.identity.paperID)) {
-      XCTAssertEqual($0 as? LibrarySummaryError, .geometryUnavailable)
+    XCTAssertNil(try LibrarySummaryService(database: f.db).restore(paperID: f.identity.paperID))
+    for table in ["librarySummaryJob", "librarySummaryResult", "librarySummaryVisible",
+      "librarySummaryOwner", "librarySummaryOwnerAnchor"] {
+      XCTAssertEqual(try f.db.adapterRead { try Int.fetchOne($0,
+        sql: "SELECT COUNT(*) FROM \(table)") }, 0, table)
     }
   }
 
@@ -743,7 +746,7 @@ final class LibrarySummaryServiceTests: XCTestCase {
     let running = JobRecoveryPolicy.apply(.claim(pending.current.lineage), to: pending).snapshot
     let admitted = JobRecoveryPolicy.apply(.dispatch(running.current.lineage), to: running).snapshot
     do {
-      _ = try await LibrarySummaryService(database: f.db, geometry: FixtureGeometry())
+      _ = try await LibrarySummaryService(database: f.db, geometry: originalGeometry(f))
         .dispatch(f.request, identity: i, snapshot: admitted)
       XCTFail("Missing provider must deny dispatch")
     } catch {
@@ -760,7 +763,9 @@ final class LibrarySummaryServiceTests: XCTestCase {
       try sql.execute(sql: "UPDATE extractionSentence SET text = 'wrong source' WHERE revision = ? AND sentenceID = 0",
         arguments: [f.identity.revision.uuidString])
     }
-    XCTAssertThrowsError(try reserve(f))
+    XCTAssertThrowsError(try reserve(f)) {
+      XCTAssertEqual($0 as? LibrarySummaryError, .invalidGrounding)
+    }
     XCTAssertEqual(try f.db.adapterRead { try Int.fetchOne($0,
       sql: "SELECT COUNT(*) FROM librarySummaryJob") }, 0)
   }

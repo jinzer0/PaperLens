@@ -173,3 +173,17 @@ No provider effect or replacement Job/result is introduced. This is database reo
 not process/native restart or independently calibrated production-owner proof. Actual
 deletion cascade, quotas, archive source review, creator/profile activation and visible
 Summary remain outstanding; no Agent purge/closure acknowledgment is fabricated.
+
+Focused storage follow-up56d2c24 passed artifact1634: actual SQLite FK paper-row
+deletion cascades all five Summary tables; a single over-quota anchor INSERT fails
+its real CHECK with rollback, and representable aggregate overflow rejects before
+anchor decoding. This is metadata storage behavior, not application deletion/purge.
+The first full24 service suite failed10 (artifact1635): nine obsolete noncanonical
+FixtureGeometry positive fixtures and one obsolete absent-saved-result expectation.
+Those fixtures now seed independently constructed original Canonical anchors once
+before exposure, retain explicit synthetic precision and never rewrite deliberate
+corruption at reserve/publish/restore. The obsolete decoder is removed; exact typed
+forgery/rollback/CAS/no-replay assertions stay active. A missing saved result returns
+nil without Job/result/visibility/owner effects; saved missing archive still denies.
+The updated complete24 LibrarySummaryServiceTests passed artifact1640. No tests are
+skipped or product guards weakened; no production geometry or acceptance claim.
