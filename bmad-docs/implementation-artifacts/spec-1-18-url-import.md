@@ -463,3 +463,18 @@ network, provider, SDK, user PDF or closure-uncertainty trial is performed.
 Compilation and these three cases do not prove HTTPS download/republication,
 restart, denied-history branches, UI/accessibility, independent review or canonical
 acceptance. Existing unused-result/weak-mutability warnings remain unsuppressed.
+
+### Independent review163: pre-acknowledgment Retry retention correction
+
+Source review requests changes: synchronous Continue then Cancel before the child
+grants a writer clears the genuine retry record and strands another same-Job Retry,
+although the original encoded history is unchanged. A refused reservation has the
+same problem. Preserve the prior genuine expected record only while the original
+confirmation's once-bound failed query has not been installed by Main after actual
+replacement reservation acknowledgment. The query-bound flag is a callback fence,
+not physical closure or persistence authority; fresh Continue still requires all
+existing exact durable CAS, namespace and folder admission checks. After query
+binding, failed capture must never restore prior history or create another Job.
+Keep the original error and no automatic execution. This bounded correction edits
+URLImportService only, with owned pre-grant cancellation/refusal regressions in
+LibraryURLImportWriterTests. No new owner/schema/profile/permission/trial.
