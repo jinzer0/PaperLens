@@ -140,15 +140,15 @@ extension ProductDatabase {
 
   func reserveLibrarySummary(_ i: LibrarySummaryIdentity, frozen: LibrarySummaryFrozen,
     geometry: any LibrarySummaryGeometryValidating) throws {
-    let identity = try JSONEncoder().encode(i)
-    let saved = try JSONEncoder().encode(frozen)
     try adapterWrite { db in
-      try guardSummaryPaper(i, db: db, currentInput: true)
-      _ = try summaryAnchors(i, frozen: frozen, db: db, geometry: geometry)
       guard let original = geometry as? CanonicalExtractionGeometryValidator else {
         throw LibrarySummaryError.geometryUnavailable
       }
       let owners = try original.captureSummaryOwners(summaryOwnerIdentities(i, frozen: frozen))
+      try guardSummaryPaper(i, db: db, currentInput: true)
+      _ = try summaryAnchors(i, frozen: frozen, db: db, geometry: geometry)
+      let identity = try JSONEncoder().encode(i)
+      let saved = try JSONEncoder().encode(frozen)
       // Never replace an invocation or clear previous usable data to make another send fit.
       try db.execute(sql: """
         INSERT INTO librarySummaryJob(job, paperID, attempt, fence, correlation, input, epoch,

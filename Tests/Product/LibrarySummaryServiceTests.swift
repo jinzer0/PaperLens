@@ -101,6 +101,48 @@ final class LibrarySummaryServiceTests: XCTestCase {
     return codec
   }
 
+  func testReservationRejectsNoncanonicalOwnerBeforeGroundingCallback() throws {
+    struct GroundingProbe: LibrarySummaryGeometryValidating {
+      func resolve(_ hit: ExtractionSearchHit, identity: PDFSentenceIdentity) throws -> PDFSentenceAnchor {
+        XCTFail("Noncanonical reservation invoked candidate grounding before owner admission")
+        throw CanonicalExtractionGeometryError.invalidEncoding
+      }
+    }
+    let f = try fixture()
+    defer { try? FileManager.default.removeItem(at: f.root) }
+    XCTAssertThrowsError(try f.db.reserveLibrarySummary(f.identity, frozen: f.frozen,
+      geometry: GroundingProbe())) {
+      XCTAssertEqual($0 as? LibrarySummaryError, .geometryUnavailable)
+    }
+    XCTAssertEqual(try f.db.adapterRead { try Int.fetchOne($0,
+      sql: "SELECT COUNT(*) FROM librarySummaryJob") }, 0)
+  }
+
+  func testReservationRejectsOriginalArchiveQuotaBeforeCorruptCandidateDecode() throws {
+    let f = try fixture()
+    defer { try? FileManager.default.removeItem(at: f.root) }
+    var owners = try canonicalOwners(f)
+    let original = owners[0]
+    owners[0] = try PDFSentenceAnchor(identity: original.identity,
+      fullSourceQuote: String(repeating: "q", count: SummaryOwnerArchive.maximumBytes / 6 + 1),
+      page: original.page, quads: original.quads)
+    let geometry = try CanonicalExtractionGeometryValidator(owningAnchors: owners,
+      precision: PDFGeometryPrecision(maximumErrorPDFPoints: 0))
+    try f.db.adapterWrite { sql in
+      try sql.execute(sql: "UPDATE extractionSentence SET geometry = ? WHERE revision = ?",
+        arguments: [Data([0]), f.identity.revision.uuidString])
+    }
+    XCTAssertThrowsError(try f.db.reserveLibrarySummary(f.identity, frozen: f.frozen,
+      geometry: geometry)) {
+      // Invalid candidate encoding must not run before original-owner byte preflight.
+      XCTAssertEqual($0 as? LibrarySummaryError, .invalidGrounding)
+    }
+    for table in ["librarySummaryJob", "librarySummaryOwner", "librarySummaryOwnerAnchor"] {
+      XCTAssertEqual(try f.db.adapterRead { try Int.fetchOne($0,
+        sql: "SELECT COUNT(*) FROM \(table)") }, 0, table)
+    }
+  }
+
   func testCanonicalSummarySaveReopenRestoresRetainedRevisionWithoutGenerationOrProvider() throws {
     let f = try fixture(tail: "independent unranked full extent")
     defer { try? FileManager.default.removeItem(at: f.root) }

@@ -199,3 +199,14 @@ atomic inserts. No new codec/store/quota/profile/default/owner or transaction ru
 Noncanonical validators must deny before grounding callbacks; over-quota original
 owners must deny before candidate decoding and full frozen serialization. This
 amendment precedes the one-source ordering fix and focused negative regression.
+
+Ordering correction passed all26 LibrarySummaryServiceTests artifact1642, including
+noncanonical callback exclusion and original over-quota rejection before malformed
+candidate decoding, with zero Job/owner effects. Review167 follow-up SOURCE CLEAR
+resolved P2; only existing operation order changed. Fresh unsigned arm64 four-target
+native build1644 SUCCEEDED with signing disabled and automatic package resolution
+disabled; no binary launch, credentials, provider, renderer or remote trial.
+Full isolated Product469 run1645 still failed seven Composition/Recovery cases on
+their obsolete noncanonical Summary fixtures; those are not hidden or counted as
+passing. Their independent original-owner fixture correction is separate from the
+archive source approval. No whole-Epic verification/acceptance promotion.
