@@ -23,6 +23,25 @@ private final class URLImportAdmission: @unchecked Sendable {
   private let lock = NSLock()
   private enum Phase { case confirming, continued, granted, cancelled }
   private var phase = Phase.confirming
+  private var failedQuery: (@Sendable () async throws -> ImportRecoveryRecord)?
+  private var queryBound = false
+  var granted: Bool { lock.withLock { phase == .granted } }
+  func bindFailedQuery(_ query: @escaping @Sendable () async throws -> ImportRecoveryRecord) throws {
+    try lock.withLock {
+      guard phase == .granted, !queryBound else { throw URLImportError.writerUnavailable }
+      queryBound = true
+      failedQuery = query
+    }
+  }
+  func captureFailed() async throws -> ImportRecoveryRecord {
+    let query = lock.withLock {
+      let query = failedQuery
+      failedQuery = nil
+      return query
+    }
+    guard let query else { throw URLImportError.writerUnavailable }
+    return try await query()
+  }
   func continueOnce() -> Bool {
     lock.withLock {
       guard phase == .confirming else { return false }
@@ -41,14 +60,24 @@ private final class URLImportAdmission: @unchecked Sendable {
 }
 
 public struct URLImportConfirmation: Identifiable, Sendable {
+  enum Purpose: Sendable { case newPaper, retry(ImportRecoveryRecord) }
   public let id: UUID
   public let destination: String
   public let destinationFolderID: UUID?
   public let possibleDuplicate: Bool
   public let sourceKind: String
+  let purpose: Purpose
   fileprivate let route: ValidatedRequestURL
   fileprivate let admission = URLImportAdmission()
   func consumeWriterGrant() -> Bool { admission.grantOnce() }
+  func bindFailedQuery(_ query: @escaping @Sendable () async throws -> ImportRecoveryRecord) throws {
+    try admission.bindFailedQuery(query)
+  }
+  func authorizesURLRetry(_ expected: ImportRecoveryRecord) -> Bool {
+    guard admission.granted, case .retry(let record) = purpose,
+      record.encoded == expected.encoded else { return false }
+    return sourceKind == "httpsPDF" || sourceKind == "arxivPDF"
+  }
 }
 
 @MainActor
@@ -68,6 +97,9 @@ public final class URLImportService: ObservableObject {
   private var lastDestination = ""
   private var lastDestinationFolderID: UUID?
   private var lastDuplicate = false
+  private var failedIntent: URLImportConfirmation?
+  private var retryRecord: ImportRecoveryRecord?
+  private var admittedFailure = false
 
   public init(authority: ProviderRequest,
     grantWriter: (@Sendable (URLImportConfirmation) async throws -> any URLImportWriter)? = nil) {
@@ -88,9 +120,12 @@ public final class URLImportService: ObservableObject {
     lastDestination = destination
     lastDestinationFolderID = destinationFolderID
     lastDuplicate = possibleDuplicate
+    failedIntent = nil
+    retryRecord = nil
+    admittedFailure = false
     confirmation = URLImportConfirmation(id: UUID(), destination: destination,
       destinationFolderID: destinationFolderID, possibleDuplicate: possibleDuplicate,
-      sourceKind: route.sourceKind, route: route)
+      sourceKind: route.sourceKind, purpose: .newPaper, route: route)
     state = .confirming
   }
 
@@ -113,6 +148,9 @@ public final class URLImportService: ObservableObject {
       startCancellationRequested = false
     }
     confirmation = nil // Consume once, before any suspension or effect.
+    failedIntent = intent
+    retryRecord = nil
+    admittedFailure = false
     guard let grant else { state = .failed(.writerUnavailable); return }
     state = .downloading
     operation = Task {
@@ -140,6 +178,7 @@ public final class URLImportService: ObservableObject {
         let paper = try await capability.publish(closed)
         state = .ready(paper) // Library stays put; navigation belongs to explicit UI action.
         lastInput = nil
+        failedIntent = nil
       } catch {
         var safe = error as? URLImportError ??
           (Task.isCancelled || (error as? LocalLibraryError) == .cancelled ? .cancelled : .rejected)
@@ -147,6 +186,10 @@ public final class URLImportService: ObservableObject {
           ownedWriter.revoke()
           do { try await ownedWriter.abort(reason: safe) } catch { safe = .cleanupFailed }
         }
+        admittedFailure = ownedWriter != nil || intent.admission.granted
+        // Main's query is bound to the acknowledged execution, never to an error
+        // label. It runs only after the real writer's abort/drain has returned.
+        retryRecord = try? await intent.admission.captureFailed()
         state = .failed(safe)
       }
       writer = nil
@@ -164,8 +207,20 @@ public final class URLImportService: ObservableObject {
 
   /// A retry reopens confirmation, never automatically grants another writer/Job.
   public func retry() throws {
-    guard case .failed = state, let input = lastInput else { return }
-    try prepare(input, destination: lastDestination, possibleDuplicate: lastDuplicate,
-      destinationFolderID: lastDestinationFolderID)
+    guard !starting, operation == nil, case .failed = state, let input = lastInput else { return }
+    if let record = retryRecord {
+      let route: ValidatedRequestURL
+      do { route = try adapter.route(input) } catch { throw URLImportError.rejected }
+      confirmation = URLImportConfirmation(id: UUID(), destination: lastDestination,
+        destinationFolderID: lastDestinationFolderID, possibleDuplicate: lastDuplicate,
+        sourceKind: route.sourceKind, purpose: .retry(record), route: route)
+      state = .confirming
+    } else {
+      guard !admittedFailure, let failedIntent, case .newPaper = failedIntent.purpose else {
+        throw URLImportError.writerUnavailable
+      }
+      try prepare(input, destination: lastDestination, possibleDuplicate: lastDuplicate,
+        destinationFolderID: lastDestinationFolderID)
+    }
   }
 }

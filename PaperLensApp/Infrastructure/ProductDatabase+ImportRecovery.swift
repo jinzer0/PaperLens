@@ -127,6 +127,8 @@ extension ProductDatabase {
     let row = try recoveryRow(identity,
       maximumBytes: ProductJobRecovery.maximumImportRecoveryJournalBytes, in: db)
     guard case .failed = snapshot.current.state, !snapshot.revoked,
+      snapshot.current.dispatch == .none, snapshot.current.result == nil,
+      snapshot.usableResult == nil, !snapshot.namespaceRemoved,
       snapshot.permits.isEmpty, snapshot.removalDebt == nil, snapshot.pendingRemoval == nil,
       recoveryString(row, "paperStatus") == "importFailed",
       recoveryString(row, "jobState") == "failed",
@@ -142,6 +144,23 @@ extension ProductDatabase {
     guard identity.epoch == currentEpoch, confirmedInput.expectedSHA256 != nil else {
       throw ImportRecoveryPersistenceError.invalidHistory
     }
+    return try reserveJournaledImportRetryTransaction(expected: expected, identity: identity,
+      confirmedInput: confirmedInput, currentEpoch: currentEpoch)
+  }
+
+  func reserveJournaledURLImportRetry(expected: ImportRecoveryRecord, identity: ImportIdentity,
+    confirmation: URLImportConfirmation, currentEpoch: UUID) throws -> ImportRecoveryRecord {
+    guard identity.epoch == currentEpoch, confirmation.authorizesURLRetry(expected) else {
+      throw ImportRecoveryPersistenceError.invalidHistory
+    }
+    return try reserveJournaledImportRetryTransaction(expected: expected, identity: identity,
+      confirmedInput: .init(expectedSHA256: nil, destinationFolderID: confirmation.destinationFolderID),
+      currentEpoch: currentEpoch)
+  }
+
+  private func reserveJournaledImportRetryTransaction(expected: ImportRecoveryRecord,
+    identity: ImportIdentity, confirmedInput: ImportRecoveryJournal.ConfirmedInput,
+    currentEpoch: UUID) throws -> ImportRecoveryRecord {
     return try adapterWrite { db in
       let maximum = ProductJobRecovery.maximumImportRecoveryJournalBytes
       try Self.validateExpectedRecovery(expected)

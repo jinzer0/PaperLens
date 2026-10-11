@@ -289,22 +289,28 @@ public actor LocalLibraryLifecycle {
     guard confirmation.consumeWriterGrant() else {
       throw URLImportError.writerUnavailable
     }
-    let identity = ImportIdentity(paperID: UUID(), generation: UUID(), jobID: UUID(),
-      attempt: UUID(), fence: UUID(), correlation: UUID(), input: UUID(), epoch: epoch,
-      writer: UUID(), publication: UUID())
+    let identity: ImportIdentity
+    switch confirmation.purpose {
+    case .newPaper:
+      identity = ImportIdentity(paperID: UUID(), generation: UUID(), jobID: UUID(),
+        attempt: UUID(), fence: UUID(), correlation: UUID(), input: UUID(), epoch: epoch,
+        writer: UUID(), publication: UUID())
+    case .retry(let expected):
+      let previous = try expected.journal.currentCapture().identity
+      identity = ImportIdentity(paperID: previous.paperID, generation: previous.generation,
+        jobID: previous.jobID, attempt: UUID(), fence: UUID(), correlation: UUID(), input: UUID(),
+        epoch: epoch, writer: UUID(), publication: UUID())
+    }
     let cancellation = ImportCancellation()
-    cancellations[identity.paperID] = cancellation
     let database = database
     let namespace = Self.namespace(database.root, identity.paperID)
     let writer = LibraryURLImportWriter(lifecycle: self, identity: identity, directory: namespace,
       destinationFolderID: confirmation.destinationFolderID, cancellation: cancellation)
     var reserved = false
     do {
-      // Only bounded, fixed provenance; never URL spelling, path, query or credentials.
-      let title = confirmation.sourceKind == "arxivPDF" ? "arXiv PDF" : "HTTPS PDF"
-      try await reserve(identity, title: title,
-        facts: .init(expectedSHA256: nil, destinationFolderID: confirmation.destinationFolderID))
+      try await reserveURLImport(identity, confirmation: confirmation, cancellation: cancellation)
       reserved = true
+      try confirmation.bindFailedQuery { try await self.captureFailedURLImport(identity) }
       LibraryURLImportWriter.retain(writer)
       try await writerOpened(identity)
       try await Task.detached {
@@ -322,11 +328,75 @@ public actor LocalLibraryLifecycle {
       return writer
     } catch {
       if reserved { try await writer.abort(reason: .rejected) }
-      else {
-        finishProducer(identity.paperID)
-      }
       throw error
     }
+  }
+
+  /// The FIFO covers only reservation acknowledgment and owner installation. The
+  /// existing writer then owns opening, producer drain, publication and abort.
+  private func reserveURLImport(_ identity: ImportIdentity, confirmation: URLImportConfirmation,
+    cancellation: ImportCancellation) async throws {
+    await enterTransition(identity.paperID)
+    defer { leaveTransition(identity.paperID) }
+    guard cancellations[identity.paperID] == nil, !deletionInFlight.contains(identity.paperID),
+      deletionSagas[identity.paperID] == nil else { throw LocalLibraryError.deletionInProgress }
+    let database = database
+    if case .retry = confirmation.purpose {
+      let namespace = Self.namespace(database.root, identity.paperID)
+      guard try await Task.detached(operation: { try Self.checkedNamespace(namespace) == nil }).value else {
+        throw LocalLibraryError.cleanupFailed
+      }
+      guard !deletionInFlight.contains(identity.paperID), deletionSagas[identity.paperID] == nil else {
+        throw LocalLibraryError.deletionInProgress
+      }
+    }
+    cancellations[identity.paperID] = cancellation
+    let actualEpoch = epoch
+    do {
+      let acknowledged = try await Task.detached {
+        switch confirmation.purpose {
+        case .newPaper:
+          // Only fixed provenance, never URL spelling, query or credentials.
+          let title = confirmation.sourceKind == "arxivPDF" ? "arXiv PDF" : "HTTPS PDF"
+          return try database.reserveJournaledImport(identity, title: title,
+            confirmedInput: .init(expectedSHA256: nil,
+              destinationFolderID: confirmation.destinationFolderID))
+        case .retry(let expected):
+          return try database.reserveJournaledURLImportRetry(expected: expected, identity: identity,
+            confirmation: confirmation, currentEpoch: actualEpoch)
+        }
+      }.value
+      records[identity.paperID] = acknowledged
+    } catch {
+      finishProducer(identity.paperID)
+      throw error
+    }
+  }
+
+  /// Read-only capture for the exact execution Main actually acknowledged. This
+  /// query cannot settle any producer, erase a namespace, or repair cleanup debt.
+  private func captureFailedURLImport(_ identity: ImportIdentity) async throws -> ImportRecoveryRecord {
+    await enterTransition(identity.paperID)
+    defer { leaveTransition(identity.paperID) }
+    guard cancellations[identity.paperID] == nil, !deletionInFlight.contains(identity.paperID),
+      deletionSagas[identity.paperID] == nil else { throw LocalLibraryError.deletionInProgress }
+    let database = database
+    let namespace = Self.namespace(database.root, identity.paperID)
+    let captured = try await Task.detached {
+      let captured = try database.captureRetryableImport(paperID: identity.paperID,
+        generation: identity.generation)
+      guard try Self.checkedNamespace(namespace) == nil else { throw LocalLibraryError.cleanupFailed }
+      return captured
+    }.value
+    let actual = try captured.journal.currentCapture().identity
+    guard actual.paperID == identity.paperID, actual.generation == identity.generation,
+      actual.jobID == identity.jobID, actual.attempt == identity.attempt,
+      actual.fence == identity.fence, actual.correlation == identity.correlation,
+      actual.input == identity.input, actual.epoch == identity.epoch,
+      actual.writer == identity.writer, actual.publication == identity.publication,
+      !deletionInFlight.contains(identity.paperID), deletionSagas[identity.paperID] == nil,
+      cancellations[identity.paperID] == nil else { throw ImportRecoveryPersistenceError.staleHistory }
+    return captured
   }
 
   func publishURLImport(_ writer: LibraryURLImportWriter, stage: ClosedHTTPSPDFStage) async throws -> UUID {
