@@ -127,6 +127,12 @@ public final class ProductDatabase: @unchecked Sendable {
     try queue.write(body)
   }
 
+  public func extractionStatuses(paperID: UUID) -> AsyncValueObservation<ExtractionStatus> {
+    ValueObservation.tracking { db in
+      try Self.fetchExtractionStatus(paperID: paperID, in: db)
+    }.values(in: queue, bufferingPolicy: .bufferingNewest(1))
+  }
+
   public func providerConfiguration() throws -> ProviderConfiguration {
     try queue.read { db in
       guard let row = try Row.fetchOne(db, sql: "SELECT slotID, generation, model FROM providerConfig")

@@ -275,3 +275,29 @@ No tests, builds, compiler commands, gates, formatter or runtime trials ran in t
 source lane. Parent checks and independent source review remain pending, including
 commit/rollback/no-change/error, superseding request and removed-task behavior;
 immediate native presentation and canonical Story/Epic acceptance remain unproved.
+
+### Terminal observation recovery source notes
+
+Correction contract2f66ea6 precedes this view-only fix. The actual Paper/restart-UUID
+task key is captured lexically in body, before attaching the task. Entry, yielded
+invalidations, readback publication, errors and terminal tracking changes reject
+stale keys and cancellation. Tracking termination is recorded before unavailable
+reconciliation awaits; normal active sequence completion also records termination.
+Initial or different-Paper entry clears presentation; same-Paper rearming preserves
+status, recovery context and reconciliation, including successful explicit readback.
+
+Explicit Refresh and post-Retry readback share recoverTracking. It first executes the
+existing guarded readback, then synchronously checks its captured key and ended
+tracking, invalidates the old reconciliation request, and advances one UUID.
+Concurrent recoveries with the old key cannot advance it twice. Ordinary observation
+invalidations only refresh; errors never automatically restart. Iterator cancellation
+remains GRDB-owned. Retry dispatch/admission stays unchanged; the existing same-Paper
+retrying cleanup survives observer-key advancement, while Retry errors/readback use
+the key fence. No new SQL/database boundary, timer, supervisor or publication ACK.
+
+Parent syntax parsing of the three changed Swift files and git diff --check pass.
+Independent186 re-review is SOURCE CLEAR and resolves its retained terminal-recovery
+BLOCK finding. This is source inspection, not behavioral/runtime proof. Deferred
+obligations include terminal error then explicit recovery and later commit delivery,
+overlapping recoveries/Retry, delayed old-task entry, cancellation during readback or
+metadata callback, and native immediate notice. No acceptance or runtime proof claimed.
