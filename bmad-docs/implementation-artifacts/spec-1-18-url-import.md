@@ -22,6 +22,21 @@ committed before source. Existing URL Add/Paste focus, service owner, Retry, des
 network and physical obligations stay unchanged. No local-opener intent for drop or
 LibraryBrowser/Retry; no tests/native keyboard/VoiceOver or physical-ACK claim.
 
+### Source implementation notes (contract d211384)
+
+The sole production URLImportView constructor now supplies required native Bool
+focus, keyed invalidation and chooseLocalPDF(UUID) inputs. The existing PDF 선택
+button retains its fresh intent in URLImportDragState; interrupt reports that
+retained UUID before advancing its existing fence, including disappearance and
+drop/service paths. Root equality checks cannot invalidate a newer intent. URL
+Add/Paste presentation and focus paths remain unchanged. The sole production
+ImportConfirmationView constructor supplies real slot-keyed Cancel/Continue
+bindings and interactive eligibility; writes occur after the existing action
+guards and before tasks. Its working state still disables interactive dismissal,
+and disappearance is not a Cancel observation. Shared source-event ordering and
+deferred existing test caller adaptations are recorded in Spec1.17 above its
+historical phases. No native/runtime or Story/Epic completion claim is made.
+
 ## Native opener-focus source continuation (baseline a22d139)
 
 URLImportView uses native FocusState on its existing URL 추가/URL 붙여넣기

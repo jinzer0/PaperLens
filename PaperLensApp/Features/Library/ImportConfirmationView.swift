@@ -23,6 +23,9 @@ public struct ImportConfirmationView: View {
   private let confirmation: LocalImportConfirmation
   private let service: FolderImportService
   private let imported: (UUID) -> Void
+  @Binding private var cancelledConfirmation: UUID?
+  @Binding private var continuedConfirmation: UUID?
+  private let allowsInteractiveCancel: Bool
   @Environment(\.dismiss) private var dismiss
   @State private var folders: [LibraryFolder] = []
   @State private var destination: UUID?
@@ -32,10 +35,15 @@ public struct ImportConfirmationView: View {
   @State private var errorMessage: String?
 
   public init(confirmation: LocalImportConfirmation, service: FolderImportService,
+    cancelledConfirmation: Binding<UUID?>, continuedConfirmation: Binding<UUID?>,
+    allowsInteractiveCancel: Bool,
     imported: @escaping (UUID) -> Void) {
     self.confirmation = confirmation
     self.service = service
     self.imported = imported
+    _cancelledConfirmation = cancelledConfirmation
+    _continuedConfirmation = continuedConfirmation
+    self.allowsInteractiveCancel = allowsInteractiveCancel
     _destination = State(initialValue: confirmation.destinationFolderID)
   }
 
@@ -71,6 +79,7 @@ public struct ImportConfirmationView: View {
       HStack {
         Button("취소") {
           guard action.beginCancel(working: working) else { return }
+          cancelledConfirmation = confirmation.id
           working = true
           Task { await service.cancel(confirmation.id); dismiss() }
         }.keyboardShortcut(.cancelAction).disabled(working)
@@ -78,6 +87,7 @@ public struct ImportConfirmationView: View {
         Button(confirmation.retryPaperID != nil ? "다시 시도"
           : (confirmation.matchingPaperIDs.isEmpty ? "가져오기" : "계속 가져오기")) {
           guard action.beginContinue(destinationsLoaded: destinationsLoaded, working: working) else { return }
+          continuedConfirmation = confirmation.id
           working = true
           Task {
             do {
@@ -97,6 +107,7 @@ public struct ImportConfirmationView: View {
     .padding(24)
     .frame(minWidth: 440)
     .disabled(working)
+    .interactiveDismissDisabled(!allowsInteractiveCancel || working)
     .task {
       do {
         folders = try await service.folders()

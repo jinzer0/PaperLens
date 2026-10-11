@@ -8,7 +8,9 @@ public struct URLImportView<LibraryContent: View>: View {
   private let folderService: FolderImportService
   private let possibleDuplicate: (String) -> Bool
   private let openReader: (UUID) -> Void
-  private let chooseLocalPDF: () -> Void
+  private let chooseLocalPDF: (UUID) -> Void
+  private let localPDFFocused: FocusState<Bool>.Binding
+  @Binding private var localIntentInvalidation: UUID?
   private let confirmLocalPDF: (URL) -> Void
   private let library: LibraryContent
   @State private var input = ""
@@ -46,7 +48,9 @@ public struct URLImportView<LibraryContent: View>: View {
   public init(service: URLImportService, folderService: FolderImportService,
     possibleDuplicate: @escaping (String) -> Bool,
     openReader: @escaping (UUID) -> Void,
-    chooseLocalPDF: @escaping () -> Void,
+    localPDFFocused: FocusState<Bool>.Binding,
+    localIntentInvalidation: Binding<UUID?>,
+    chooseLocalPDF: @escaping (UUID) -> Void,
     confirmLocalPDF: @escaping (URL) -> Void,
     @ViewBuilder library: () -> LibraryContent) {
     self.service = service
@@ -54,6 +58,8 @@ public struct URLImportView<LibraryContent: View>: View {
     self.possibleDuplicate = possibleDuplicate
     self.openReader = openReader
     self.chooseLocalPDF = chooseLocalPDF
+    self.localPDFFocused = localPDFFocused
+    _localIntentInvalidation = localIntentInvalidation
     self.confirmLocalPDF = confirmLocalPDF
     self.library = library()
   }
@@ -84,8 +90,10 @@ public struct URLImportView<LibraryContent: View>: View {
         Button("PDF 선택") {
           guard drag.isCurrent(mount, interaction) else { return }
           drag.interrupt()
-          chooseLocalPDF()
-        }
+          let intent = UUID()
+          drag.localIntent = intent
+          chooseLocalPDF(intent)
+        }.focused(localPDFFocused)
         Spacer()
       }
       HStack {
@@ -214,6 +222,7 @@ public struct URLImportView<LibraryContent: View>: View {
       Button("확인", role: .cancel) {}
     } message: { Text("인증 정보가 없는 HTTPS PDF 또는 올바른 arXiv URL을 입력하세요.") }
     .onAppear {
+      drag.localIntentInvalidation = $localIntentInvalidation
       drag.appear()
       let loadMount = drag.mount
       let loadInteraction = drag.interaction
@@ -380,6 +389,8 @@ private final class URLImportDragState: ObservableObject {
   @Published private(set) var interaction = UUID()
   var hover: UUID?
   private(set) var pendingDrop: UUID?
+  var localIntent: UUID?
+  var localIntentInvalidation: Binding<UUID?>?
 
   // UI interruption fences only; writer/input admission remains with the existing owners.
   func isCurrent(_ mount: UUID?, _ interaction: UUID) -> Bool {
@@ -387,6 +398,10 @@ private final class URLImportDragState: ObservableObject {
   }
 
   func interrupt() {
+    if let localIntent {
+      localIntentInvalidation?.wrappedValue = localIntent
+      self.localIntent = nil
+    }
     interaction = UUID()
     hover = nil
     pendingDrop = nil

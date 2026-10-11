@@ -99,7 +99,7 @@ public final class ProductWorkspace: ObservableObject {
     return try await Task.detached { try database.librarySortFacts() }.value
   }
 
-  public func prepareImport(source: URL) async throws {
+  @discardableResult public func prepareImport(source: URL) async throws -> UUID {
     guard !preparing, !opening, !sheetCleanupPending, sheet == nil, reader == nil else { throw ProductWorkspaceError.busy }
     confirmationCancellation = nil
     let destinationFolderID: UUID?
@@ -124,6 +124,7 @@ public final class ProductWorkspace: ObservableObject {
       pendingConfirmation = confirmation.id
       sheet = .confirmation(confirmation)
       failure = nil
+      return confirmation.id
     } catch {
       if scoped { source.stopAccessingSecurityScopedResource() }
       if let returnedConfirmation { await imports.cancel(returnedConfirmation) }
@@ -131,17 +132,20 @@ public final class ProductWorkspace: ObservableObject {
     }
   }
 
-  public func pickPDF() {
-    guard !preparing, !opening, !sheetCleanupPending, sheet == nil, reader == nil else { return }
+  @discardableResult public func pickPDF() -> Task<UUID?, Never>? {
+    guard !preparing, !opening, !sheetCleanupPending, sheet == nil, reader == nil else { return nil }
     confirmationCancellation = nil
     let picker = NSOpenPanel()
     picker.allowedContentTypes = [.pdf]
     picker.canChooseDirectories = false
     picker.allowsMultipleSelection = false
-    guard picker.runModal() == .OK, let source = picker.url else { return }
-    Task {
-      do { try await prepareImport(source: source) }
-      catch { failure = "PDF 가져오기를 준비하지 못했습니다. 원본 PDF를 다시 선택하세요." }
+    guard picker.runModal() == .OK, let source = picker.url else { return nil }
+    return Task {
+      do { return try await prepareImport(source: source) }
+      catch {
+        failure = "PDF 가져오기를 준비하지 못했습니다. 원본 PDF를 다시 선택하세요."
+        return nil
+      }
     }
   }
 
@@ -222,16 +226,24 @@ public final class ProductWorkspace: ObservableObject {
     return nil
   }
 
-  @discardableResult public func presentationDidDismiss() -> Task<UUID, Never>? {
+  @discardableResult public func presentationDidDismiss(confirmationID: UUID? = nil) -> Task<UUID, Never>? {
     guard activeSheet == nil, !installingSheet, !preparing, importPreparation == nil else { return nil }
-    if let confirmationCancellation { return confirmationCancellation.task }
+    if let confirmationID {
+      if let confirmationCancellation {
+        guard confirmationCancellation.id == confirmationID else { return nil }
+        return confirmationCancellation.task
+      }
+      guard pendingConfirmation == confirmationID else { return nil }
+    } else {
+      guard pendingConfirmation == nil, confirmationCancellation == nil else { return nil }
+    }
     guard sheetCleanupPending, !cleaningSheet else { return nil }
     return dismissSheet()
   }
 
   public func acceptDroppedPDF(_ source: URL) {
     Task {
-      do { try await prepareImport(source: source) }
+      do { _ = try await prepareImport(source: source) }
       catch { failure = "PDF 가져오기를 준비하지 못했습니다. 원본 PDF를 다시 선택하세요." }
     }
   }
@@ -444,8 +456,37 @@ public struct ProductWorkspaceView: View {
   @ObservedObject private var workspace: ProductWorkspace
   @ObservedObject private var urls: URLImportService
   @FocusState private var folderOpenerFocused: Bool
+  @FocusState private var localPDFFocused: Bool
   @State private var mount: UUID?
   @State private var folderPresentation: FolderPresentation?
+  @State private var nativeSlot: NativeSlot?
+  @State private var directIntent: DirectIntent?
+
+  private struct NativeSlot {
+    let id = UUID()
+    let mount: UUID
+    let sheet: ProductWorkspace.Sheet
+    let confirmationID: UUID?
+    let directIntentID: UUID?
+    var appeared = false
+    var cancelled: UUID?
+    var continued: UUID?
+  }
+
+  private struct DirectIntent {
+    let id: UUID
+    let mount: UUID
+    var invalidated = false
+    var preparationFinished = false
+    var preparedID: UUID?
+    var slotID: UUID?
+    var confirmationID: UUID?
+    var appeared = false
+    var dismissed = false
+    var cancelled: UUID?
+    var continued: UUID?
+    var cancellationReturned: UUID?
+  }
 
   private struct FolderPresentation {
     let id = UUID()
@@ -455,8 +496,7 @@ public struct ProductWorkspaceView: View {
 
   public init(workspace: ProductWorkspace) { self.workspace = workspace; urls = workspace.urls }
   public var body: some View {
-    let viewMount = mount
-    let folderPresentationID = folderPresentation?.id
+    let slot = nativeSlot
     VStack(spacing: 0) {
       if let reader = workspace.reader {
         NativeReaderView(paperID: reader.id, session: reader.session,
@@ -470,22 +510,30 @@ public struct ProductWorkspaceView: View {
       } else {
         HStack {
           Button("폴더 관리") {
-            guard let mount, folderPresentation == nil, workspace.sheet == nil,
+            guard let mount, nativeSlot == nil, folderPresentation == nil, workspace.sheet == nil,
               !workspace.sheetCleanupPending, !workspace.preparing, !workspace.opening,
               workspace.reader == nil else { return }
             folderPresentation = FolderPresentation(mount: mount)
+            invalidateDirectIntent()
             workspace.sheet = .folders
             if workspace.sheet?.id != "folders" { folderPresentation = nil }
           }.focused($folderOpenerFocused)
-          Button("Settings") { workspace.sheet = .settings }
+          Button("Settings") { invalidateDirectIntent(); workspace.sheet = .settings }
           if workspace.preparing { ProgressView("PDF 확인 중") }
           Spacer()
         }.padding().disabled(workspace.preparing || workspace.opening || workspace.sheetCleanupPending)
         URLImportView(service: urls, folderService: workspace.imports,
           possibleDuplicate: { _ in true },
           openReader: { workspace.openImportedURL($0) },
-          chooseLocalPDF: { workspace.pickPDF() },
-          confirmLocalPDF: { workspace.acceptDroppedPDF($0) }) {
+          localPDFFocused: $localPDFFocused,
+          localIntentInvalidation: Binding(get: {
+            directIntent?.invalidated == true ? directIntent?.id : nil
+          }, set: { id in
+            guard let id, directIntent?.id == id else { return }
+            directIntent?.invalidated = true
+          }),
+          chooseLocalPDF: { chooseLocalPDF($0) },
+          confirmLocalPDF: { invalidateDirectIntent(); workspace.acceptDroppedPDF($0) }) {
             LibraryBrowserView(service: workspace.organization, folderService: workspace.imports,
               filter: $workspace.libraryFilter, refreshRevision: workspace.revision,
               sortFacts: { try await workspace.sortFacts() },
@@ -494,9 +542,12 @@ public struct ProductWorkspaceView: View {
                   try annotations.libraryReadingRecords(paperID: paperID, generation: generation)
                 }.value
               },
-              openPaper: { try await workspace.open($0) }, importPDF: { workspace.pickPDF() },
-              retryImportPDF: { workspace.pickRetryPDF(paperID: $0, generation: $1) },
-              manageFolders: { workspace.sheet = .folders })
+              openPaper: { invalidateDirectIntent(); try await workspace.open($0) },
+              importPDF: { invalidateDirectIntent(); _ = workspace.pickPDF() },
+              retryImportPDF: {
+                invalidateDirectIntent(); workspace.pickRetryPDF(paperID: $0, generation: $1)
+              },
+              manageFolders: { invalidateDirectIntent(); workspace.sheet = .folders })
           }
           .onChange(of: urls.state) {
             if case .ready(let paper) = urls.state { workspace.imported(paper) }
@@ -509,37 +560,49 @@ public struct ProductWorkspaceView: View {
       Text("Codex 연결은 아직 연결되지 않았습니다. Agent 삭제 연결이 없어 삭제는 미완료 상태로 남습니다.")
         .font(.caption).foregroundStyle(.secondary).padding(8)
     }
-    .onAppear { mount = UUID() }
-    .onDisappear { mount = nil; folderPresentation = nil }
+    .onAppear { mount = UUID(); latchNativeSlot() }
+    .onDisappear { invalidateDirectIntent(); mount = nil; folderPresentation = nil }
     .onChange(of: workspace.reader?.mountIdentity) { _, reader in
-      if reader != nil { folderPresentation = nil }
+      if reader != nil { invalidateDirectIntent(); folderPresentation = nil }
     }
-    .sheet(item: $workspace.sheet, onDismiss: {
-      let presentation = folderPresentation
-      workspace.presentationDidDismiss()
-      guard let presentation, presentation.id == folderPresentationID,
-        presentation.mount == viewMount, folderPresentation?.id == presentation.id else { return }
-      folderPresentation = nil
-      guard presentation.appeared, mount == presentation.mount,
-        workspace.reader == nil, workspace.sheet == nil,
-        !workspace.sheetCleanupPending, !workspace.preparing, !workspace.opening else { return }
-      // Folder management has no pending import input/security scope to drain.
-      // Local import confirmation deliberately has no focus receipt here.
-      folderOpenerFocused = true
-    }) { sheet in
-      switch sheet {
+    .onChange(of: workspace.sheet?.id) { _, _ in latchNativeSlot() }
+    .sheet(isPresented: Binding(get: {
+      guard let slot else { return false }
+      return nativeSlot?.id == slot.id && workspace.sheet?.id == slot.sheet.id
+    }, set: { visible in
+      guard !visible, let slot, nativeSlot?.id == slot.id,
+        workspace.sheet?.id == slot.sheet.id else { return }
+      if interactiveCancelAllowed(slot) {
+        recordAction(slot, confirmationID: slot.confirmationID, continued: false)
+      }
+      workspace.sheet = nil
+    }), onDismiss: {
+      if let slot { nativeDidDismiss(slot) }
+    }) {
+      if let slot {
+        sheetContent(slot)
+          .onAppear { nativeDidAppear(slot) }
+      }
+    }
+  }
+
+  @ViewBuilder private func sheetContent(_ slot: NativeSlot) -> some View {
+      switch slot.sheet {
       case .confirmation(let confirmation):
         ImportConfirmationView(confirmation: confirmation, service: workspace.imports,
+          cancelledConfirmation: actionBinding(slot, continued: false),
+          continuedConfirmation: actionBinding(slot, continued: true),
+          allowsInteractiveCancel: interactiveCancelAllowed(slot),
           imported: { workspace.imported($0) })
-          .interactiveDismissDisabled()
       case .folders:
         let presentationID = folderPresentation?.id
         VStack {
           FolderManagementView(service: workspace.imports)
-          Button("닫기") { workspace.sheet = nil }
+          Button("닫기") { closeNativeSlot(slot) }
         }.padding().frame(minWidth: 420)
           .onAppear {
-            guard let presentationID, folderPresentation?.id == presentationID,
+            guard nativeSlot?.id == slot.id, mount == slot.mount,
+              let presentationID, folderPresentation?.id == presentationID,
               workspace.sheet?.id == "folders",
               folderPresentation?.mount == mount else { return }
             folderPresentation?.appeared = true
@@ -547,9 +610,134 @@ public struct ProductWorkspaceView: View {
       case .settings:
         VStack {
           ProviderSettingsView(service: workspace.settings)
-          Button("닫기") { workspace.sheet = nil }
+          Button("닫기") { closeNativeSlot(slot) }
         }.padding()
       }
+  }
+
+  private func invalidateDirectIntent() { directIntent?.invalidated = true }
+
+  private func closeNativeSlot(_ slot: NativeSlot) {
+    guard nativeSlot?.id == slot.id, workspace.sheet?.id == slot.sheet.id else { return }
+    workspace.sheet = nil
+  }
+
+  private func chooseLocalPDF(_ id: UUID) {
+    guard let mount, nativeSlot == nil, workspace.reader == nil,
+      workspace.sheet == nil, !workspace.preparing, !workspace.opening,
+      !workspace.sheetCleanupPending else { return }
+    directIntent = DirectIntent(id: id, mount: mount)
+    guard let preparation = workspace.pickPDF() else {
+      if directIntent?.id == id { directIntent = nil }
+      return
     }
+    Task { @MainActor in
+      let confirmationID = await preparation.value
+      guard !Task.isCancelled, directIntent?.id == id else { return }
+      directIntent?.preparationFinished = true
+      directIntent?.preparedID = confirmationID
+      if confirmationID == nil { directIntent?.invalidated = true }
+      latchNativeSlot()
+      reconcileDirectIntent(id)
+    }
+  }
+
+  private func latchNativeSlot() {
+    guard nativeSlot == nil, let mount, let sheet = workspace.sheet else { return }
+    let confirmationID: UUID?
+    if case .confirmation(let confirmation) = sheet { confirmationID = confirmation.id }
+    else { confirmationID = nil }
+    let origin = confirmationID != nil && directIntent?.mount == mount
+      && directIntent?.invalidated == false && directIntent?.slotID == nil
+      ? directIntent?.id : nil
+    if origin == nil { invalidateDirectIntent() }
+    let slot = NativeSlot(mount: mount, sheet: sheet,
+      confirmationID: confirmationID, directIntentID: origin)
+    nativeSlot = slot
+    if let origin, directIntent?.id == origin {
+      directIntent?.slotID = slot.id
+      directIntent?.confirmationID = confirmationID
+    }
+  }
+
+  private func nativeDidAppear(_ slot: NativeSlot) {
+    guard nativeSlot?.id == slot.id, mount == slot.mount,
+      workspace.sheet?.id == slot.sheet.id else { return }
+    nativeSlot?.appeared = true
+    if let id = slot.directIntentID, directIntent?.id == id,
+      directIntent?.slotID == slot.id { directIntent?.appeared = true }
+  }
+
+  private func interactiveCancelAllowed(_ slot: NativeSlot) -> Bool {
+    guard nativeSlot?.id == slot.id, nativeSlot?.appeared == true,
+      nativeSlot?.continued == nil, let id = slot.directIntentID,
+      directIntent?.id == id, directIntent?.slotID == slot.id,
+      directIntent?.invalidated == false, directIntent?.continued == nil,
+      mount == slot.mount, workspace.sheet?.id == slot.sheet.id else { return false }
+    return true
+  }
+
+  private func actionBinding(_ slot: NativeSlot, continued: Bool) -> Binding<UUID?> {
+    Binding(get: {
+      guard nativeSlot?.id == slot.id else { return nil }
+      return continued ? nativeSlot?.continued : nativeSlot?.cancelled
+    }, set: { id in recordAction(slot, confirmationID: id, continued: continued) })
+  }
+
+  private func recordAction(_ slot: NativeSlot, confirmationID: UUID?, continued: Bool) {
+    guard nativeSlot?.id == slot.id, let confirmationID,
+      slot.confirmationID == confirmationID, mount == slot.mount,
+      workspace.sheet?.id == slot.sheet.id else { return }
+    if continued { nativeSlot?.continued = confirmationID }
+    else { nativeSlot?.cancelled = confirmationID }
+    guard let id = slot.directIntentID, directIntent?.id == id,
+      directIntent?.slotID == slot.id else { return }
+    if continued { directIntent?.continued = confirmationID }
+    else { directIntent?.cancelled = confirmationID }
+  }
+
+  private func nativeDidDismiss(_ slot: NativeSlot) {
+    // Slot identity gates duplicate callbacks; owner cleanup precedes every focus guard.
+    guard nativeSlot?.id == slot.id else { return }
+    let cleanup = workspace.presentationDidDismiss(confirmationID: slot.confirmationID)
+    let appeared = nativeSlot?.appeared == true
+    nativeSlot = nil
+    if let id = slot.directIntentID, directIntent?.id == id,
+      directIntent?.slotID == slot.id {
+      directIntent?.dismissed = true
+      if let cleanup {
+        Task { @MainActor in
+          let cancelledID = await cleanup.value
+          guard !Task.isCancelled, directIntent?.id == id,
+            directIntent?.slotID == slot.id else { return }
+          directIntent?.cancellationReturned = cancelledID
+          reconcileDirectIntent(id)
+        }
+      }
+      reconcileDirectIntent(id)
+    }
+    if case .folders = slot.sheet, let presentation = folderPresentation,
+      presentation.mount == slot.mount {
+      folderPresentation = nil
+      if appeared, presentation.appeared, mount == slot.mount,
+        workspace.reader == nil, workspace.sheet == nil,
+        !workspace.sheetCleanupPending, !workspace.preparing, !workspace.opening {
+        folderOpenerFocused = true
+      }
+    }
+    latchNativeSlot()
+  }
+
+  private func reconcileDirectIntent(_ id: UUID) {
+    guard let intent = directIntent, intent.id == id, !intent.invalidated,
+      intent.preparationFinished, let confirmationID = intent.preparedID,
+      intent.confirmationID == confirmationID, intent.slotID != nil,
+      intent.appeared, intent.dismissed, intent.cancelled == confirmationID,
+      intent.continued == nil, intent.cancellationReturned == confirmationID,
+      mount == intent.mount, workspace.reader == nil, nativeSlot == nil,
+      workspace.sheet == nil, !workspace.sheetCleanupPending,
+      !workspace.preparing, !workspace.opening else { return }
+    directIntent = nil
+    localPDFFocused = true
   }
 }

@@ -66,6 +66,33 @@ Parent source checks/independent review precede delivery. Both event/task orders
 interruption/replacement/unmount, Continue-error-Cancel, native scheduling, keyboard
 and VoiceOver remain verification obligations; no Story/Epic promotion.
 
+### Source implementation notes (contract d211384)
+
+The three scoped Swift files now implement the direct-button phase. Workspace
+returns the installed UUID from discardable prepareImport and the selected
+Task<UUID?, Never>? from pickPDF; presentationDidDismiss accepts the actual UUID,
+joins only its retained cancellation, and rejects nil confirmation cleanup.
+The root retains one NativeSlot payload until token-matched native onDismiss;
+owner-sheet observation latches it independently of the preparation observer.
+Cancel/Continue bindings buffer IDs synchronously. Native dismissal captures
+keyed cleanup once before focus eligibility, then awaits exactly that task.
+Preparation-first and native-events-first orders meet in one reconcile function.
+Continue, interruption, replacement and unmount deny restoration; cancellation
+waiter cancellation never cancels owner cleanup. Slot scheduling remains UI-only.
+
+Tests/Product/ProductWorkspaceTests.swift still contains identity-less
+confirmation dismissal callers and synchronous cleanup expectations. Parent must
+adapt those callers to captured actual IDs and await the returned cancellation
+task; nil remains valid only for nonconfirmation cases. No test files, tests,
+builds, formatters, gates or native trials were changed/run in this source phase.
+Parent syntax parsing of the three changed Swift files and git diff --check pass.
+Independent192 is SOURCE CLEAR for the five-file direct-button integration only;
+no typechecked build, behavioral tests or native focus proof is established.
+Keyboard/VoiceOver, native scheduling, external-panel/Browser/Retry/drop focus,
+and physical cleanup certification remain outside this delivered source slice.
+Historical source-stage limitations below describe their named earlier baselines,
+not a new verification or completion claim for this phase.
+
 ## Native opener-focus source continuation (baseline a22d139)
 
 The existing Workspace toolbar's 폴더 관리 button gains native FocusState. Its
