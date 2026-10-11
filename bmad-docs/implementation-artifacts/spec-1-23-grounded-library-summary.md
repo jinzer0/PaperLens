@@ -187,3 +187,15 @@ forgery/rollback/CAS/no-replay assertions stay active. A missing saved result re
 nil without Job/result/visibility/owner effects; saved missing archive still denies.
 The updated complete24 LibrarySummaryServiceTests passed artifact1640. No tests are
 skipped or product guards weakened; no production geometry or acceptance claim.
+
+### Review167 required capture ordering correction
+
+Source review BLOCK identifies reserveLibrarySummary allocating full frozen JSON
+and traversing/decoding full corpus before original archive count/quote/quad/byte
+preflight. Move existing canonical-owner admission, bounded membership and original
+capture to the start of the existing write closure. Then validate current Paper and
+full grounding; only afterward encode identity/frozen storage and perform unchanged
+atomic inserts. No new codec/store/quota/profile/default/owner or transaction rule.
+Noncanonical validators must deny before grounding callbacks; over-quota original
+owners must deny before candidate decoding and full frozen serialization. This
+amendment precedes the one-source ordering fix and focused negative regression.
