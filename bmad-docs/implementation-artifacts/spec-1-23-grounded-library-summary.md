@@ -210,3 +210,16 @@ Full isolated Product469 run1645 still failed seven Composition/Recovery cases o
 their obsolete noncanonical Summary fixtures; those are not hidden or counted as
 passing. Their independent original-owner fixture correction is separate from the
 archive source approval. No whole-Epic verification/acceptance promotion.
+
+The shared StartupSummaryFixture now creates independent original full anchors and
+explicit synthetic zero precision from its fixed owned source quotes, encodes each
+candidate once before request construction, and retains that immutable Canonical
+validator through genuine reservation/publication/recovery. Composition and Recovery
+restore use the same original validator; the obsolete decoder is removed. Existing
+restart/CAS/corruption/trigger-marker/rollback/prior-visible-result assertions are
+unchanged. The current complete isolated Product469 suite passed artifact1657 after
+these two affected test files were corrected. Tests/Product contains no XCTSkip
+branches. Failure1645 remains retained; no product guard, quota, owner or provider
+rule was weakened. This proves owned local regressions, not authenticated production,
+native process restart, real purge, calibrated geometry/profile, visible UI or any
+canonical Story/Epic gate acceptance.

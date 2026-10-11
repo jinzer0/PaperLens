@@ -6,22 +6,11 @@ import ProviderRequest
 
 /// Owned PDF/GRDB fixture with a locally validated frozen request; never a provider send.
 struct StartupSummaryFixture {
-  struct Geometry: LibrarySummaryGeometryValidating {
-    func resolve(_ hit: ExtractionSearchHit, identity: PDFSentenceIdentity) throws -> PDFSentenceAnchor {
-      guard hit.canonicalGeometry == Data("startup-quad".utf8) else {
-        throw LibrarySummaryError.invalidGrounding
-      }
-      let page = try PDFPageGeometry(pageIndex: identity.pageIndex,
-        cropOrigin: .init(x: 0, y: 0), width: 100, height: 100, rotation: 0)
-      let quad = try PDFQuad(topLeft: .init(x: 10, y: 20), topRight: .init(x: 20, y: 20),
-        bottomRight: .init(x: 20, y: 10), bottomLeft: .init(x: 10, y: 10), page: page)
-      return try PDFSentenceAnchor(identity: identity, fullSourceQuote: hit.text, page: page, quads: [quad])
-    }
-  }
   let database: ProductDatabase
   let identity: LibrarySummaryIdentity
   let frozen: LibrarySummaryFrozen
   let result: ValidatedProviderResult
+  let geometry: CanonicalExtractionGeometryValidator
 
   init(database: ProductDatabase, lifecycle: LocalLibraryLifecycle, epoch: UUID) async throws {
     self.database = database
@@ -43,8 +32,31 @@ struct StartupSummaryFixture {
       configuration: try database.providerConfiguration())
     try database.reserveExtraction(extraction)
     let quotes = ["main contribution alpha", "results conclusion beta"]
-    try publishFixtureExtraction(database, extraction, sentences: quotes.enumerated().map {
-      .init(page: 0, sentenceID: $0.offset, text: $0.element, geometry: Data("startup-quad".utf8))
+    // Original full extents come from this fixture, never stored candidates or frozen/result bytes.
+    let owners = try quotes.enumerated().map { id, quote in
+      let identity = try PDFSentenceIdentity(paperID: paper, pdfSHA256: hash,
+        extractionRevision: extraction.revision.uuidString.lowercased(), pageIndex: 0, sentenceID: id)
+      let page = try PDFPageGeometry(pageIndex: 0,
+        cropOrigin: .init(x: 0, y: 0), width: 100, height: 100, rotation: 0)
+      let first = try PDFQuad(topLeft: .init(x: 10, y: 80), topRight: .init(x: 80, y: 80),
+        bottomRight: .init(x: 80, y: 70), bottomLeft: .init(x: 10, y: 70), page: page)
+      let continuation = try PDFQuad(topLeft: .init(x: 10, y: 60), topRight: .init(x: 60, y: 60),
+        bottomRight: .init(x: 60, y: 50), bottomLeft: .init(x: 10, y: 50), page: page)
+      return try PDFSentenceAnchor(identity: identity, fullSourceQuote: quote,
+        page: page, quads: [first, continuation])
+    }
+    // Exact synthetic precision is fixture-only, not a production calibration/profile default.
+    let originalGeometry = try CanonicalExtractionGeometryValidator(owningAnchors: owners,
+      precision: PDFGeometryPrecision(maximumErrorPDFPoints: 0))
+    geometry = originalGeometry
+    try publishFixtureExtraction(database, extraction, sentences: owners.map { owner in
+      let key = ExtractionSentenceIdentity(paperID: paper, pdfSHA256: hash,
+        revision: extraction.revision, page: owner.identity.pageIndex,
+        sentenceID: owner.identity.sentenceID)
+      let bytes = try originalGeometry.validateAndEncode(CanonicalExtractionGeometryInput(anchor: owner),
+        identity: key, expectedText: owner.fullSourceQuote).canonicalBytes
+      return .init(page: key.page, sentenceID: key.sentenceID,
+        text: owner.fullSourceQuote, geometry: bytes)
     })
     // Explicit synthetic trusted-context generation, not derived from a durable UUID.
     identity = LibrarySummaryIdentity(paperID: paper, generation: extraction.generation,
@@ -72,17 +84,18 @@ struct StartupSummaryFixture {
   }
 
   func reserve() throws {
-    try database.reserveLibrarySummary(identity, frozen: frozen, geometry: Geometry())
+    try database.reserveLibrarySummary(identity, frozen: frozen, geometry: geometry)
   }
 
   func publish() throws -> LibrarySummaryRecord {
     try database.publishLibrarySummary(identity, frozen: frozen, result: result,
       bytes: ProviderRequest.canonicalBytes(result.value), permit: UUID().uuidString,
-      resultID: UUID(), geometry: Geometry())
+      resultID: UUID(), geometry: geometry)
   }
 
   init(previous: StartupSummaryFixture, epoch: UUID) throws {
     database = previous.database
+    geometry = previous.geometry
     let old = previous.identity
     identity = .init(paperID: old.paperID, generation: old.generation,
       requestPaperGeneration: old.requestPaperGeneration, pdfSHA256: old.pdfSHA256,
@@ -541,7 +554,7 @@ final class ProductJobRecoveryTests: XCTestCase, @unchecked Sendable {
       assertUnchanged(untouched[index], try job(fixture.identity.job))
     }
     let restored = try XCTUnwrap(LibrarySummaryService(database: database,
-      geometry: StartupSummaryFixture.Geometry()).restore(paperID: saved.identity.paperID))
+      geometry: saved.geometry).restore(paperID: saved.identity.paperID))
     XCTAssertEqual(restored.id, visible.id)
     XCTAssertEqual(restored.identity, saved.identity)
     XCTAssertEqual(restored.result, visible.result)

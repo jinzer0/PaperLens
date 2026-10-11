@@ -332,7 +332,7 @@ final class ProductCompositionTests: XCTestCase {
     }
     XCTAssertEqual(before, terminal)
     let restored = try XCTUnwrap(LibrarySummaryService(database: reopened,
-      geometry: StartupSummaryFixture.Geometry()).restore(paperID: saved.identity.paperID))
+      geometry: saved.geometry).restore(paperID: saved.identity.paperID))
     XCTAssertEqual(restored.id, visible.id)
     XCTAssertEqual(restored.identity, visible.identity)
     XCTAssertEqual(restored.result, visible.result)
