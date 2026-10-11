@@ -187,3 +187,18 @@ Six focused folder/startup cases passed; current full isolated Product475 passed
 artifact1668. Database reopen is not native app restart or visible focus/VoiceOver;
 no Summary/provider/Agent/purge/renderer authority is inferred. Story/Epic gates stay
 unaccepted and no trials or remote actions were renewed.
+
+### Review172 required presentation cleanup admission fence
+
+SOURCE BLOCK/P2: sheet binding becomes nil before its identity-free onDismiss
+clears preparation/confirmation/source scope; a newly admitted input can be cancelled
+or lose its scope by that old callback. Serialize cleanup rather than introducing
+overlapping resource owners. Retain pending-cleanup state from admitted presentation
+until its actual dismissal cleanup finishes; nil binding alone must not permit new
+picker/drop/Retry/Reader admission or replacement folders/settings/confirmation.
+Keep existing per-confirmation imports.cancel and matching scope stop. Native
+dismissal callbacks with no pending nil presentation must not invalidate a new
+preparation; explicit owned-fixture preparation interruption remains supported.
+Use existing workspace state only, no schema/store/namespace/generation/physical
+authority or permission change. Source scope ProductWorkspaceView.swift plus direct
+Workspace regression tests; this amendment precedes the bounded source correction.
