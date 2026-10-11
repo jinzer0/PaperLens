@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import GRDB
 import PDFKit
 import XCTest
@@ -211,6 +212,126 @@ import XCTest
     owner.view.onNavigation = { owner.session.close() }
     XCTAssertThrowsError(try next.navigate(sectionID: "/0"))
     XCTAssertNil(next.state)
+  }
+
+  func testRefreshPublisherCloseCannotResurrectInvalidatedSnapshot() async throws {
+    let (db, _, identity, owner) = try await fixture()
+    defer { owner.session.close() }
+    let binding = try mount(db, identity, owner)
+    weak var document = owner.view.document
+    var consumed = false
+    let subscriber = binding.$state.dropFirst().sink { next in
+      guard next != nil, !consumed else { return }
+      consumed = true
+      // Published delivers in willSet, before the outer nonnil assignment finishes.
+      XCTAssertNotNil(binding.state)
+      owner.session.close()
+      XCTAssertNil(binding.state)
+      XCTAssertNil(owner.view.document)
+      XCTAssertNil(owner.binding)
+      XCTAssertNil(owner.session.currentPaper)
+    }
+    defer { subscriber.cancel() }
+
+    XCTAssertThrowsError(try binding.refresh()) { error in
+      XCTAssertEqual(error as? ReaderMetadataError, .staleIdentity)
+    }
+    XCTAssertTrue(consumed)
+    XCTAssertNil(binding.state)
+    XCTAssertNil(owner.view.document)
+    XCTAssertNil(document)
+    XCTAssertNil(owner.session.currentPaper)
+    XCTAssertThrowsError(try owner.session.withReadAccess { XCTFail("Closed Reader admitted a read") }) {
+      XCTAssertEqual($0 as? ReaderError, .notOpen)
+    }
+    XCTAssertThrowsError(try binding.observePosition()) {
+      XCTAssertEqual($0 as? ReaderError, .notOpen)
+    }
+    XCTAssertNil(try ReaderMetadataService(database: db).beginSession(for: identity).location)
+  }
+
+  func testObservedPublisherRejectsRecursiveActionsBeforeEffectsAndPreservesCAS() async throws {
+    let (db, _, identity, owner) = try await fixture()
+    defer { owner.session.close() }
+    try outline(owner)
+    let binding = try mount(db, identity, owner)
+    let page = try XCTUnwrap(owner.view.document?.page(at: 0))
+    let location = ReaderConfirmedLocation(pageIndex: 0, x: 20, y: 150)
+    owner.view.observedDestination = PDFDestination(page: page, at: CGPoint(x: 20, y: 150))
+    var consumed = false
+    let subscriber = binding.$state.dropFirst().sink { next in
+      guard next?.observedLocation != nil, !consumed else { return }
+      consumed = true
+      XCTAssertEqual(next?.observedLocation, location)
+      XCTAssertNil(binding.state?.observedLocation)
+      owner.view.onObservation = { XCTFail("Publishing reentry read the PDF position") }
+      owner.view.onNavigation = { XCTFail("Publishing reentry dispatched PDF navigation") }
+      do { try binding.refresh(); XCTFail("Publishing admitted recursive refresh") }
+      catch { XCTAssertEqual(error as? ReaderMetadataError, .staleConfirmation) }
+      do { try binding.observePosition(); XCTFail("Publishing admitted recursive observation") }
+      catch { XCTAssertEqual(error as? ReaderMetadataError, .staleConfirmation) }
+      do { try binding.navigate(sectionID: "/0"); XCTFail("Publishing admitted recursive navigation") }
+      catch { XCTAssertEqual(error as? ReaderMetadataError, .staleConfirmation) }
+    }
+    defer { subscriber.cancel() }
+
+    try binding.observePosition()
+    XCTAssertTrue(consumed)
+    XCTAssertNotNil(owner.view.onObservation)
+    XCTAssertNotNil(owner.view.onNavigation)
+    owner.view.onObservation = nil
+    owner.view.onNavigation = nil
+    XCTAssertEqual(binding.state?.observedLocation, location)
+    XCTAssertEqual(binding.state?.activeSectionID, "/1")
+    XCTAssertNotNil(owner.session.currentPaper)
+    XCTAssertNotNil(owner.view.document)
+    let stored = try ReaderMetadataService(database: db).beginSession(for: identity)
+    XCTAssertEqual(stored.sequence, 1)
+    XCTAssertEqual(stored.location, location)
+    XCTAssertEqual(stored.sectionID, "/1")
+  }
+
+  func testFailedObservationPublisherClosePreservesOriginalErrorAndStoredPosition() async throws {
+    let (db, _, identity, owner) = try await fixture()
+    defer { owner.session.close() }
+    try outline(owner)
+    let binding = try mount(db, identity, owner)
+    // Scope the genuine destination so no test-local page retains the detached PDF.
+    do {
+      let page = try XCTUnwrap(owner.view.document?.page(at: 0))
+      owner.view.observedDestination = PDFDestination(page: page, at: CGPoint(x: 20, y: 150))
+      try binding.observePosition()
+    }
+    XCTAssertNotNil(binding.state?.observedLocation)
+    owner.view.observedDestination = nil
+    weak var document = owner.view.document
+    var consumed = false
+    let subscriber = binding.$state.dropFirst().sink { next in
+      guard let next, next.observedLocation == nil, !consumed else { return }
+      consumed = true
+      XCTAssertNotNil(binding.state?.observedLocation)
+      owner.session.close()
+      XCTAssertNil(binding.state)
+    }
+    defer { subscriber.cancel() }
+
+    XCTAssertThrowsError(try binding.observePosition()) { error in
+      // Failure-state publication also fails after close; it must not replace this error.
+      XCTAssertEqual(error as? ReaderMetadataError, .invalidDestination)
+    }
+    XCTAssertTrue(consumed)
+    XCTAssertNil(binding.state)
+    XCTAssertNil(owner.binding)
+    XCTAssertNil(owner.view.document)
+    XCTAssertNil(document)
+    XCTAssertNil(owner.session.currentPaper)
+    XCTAssertThrowsError(try binding.refresh()) {
+      XCTAssertEqual($0 as? ReaderError, .notOpen)
+    }
+    let stored = try ReaderMetadataService(database: db).beginSession(for: identity)
+    XCTAssertEqual(stored.sequence, 1)
+    XCTAssertEqual(stored.location, .init(pageIndex: 0, x: 20, y: 150))
+    XCTAssertEqual(stored.sectionID, "/1")
   }
 
   func testRevisionRemovalAndDocumentReplacementDiscardPresentation() async throws {
