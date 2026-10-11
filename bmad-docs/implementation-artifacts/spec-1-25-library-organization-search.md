@@ -202,3 +202,18 @@ preparation; explicit owned-fixture preparation interruption remains supported.
 Use existing workspace state only, no schema/store/namespace/generation/physical
 authority or permission change. Source scope ProductWorkspaceView.swift plus direct
 Workspace regression tests; this amendment precedes the bounded source correction.
+
+Correction173 adds three actual workspace/import/GRDB tests: closing settings or
+folders blocks input/replacement without Job effects until callback cleanup; fresh
+confirmation survives obsolete callbacks during preparation and after installation;
+same-Job Retry/Cancel preserves exact failed capture and selected destination is
+explicitly confirmed at Continue. Initial failure3237 assumed a Library-filter Retry
+default not present in the service contract; the test now retains the actual nil
+default and asserts explicit chosen folder both in durable capture and placement.
+Actual objectWillChange subscription also delivers obsolete callbacks inside empty
+pending installation/cleanup observations. Private installing/cleaning fences deny
+that synchronous reentry without adding ownership authority. All three focused cases
+passed, full current isolated Product480 passed3238, fresh unsigned native four-target
+arm64 build3239 SUCCEEDED. Review172 follow-up SOURCE CLEAR resolves P2. Old failures
+are retained; no model guard weakened. Native dismissal timing, scope-stop/FD proof,
+rendered keyboard/focus/VoiceOver, process restart and canonical gates remain unproved.

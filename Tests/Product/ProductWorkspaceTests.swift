@@ -132,6 +132,192 @@ import ProviderRequest
     return try f.database.captureRetryableImport(paperID: id, generation: observed.generation)
   }
 
+  func testWorkspaceClosingSettingsAndFoldersBlockImportUntilCallbackAndProtectFreshConfirmation() async throws {
+    for presentation in [ProductWorkspace.Sheet.settings, .folders] {
+      let f = try await fixture()
+      let folder = try await f.workspace.imports.createFolder(name: "Current destination")
+      f.workspace.libraryFilter.folder = .folder(folder.id)
+      f.workspace.sheet = presentation
+      XCTAssertEqual(f.workspace.sheet?.id, presentation.id)
+      f.workspace.sheet = nil
+      XCTAssertTrue(f.workspace.sheetCleanupPending)
+      let revision = f.workspace.revision
+      do {
+        try await f.workspace.prepareImport(source: f.source)
+        XCTFail("A nil binding is not completed presentation cleanup")
+      } catch { XCTAssertTrue(error is ProductWorkspaceError) }
+      f.workspace.sheet = .settings
+      XCTAssertNil(f.workspace.sheet, "Closing presentation cannot be replaced")
+      f.workspace.sheet = .folders
+      XCTAssertNil(f.workspace.sheet)
+      XCTAssertFalse(f.workspace.preparing)
+      let blockedPending = await f.workspace.imports.pendingConfirmationCount
+      XCTAssertEqual(blockedPending, 0)
+      XCTAssertTrue(try f.database.libraryRecords().isEmpty)
+      XCTAssertEqual(try f.database.adapterRead { try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM importJob") }, 0)
+      XCTAssertEqual(f.workspace.revision, revision)
+
+      f.workspace.presentationDidDismiss()
+      XCTAssertFalse(f.workspace.sheetCleanupPending)
+      XCTAssertEqual(f.workspace.revision, revision + 1)
+      try await f.workspace.prepareImport(source: f.source)
+      let fresh = try confirmation(f.workspace)
+      XCTAssertEqual(fresh.destinationFolderID, folder.id)
+      let freshRevision = f.workspace.revision
+      f.workspace.presentationDidDismiss()
+      XCTAssertEqual(try confirmation(f.workspace), fresh,
+        "An old duplicate callback cannot cancel the current actual sheet")
+      XCTAssertTrue(f.workspace.sheetCleanupPending)
+      XCTAssertEqual(f.workspace.revision, freshRevision)
+      let freshPending = await f.workspace.imports.pendingConfirmationCount
+      XCTAssertEqual(freshPending, 1)
+      let id = try await f.workspace.imports.continueImport(fresh.id,
+        destinationFolderID: fresh.destinationFolderID)
+      f.workspace.imported(id)
+      XCTAssertNil(f.workspace.failure)
+      let ready = try await paper(f, id: id)
+      XCTAssertEqual(ready.status, .ready)
+      XCTAssertEqual(try f.database.folderID(for: id), folder.id)
+      XCTAssertEqual(try f.database.adapterRead { try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM importJob") }, 1)
+      do { _ = try await f.workspace.imports.continueImport(fresh.id, destinationFolderID: nil); XCTFail("Fresh Continue replayed") }
+      catch { XCTAssertEqual(error as? FolderImportError, .consumedIntent) }
+      f.workspace.sheet = nil
+      f.workspace.presentationDidDismiss()
+      XCTAssertFalse(f.workspace.sheetCleanupPending)
+    }
+  }
+
+  func testWorkspaceObsoleteDismissCallbackDuringOwnedImportPreparationDoesNotInvalidateInput() async throws {
+    let f = try await fixture()
+    let folder = try await f.workspace.imports.createFolder(name: "Fresh input destination")
+    f.workspace.libraryFilter.folder = .folder(folder.id)
+    f.workspace.sheet = .settings
+    f.workspace.sheet = nil
+    f.workspace.presentationDidDismiss()
+    let revision = f.workspace.revision
+    var emptyPendingCallbacks = 0
+    let observation = f.workspace.objectWillChange.sink {
+      if f.workspace.sheetCleanupPending, f.workspace.sheet == nil {
+        emptyPendingCallbacks += 1
+      }
+      f.workspace.presentationDidDismiss()
+    }
+    defer { observation.cancel() }
+    var returned: LocalImportConfirmation?
+    f.workspace.beforeImportConfirmationInstallForOwnedFixtures = { value in
+      returned = value
+      XCTAssertTrue(f.workspace.preparing)
+      XCTAssertNil(f.workspace.sheet)
+      XCTAssertFalse(f.workspace.sheetCleanupPending)
+      f.workspace.presentationDidDismiss()
+      XCTAssertTrue(f.workspace.preparing, "Obsolete native callback is not explicit preparation interruption")
+      XCTAssertEqual(f.workspace.revision, revision)
+    }
+    try await f.workspace.prepareImport(source: f.source)
+    f.workspace.beforeImportConfirmationInstallForOwnedFixtures = nil
+    let fresh = try confirmation(f.workspace)
+    XCTAssertEqual(fresh, try XCTUnwrap(returned))
+    XCTAssertEqual(fresh.destinationFolderID, folder.id)
+    XCTAssertFalse(f.workspace.preparing)
+    XCTAssertGreaterThan(emptyPendingCallbacks, 0, "Actual synchronous installation callback was not observed")
+    let pending = await f.workspace.imports.pendingConfirmationCount
+    XCTAssertEqual(pending, 1)
+    XCTAssertTrue(try f.database.libraryRecords().isEmpty)
+    XCTAssertEqual(try f.database.adapterRead { try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM importJob") }, 0)
+    let id = try await f.workspace.imports.continueImport(fresh.id,
+      destinationFolderID: fresh.destinationFolderID)
+    f.workspace.imported(id)
+    let ready = try await paper(f, id: id)
+    XCTAssertEqual(ready.status, .ready)
+    XCTAssertEqual(try f.database.folderID(for: id), folder.id)
+    XCTAssertNil(f.workspace.failure)
+    do { _ = try await f.workspace.imports.continueImport(fresh.id, destinationFolderID: nil); XCTFail("Fresh input replayed") }
+    catch { XCTAssertEqual(error as? FolderImportError, .consumedIntent) }
+    XCTAssertEqual(try f.database.adapterRead { try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM importJob") }, 1)
+    f.workspace.sheet = nil
+    f.workspace.presentationDidDismiss()
+  }
+
+  func testWorkspaceClosingPresentationBlocksRetryAndObsoleteCallbackPreservesSameJobCapture() async throws {
+    let f = try await fixture()
+    let old = try await failedImportForRetry(f)
+    let identity = try old.journal.currentCapture().identity
+    let folder = try await f.workspace.imports.createFolder(name: "Retry current destination")
+    f.workspace.libraryFilter.folder = .folder(folder.id)
+    f.workspace.sheet = .folders
+    f.workspace.sheet = nil
+    do {
+      try await f.workspace.prepareRetry(source: f.source, paperID: identity.paperID, generation: identity.generation)
+      XCTFail("Closing presentation admitted Retry")
+    } catch { XCTAssertTrue(error is ProductWorkspaceError) }
+    do {
+      try await f.workspace.prepareImport(source: f.source)
+      XCTFail("Closing presentation admitted a replacement import")
+    } catch { XCTAssertTrue(error is ProductWorkspaceError) }
+    f.workspace.sheet = .settings
+    XCTAssertNil(f.workspace.sheet)
+    let blockedPending = await f.workspace.imports.pendingConfirmationCount
+    XCTAssertEqual(blockedPending, 0)
+    XCTAssertEqual(try f.database.captureRetryableImport(paperID: identity.paperID,
+      generation: identity.generation).encoded, old.encoded)
+    XCTAssertEqual(try f.database.adapterRead { try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM importJob") }, 1)
+    f.workspace.presentationDidDismiss()
+    let revision = f.workspace.revision
+    var returned: LocalImportConfirmation?
+    f.workspace.beforeImportConfirmationInstallForOwnedFixtures = { value in
+      returned = value
+      XCTAssertTrue(f.workspace.preparing)
+      f.workspace.presentationDidDismiss()
+      XCTAssertTrue(f.workspace.preparing)
+      XCTAssertEqual(f.workspace.revision, revision)
+    }
+    try await f.workspace.prepareRetry(source: f.source, paperID: identity.paperID, generation: identity.generation)
+    f.workspace.beforeImportConfirmationInstallForOwnedFixtures = nil
+    let cancelled = try confirmation(f.workspace)
+    XCTAssertEqual(cancelled, try XCTUnwrap(returned))
+    XCTAssertEqual(cancelled.retryPaperID, identity.paperID)
+    f.workspace.presentationDidDismiss()
+    XCTAssertEqual(try confirmation(f.workspace), cancelled)
+    XCTAssertEqual(try f.database.captureRetryableImport(paperID: identity.paperID,
+      generation: identity.generation).encoded, old.encoded)
+    await f.workspace.imports.cancel(cancelled.id)
+    f.workspace.sheet = nil
+    f.workspace.presentationDidDismiss()
+    XCTAssertEqual(try f.database.captureRetryableImport(paperID: identity.paperID,
+      generation: identity.generation).encoded, old.encoded, "Cancel leaves the exact failed history intact")
+    do { _ = try await f.workspace.imports.continueImport(cancelled.id, destinationFolderID: nil); XCTFail("Cancelled Retry replayed") }
+    catch { XCTAssertEqual(error as? FolderImportError, .consumedIntent) }
+    try await f.workspace.prepareRetry(source: f.source, paperID: identity.paperID, generation: identity.generation)
+    let fresh = try confirmation(f.workspace)
+    XCTAssertNotEqual(fresh.id, cancelled.id)
+    // Retry has no implicit Library-filter destination; the user selects it at Continue.
+    XCTAssertNil(fresh.destinationFolderID)
+    f.workspace.presentationDidDismiss()
+    XCTAssertEqual(try confirmation(f.workspace), fresh)
+    let id = try await f.workspace.imports.continueImport(fresh.id,
+      destinationFolderID: folder.id)
+    XCTAssertEqual(id, identity.paperID)
+    let ready = try await paper(f, id: id)
+    XCTAssertEqual(ready.generation, identity.generation)
+    XCTAssertEqual(ready.status, .ready)
+    XCTAssertEqual(try f.database.folderID(for: id), folder.id)
+    let journal = try f.database.adapterRead { sql in
+      try ImportRecoveryJournal.decode(XCTUnwrap(Data.fetchOne(sql,
+        sql: "SELECT recoveryJournal FROM importJob WHERE id = ?", arguments: [identity.jobID.uuidString])),
+        maximumBytes: ProductJobRecovery.maximumImportRecoveryJournalBytes)
+    }
+    XCTAssertTrue(try journal.extends(old.journal, maximumBytes: ProductJobRecovery.maximumImportRecoveryJournalBytes))
+    XCTAssertEqual(try journal.currentCapture().identity.jobID, identity.jobID)
+    XCTAssertEqual(try journal.currentCapture().confirmedInput.expectedSHA256, fresh.sha256)
+    XCTAssertEqual(try journal.currentCapture().confirmedInput.destinationFolderID, folder.id)
+    XCTAssertEqual(try journal.snapshot().current.state, .succeeded)
+    do { _ = try await f.workspace.imports.continueImport(fresh.id, destinationFolderID: nil); XCTFail("Same-Job Retry replayed") }
+    catch { XCTAssertEqual(error as? FolderImportError, .consumedIntent) }
+    XCTAssertEqual(try f.database.adapterRead { try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM importJob") }, 1)
+    f.workspace.sheet = nil
+    f.workspace.presentationDidDismiss()
+  }
+
   func testWorkspaceFreshRetryConfirmationPublishesSameJobAndCannotReplay() async throws {
     let f = try await fixture()
     let old = try await failedImportForRetry(f)

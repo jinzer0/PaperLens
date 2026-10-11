@@ -47,7 +47,30 @@ public final class ProductWorkspace: ObservableObject {
   private var importPreparation: UUID?
   internal var beforeImportConfirmationInstallForOwnedFixtures: (@MainActor (LocalImportConfirmation) -> Void)?
   private var metadataReadRequest: UUID?
-  @Published public var sheet: Sheet?
+  private var installingSheet = false
+  private var cleaningSheet = false
+  @Published private var activeSheet: Sheet?
+  @Published public private(set) var sheetCleanupPending = false
+  public var sheet: Sheet? {
+    get { activeSheet }
+    set {
+      if let newValue {
+        guard activeSheet == nil, !sheetCleanupPending, !installingSheet, !cleaningSheet else { return }
+        switch newValue {
+        case .confirmation(let confirmation):
+          guard preparing, pendingConfirmation == confirmation.id else { return }
+        case .folders, .settings:
+          guard !preparing else { return }
+        }
+        installingSheet = true
+        defer { installingSheet = false }
+        sheetCleanupPending = true
+        activeSheet = newValue
+      } else {
+        activeSheet = nil
+      }
+    }
+  }
   @Published public var libraryFilter = OrganizationFilter()
   @Published public private(set) var reader: OpenReader?
   @Published public private(set) var revision = 0
@@ -75,7 +98,7 @@ public final class ProductWorkspace: ObservableObject {
   }
 
   public func prepareImport(source: URL) async throws {
-    guard !preparing, !opening, sheet == nil, reader == nil else { throw ProductWorkspaceError.busy }
+    guard !preparing, !opening, !sheetCleanupPending, sheet == nil, reader == nil else { throw ProductWorkspaceError.busy }
     let destinationFolderID: UUID?
     switch libraryFilter.folder {
     case .folder(let id): destinationFolderID = id
@@ -93,7 +116,7 @@ public final class ProductWorkspace: ObservableObject {
       returnedConfirmation = confirmation.id
       beforeImportConfirmationInstallForOwnedFixtures?(confirmation)
       try Task.checkCancellation()
-      guard importPreparation == request, !opening, sheet == nil, reader == nil else { throw CancellationError() }
+      guard importPreparation == request, !opening, !sheetCleanupPending, sheet == nil, reader == nil else { throw CancellationError() }
       if scoped { scopedSource = source }
       pendingConfirmation = confirmation.id
       sheet = .confirmation(confirmation)
@@ -106,7 +129,7 @@ public final class ProductWorkspace: ObservableObject {
   }
 
   public func pickPDF() {
-    guard !preparing, !opening, sheet == nil, reader == nil else { return }
+    guard !preparing, !opening, !sheetCleanupPending, sheet == nil, reader == nil else { return }
     let picker = NSOpenPanel()
     picker.allowedContentTypes = [.pdf]
     picker.canChooseDirectories = false
@@ -119,7 +142,7 @@ public final class ProductWorkspace: ObservableObject {
   }
 
   public func prepareRetry(source: URL, paperID: UUID, generation: UUID) async throws {
-    guard !preparing, !opening, sheet == nil, reader == nil else { throw ProductWorkspaceError.busy }
+    guard !preparing, !opening, !sheetCleanupPending, sheet == nil, reader == nil else { throw ProductWorkspaceError.busy }
     let request = UUID()
     importPreparation = request
     preparing = true
@@ -132,7 +155,7 @@ public final class ProductWorkspace: ObservableObject {
       returnedConfirmation = confirmation.id
       beforeImportConfirmationInstallForOwnedFixtures?(confirmation)
       try Task.checkCancellation()
-      guard importPreparation == request, !opening, sheet == nil, reader == nil else { throw CancellationError() }
+      guard importPreparation == request, !opening, !sheetCleanupPending, sheet == nil, reader == nil else { throw CancellationError() }
       if scoped { scopedSource = source }
       pendingConfirmation = confirmation.id
       sheet = .confirmation(confirmation)
@@ -145,7 +168,7 @@ public final class ProductWorkspace: ObservableObject {
   }
 
   public func pickRetryPDF(paperID: UUID, generation: UUID) {
-    guard !preparing, !opening, sheet == nil, reader == nil else { return }
+    guard !preparing, !opening, !sheetCleanupPending, sheet == nil, reader == nil else { return }
     let picker = NSOpenPanel()
     picker.allowedContentTypes = [.pdf]
     picker.canChooseDirectories = false
@@ -158,6 +181,11 @@ public final class ProductWorkspace: ObservableObject {
   }
 
   public func dismissSheet() {
+    guard !cleaningSheet else { return }
+    cleaningSheet = true
+    defer { cleaningSheet = false }
+    sheetCleanupPending = true
+    activeSheet = nil
     importPreparation = nil
     preparing = false
     if let pendingConfirmation {
@@ -167,6 +195,12 @@ public final class ProductWorkspace: ObservableObject {
     scopedSource?.stopAccessingSecurityScopedResource()
     scopedSource = nil
     revision += 1
+    sheetCleanupPending = false
+  }
+
+  public func presentationDidDismiss() {
+    guard sheetCleanupPending, activeSheet == nil, !installingSheet, !cleaningSheet else { return }
+    dismissSheet()
   }
 
   public func acceptDroppedPDF(_ source: URL) {
@@ -202,7 +236,7 @@ public final class ProductWorkspace: ObservableObject {
   }
 
   public func open(_ paper: OrganizedPaper) async throws {
-    guard reader == nil, sheet == nil, !preparing, !opening else { throw ProductWorkspaceError.busy }
+    guard reader == nil, sheet == nil, !sheetCleanupPending, !preparing, !opening else { throw ProductWorkspaceError.busy }
     opening = true
     defer { opening = false }
     try await organization.admitOpen(paper)
@@ -400,7 +434,7 @@ public struct ProductWorkspaceView: View {
           Button("Settings") { workspace.sheet = .settings }
           if workspace.preparing { ProgressView("PDF 확인 중") }
           Spacer()
-        }.padding().disabled(workspace.preparing || workspace.opening)
+        }.padding().disabled(workspace.preparing || workspace.opening || workspace.sheetCleanupPending)
         URLImportView(service: urls, folderService: workspace.imports,
           possibleDuplicate: { _ in true },
           openReader: { workspace.openImportedURL($0) },
@@ -426,7 +460,7 @@ public struct ProductWorkspaceView: View {
       Text("Codex 연결은 아직 연결되지 않았습니다. Agent 삭제 연결이 없어 삭제는 미완료 상태로 남습니다.")
         .font(.caption).foregroundStyle(.secondary).padding(8)
     }
-    .sheet(item: $workspace.sheet, onDismiss: { workspace.dismissSheet() }) { sheet in
+    .sheet(item: $workspace.sheet, onDismiss: { workspace.presentationDidDismiss() }) { sheet in
       switch sheet {
       case .confirmation(let confirmation):
         ImportConfirmationView(confirmation: confirmation, service: workspace.imports,
