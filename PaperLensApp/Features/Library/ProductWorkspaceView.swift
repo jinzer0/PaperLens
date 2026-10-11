@@ -456,7 +456,10 @@ public struct ProductWorkspaceView: View {
             if case .ready(let paper) = urls.state { workspace.imported(paper) }
           }
       }
-      if let failure = workspace.failure { Text(failure).foregroundStyle(.red).textSelection(.enabled) }
+      if let failure = workspace.failure {
+        Label(failure, systemImage: "exclamationmark.triangle")
+          .foregroundStyle(.red).textSelection(.enabled)
+      }
       Text("Codex 연결은 아직 연결되지 않았습니다. Agent 삭제 연결이 없어 삭제는 미완료 상태로 남습니다.")
         .font(.caption).foregroundStyle(.secondary).padding(8)
     }

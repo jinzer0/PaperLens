@@ -18,6 +18,7 @@ public struct URLImportView<LibraryContent: View>: View {
   @State private var folders: [LibraryFolder] = []
   @State private var destinationFolderID: UUID?
   @State private var folderLoadFailed = false
+  @FocusState private var inputFocused: Bool
 
   public init(service: URLImportService, folderService: FolderImportService,
     possibleDuplicate: @escaping (String) -> Bool,
@@ -65,7 +66,7 @@ public struct URLImportView<LibraryContent: View>: View {
           drag.interrupt()
           destinationFolderID = value
         })) {
-          Text("Unfiled").tag(Optional<UUID>.none)
+          Text("미분류 (기본값)").tag(Optional<UUID>.none)
           ForEach(folders) { folder in Text(folder.name).tag(Optional(folder.id)) }
         }
         .disabled(service.state == .confirming || service.state == .downloading)
@@ -76,7 +77,10 @@ public struct URLImportView<LibraryContent: View>: View {
           let loadInteraction = drag.interaction
           Task { await reloadFolders(mount: loadMount, interaction: loadInteraction) }
         }
-        if folderLoadFailed { Text("폴더를 불러오지 못했습니다.").foregroundStyle(.red) }
+        if folderLoadFailed {
+          Label("폴더를 불러오지 못했습니다.", systemImage: "exclamationmark.triangle")
+            .foregroundStyle(.red)
+        }
       }
       library
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -113,6 +117,7 @@ public struct URLImportView<LibraryContent: View>: View {
           guard drag.isCurrent(mount, interaction), inputSheet else { return }
           input = value
         })).accessibilityLabel("가져올 HTTPS URL")
+          .focused($inputFocused)
           .onSubmit {
             guard drag.isCurrent(mount, interaction) else { return }
             drag.interrupt()
@@ -133,6 +138,7 @@ public struct URLImportView<LibraryContent: View>: View {
           }.keyboardShortcut(.defaultAction)
         }
       }.padding().frame(minWidth: 420)
+        .onAppear { inputFocused = true }
     }
     .sheet(item: Binding(get: { service.confirmation }, set: { value in
       guard value == nil, drag.isCurrent(mount, interaction),
@@ -141,11 +147,20 @@ public struct URLImportView<LibraryContent: View>: View {
       service.cancelConfirmation()
     })) { intent in
       VStack(alignment: .leading, spacing: 16) {
-        Text("Library에 논문 추가").font(.headline)
+        if case .retry = intent.purpose {
+          Text("URL 가져오기 다시 시도 확인").font(.headline)
+          Text("확인한 URL과 저장 폴더로 같은 논문의 실패한 가져오기 작업을 다시 시도합니다. 별도 논문을 추가하지 않습니다.")
+        } else {
+          Text("Library에 논문 추가").font(.headline)
+        }
         Label(intent.destination, systemImage: "folder")
         Text("입력 경로: \(intent.sourceKind)")
         if intent.possibleDuplicate {
-          Label("중복 가능성이 있습니다. 계속하면 독립 복사본으로 추가됩니다.", systemImage: "exclamationmark.triangle")
+          if case .retry = intent.purpose {
+            Label("중복 가능성이 있습니다. 계속하면 선택한 논문의 실패한 작업만 다시 시도하며, 같은 내용의 기존 논문은 교체하지 않습니다.", systemImage: "exclamationmark.triangle")
+          } else {
+            Label("중복 가능성이 있습니다. 계속하면 독립 복사본으로 추가됩니다.", systemImage: "exclamationmark.triangle")
+          }
         }
         Text("다운로드 후 Library에 머무릅니다.")
         HStack {

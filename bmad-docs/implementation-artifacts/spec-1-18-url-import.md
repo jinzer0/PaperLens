@@ -1,5 +1,38 @@
 # Story 1.18 Build Spec — URL Import and shared Library entry
 
+## Current URL presentation continuation (baseline 2c855ee)
+
+Story1.18/Issue20 reuses `issue/epic-1-product-vertical-integration-20261010` and the
+existing HTTPS/service ownership contracts. The explicit implementation-first assignment
+limits changes to this Spec, Story1.17 Spec and the three existing Library presentation
+files. URLImportView currently supplies entry, paste, native PDF selection and supported
+URL/PDF drop over Library. HTTPS/arXiv admission remains service-owned; invalid input
+shows a safe alert without exposing the raw URL. The UUID-backed destination picker
+captures its current folder into confirmation; labels are not admission identities.
+Cancel/Continue retain current confirmation/mount/interaction gates and native shortcuts.
+Downloading is labelled and cancellable; ready offers explicit Reader opening while
+Library stays mounted. Failure supplies a reason and explicit Retry, which reopens a
+fresh confirmation through the existing genuine same-Job or pre-admission path.
+
+Concrete presentation defect: the confirmation formerly promised a new independent
+copy even when its existing purpose was genuine same-Job Retry. This continuation reads
+that already-captured purpose only for presentation: Retry now states that it retries
+the selected Paper's failed work without adding another Paper or replacing a duplicate.
+Ordinary new-import independent-copy disclosure remains intact. No Retry ownership,
+record query, reservation, destination or lifecycle contract changes. The URL entry
+field gains initial native focus; the picker uses Korean 미분류 default wording, and
+folder-load failure gains an icon alongside its text. All existing drag/input fences
+and service effect paths are unchanged.
+
+Remaining product/runtime prerequisites: actual focus return to each opener (not
+implemented or claimed here), keyboard and VoiceOver interaction across entry/confirm/
+Retry/Cancel, resize/contrast/scaling and drop feedback; current actual HTTPS download,
+independent-copy publication, same-Job retry/republication, cancellation/drain/debt,
+delete/restart/crash barriers; admitted P6 measurement/profile evidence separately.
+Parent owns permitted source review/compiler checks. Worker skips all tests/test
+authoring/builds/gates/formatters/runtime/network/protected trials, commits and remote
+actions. No current-source runtime PASS or full Story/Epic acceptance is asserted.
+
 ## URL start-publication cancellation fence
 
 Baseline d82abc85135af4b7860b5a46284990a65bcec64b: continueImport consumes
