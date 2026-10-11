@@ -402,3 +402,50 @@ tint/focus. User implementation-first defers new/correction tests, broad/native 
 formatter and independent review. Current/stale drops and native sheet interactions
 remain runtime-unverified. No network/provider/helper/renderer/clipboard/remote trial;
 canonical completion0/26 and Epic acceptance remain false.
+
+## Fresh-confirmed same-Job URL Retry — bounded implementation
+
+Ordinary failed URL Retry requires a genuine current failed ImportRecoveryRecord
+obtained by Main's sole database for the exact originally granted execution, after
+actual abort/drain/cleanup. Bind an internal one-shot read-only failed-record query
+to that original confirmation after durable reservation acknowledgment, before
+writer-opening effects. Compare all ten actual execution identity fields when
+capturing; a display UUID, service error, callback flag or confirmation cannot
+manufacture failed history or physical closure authority.
+
+Keep ordinary new-import intent separate from genuine captured same-Job Retry.
+Retry creates a fresh validated HTTPS confirmation with current destination and
+captured failed record; Cancel makes no reservation and Continue consumes it once.
+Main retains the same Paper/generation/Job, generates six fresh execution IDs and
+uses its current epoch. Share the existing defended reservation transaction through
+a private helper, preserving exact bounded encoded-history CAS, current row/folder
+checks, namespace absence, journal retry/claim/writer admission, terminal headroom,
+write-scope/schema/counter/readback defenses and rollback. The existing per-Paper
+FIFO spans reservation through acknowledged record/cancellation installation only.
+
+Keep the existing local Retry entry's nonnil confirmed SHA requirement. Add a
+narrow HTTPS-confirmation-only reservation entry: require genuine once-granted
+validated HTTPS confirmation and its captured retry record, use its destination,
+and supply nil predownload SHA as existing first URL import does. Do not remove the
+local guard, invent a hash, change journal format or use missing hash as authority.
+Reuse the actual existing URL writer, producer, validator owner, closed stage,
+publication receipt, cancellation, abort and reconciliation paths unchanged.
+
+Unknown closure, cleanup/removal debt, outstanding permits, ambiguous dispatch,
+stale/replaced/succeeded/deleted/legacy/invalid history, removed destination and
+residual namespace deny Retry. Retain original unknown FD/lease/stage/scope roots;
+do not clean a namespace to make admission pass or infer closure from bookkeeping.
+A bound same-Job denial never falls back to a new Paper/Job. Before actual grant
+there is no same-Job authority to fabricate. Failed reservation leaves prior
+history unchanged; failures after reservation use the actual same-Job abort path.
+
+Implementation uses existing URLImportService.swift, LocalLibraryLifecycle.swift
+and ProductDatabase+ImportRecovery.swift; ImportRecoveryJournal.swift already has
+optional HTTPS SHA and its existing factory/codec must remain unchanged unless a
+concrete in-contract integration need is found. The confirmation-bound query keeps
+the existing grantWriter callback signature; confirm actual caller wiring before
+claiming source integration. No new owners/pools/quotas/schema/SDK/provider trial,
+privacy/permission/profile/architecture relaxation, remote or release action.
+Tests/builds/independent review/formatters/runtime and acceptance remain deferred
+under the implementation-first instruction. This amendment precedes source edits
+and does not promote Story/Epic acceptance or certify physical runtime behavior.
