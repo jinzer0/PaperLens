@@ -21,7 +21,8 @@ public struct LibraryBrowserView: View {
   @State private var operationFailed = false
   @State private var busy = false
   @State private var deleting: OrganizedPaper?
-  @State private var editing: OrganizedPaper?
+  @State private var rootMount: UUID?
+  @State private var tagEditor: LibraryTagEditorPresentation?
   @State private var moving: LibraryMovement?
   @State private var movementFocusToRestore: OrganizedPaper?
   @State private var identification: LibraryIdentification?
@@ -76,7 +77,9 @@ public struct LibraryBrowserView: View {
         Text("Library").font(.largeTitle)
         Spacer()
         Button("PDF 추가", action: requestImport)
-        Button("새로고침") { refresh() }.disabled(busy)
+          .focused($organizationFocus, equals: .importPDF)
+        Button("새로고침", action: requestRefresh).disabled(busy)
+          .focused($organizationFocus, equals: .refresh)
       }
       Text(folderHeading).font(.title2).textSelection(.enabled)
       TextField("제목 또는 사용자 태그 검색", text: $filter.search)
@@ -92,6 +95,7 @@ public struct LibraryBrowserView: View {
             Text("목록").tag(LibraryPresentation.list)
             Text("카드").tag(LibraryPresentation.grid)
           }.pickerStyle(.segmented)
+            .focused($organizationFocus, equals: .presentation)
           Picker("정렬", selection: Binding(get: { snapshot.preferences.sort }, set: { value in
             var preference = snapshot.preferences; preference.sort = value
             savePreferences(preference)
@@ -100,13 +104,14 @@ public struct LibraryBrowserView: View {
             Text("이름").tag(LibrarySort.name)
             Text("최근 추가").tag(LibrarySort.recentlyAdded)
             Text("발행연도").tag(LibrarySort.publicationYear)
-          }
+          }.focused($organizationFocus, equals: .sort)
         }.disabled(busy || loading)
       }
       if loadFailed {
         ContentUnavailableView("불러오기 실패", systemImage: "exclamationmark.triangle",
           description: Text("저장된 값을 확인할 수 없습니다. 다시 불러오세요."))
-        Button("다시 불러오기") { refresh() }.disabled(busy)
+        Button("다시 불러오기", action: requestRefresh).disabled(busy)
+          .focused($organizationFocus, equals: .retryLibrary)
       } else if loading {
         ProgressView("라이브러리 불러오는 중")
       } else if selectedFolderUnavailable {
@@ -114,16 +119,19 @@ public struct LibraryBrowserView: View {
           description: Text(folderLoadFailed
             ? "폴더 목록을 불러오지 못했습니다. 선택은 유지됩니다. 다시 불러오세요."
             : "이 UUID의 폴더가 현재 목록에 없습니다. 다른 폴더를 직접 선택하거나 폴더 관리에서 확인하세요."))
-        Button("폴더 관리", action: manageFolders).disabled(busy)
+        Button("폴더 관리", action: requestManageFolders).disabled(busy)
+          .focused($organizationFocus, equals: .manageUnavailableFolder)
       } else if let snapshot {
         if snapshot.totalCount == 0 {
           ContentUnavailableView("아직 논문이 없습니다", systemImage: "books.vertical",
             description: Text("PDF 추가로 시작하세요."))
           Button("PDF 추가", action: requestImport)
+            .focused($organizationFocus, equals: .importEmpty)
         } else if snapshot.papers.isEmpty {
           ContentUnavailableView("일치하는 논문 없음", systemImage: "line.3.horizontal.decrease.circle",
             description: Text("저장된 논문은 있습니다. 검색과 필터를 변경하세요."))
           Button("검색·조건 지우기") { filter = clearedConditions }
+            .focused($organizationFocus, equals: .clearNoMatch)
         } else if snapshot.preferences.presentation == .list {
           List(snapshot.papers) { paper in paperContent(paper) }
         } else {
@@ -150,7 +158,8 @@ public struct LibraryBrowserView: View {
         ProgressView("폴더 불러오는 중")
       } else if folderLoadFailed || loadFailed {
         Text("폴더 목록을 불러오지 못했습니다.").font(.caption)
-        Button("폴더 다시 불러오기") { refresh() }.disabled(busy)
+        Button("폴더 다시 불러오기", action: requestRefresh).disabled(busy)
+          .focused($organizationFocus, equals: .retryFolders)
       } else if folders.isEmpty {
         Text("저장된 폴더가 없습니다.").font(.caption).foregroundStyle(.secondary)
       } else {
@@ -161,16 +170,19 @@ public struct LibraryBrowserView: View {
       if selectedFolderUnavailable, case .folder(let id) = filter.folder {
         Text("선택 유지 · \(id.uuidString)").font(.caption).textSelection(.enabled)
       }
-      Button("폴더 관리", action: manageFolders).disabled(busy)
+      Button("폴더 관리", action: requestManageFolders).disabled(busy)
+        .focused($organizationFocus, equals: .manageFolders)
       Divider()
       Text("필터").font(.headline)
       Toggle("즐겨찾기만", isOn: $filter.favoritesOnly)
+        .focused($organizationFocus, equals: .favoritesFilter)
       Picker("읽기 상태", selection: $filter.readingStatus) {
         Text("전체").tag(Optional<PaperReadingStatus>.none)
         ForEach(PaperReadingStatus.allCases, id: \.self) { status in
           Text(readingLabel(status)).tag(Optional(status))
         }
       }.pickerStyle(.radioGroup)
+        .focused($organizationFocus, equals: .readingFilter)
       Divider()
       Text("사용자 태그").font(.headline)
       tagControl("전체 태그", selection: nil)
@@ -178,7 +190,8 @@ public struct LibraryBrowserView: View {
         ProgressView("저장된 태그 불러오는 중")
       } else if tagLoadFailed || loadFailed {
         Text("저장된 태그를 불러오지 못했습니다. 선택은 유지됩니다.").font(.caption)
-        Button("태그 다시 불러오기") { refresh() }.disabled(busy)
+        Button("태그 다시 불러오기", action: requestRefresh).disabled(busy)
+          .focused($organizationFocus, equals: .retryTags)
       } else if tags.isEmpty {
         Text("저장된 사용자 태그가 없습니다.").font(.caption).foregroundStyle(.secondary)
       } else {
@@ -198,10 +211,12 @@ public struct LibraryBrowserView: View {
         get: { filter.tag ?? "" }, set: { filter.tag = $0.isEmpty ? nil : $0 }))
         .textFieldStyle(.roundedBorder)
         .accessibilityLabel("정확한 사용자 태그로 필터")
+        .focused($organizationFocus, equals: .exactTag)
       Text("제목·태그 검색과 함께 적용됩니다. 출처 주제는 사용자 태그가 아닙니다.")
         .font(.caption).foregroundStyle(.secondary)
       Button("검색·조건 지우기") { filter = clearedConditions }
         .disabled(filter == clearedConditions)
+        .focused($organizationFocus, equals: .clearConditions)
       Spacer()
     }
     .padding(12)
@@ -212,7 +227,13 @@ public struct LibraryBrowserView: View {
   }
 
   private func folderControl(_ title: String, selection: LibraryFolderSelection) -> some View {
-    Button { filter.folder = selection } label: {
+    let focus: OrganizationControlFocus
+    switch selection {
+    case .all: focus = .allFolders
+    case .unfiled: focus = .unfiled
+    case .folder(let id): focus = .folder(id)
+    }
+    return Button { filter.folder = selection } label: {
       HStack {
         Text(title).multilineTextAlignment(.leading)
         Spacer()
@@ -220,6 +241,7 @@ public struct LibraryBrowserView: View {
       }.frame(maxWidth: .infinity, alignment: .leading)
     }
     .disabled(busy)
+    .focused($organizationFocus, equals: focus)
     .accessibilityValue(filter.folder == selection ? "선택됨" : "선택되지 않음")
   }
 
@@ -237,6 +259,7 @@ public struct LibraryBrowserView: View {
       }.frame(maxWidth: .infinity, alignment: .leading)
     }
     .disabled(busy)
+    .focused($organizationFocus, equals: .tag(selection))
     .accessibilityValue(tagIsSelected(selection) ? "선택됨" : "선택되지 않음")
   }
 
@@ -246,9 +269,25 @@ public struct LibraryBrowserView: View {
       libraryContent.frame(minWidth: 360, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
     .padding()
-    .task(id: refreshRevision) { refresh() }
-    .onDisappear { invalidateObservation() }
+    .onAppear { rootMount = UUID(); tagEditor = nil; refresh() }
+    .onDisappear { rootMount = nil; tagEditor = nil; invalidateObservation() }
+    .onChange(of: refreshRevision) { _, _ in refresh() }
     .onChange(of: filter) { _, _ in refresh() }
+    .onChange(of: organizationFocus) { _, value in
+      if value != nil { interruptEditorReturn(newerWork: false) }
+    }
+    .onChange(of: focusedPaper) { _, value in
+      if let value, value != tagEditor?.slot.paper.id { interruptEditorReturn(newerWork: false) }
+    }
+    .onChange(of: focusedIdentification) { _, value in
+      if value != nil { interruptEditorReturn(newerWork: false) }
+    }
+    .onChange(of: focusedMovement) { _, value in
+      if value != nil { interruptEditorReturn(newerWork: false) }
+    }
+    .onChange(of: operationFailed) { _, value in
+      if value { interruptEditorReturn(newerWork: true) }
+    }
     .onChange(of: loading) { _, value in
       if !value, let opener = movementFocusToRestore {
         if snapshot?.papers.contains(where: { $0.id == opener.id && $0.generation == opener.generation }) == true {
@@ -275,18 +314,10 @@ public struct LibraryBrowserView: View {
     .alert("저장 또는 작업 실패", isPresented: $operationFailed) {
       Button("확인", role: .cancel) {}
     } message: { Text("성공으로 저장되지 않았습니다. 새로 불러온 현재 상태를 확인하세요.") }
-    .sheet(item: $editing, onDismiss: { refresh() }) { paper in
-      OrganizationEditor(paper: paper, save: { value, observed in
-        busy = true; invalidateObservation()
-        do {
-          try await service.save(value, for: observed)
-          busy = false; refresh()
-        } catch {
-          busy = false; refresh()
-          throw error
-        }
-      }, revalidate: { observed in try await service.revalidate(observed) })
-      .onDisappear { focusedPaper = paper.id }
+    .background {
+      if let presentation = tagEditor {
+        editorPresenter(presentation.slot).id(presentation.slot.id)
+      }
     }
     .sheet(item: $identification) { captured in
       LibraryIdentificationDetail(captured: captured, readReadingRecords: readReadingRecords)
@@ -359,15 +390,17 @@ public struct LibraryBrowserView: View {
       HStack {
         Button("열기") { perform { try await service.admitOpen(paper); try await openPaper(paper) } }
           .disabled(!paper.readable || busy)
+          .focused($organizationFocus, equals: .open(paper.id))
           .accessibilityLabel("\(paper.title) 열기")
         Button("논문 정보·요약·읽기 기록 상세") {
-          guard !busy, !loading, !loadFailed else { return }
+          guard !nativeEditorPending, !busy, !loading, !loadFailed else { return }
+          interruptEditorReturn(newerWork: true)
           identification = LibraryIdentification(paper: paper, metadata: fact?.metadata, summary: fact?.summary)
         }.disabled(busy || loading || loadFailed)
           .focused($focusedIdentification, equals: paper.id)
           .accessibilityLabel("\(paper.title) 출처 제목·발행연도·요약·초록·출처 주제·저장된 읽기 기록 상세")
         Button("폴더 이동") {
-          guard paper.readable, !busy, !loading, !loadFailed else { return }
+          guard !nativeEditorPending, paper.readable, !busy, !loading, !loadFailed else { return }
           invalidateObservation(); moving = LibraryMovement(paper: paper)
         }.disabled(!paper.readable || busy || loading || loadFailed)
           .focused($focusedMovement, equals: paper.id)
@@ -378,53 +411,204 @@ public struct LibraryBrowserView: View {
               .disabled(busy || loading || loadFailed)
           }
           Button("태그·읽기 상태·즐겨찾기 편집") {
-            invalidateObservation(); editing = paper
+            beginTagEdit(paper)
           }.disabled(!paper.readable)
           if paper.status == .deletionFailed {
             Button("삭제 다시 시도") { perform { try await service.delete(paper, retry: true) } }
           } else {
-            Button("삭제", role: .destructive) { deleting = paper }.disabled(paper.status == .deleting)
+            Button("삭제", role: .destructive) {
+              guard !nativeEditorPending, !busy else { return }
+              interruptEditorReturn(newerWork: true)
+              deleting = paper
+            }.disabled(paper.status == .deleting)
           }
         }.disabled(busy).focused($focusedPaper, equals: paper.id)
           .accessibilityLabel("\(paper.title) 더 보기")
       }
     }.accessibilityElement(children: .contain)
   }
+  private var nativeEditorPending: Bool {
+    tagEditor.map { !$0.nativeDismissConsumed } ?? false
+  }
+
+  private func renderedMoreMenu(for paper: OrganizedPaper) -> Bool {
+    guard !busy, !loading, !loadFailed, !selectedFolderUnavailable, let snapshot else { return false }
+    return snapshot.totalCount > 0
+      && snapshot.papers.contains(where: { $0.id == paper.id && $0.generation == paper.generation })
+  }
+
+  private func beginTagEdit(_ paper: OrganizedPaper) {
+    guard !nativeEditorPending, let mountID = rootMount, !busy, !loading, !loadFailed,
+      paper.readable, renderedMoreMenu(for: paper), identification == nil,
+      moving == nil, deleting == nil, !operationFailed else { return }
+    interruptEditorReturn(newerWork: true)
+    guard tagEditor == nil else { return }
+    let slot = LibraryTagEditorSlot(mountID: mountID, paper: paper,
+      filter: filter, refreshRevision: refreshRevision)
+    movementFocusToRestore = nil
+    organizationFocusToRestore = nil
+    tagEditor = LibraryTagEditorPresentation(slot: slot)
+    invalidateObservation(preservingEditor: slot.id)
+  }
+
+  private func editorPresenter(_ slot: LibraryTagEditorSlot) -> some View {
+    Color.clear.frame(width: 0, height: 0)
+      .sheet(isPresented: Binding(get: {
+        tagEditor?.slot.id == slot.id && rootMount == slot.mountID
+          && tagEditor?.requestedVisibility == true
+      }, set: { visible in
+        if !visible { requestEditorClose(slot) }
+      }), onDismiss: { editorDismissed(slot) }) {
+        OrganizationEditor(paper: slot.paper, save: { value, observed in
+          guard tagEditor?.slot.id == slot.id, rootMount == slot.mountID,
+            tagEditor?.requestedVisibility == true, tagEditor?.closing == false else {
+            throw CancellationError()
+          }
+          busy = true; invalidateObservation(preservingEditor: slot.id)
+          do {
+            try await service.save(value, for: observed)
+            busy = false
+            if let mountID = rootMount {
+              let preserved = tagEditor?.slot.id == slot.id && mountID == slot.mountID ? slot.id : nil
+              refresh(preservingEditor: preserved)
+            }
+          } catch {
+            busy = false
+            if let mountID = rootMount {
+              let preserved = tagEditor?.slot.id == slot.id && mountID == slot.mountID ? slot.id : nil
+              refresh(preservingEditor: preserved)
+            }
+            throw error
+          }
+        }, revalidate: { observed in try await service.revalidate(observed) },
+          close: { requestEditorClose(slot) })
+        .onAppear { editorAppeared(slot) }
+      }
+  }
+
+  private func editorAppeared(_ slot: LibraryTagEditorSlot) {
+    guard tagEditor?.slot.id == slot.id, rootMount == slot.mountID,
+      tagEditor?.requestedVisibility == true, tagEditor?.closing == false,
+      tagEditor?.appeared == false else { return }
+    tagEditor?.appeared = true
+  }
+
+  private func requestEditorClose(_ slot: LibraryTagEditorSlot) {
+    guard tagEditor?.slot.id == slot.id, rootMount == slot.mountID,
+      tagEditor?.requestedVisibility == true, tagEditor?.closing == false,
+      tagEditor?.nativeDismissConsumed == false else { return }
+    tagEditor?.closing = true
+    tagEditor?.requestedVisibility = false
+  }
+
+  private func editorDismissed(_ slot: LibraryTagEditorSlot) {
+    guard let presentation = tagEditor, presentation.slot.id == slot.id,
+      rootMount == slot.mountID, presentation.closing, !presentation.requestedVisibility,
+      !presentation.nativeDismissConsumed else { return }
+    tagEditor?.nativeDismissConsumed = true
+    guard !presentation.newerWork, filter == slot.filter,
+      refreshRevision == slot.refreshRevision, !busy, identification == nil,
+      moving == nil, deleting == nil, !operationFailed else {
+      tagEditor = nil
+      return
+    }
+    refresh(preservingEditor: slot.id, returningEditor: slot)
+  }
+
+  private func interruptEditorReturn(newerWork: Bool) {
+    guard let presentation = tagEditor else { return }
+    if newerWork {
+      if presentation.nativeDismissConsumed { tagEditor = nil }
+      else { tagEditor?.newerWork = true }
+    } else {
+      tagEditor?.differentFocus = true
+    }
+  }
+
+  private func consumeEditorReturn(_ request: OrganizationQueryState.Request) {
+    guard let presentation = tagEditor, presentation.awaitingRequest == request,
+      presentation.nativeDismissConsumed, !query.loading else { return }
+    let slot = presentation.slot
+    tagEditor = nil
+    guard rootMount == slot.mountID, filter == slot.filter,
+      refreshRevision == slot.refreshRevision, presentation.appeared,
+      !presentation.newerWork, !presentation.differentFocus,
+      !busy, identification == nil, moving == nil, deleting == nil, !operationFailed,
+      organizationFocus == nil, focusedIdentification == nil, focusedMovement == nil,
+      focusedPaper == nil || focusedPaper == slot.paper.id else { return }
+    if renderedMoreMenu(for: slot.paper) {
+      focusedPaper = slot.paper.id
+    } else {
+      focusedPaper = nil
+      organizationFocus = .search
+    }
+  }
+
+  private func requestManageFolders() {
+    guard !nativeEditorPending, !busy else { return }
+    interruptEditorReturn(newerWork: true)
+    manageFolders()
+  }
+
+  private func requestRefresh() {
+    guard !nativeEditorPending, !busy else { return }
+    refresh()
+  }
+
   private func savePreferences(_ preference: OrganizationPreferences) {
     perform { try await service.savePreferences(preference) }
   }
   private func saveOrganization(_ value: PaperOrganization, for paper: OrganizedPaper,
     origin: OrganizationControlFocus) {
-    guard paper.readable, !busy, !loading, !loadFailed, value != paper.organization else { return }
+    guard !nativeEditorPending, paper.readable, !busy, !loading, !loadFailed,
+      value != paper.organization else { return }
     organizationFocusToRestore = (paper.id, paper.generation, origin)
     perform { try await service.save(value, for: paper) }
   }
   private func requestImport() {
+    guard !nativeEditorPending else { return }
     invalidateObservation()
     importPDF()
     refresh()
   }
   private func requestRetry(_ paper: OrganizedPaper) {
-    guard paper.status == .importFailed, !busy, !loading, !loadFailed else { return }
+    guard !nativeEditorPending, paper.status == .importFailed, !busy, !loading, !loadFailed else { return }
     invalidateObservation()
     retryImportPDF(paper.id, paper.generation)
     refresh()
   }
   private func perform(_ operation: @escaping @MainActor () async throws -> Void) {
-    guard !busy else { return }
+    guard !nativeEditorPending, !busy else { return }
     busy = true; invalidateObservation()
     Task {
       do { try await operation() } catch { operationFailed = true }
       busy = false; refresh()
     }
   }
-  private func refresh() {
-    invalidateObservation()
+  private func refresh(preservingEditor slotID: UUID? = nil,
+    returningEditor slot: LibraryTagEditorSlot? = nil) {
+    if let slot {
+      guard let presentation = tagEditor, presentation.slot.id == slot.id,
+        rootMount == slot.mountID, presentation.nativeDismissConsumed,
+        presentation.awaitingRequest == nil, !presentation.newerWork,
+        filter == slot.filter, refreshRevision == slot.refreshRevision else { return }
+      clearObservation()
+    } else {
+      invalidateObservation(preservingEditor: slotID)
+    }
     guard !busy else { return }
     let request = query.begin(filter: filter)
+    if let slot, tagEditor?.slot.id == slot.id { tagEditor?.awaitingRequest = request }
     Task { await load(request) }
   }
-  private func invalidateObservation() {
+  private func invalidateObservation(preservingEditor slotID: UUID? = nil) {
+    if let presentation = tagEditor,
+      presentation.slot.id != slotID || presentation.nativeDismissConsumed {
+      interruptEditorReturn(newerWork: true)
+    }
+    clearObservation()
+  }
+  private func clearObservation() {
     if let identification { focusedIdentification = identification.paper.id }
     identification = nil
     currentFacts = [:]
@@ -463,8 +647,10 @@ public struct LibraryBrowserView: View {
       tagLoadFailed = tagsFailed
       let generations = Dictionary(uniqueKeysWithValues: value.papers.map { ($0.id, $0.generation) })
       currentFacts = Dictionary(uniqueKeysWithValues: facts.filter { generations[$0.paperID] == $0.generation }.map { ($0.paperID, $0) })
+      consumeEditorReturn(request)
     } catch {
       query.reject(request: request, currentFilter: filter)
+      consumeEditorReturn(request)
     }
   }
   private func readingLabel(_ status: PaperReadingStatus) -> String {
@@ -484,6 +670,28 @@ public struct LibraryBrowserView: View {
 
 private enum OrganizationControlFocus: Hashable {
   case search, favorite(UUID), reading(UUID)
+  case importPDF, refresh, presentation, sort, retryLibrary, manageUnavailableFolder
+  case importEmpty, clearNoMatch, retryFolders, manageFolders, favoritesFilter, readingFilter
+  case retryTags, exactTag, clearConditions, allFolders, unfiled, folder(UUID), tag(String?), open(UUID)
+}
+
+private struct LibraryTagEditorSlot: Identifiable {
+  let id = UUID()
+  let mountID: UUID
+  let paper: OrganizedPaper
+  let filter: OrganizationFilter
+  let refreshRevision: Int
+}
+
+private struct LibraryTagEditorPresentation {
+  let slot: LibraryTagEditorSlot
+  var requestedVisibility = true
+  var appeared = false
+  var closing = false
+  var nativeDismissConsumed = false
+  var awaitingRequest: OrganizationQueryState.Request?
+  var newerWork = false
+  var differentFocus = false
 }
 
 private struct LibraryMovement: Identifiable {
@@ -877,15 +1085,16 @@ struct OrganizationEditorInteraction {
 @MainActor private struct OrganizationEditor: View {
   let save: @MainActor (PaperOrganization, OrganizedPaper) async throws -> Void
   let revalidate: @MainActor (OrganizedPaper) async throws -> OrganizedPaper
-  @Environment(\.dismiss) private var dismiss
+  let close: @MainActor () -> Void
   @State private var observed: OrganizedPaper
   @State private var value: PaperOrganization
   @State private var tags: String
   @State private var interaction = OrganizationEditorInteraction()
   init(paper: OrganizedPaper,
     save: @escaping @MainActor (PaperOrganization, OrganizedPaper) async throws -> Void,
-    revalidate: @escaping @MainActor (OrganizedPaper) async throws -> OrganizedPaper) {
-    self.save = save; self.revalidate = revalidate
+    revalidate: @escaping @MainActor (OrganizedPaper) async throws -> OrganizedPaper,
+    close: @escaping @MainActor () -> Void) {
+    self.save = save; self.revalidate = revalidate; self.close = close
     _observed = State(initialValue: paper)
     _value = State(initialValue: paper.organization)
     _tags = State(initialValue: paper.organization.tags.joined(separator: "\n"))
@@ -922,7 +1131,7 @@ struct OrganizationEditorInteraction {
       HStack {
         Button("취소", role: .cancel) {
           guard interaction.beginCancel() else { return }
-          dismiss()
+          close()
         }.keyboardShortcut(.cancelAction)
         Button("저장") {
           guard interaction.beginSave() else { return }
@@ -932,7 +1141,7 @@ struct OrganizationEditorInteraction {
             do {
               try await save(draft, observed)
               guard interaction.finishSave(succeeded: true) else { return }
-              dismiss()
+              close()
             } catch { _ = interaction.finishSave(succeeded: false) }
           }
         }.keyboardShortcut(.defaultAction).disabled(interaction.failed)

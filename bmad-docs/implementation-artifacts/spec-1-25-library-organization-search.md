@@ -45,6 +45,32 @@ Tests/test fixes, type/build/native runtime, gates, formatters and keyboard/Voic
 delivery remain deferred. No protected execution, credentials/network, new architecture,
 store/schema or remote operations; source is not Story/Epic acceptance, still0/26.
 
+### Authored opener-return source notes
+
+The Browser now captures one immutable More Menu slot and retains its presentation
+record on a slot-keyed, zero-size native sheet anchor through requested close,
+actual onDismiss consumption and the exact existing query Request. Appearance,
+visibility setter and private editor close are slot/mount checked; editor subtree
+disappearance no longer assigns tag-opener focus. The matching request is consumed
+after accepted folders/tags/facts installation or current rejection. A rendered,
+enabled same-generation More Menu is preferred; otherwise the existing search field
+is requested without changing conditions. New work, changed conditions/revision,
+unmount and different nonnil native Library control focus cannot rearm the return.
+Browser-owned action/modal entries guard pending native dismissal. Existing editor
+interaction phases, failure drafts, explicit revalidation and whole-record service
+CAS remain unchanged; guarded Cancel/successful Save use the required private close.
+
+This continuation changes only LibraryBrowserView.swift and this Spec. Source was
+read back against the committed fa9872c contract and existing query accept/reject
+semantics. Independent199 initially BLOCKED skipped save-completion refresh after
+root remount; the parent corrected both outcomes to refresh the current mounted root,
+preserving only a still-matching pre-dismissal slot and never querying while unmounted.
+Independent199 re-review is SOURCE CLEAR; parent Browser syntax parsing and
+git diff --check pass. Tests/test fixes, formatters, type/build checks, gates and
+native/runtime execution were not run. Actual native dismissal ordering, keyboard/
+VoiceOver focus delivery, Cancel no-write and failed-save/revalidation interaction
+remain deferred proof; authored source is not StoryDone or Epic acceptance (0/26).
+
 ## Authority and admission
 
 Issue#27 / `issue/27-story-1-25`; base `f14f15f3f1c1fed02657ebf0c7ecdcb23721bfa8`. PRODUCT `5eac3bb9424ad893eca7d63bc319b71f580838ed`; ARCHITECTURE `1195c92227cc628e325f5ff24d70cc93639bf7a9`; Whole-Epic https://github.com/jinzer0/PaperLens/issues/3#issuecomment-6049004229. Own Spec before source, no repeated unchanged-scope SHA approval; no gate/live/paid/credential/remote/distribution permission. Parent reconciled proposal's per-SHA wording; absent predecessor is an admission fact, not a new source defect.
