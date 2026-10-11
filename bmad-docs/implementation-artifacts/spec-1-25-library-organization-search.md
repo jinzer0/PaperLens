@@ -32,6 +32,24 @@ no public API/service/store/schema/resource changes. Parent syntax/diff/independ
 and local commit only; tests/test fixes/type/build/gates/formatter/native/runtime/
 keyboard/VoiceOver deferred, acceptance0/26.
 
+### Authored paired movement source notes (contract 29ea39d)
+
+Browser now has three concrete slot kinds and kind-specific native opener-return checks.
+Late admitted movement completion uses the existing presentation record's distinct
+lateMovementMutationVeto for a newer tag editor. Exact tag Save/revalidate callbacks
+check this veto at actual service admission, including calls from delayed Tasks;
+ordinary newer-work/focus interruption is not used as the mutation veto. Newer payload
+and return are revoked while visibility, closing state and callback identity remain.
+Already admitted tag Save still executes its existing success/failure current-mounted-
+root refresh after busy clears, rethrowing the original failure and never querying
+while unmounted. Tag drafts/phases/CAS and detail live-read fences are unchanged.
+
+Parent Browser syntax parsing/git diff --check pass and independent205 SOURCE CLEAR
+confirm bounded source paths, including late completion and already admitted tag work.
+Tests/test fixes, type/build/gates/formatters/runtime/native keyboard/VoiceOver proof
+remain deferred and were not executed. Historical source-review/test notes
+remain historical; Story/Epic acceptance stays 0/26.
+
 ## Historical paired detail lifecycle integration; retained tag source contract
 
 The movement exclusion below records the two-case phase scope; only the new bounded

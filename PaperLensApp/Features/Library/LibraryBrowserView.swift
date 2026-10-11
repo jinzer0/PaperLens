@@ -23,8 +23,6 @@ public struct LibraryBrowserView: View {
   @State private var deleting: OrganizedPaper?
   @State private var rootMount: UUID?
   @State private var sheetPresentation: LibrarySheetPresentation?
-  @State private var moving: LibraryMovement?
-  @State private var movementFocusToRestore: OrganizedPaper?
   @State private var organizationFocusToRestore: (paperID: UUID, generation: UUID, control: OrganizationControlFocus)?
   @FocusState private var organizationFocus: OrganizationControlFocus?
   @FocusState private var focusedPaper: UUID?
@@ -288,22 +286,17 @@ public struct LibraryBrowserView: View {
         || value != sheetPresentation?.slot.paper.id { interruptSheetReturn(newerWork: false) }
     }
     .onChange(of: focusedIdentification) { _, value in
-      if let value, sheetPresentation?.slot.content.isTagEditor != false
+      if let value, sheetPresentation?.slot.content.isIdentification != true
         || value != sheetPresentation?.slot.paper.id { interruptSheetReturn(newerWork: false) }
     }
     .onChange(of: focusedMovement) { _, value in
-      if value != nil { interruptSheetReturn(newerWork: false) }
+      if let value, sheetPresentation?.slot.content.isMovement != true
+        || value != sheetPresentation?.slot.paper.id { interruptSheetReturn(newerWork: false) }
     }
     .onChange(of: operationFailed) { _, value in
       if value { interruptSheetReturn(newerWork: true) }
     }
     .onChange(of: loading) { _, value in
-      if !value, let opener = movementFocusToRestore {
-        if snapshot?.papers.contains(where: { $0.id == opener.id && $0.generation == opener.generation }) == true {
-          focusedMovement = opener.id
-        }
-        movementFocusToRestore = nil
-      }
       if !value, let opener = organizationFocusToRestore {
         if organizationFocus == nil || organizationFocus == opener.control {
           organizationFocus = !loadFailed && snapshot?.papers.contains(where: {
@@ -327,14 +320,6 @@ public struct LibraryBrowserView: View {
       if let presentation = sheetPresentation {
         sheetPresenter(presentation.slot).id(presentation.slot.id)
       }
-    }
-    .sheet(item: $moving, onDismiss: { refresh() }) { captured in
-      PaperMovementSheet(paper: captured.paper, service: folderService, committed: {
-        if moving?.id == captured.id { moving = nil }
-        refresh()
-      })
-      .id(captured.id)
-      .onDisappear { movementFocusToRestore = captured.paper }
     }
   }
 
@@ -402,8 +387,7 @@ public struct LibraryBrowserView: View {
           .focused($focusedIdentification, equals: paper.id)
           .accessibilityLabel("\(paper.title) 출처 제목·발행연도·요약·초록·출처 주제·저장된 읽기 기록 상세")
         Button("폴더 이동") {
-          guard !nativeSheetPending, paper.readable, !busy, !loading, !loadFailed else { return }
-          invalidateObservation(); moving = LibraryMovement(paper: paper)
+          beginMovement(paper)
         }.disabled(!paper.readable || busy || loading || loadFailed)
           .focused($focusedMovement, equals: paper.id)
           .accessibilityLabel("\(paper.title) 폴더 이동")
@@ -442,12 +426,11 @@ public struct LibraryBrowserView: View {
   private func beginTagEdit(_ paper: OrganizedPaper) {
     guard !nativeSheetPending, let mountID = rootMount, !busy, !loading, !loadFailed,
       paper.readable, renderedPaperControls(for: paper),
-      moving == nil, deleting == nil, !operationFailed else { return }
+      deleting == nil, !operationFailed else { return }
     interruptSheetReturn(newerWork: true)
     guard sheetPresentation == nil else { return }
     let slot = LibrarySheetSlot(mountID: mountID, content: .tagEditor(paper),
       filter: filter, refreshRevision: refreshRevision)
-    movementFocusToRestore = nil
     organizationFocusToRestore = nil
     sheetPresentation = LibrarySheetPresentation(slot: slot)
     invalidateObservation(preservingEditor: slot.id)
@@ -455,7 +438,7 @@ public struct LibraryBrowserView: View {
 
   private func beginIdentification(_ paper: OrganizedPaper) {
     guard !nativeSheetPending, let mountID = rootMount, !busy, !loading, !loadFailed,
-      renderedPaperControls(for: paper), moving == nil, deleting == nil, !operationFailed,
+      renderedPaperControls(for: paper), deleting == nil, !operationFailed,
       let accepted = snapshot?.papers.first(where: {
         $0.id == paper.id && $0.generation == paper.generation
       }) else { return }
@@ -465,9 +448,41 @@ public struct LibraryBrowserView: View {
     let captured = LibraryIdentification(paper: accepted, metadata: fact?.metadata, summary: fact?.summary)
     let slot = LibrarySheetSlot(mountID: mountID, content: .identification(captured),
       filter: filter, refreshRevision: refreshRevision)
-    movementFocusToRestore = nil
     organizationFocusToRestore = nil
     sheetPresentation = LibrarySheetPresentation(slot: slot)
+  }
+
+  private func beginMovement(_ paper: OrganizedPaper) {
+    guard !nativeSheetPending, let mountID = rootMount, !busy, !loading, !loadFailed,
+      paper.readable, renderedPaperControls(for: paper), deleting == nil, !operationFailed,
+      let accepted = snapshot?.papers.first(where: {
+        $0.id == paper.id && $0.generation == paper.generation && $0.readable
+      }) else { return }
+    interruptSheetReturn(newerWork: true)
+    guard sheetPresentation == nil else { return }
+    let slot = LibrarySheetSlot(mountID: mountID, content: .movement(accepted),
+      filter: filter, refreshRevision: refreshRevision)
+    organizationFocusToRestore = nil
+    clearObservation()
+    sheetPresentation = LibrarySheetPresentation(slot: slot)
+  }
+
+  private func movementPayloadIsEligible(_ slot: LibrarySheetSlot) -> Bool {
+    guard case .movement = slot.content, let presentation = sheetPresentation else { return false }
+    return presentation.slot.id == slot.id && presentation.slot.mountID == slot.mountID
+      && rootMount == slot.mountID && presentation.requestedVisibility && !presentation.closing
+      && !presentation.nativeDismissConsumed && !presentation.newerWork
+      && filter == slot.filter && refreshRevision == slot.refreshRevision
+  }
+
+  private func movementCommitted(_ slot: LibrarySheetSlot) {
+    if sheetPresentation?.slot.id == slot.id, sheetPresentation?.slot.mountID == slot.mountID,
+      sheetPresentation?.nativeDismissConsumed == false {
+      sheetPresentation?.closing = true
+      sheetPresentation?.requestedVisibility = false
+    }
+    guard rootMount != nil else { return }
+    refresh(completedMovement: slot)
   }
 
   private func detailPayloadIsEligible(_ slot: LibrarySheetSlot) -> Bool {
@@ -490,7 +505,8 @@ public struct LibraryBrowserView: View {
         case .tagEditor(let paper):
         OrganizationEditor(paper: paper, save: { value, observed in
           guard sheetPresentation?.slot.id == slot.id, rootMount == slot.mountID,
-            sheetPresentation?.requestedVisibility == true, sheetPresentation?.closing == false else {
+            sheetPresentation?.requestedVisibility == true, sheetPresentation?.closing == false,
+            sheetPresentation?.lateMovementMutationVeto == false else {
             throw CancellationError()
           }
           busy = true; invalidateObservation(preservingEditor: slot.id)
@@ -511,13 +527,24 @@ public struct LibraryBrowserView: View {
             }
             throw error
           }
-        }, revalidate: { observed in try await service.revalidate(observed) },
+        }, revalidate: { observed in
+          guard sheetPresentation?.slot.id == slot.id, rootMount == slot.mountID,
+            sheetPresentation?.requestedVisibility == true, sheetPresentation?.closing == false,
+            sheetPresentation?.lateMovementMutationVeto == false else { throw CancellationError() }
+          return try await service.revalidate(observed)
+        },
           close: { requestSheetClose(slot) })
         .onAppear { sheetAppeared(slot) }
         case .identification(let captured):
           LibraryIdentificationDetail(captured: captured, readReadingRecords: readReadingRecords,
             eligible: detailPayloadIsEligible(slot), isEligible: { detailPayloadIsEligible(slot) },
             close: { requestSheetClose(slot) })
+            .id(slot.id)
+            .onAppear { sheetAppeared(slot) }
+        case .movement(let paper):
+          PaperMovementSheet(paper: paper, service: folderService,
+            eligible: movementPayloadIsEligible(slot), isEligible: { movementPayloadIsEligible(slot) },
+            close: { requestSheetClose(slot) }, committed: { movementCommitted(slot) })
             .id(slot.id)
             .onAppear { sheetAppeared(slot) }
         }
@@ -547,7 +574,7 @@ public struct LibraryBrowserView: View {
     sheetPresentation?.nativeDismissConsumed = true
     guard rootMount == slot.mountID, !presentation.newerWork, filter == slot.filter,
       refreshRevision == slot.refreshRevision, !busy,
-      moving == nil, deleting == nil, !operationFailed else {
+      deleting == nil, !operationFailed else {
       sheetPresentation = nil
       return
     }
@@ -578,11 +605,11 @@ public struct LibraryBrowserView: View {
     guard rootMount == slot.mountID, filter == slot.filter,
       refreshRevision == slot.refreshRevision, presentation.appeared,
       !presentation.newerWork, !presentation.differentFocus,
-      !busy, moving == nil, deleting == nil, !operationFailed,
-      organizationFocus == nil, focusedMovement == nil else { return }
+      !busy, deleting == nil, !operationFailed,
+      organizationFocus == nil else { return }
     switch slot.content {
     case .tagEditor:
-      guard focusedIdentification == nil,
+      guard focusedIdentification == nil, focusedMovement == nil,
         focusedPaper == nil || focusedPaper == slot.paper.id else { return }
       if renderedPaperControls(for: slot.paper) {
         focusedPaper = slot.paper.id
@@ -591,12 +618,23 @@ public struct LibraryBrowserView: View {
         organizationFocus = .search
       }
     case .identification:
-      guard focusedPaper == nil,
+      guard focusedPaper == nil, focusedMovement == nil,
         focusedIdentification == nil || focusedIdentification == slot.paper.id else { return }
       if renderedPaperControls(for: slot.paper) {
         focusedIdentification = slot.paper.id
       } else {
         focusedIdentification = nil
+        organizationFocus = .search
+      }
+    case .movement:
+      guard focusedPaper == nil, focusedIdentification == nil,
+        focusedMovement == nil || focusedMovement == slot.paper.id else { return }
+      if renderedPaperControls(for: slot.paper), snapshot?.papers.contains(where: {
+        $0.id == slot.paper.id && $0.generation == slot.paper.generation && $0.readable
+      }) == true {
+        focusedMovement = slot.paper.id
+      } else {
+        focusedMovement = nil
         organizationFocus = .search
       }
     }
@@ -644,12 +682,31 @@ public struct LibraryBrowserView: View {
     }
   }
   private func refresh(preservingEditor slotID: UUID? = nil,
-    returningSheet slot: LibrarySheetSlot? = nil) {
+    returningSheet slot: LibrarySheetSlot? = nil,
+    completedMovement movement: LibrarySheetSlot? = nil) {
     if let slot {
       guard let presentation = sheetPresentation, presentation.slot.id == slot.id,
         rootMount == slot.mountID, presentation.nativeDismissConsumed,
         presentation.awaitingRequest == nil, !presentation.newerWork,
         filter == slot.filter, refreshRevision == slot.refreshRevision else { return }
+      clearObservation()
+    } else if let movement {
+      if let presentation = sheetPresentation {
+        let preservesOriginalReturn = presentation.slot.id == movement.id
+          && presentation.slot.mountID == movement.mountID && rootMount == movement.mountID
+          && !presentation.nativeDismissConsumed && !presentation.newerWork
+          && !presentation.differentFocus && filter == movement.filter
+          && refreshRevision == movement.refreshRevision
+        if !preservesOriginalReturn {
+          if presentation.nativeDismissConsumed { sheetPresentation = nil }
+          else {
+            sheetPresentation?.newerWork = true
+            if presentation.slot.content.isTagEditor {
+              sheetPresentation?.lateMovementMutationVeto = true
+            }
+          }
+        }
+      }
       clearObservation()
     } else {
       invalidateObservation(preservingEditor: slotID)
@@ -735,15 +792,25 @@ private enum OrganizationControlFocus: Hashable {
 private enum LibrarySheetContent {
   case tagEditor(OrganizedPaper)
   case identification(LibraryIdentification)
+  case movement(OrganizedPaper)
 
   var isTagEditor: Bool {
     if case .tagEditor = self { return true }
+    return false
+  }
+  var isIdentification: Bool {
+    if case .identification = self { return true }
+    return false
+  }
+  var isMovement: Bool {
+    if case .movement = self { return true }
     return false
   }
   var paper: OrganizedPaper {
     switch self {
     case .tagEditor(let paper): return paper
     case .identification(let captured): return captured.paper
+    case .movement(let paper): return paper
     }
   }
 }
@@ -766,18 +833,16 @@ private struct LibrarySheetPresentation {
   var awaitingRequest: OrganizationQueryState.Request?
   var newerWork = false
   var differentFocus = false
-}
-
-private struct LibraryMovement: Identifiable {
-  let id = UUID()
-  let paper: OrganizedPaper
+  var lateMovementMutationVeto = false
 }
 
 @MainActor private struct PaperMovementSheet: View {
   let paper: OrganizedPaper
   let service: FolderImportService
+  let eligible: Bool
+  let isEligible: @MainActor () -> Bool
+  let close: @MainActor () -> Void
   let committed: @MainActor () -> Void
-  @Environment(\.dismiss) private var dismiss
   @State private var observation = PaperPlacementLoadState()
   @State private var destination: UUID?
   @State private var loadTask: Task<Void, Never>?
@@ -785,12 +850,16 @@ private struct LibraryMovement: Identifiable {
   @State private var saving = false
   @State private var saveFailed = false
   @State private var visible = false
+  @State private var closed = false
+
+  private var canObserve: Bool { eligible && !closed && isEligible() }
 
   var body: some View {
     Form {
-      Text(paper.title).font(.headline)
+      if canObserve { Text(paper.title).font(.headline) }
       Text("논문의 폴더 배치만 변경합니다. 앱 소유 PDF는 이동하거나 복사하지 않습니다.")
         .font(.caption)
+      if canObserve {
       if observation.loading { ProgressView("현재 폴더 불러오는 중") }
       if saving { ProgressView("폴더 배치 저장 중").accessibilityLabel("폴더 배치 저장 중") }
       if let captured = observation.captured {
@@ -808,17 +877,24 @@ private struct LibraryMovement: Identifiable {
           : "현재 배치를 확인할 수 없습니다. 다시 불러오세요.")
         Button("현재 상태 다시 불러오기") { reload() }.disabled(saving || observation.loading)
       }
+      }
       HStack {
-        Button("취소", role: .cancel) { cancelObservation(); dismiss() }
+        Button("취소", role: .cancel) { closed = true; cancelObservation(); close() }
           .keyboardShortcut(.cancelAction)
         Button("저장") { save() }
           .keyboardShortcut(.defaultAction)
-          .disabled(saving || observation.loading || observation.captured == nil || saveFailed)
+          .disabled(!canObserve || saving || observation.loading || observation.captured == nil || saveFailed)
       }
     }
     .padding().frame(minWidth: 400)
-    .task { visible = true; reload() }
-    .onDisappear { visible = false; cancelObservation() }
+    .task {
+      guard canObserve, !Task.isCancelled else { return }
+      visible = true; reload()
+    }
+    .onChange(of: eligible) { _, value in
+      if !value { closed = true; cancelObservation() }
+    }
+    .onDisappear { visible = false; closed = true; cancelObservation() }
   }
 
   private func cancelObservation() {
@@ -828,39 +904,43 @@ private struct LibraryMovement: Identifiable {
   }
 
   private func reload() {
+    guard canObserve, visible, !saving else { return }
     loadTask?.cancel()
     let request = observation.begin(paperID: paper.id, generation: paper.generation)
     destination = nil
     loadTask = Task {
+      guard canObserve, visible, !Task.isCancelled else { return }
       do {
         let captured = try await service.capturePaperPlacement(paperID: request.paperID,
           generation: request.generation)
         try Task.checkCancellation()
+        guard canObserve, visible else { return }
         let folders = try await service.folders()
         try Task.checkCancellation()
-        guard visible else { return }
+        guard canObserve, visible else { return }
         if observation.accept(captured, folders: folders, request: request) {
           destination = captured.folder?.id; saveFailed = false
         } else { observation.reject(request) }
       } catch {
-        guard !Task.isCancelled, visible else { return }
+        guard !Task.isCancelled, canObserve, visible else { return }
         observation.reject(request)
       }
     }
   }
 
   private func save() {
-    guard !saving, !saveFailed, !observation.loading,
+    guard canObserve, visible, !saving, !saveFailed, !observation.loading,
       let captured = observation.captured else { return }
     let selectedDestination = destination
     saving = true
     saveTask = Task {
+      guard canObserve, visible, !Task.isCancelled else { return }
       do {
         try await service.movePaper(captured, to: selectedDestination)
         // A committed transaction can win a late dismissal; refresh, never undo it.
         committed()
       } catch {
-        guard visible, !Task.isCancelled else { return }
+        guard canObserve, visible, !Task.isCancelled else { return }
         observation.invalidate(); saveFailed = true; saving = false
       }
     }

@@ -50,6 +50,32 @@ No public API/service/DB/schema/placement CAS/PDF/resource changes. Parent owns 
 diff checks, independent review and local commit. Tests/test fixes/type/build/gates/
 formatter/native/runtime/keyboard/VoiceOver remain deferred; canonical acceptance0/26.
 
+### Authored movement source notes (contract 29ea39d)
+
+LibraryBrowserView.swift now admits movement from the current readable same-generation
+projection into its existing immutable LibrarySheetSlot and retained native presenter.
+The separate item sheet, LibraryMovement and disappearance/loading focus continuation
+are removed. Exact native dismissal binds return to the existing query Request; current
+accepted controls select the readable movement Button or existing search, without
+resetting conditions or replacing another kind's focus. Old-mount movement receipts
+retire only their retained capture. Organization action focus and deletion/folder UI
+are unchanged.
+
+PaperMovementSheet uses reactive and live eligibility at rendering, reload, delayed
+Task entry, read boundaries and Save admission, retaining placement requests and explicit
+reload after failure. Cancel/disappearance invalidate observations, not dismissal proof.
+Admitted successful moves still invoke their exact committed callback after cancellation;
+it closes only the original slot and refreshes the current mounted root. The narrow
+completed-movement mode preserves only uninterrupted original pre-dismissal return and
+revokes newer payload/return without dropping native callback identity. These are UI
+fences, not persistence, resource or physical-ACK authority.
+
+Parent Browser syntax parsing and git diff --check pass; independent205 SOURCE CLEAR
+traces exact receipt/query return, delayed Save/Cancel, old-root retirement and late
+movement with newer slots or admitted tag Save. Tests/test fixes/type/build/gates/
+formatters/runtime/native/keyboard/VoiceOver remain deferred and were not run.
+Historical evidence is unchanged; this is not acceptance promotion (0/26).
+
 ## Shared toolbar focus continuation (baseline 0ee17ee)
 
 Spec1.26's Settings opener phase reuses this root's existing folder presentation
