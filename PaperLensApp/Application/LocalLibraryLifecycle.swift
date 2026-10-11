@@ -256,16 +256,26 @@ public actor LocalLibraryLifecycle {
   private static func open(database: ProductDatabase, agentPurge: (any AgentLibraryPurging)?,
     copyEffects: ActualCopyEffects, validationEffects: ActualURLStageValidationEffects)
     async throws -> LocalLibraryLifecycle {
+    try Task.checkCancellation()
     // Allocate Main's lifetime epoch once, before recovery, and expose no owner until
     // all registered job kinds and library validation have completed successfully.
     let lifecycle = LocalLibraryLifecycle(database: database, agentPurge: agentPurge,
       copyEffects: copyEffects, validationEffects: validationEffects)
     let epoch = lifecycle.epoch
-    try await Task.detached {
+    let worker = Task.detached {
+      try Task.checkCancellation()
       let recovery = ProductJobRecovery(database: database)
       _ = try recovery.recoverStartup(currentEpoch: epoch)
+      try Task.checkCancellation()
       try recovery.reconcileLibraryStartup()
-    }.value
+      try Task.checkCancellation()
+    }
+    try await withTaskCancellationHandler {
+      try await worker.value
+    } onCancel: {
+      worker.cancel()
+    }
+    try Task.checkCancellation()
     return lifecycle
   }
 

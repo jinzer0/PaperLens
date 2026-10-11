@@ -1865,3 +1865,16 @@ the original checked-close owner alone determines known/unknown physical closure
 Scope only LocalLibraryLifecycle.swift/ProductJobRecovery.swift and owned cancellation
 regressions; no additional owner/pool/profile/quota/store or alternate recovery path.
 This bounded amendment precedes source mutation and does not renew protected trials.
+
+Correction verification: pre-cancelled actual owned startup denies before exposure
+and preserves exact published Paper/succeeded journal; a real GRDB reconciliation
+SELECT barrier cancels the caller while two owned files contain known mismatching
+bytes, then verifies worker cancellation prevents both availability downgrades and
+returns no lifecycle. Bounded barrier timeouts fail, never skip. Initial test compile
+failure1675 (semaphore wait unavailable in async context) was corrected in the test
+helper only; both cases then passed. Review171 follow-up SOURCE CLEAR resolves P1.
+Current full isolated Product477 passed artifact1676; separate fresh unsigned arm64
+four-target native build1677 SUCCEEDED, no binaries launched or protected trials.
+Mid-read/actual FD-close cancellation and unknown-close startup injection are not
+exercised; no immediate cancellation/atomic-recovery rollback, aggregate/RSS, hostile
+mutation, authenticated provider, purge, OS×CPU or canonical acceptance is inferred.

@@ -189,6 +189,109 @@ final class ProductJobRecoveryTests: XCTestCase, @unchecked Sendable {
     return try await lifecycle.importPDF(from: source)
   }
 
+  func testPreCancelledStartupDeniesLifecycleAndPreservesOwnedPublishedHistory() async throws {
+    let paper = try await ownedStartupImport("pre-cancelled startup")
+    let beforePaper = try row("paper", paper: paper)
+    let beforeJob = try row("importJob", paper: paper)
+    XCTAssertEqual(beforePaper["status"] as String, "ready")
+    XCTAssertEqual(beforeJob["state"] as String, "succeeded")
+    let bytes = try XCTUnwrap(Data.fromDatabaseValue(beforeJob["recoveryJournal"]))
+    let db = try XCTUnwrap(database)
+    let operation = Task {
+      withUnsafeCurrentTask { $0?.cancel() }
+      XCTAssertTrue(Task.isCancelled)
+      return try await LocalLibraryLifecycle.open(database: db)
+    }
+    do {
+      _ = try await operation.value
+      XCTFail("Pre-cancelled startup exposed a lifecycle")
+    } catch {
+      XCTAssertTrue(error is CancellationError, "Unexpected startup error: \(error)")
+    }
+    assertUnchanged(beforePaper, try row("paper", paper: paper))
+    assertUnchanged(beforeJob, try row("importJob", paper: paper))
+    XCTAssertEqual(try row("importJob", paper: paper)["recoveryJournal"] as Data, bytes)
+  }
+
+  private final class StartupReadBarrier: @unchecked Sendable {
+    let entered = DispatchSemaphore(value: 0)
+    let resume = DispatchSemaphore(value: 0)
+    private let lock = NSLock()
+    private var reads = 0
+    private var timedOut = false
+
+    func waitForEntry() -> Bool {
+      entered.wait(timeout: .now() + 5) == .success
+    }
+
+    func trace(_ event: Database.TraceEvent) {
+      let sql = event.description
+      guard sql.contains("SELECT id, generation, pdfSHA256, pdfReference FROM paper WHERE status = 'ready'")
+      else { return }
+      let first = lock.withLock { reads += 1; return reads == 1 }
+      guard first else { return }
+      entered.signal()
+      if resume.wait(timeout: .now() + 5) != .success {
+        lock.withLock { timedOut = true }
+      }
+    }
+
+    var observations: (reads: Int, timedOut: Bool) {
+      lock.withLock { (reads, timedOut) }
+    }
+  }
+
+  func testCallerCancellationDuringStartupReconciliationStopsWorkerBeforeAvailabilityChanges() async throws {
+    let first = try await ownedStartupImport("cancellation first")
+    let second = try await ownedStartupImport("cancellation second")
+    let papers = [first, second]
+    let beforePapers = try papers.map { try row("paper", paper: $0) }
+    let beforeJobs = try papers.map { try row("importJob", paper: $0) }
+    for (index, paper) in papers.enumerated() {
+      XCTAssertEqual(beforePapers[index]["status"] as String, "ready")
+      XCTAssertEqual(beforeJobs[index]["state"] as String, "succeeded")
+      _ = try XCTUnwrap(Data.fromDatabaseValue(beforeJobs[index]["recoveryJournal"]))
+      let reference: String = beforePapers[index]["pdfReference"]
+      let document = root.appendingPathComponent(reference)
+      let values = try document.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+      guard reference == "papers/\(paper.uuidString)/document.pdf",
+        values.isRegularFile == true, values.isSymbolicLink == false else {
+        throw LocalLibraryError.invalidPDF
+      }
+      // Mismatch makes unforwarded worker cancellation observably downgrade availability.
+      let replacement = Data("%PDF-1.7\nchanged owned cancellation fixture \(index)\n%%EOF\n".utf8)
+      XCTAssertNotEqual(try Data(contentsOf: document), replacement)
+      try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: document.path)
+      try replacement.write(to: document)
+      try FileManager.default.setAttributes([.posixPermissions: 0o400], ofItemAtPath: document.path)
+    }
+    let db = try XCTUnwrap(database)
+    let barrier = StartupReadBarrier()
+    try db.adapterWrite { $0.trace(options: .statement) { barrier.trace($0) } }
+    defer { try? db.adapterWrite { $0.trace() } }
+    let operation = Task { try await LocalLibraryLifecycle.open(database: db) }
+    let entered = await Task.detached {
+      barrier.waitForEntry()
+    }.value
+    XCTAssertTrue(entered, "Startup worker never reached the real reconciliation SELECT")
+    operation.cancel()
+    XCTAssertTrue(operation.isCancelled)
+    barrier.resume.signal()
+    do {
+      _ = try await operation.value
+      XCTFail("Cancelled reconciliation exposed a lifecycle")
+    } catch {
+      XCTAssertTrue(error is CancellationError || error as? LocalLibraryError == .cancelled,
+        "Unexpected startup error: \(error)")
+    }
+    XCTAssertEqual(barrier.observations.reads, 1)
+    XCTAssertFalse(barrier.observations.timedOut, "Cancellation barrier timed out")
+    for (index, paper) in papers.enumerated() {
+      assertUnchanged(beforePapers[index], try row("paper", paper: paper))
+      assertUnchanged(beforeJobs[index], try row("importJob", paper: paper))
+    }
+  }
+
   func testStartupSHAObservationPreservesMatchingPublishedPaperAndSucceededHistory() async throws {
     let paper = try await ownedStartupImport("matching")
     let beforePaper = try row("paper", paper: paper)

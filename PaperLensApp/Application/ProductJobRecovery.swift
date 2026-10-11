@@ -227,6 +227,7 @@ public struct ProductJobRecovery: Sendable {
   /// Library reconciliation follows atomic job recovery, still before owner admission.
   /// Neither missing files nor process restart attest Agent drain or namespace absence.
   func reconcileLibraryStartup() throws {
+    try Task.checkCancellation()
     guard FolderImportService.unknownSelectedSourceReads().isEmpty else {
       throw LocalLibraryError.producerClosureUnknown
     }
@@ -253,6 +254,7 @@ public struct ProductJobRecovery: Sendable {
       }
     }
     for capture in references {
+      try Task.checkCancellation()
       let expected = "papers/\(capture.id.uuidString)/document.pdf"
       let url = database.root.appendingPathComponent(capture.reference)
       let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
@@ -263,8 +265,10 @@ public struct ProductJobRecovery: Sendable {
         // A post-close byte observation, not a physical pin or lasting integrity attestation.
         let digest = try FolderImportService.hashSelectedSource(url,
           close: { try $0.close() }, beforeOpen: nil)
+        try Task.checkCancellation()
         unavailable = digest != capture.sha256
       }
+      try Task.checkCancellation()
       if unavailable {
         try database.adapterWrite { db in
           try ProductDatabase.reconcileUnavailableImport(capture.id,
@@ -273,6 +277,7 @@ public struct ProductJobRecovery: Sendable {
         }
       }
     }
+    try Task.checkCancellation()
   }
 
   private static func uuid(_ row: Row, _ column: String) throws -> UUID {
