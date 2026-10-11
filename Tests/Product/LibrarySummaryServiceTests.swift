@@ -156,6 +156,148 @@ final class LibrarySummaryServiceTests: XCTestCase {
     }
   }
 
+  func testOriginalOwnerArchiveRestoresWithoutInjectedGeometryOrProviderAfterRevisionChange() throws {
+    let f = try fixture(tail: "independent unranked full extent")
+    defer { try? FileManager.default.removeItem(at: f.root) }
+    let owners = try canonicalOwners(f)
+    _ = try installCanonicalGeometry(f, owners: owners)
+    // Explicit nonzero test tolerance belongs to these original fixture owners only.
+    let codec = try CanonicalExtractionGeometryValidator(owningAnchors: owners,
+      precision: PDFGeometryPrecision(maximumErrorPDFPoints: 0.25))
+    try f.db.reserveLibrarySummary(f.identity, frozen: f.frozen, geometry: codec)
+    let saved = try f.db.publishLibrarySummary(f.identity, frozen: f.frozen, result: f.result,
+      bytes: ProviderRequest.canonicalBytes(f.result.value), permit: UUID().uuidString,
+      resultID: UUID(), geometry: codec)
+    let newer = UUID()
+    try f.db.adapterWrite { sql in
+      try sql.execute(sql: """
+        INSERT INTO extractionRevision(id, paperID, generation, pdfSHA256, pdfReference)
+        VALUES (?, ?, ?, ?, ?)
+        """, arguments: [newer.uuidString, f.identity.paperID.uuidString,
+          f.identity.generation.uuidString, f.identity.pdfSHA256,
+          "papers/\(f.identity.paperID.uuidString)/document.pdf"])
+      try sql.execute(sql: "UPDATE extractionVisible SET revision = ? WHERE paperID = ?",
+        arguments: [newer.uuidString, f.identity.paperID.uuidString])
+    }
+    _ = try f.db.compareAndSwapProviderConfiguration(expected: f.db.providerConfiguration(),
+      replacementSlotID: nil, replacementModel: "new configuration")
+    let reopened = try ProductDatabase.open(at: f.root)
+    // Neither geometry nor provider is injected: only the registered original archive owns restore.
+    let restored = try XCTUnwrap(LibrarySummaryService(database: reopened)
+      .restore(paperID: f.identity.paperID))
+    XCTAssertEqual(restored.id, saved.id)
+    XCTAssertEqual(restored.identity, f.identity)
+    XCTAssertEqual(restored.identity.requestPaperGeneration, f.frozen.paperGeneration)
+    XCTAssertEqual(restored.identity.revision, f.identity.revision)
+    XCTAssertEqual(restored.result, f.result)
+    XCTAssertEqual(restored.evidence, saved.evidence)
+    XCTAssertEqual(restored.claimAnchors, [owners[1], owners[0]])
+    XCTAssertEqual(restored.claimAnchors.map(\.fullSourceQuote),
+      [owners[1].fullSourceQuote, owners[0].fullSourceQuote])
+    let archived = try reopened.adapterRead { sql in
+      try Data.fetchAll(sql, sql: "SELECT anchor FROM librarySummaryOwnerAnchor WHERE job = ? ORDER BY page, sentenceID",
+        arguments: [f.identity.job.uuidString])
+    }
+    XCTAssertEqual(try archived.map { try CanonicalExtractionGeometryValidator.decodeCanonicalAnchor($0) }, owners)
+    XCTAssertEqual(try reopened.adapterRead { try Double.fetchOne($0,
+      sql: "SELECT maximumErrorPDFPoints FROM librarySummaryOwner WHERE job = ?",
+      arguments: [f.identity.job.uuidString]) }, 0.25) // Synthetic fixture precision, not calibration.
+    XCTAssertEqual(try reopened.adapterRead { try Int.fetchOne($0,
+      sql: "SELECT COUNT(*) FROM librarySummaryJob") }, 1)
+    XCTAssertEqual(try reopened.adapterRead { try Int.fetchOne($0,
+      sql: "SELECT COUNT(*) FROM librarySummaryResult") }, 1)
+  }
+
+  func testOriginalOwnerArchiveRejectsMissingHeaderInvalidPrecisionCorruptAnchorAndMissingTail() throws {
+    for corruption in ["header", "precision", "anchor", "membership"] {
+      let f = try fixture(tail: "independent unranked full extent")
+      defer { try? FileManager.default.removeItem(at: f.root) }
+      let owners = try canonicalOwners(f)
+      let codec = try installCanonicalGeometry(f, owners: owners)
+      try f.db.reserveLibrarySummary(f.identity, frozen: f.frozen, geometry: codec)
+      let saved = try f.db.publishLibrarySummary(f.identity, frozen: f.frozen, result: f.result,
+        bytes: ProviderRequest.canonicalBytes(f.result.value), permit: UUID().uuidString,
+        resultID: UUID(), geometry: codec)
+      try f.db.adapterWrite { sql in
+        if corruption == "header" || corruption == "precision" {
+          // DELETE/INSERT respects the real immutable-update triggers. SQLite permits text
+          // in this REAL-affinity column; recovery must reject it rather than guess precision.
+          try sql.execute(sql: "DELETE FROM librarySummaryOwner WHERE job = ?",
+            arguments: [f.identity.job.uuidString])
+          if corruption == "precision" {
+            try sql.execute(sql: "INSERT INTO librarySummaryOwner(job, format, maximumErrorPDFPoints) VALUES (?, 1, 'unknown')",
+              arguments: [f.identity.job.uuidString])
+            for owner in owners {
+              try sql.execute(sql: "INSERT INTO librarySummaryOwnerAnchor(job, page, sentenceID, anchor) VALUES (?, ?, ?, ?)",
+                arguments: [f.identity.job.uuidString, owner.identity.pageIndex,
+                  owner.identity.sentenceID, try CanonicalExtractionGeometryValidator.encodeCanonicalAnchor(owner)])
+            }
+          }
+        } else {
+          // The unranked tail is required even though the saved claim selects only [1, 0].
+          try sql.execute(sql: "DELETE FROM librarySummaryOwnerAnchor WHERE job = ? AND page = 0 AND sentenceID = 2",
+            arguments: [f.identity.job.uuidString])
+          if corruption == "anchor" {
+            try sql.execute(sql: "INSERT INTO librarySummaryOwnerAnchor(job, page, sentenceID, anchor) VALUES (?, 0, 2, ?)",
+              arguments: [f.identity.job.uuidString, Data([0])])
+          }
+        }
+      }
+      let reopened = try ProductDatabase.open(at: f.root)
+      XCTAssertThrowsError(try LibrarySummaryService(database: reopened)
+        .restore(paperID: f.identity.paperID), corruption) { error in
+        switch corruption {
+        case "header", "precision": XCTAssertEqual(error as? LibrarySummaryError, .geometryUnavailable)
+        case "anchor": XCTAssertEqual(error as? CanonicalExtractionGeometryError, .invalidEncoding)
+        default: XCTAssertEqual(error as? LibrarySummaryError, .invalidGrounding)
+        }
+      }
+      // The saved result and candidate geometry remain valid under independent fixture owners;
+      // archive failure must not regenerate, delete or silently replace the committed result.
+      XCTAssertEqual(try LibrarySummaryService(database: reopened, geometry: codec)
+        .restore(paperID: f.identity.paperID)?.id, saved.id)
+      XCTAssertEqual(try reopened.adapterRead { try Int.fetchOne($0,
+        sql: "SELECT COUNT(*) FROM librarySummaryJob") }, 1)
+      XCTAssertEqual(try reopened.adapterRead { try Data.fetchOne($0,
+        sql: "SELECT result FROM librarySummaryResult WHERE id = ?",
+        arguments: [saved.id.uuidString]) }, try ProviderRequest.canonicalBytes(f.result.value))
+      XCTAssertEqual(try reopened.adapterRead { try String.fetchOne($0,
+        sql: "SELECT resultID FROM librarySummaryVisible WHERE paperID = ?",
+        arguments: [f.identity.paperID.uuidString]) }, saved.id.uuidString)
+    }
+  }
+
+  func testOriginalOwnerArchiveCannotRestoreSummaryForChangedPaperGeneration() throws {
+    let f = try fixture(tail: "independent unranked full extent")
+    defer { try? FileManager.default.removeItem(at: f.root) }
+    let codec = try installCanonicalGeometry(f, owners: canonicalOwners(f))
+    try f.db.reserveLibrarySummary(f.identity, frozen: f.frozen, geometry: codec)
+    let saved = try f.db.publishLibrarySummary(f.identity, frozen: f.frozen, result: f.result,
+      bytes: ProviderRequest.canonicalBytes(f.result.value), permit: UUID().uuidString,
+      resultID: UUID(), geometry: codec)
+    try f.db.adapterWrite { sql in
+      try sql.execute(sql: "UPDATE paper SET generation = ? WHERE id = ?",
+        arguments: [UUID().uuidString, f.identity.paperID.uuidString])
+    }
+    let reopened = try ProductDatabase.open(at: f.root)
+    XCTAssertNil(try LibrarySummaryService(database: reopened).restore(paperID: f.identity.paperID))
+    XCTAssertEqual(try reopened.adapterRead { try Int.fetchOne($0,
+      sql: "SELECT COUNT(*) FROM librarySummaryOwnerAnchor WHERE job = ?",
+      arguments: [f.identity.job.uuidString]) }, 3)
+    // Fixture-only stale pointer models corruption; even a still-retained archive cannot
+    // relabel this old result with the new Paper generation. No deletion/purge ACK is invented.
+    try reopened.adapterWrite { sql in
+      try sql.execute(sql: "INSERT INTO librarySummaryVisible(paperID, resultID) VALUES (?, ?)",
+        arguments: [f.identity.paperID.uuidString, saved.id.uuidString])
+    }
+    XCTAssertThrowsError(try LibrarySummaryService(database: reopened)
+      .restore(paperID: f.identity.paperID)) {
+      XCTAssertEqual($0 as? LibrarySummaryError, .staleIdentity)
+    }
+    XCTAssertEqual(try reopened.adapterRead { try Int.fetchOne($0,
+      sql: "SELECT COUNT(*) FROM librarySummaryResult") }, 1)
+  }
+
   func testCanonicalSummaryRequiresFullUnrankedOwnerAtReservePublishAndRestore() throws {
     for boundary in ["reserve", "publish", "restore"] {
       let f = try fixture(tail: "independent unranked full extent")

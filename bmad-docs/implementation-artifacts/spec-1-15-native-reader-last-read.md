@@ -276,3 +276,17 @@ interruption branches. No stronger repaired-race/runtime/Story certification is 
 Source diff SHA256 `24720c54268f760cee18f58a81511d06489642a2bc13d0f57b00a0c3bd115bcb`.
 Prior455/native-bf receipts belong to03ee2f5, not this changed source. Assessment140
 remains historical with implementation authored; regression/review resolution pending.
+
+### Bounded current interruption evidence
+
+Review166 returned SOURCE CLEAR for existing metadata publication1408cd4 and native
+restoration01c8bc7: real session/lease access surrounds callback-capable effects;
+post-callback repair prevents late Published resurrection. No product gate acceptance.
+Three actual metadata Combine publication cases passed artifact1620 after a test-only
+throwing-subscriber compilation correction (failure1619 retained). Artifact1625 passed
+the complete17 metadata cases plus three URL cases. Commitb29b4ee retains those tests.
+The additional actual ReaderPresentation `$opened` close/recursive-open case passed
+artifact1632: false opened, detached PDF, no session/metadata, zero pages after return,
+then successful later explicit genuine reopen. It is not scale/navigation notification
+interruption or visible-frame proof. Saved-zoom2.5 notification branch, navigation
+notification, physical restart/accessibility/P6/native matrix remain outstanding.

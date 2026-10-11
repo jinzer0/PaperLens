@@ -502,6 +502,41 @@ import XCTest
     XCTAssertNil(try db.publishedMetadataPaperIdentity(paperID: identity.paperID))
   }
 
+  func testNativeOpenedPublisherCloseCannotResurrectAndRecursiveOpenIsRejected() async throws {
+    let (db, lifecycle, identity, owner) = try await fixture()
+    owner.session.close()
+    let session = ReaderSession(database: db,
+      leaseProvider: LibraryReadLeaseProvider(lifecycle: lifecycle))
+    let presentation = ReaderPresentation(session: session,
+      annotationIdentity: try db.annotationIdentity(paperID: identity.paperID),
+      annotationService: AnnotationService(database: db),
+      metadataService: ReaderMetadataService(database: db), metadataIdentity: identity)
+    defer { session.close() }
+    var interrupted = false
+    let subscriber = presentation.$opened.dropFirst().sink { next in
+      guard next, !interrupted else { return }
+      interrupted = true
+      session.close()
+      presentation.open(paperID: identity.paperID) // Same-stack restoration cannot re-admit.
+      XCTAssertNil(session.currentPaper)
+      XCTAssertNil(presentation.pdfView.document)
+    }
+    defer { subscriber.cancel() }
+    presentation.open(paperID: identity.paperID)
+    XCTAssertTrue(interrupted)
+    XCTAssertFalse(presentation.opened)
+    XCTAssertEqual(presentation.pageCount, 0)
+    XCTAssertNil(presentation.pdfView.document)
+    XCTAssertNil(session.currentPaper)
+    XCTAssertNil(presentation.metadataBinding)
+    XCTAssertNotNil(presentation.failure)
+    presentation.open(paperID: identity.paperID) // Later explicit open receives fresh real access.
+    XCTAssertTrue(presentation.opened)
+    XCTAssertEqual(session.currentPaper?.paperID, identity.paperID)
+    XCTAssertNotNil(presentation.pdfView.document)
+    XCTAssertNotNil(presentation.metadataBinding)
+  }
+
   func testActualReaderMountMissingContextAndIdentityReplacement() async throws {
     let (db, lifecycle, identity, owner) = try await fixture()
     owner.session.close()

@@ -160,3 +160,16 @@ No new/correction tests, broad union/native gate or independent review were perf
 legacy noncanonical reservation fixture expectations remain intentionally unmodified
 and require genuine independent Canonical owners before future broad verification.
 0/26 Stories and Epic acceptance remain false; no protected execution or remote action.
+
+### Geometry-free owner archive focused regression
+
+Three new LibrarySummaryServiceTests original-owner archive cases passed parent
+SwiftPM `--parallel --num-workers 1 --filter LibrarySummaryServiceTests.testOriginalOwnerArchive`.
+They reopen sole GRDB without injected geometry or provider after visible revision/config
+change, retain saved identity/result/full ordered quotes and unranked membership plus
+explicit synthetic fixture precision, and reject missing header, wrong-typed precision,
+corrupt canonical anchor, missing unranked tail and stale generation/visible pointer.
+No provider effect or replacement Job/result is introduced. This is database reopen,
+not process/native restart or independently calibrated production-owner proof. Actual
+deletion cascade, quotas, archive source review, creator/profile activation and visible
+Summary remain outstanding; no Agent purge/closure acknowledgment is fabricated.
