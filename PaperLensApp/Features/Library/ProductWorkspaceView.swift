@@ -456,9 +456,10 @@ public struct ProductWorkspaceView: View {
   @ObservedObject private var workspace: ProductWorkspace
   @ObservedObject private var urls: URLImportService
   @FocusState private var folderOpenerFocused: Bool
+  @FocusState private var settingsOpenerFocused: Bool
   @FocusState private var localPDFFocused: Bool
   @State private var mount: UUID?
-  @State private var folderPresentation: FolderPresentation?
+  @State private var toolbarPresentation: ToolbarPresentation?
   @State private var nativeSlot: NativeSlot?
   @State private var directIntent: DirectIntent?
 
@@ -468,6 +469,7 @@ public struct ProductWorkspaceView: View {
     let sheet: ProductWorkspace.Sheet
     let confirmationID: UUID?
     let directIntentID: UUID?
+    let toolbarPresentationID: UUID?
     var appeared = false
     var cancelled: UUID?
     var continued: UUID?
@@ -488,9 +490,28 @@ public struct ProductWorkspaceView: View {
     var cancellationReturned: UUID?
   }
 
-  private struct FolderPresentation {
+  private struct ToolbarPresentation {
+    enum Kind {
+      case folders, settings
+
+      var sheet: ProductWorkspace.Sheet {
+        switch self {
+        case .folders: return .folders
+        case .settings: return .settings
+        }
+      }
+
+      func matches(_ sheet: ProductWorkspace.Sheet) -> Bool {
+        switch (self, sheet) {
+        case (.folders, .folders), (.settings, .settings): return true
+        default: return false
+        }
+      }
+    }
+
     let id = UUID()
     let mount: UUID
+    let kind: Kind
     var appeared = false
   }
 
@@ -509,16 +530,8 @@ public struct ProductWorkspaceView: View {
         .id(reader.mountIdentity)
       } else {
         HStack {
-          Button("폴더 관리") {
-            guard let mount, nativeSlot == nil, folderPresentation == nil, workspace.sheet == nil,
-              !workspace.sheetCleanupPending, !workspace.preparing, !workspace.opening,
-              workspace.reader == nil else { return }
-            folderPresentation = FolderPresentation(mount: mount)
-            invalidateDirectIntent()
-            workspace.sheet = .folders
-            if workspace.sheet?.id != "folders" { folderPresentation = nil }
-          }.focused($folderOpenerFocused)
-          Button("Settings") { invalidateDirectIntent(); workspace.sheet = .settings }
+          Button("폴더 관리") { openToolbar(.folders) }.focused($folderOpenerFocused)
+          Button("Settings") { openToolbar(.settings) }.focused($settingsOpenerFocused)
           if workspace.preparing { ProgressView("PDF 확인 중") }
           Spacer()
         }.padding().disabled(workspace.preparing || workspace.opening || workspace.sheetCleanupPending)
@@ -561,9 +574,9 @@ public struct ProductWorkspaceView: View {
         .font(.caption).foregroundStyle(.secondary).padding(8)
     }
     .onAppear { mount = UUID(); latchNativeSlot() }
-    .onDisappear { invalidateDirectIntent(); mount = nil; folderPresentation = nil }
+    .onDisappear { invalidateDirectIntent(); mount = nil; toolbarPresentation = nil }
     .onChange(of: workspace.reader?.mountIdentity) { _, reader in
-      if reader != nil { invalidateDirectIntent(); folderPresentation = nil }
+      if reader != nil { invalidateDirectIntent(); toolbarPresentation = nil }
     }
     .onChange(of: workspace.sheet?.id) { _, _ in latchNativeSlot() }
     .sheet(isPresented: Binding(get: {
@@ -595,18 +608,10 @@ public struct ProductWorkspaceView: View {
           allowsInteractiveCancel: interactiveCancelAllowed(slot),
           imported: { workspace.imported($0) })
       case .folders:
-        let presentationID = folderPresentation?.id
         VStack {
           FolderManagementView(service: workspace.imports)
           Button("닫기") { closeNativeSlot(slot) }
         }.padding().frame(minWidth: 420)
-          .onAppear {
-            guard nativeSlot?.id == slot.id, mount == slot.mount,
-              let presentationID, folderPresentation?.id == presentationID,
-              workspace.sheet?.id == "folders",
-              folderPresentation?.mount == mount else { return }
-            folderPresentation?.appeared = true
-          }
       case .settings:
         VStack {
           ProviderSettingsView(service: workspace.settings)
@@ -616,6 +621,18 @@ public struct ProductWorkspaceView: View {
   }
 
   private func invalidateDirectIntent() { directIntent?.invalidated = true }
+
+  private func openToolbar(_ kind: ToolbarPresentation.Kind) {
+    guard let mount, nativeSlot == nil, toolbarPresentation == nil, workspace.sheet == nil,
+      !workspace.sheetCleanupPending, !workspace.preparing, !workspace.opening,
+      workspace.reader == nil else { return }
+    let presentation = ToolbarPresentation(mount: mount, kind: kind)
+    toolbarPresentation = presentation
+    invalidateDirectIntent()
+    workspace.sheet = kind.sheet
+    if workspace.sheet.map({ kind.matches($0) }) != true,
+      toolbarPresentation?.id == presentation.id { toolbarPresentation = nil }
+  }
 
   private func closeNativeSlot(_ slot: NativeSlot) {
     guard nativeSlot?.id == slot.id, workspace.sheet?.id == slot.sheet.id else { return }
@@ -643,6 +660,11 @@ public struct ProductWorkspaceView: View {
   }
 
   private func latchNativeSlot() {
+    if let presentation = toolbarPresentation,
+      let sheet = workspace.sheet,
+      presentation.mount != mount || !presentation.kind.matches(sheet) {
+      if toolbarPresentation?.id == presentation.id { toolbarPresentation = nil }
+    }
     guard nativeSlot == nil, let mount, let sheet = workspace.sheet else { return }
     let confirmationID: UUID?
     if case .confirmation(let confirmation) = sheet { confirmationID = confirmation.id }
@@ -651,8 +673,11 @@ public struct ProductWorkspaceView: View {
       && directIntent?.invalidated == false && directIntent?.slotID == nil
       ? directIntent?.id : nil
     if origin == nil { invalidateDirectIntent() }
+    let toolbarID = toolbarPresentation?.mount == mount
+      && toolbarPresentation?.kind.matches(sheet) == true ? toolbarPresentation?.id : nil
     let slot = NativeSlot(mount: mount, sheet: sheet,
-      confirmationID: confirmationID, directIntentID: origin)
+      confirmationID: confirmationID, directIntentID: origin,
+      toolbarPresentationID: toolbarID)
     nativeSlot = slot
     if let origin, directIntent?.id == origin {
       directIntent?.slotID = slot.id
@@ -664,6 +689,11 @@ public struct ProductWorkspaceView: View {
     guard nativeSlot?.id == slot.id, mount == slot.mount,
       workspace.sheet?.id == slot.sheet.id else { return }
     nativeSlot?.appeared = true
+    if let id = slot.toolbarPresentationID, toolbarPresentation?.id == id,
+      toolbarPresentation?.mount == slot.mount,
+      toolbarPresentation?.kind.matches(slot.sheet) == true {
+      toolbarPresentation?.appeared = true
+    }
     if let id = slot.directIntentID, directIntent?.id == id,
       directIntent?.slotID == slot.id { directIntent?.appeared = true }
   }
@@ -716,13 +746,17 @@ public struct ProductWorkspaceView: View {
       }
       reconcileDirectIntent(id)
     }
-    if case .folders = slot.sheet, let presentation = folderPresentation,
-      presentation.mount == slot.mount {
-      folderPresentation = nil
+    if let id = slot.toolbarPresentationID, let presentation = toolbarPresentation,
+      presentation.id == id, presentation.mount == slot.mount,
+      presentation.kind.matches(slot.sheet) {
+      toolbarPresentation = nil
       if appeared, presentation.appeared, mount == slot.mount,
-        workspace.reader == nil, workspace.sheet == nil,
+        workspace.reader == nil, workspace.sheet == nil, nativeSlot == nil,
         !workspace.sheetCleanupPending, !workspace.preparing, !workspace.opening {
-        folderOpenerFocused = true
+        switch presentation.kind {
+        case .folders: folderOpenerFocused = true
+        case .settings: settingsOpenerFocused = true
+        }
       }
     }
     latchNativeSlot()

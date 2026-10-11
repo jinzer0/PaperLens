@@ -31,6 +31,25 @@ Tests/test fixes, type/build/native runtime and keyboard/VoiceOver verification
 remain deferred under the current instruction. Parent owns permitted source checks
 and independent review; no Story/Epic acceptance or authenticated reconnect claim.
 
+### Source implementation notes (contract 465b289)
+
+The existing Settings and folder Buttons now have their own native FocusState
+bindings and share one typed ToolbarPresentation in the existing Workspace root.
+Accepted actions capture a fresh receipt/original mount before owner assignment;
+rejection clears only that receipt. The immutable NativeSlot latches the matching
+kind/mount receipt ID. Common actual native appearance records that exact receipt;
+unrelated sheets, Reader entry and unmount deny toolbar return. Native dismissal
+invokes existing owner cleanup first, consumes only the slot-linked receipt once,
+then returns to its actual Button only with appearance/live-mount/clear-owner fences.
+Stale callbacks cannot consume a newer receipt. Direct-PDF Cancel-only reconciliation
+and all Workspace model/provider/resource authority remain unchanged.
+
+This is authored source, not observed native focus or reconnection proof. Tests,
+test fixes, type/build checks, gates, formatters and native/keyboard/VoiceOver trials
+were not run. Parent Workspace syntax parsing and git diff --check pass;
+independent196 is SOURCE CLEAR for this three-file delta. No StoryDone/Epic promotion
+or physical cleanup ACK is claimed.
+
 ## Authority and admission
 
 Issue#28 / `issue/28-story-1-26`; base `f14f15f3f1c1fed02657ebf0c7ecdcb23721bfa8`. PRODUCT `5eac3bb9424ad893eca7d63bc319b71f580838ed`; ARCHITECTURE `1195c92227cc628e325f5ff24d70cc93639bf7a9`; Whole-Epic https://github.com/jinzer0/PaperLens/issues/3#issuecomment-6049004229. Own committed Spec before source; no repeated unchanged-scope SHA approval (parent reconciled generic proposal wording), no actual gates/credentials/live/paid/remote/distribution permission.

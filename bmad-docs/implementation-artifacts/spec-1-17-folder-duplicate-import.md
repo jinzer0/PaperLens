@@ -13,6 +13,25 @@ is untouched. Commit this shared contract before the sole Workspace source chang
 native/type/runtime/tests remain deferred, no provider/resource/physical ACK or
 Story promotion. No new focus controller or parallel presentation owner.
 
+### Shared toolbar source implementation notes (contract 465b289)
+
+Workspace's existing FolderPresentation is replaced by one typed folders/settings
+ToolbarPresentation, not a second owner. Both actual toolbar Buttons capture fresh
+receipts under the same explicit admission guards; each has its own native focus
+binding. The immutable native slot retains the exact kind/mount-matched receipt ID,
+and common native appearance marks only that receipt. Unrelated sheets consume
+eligibility; Reader entry/unmount invalidate it. Actual dismissal still calls owner
+cleanup before focus guards, consumes only its matching receipt, and returns to
+the original surviving Button after appearance and clear live-owner fences.
+The folder-only sheet appearance path is removed; Browser-origin folders gain no
+toolbar receipt. Direct-PDF Cancel/event/task reconciliation and model cleanup
+are unchanged. These are UI identities, not resource or physical-ACK authority.
+
+Tests/test fixes, gates, formatters, type/build/runtime and native keyboard/VoiceOver
+proof remain deferred and were not executed. Parent Workspace syntax parsing and
+git diff --check pass; independent196 is SOURCE CLEAR for this three-file delta.
+This shared source continuation is not Story/Epic acceptance.
+
 ## Direct PDF-button Cancel focus integration (baseline b8b3bd3)
 
 Review190 resolves the next source input: URLImportView's existing PDF 선택 Button
