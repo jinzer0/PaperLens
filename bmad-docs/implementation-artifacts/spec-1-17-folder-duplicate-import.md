@@ -1,5 +1,55 @@
 # Story 1.17 Build Spec — Folder arrangement and duplicate local import
 
+## Bounded movement native dismissal/current-query return (baseline 57c4199)
+
+Architect203 SOURCE_SLICE_READY identifies the existing opener-focus criterion:
+the separate movement item sheet, subtree disappearance and loading=false membership
+check cannot establish native dismissal, original root or current enabled opener.
+This continuation supersedes only that historical return mechanism, not its durable
+placement/CAS evidence. Commit this paired contract before sole Browser source edits.
+
+Add exactly movement to existing LibrarySheetContent/Slot/Presentation/root presenter.
+Capture the currently accepted readable Paper/generation, original mount, presentation
+identity, filter/revision at guarded admission; clear prior observation before installing
+the slot. Remove LibraryMovement/moving/movementFocusToRestore/separate item sheet and
+loading-based return, not organization action focus, folder manager or deletion alerts.
+No second controller/store/query counter or resource authority.
+
+Slot-captured appearance, close, visibility and actual native receipt retain identity
+through closing. Pending native admission blocks replacement Browser work. Invalidation/
+unmount revoke payload/load/Save/return eligibility while retaining callback identity;
+old-root receipt retires only its matching capture, never queries or affects newer root.
+Disappearance cancels local observations only, never proves dismissal or requests focus.
+
+Uninterrupted same-mount receipt binds once to the existing exact query Request. Consume
+after current acceptance installs folders/tags/facts or matching rejection; newer query/
+work/focus permanently denies. Return only to current rendered, enabled, readable,
+same-generation movement Button including selected-folder visibility, else existing
+search without resetting conditions. Preserve other-kind/different focus, allow only
+nil or matching original movement focus, and release record before assignment. Replace
+identification-not-tag shorthand with concrete kind checks for all three controls.
+
+Private PaperMovementSheet requires close, reactive Bool and synchronous live eligibility.
+Fence payload/destination/error rendering, task/reload/Save admission and delayed Task
+entry. Reload checks before placement read, between placement/folders awaits, after
+folders and before failure publication; retain actual PaperPlacementLoadState requests,
+cancellation and explicit accepted reload after failed Save. Save freezes actual captured
+placement/destination and checks eligibility before service admission. Cancel admits no
+new write. Already admitted successful move always reaches keyed committed callback,
+even after cancellation/invalidation: never undo/replay persistence. Live failure remains
+explicit, invalidates observation and requires fresh reload; invalidated UI cannot revive.
+
+Committed callback refreshes current mounted root only and closes only original matching
+slot. Preserve only uninterrupted pre-dismissal original movement return, never rearm a
+consumed/interrupted one. A narrowly named completed-movement refresh/invalidation mode
+revokes newer slot payload/mutation/return eligibility but retains native visibility,
+closing state and callback identity. Paired Spec1.25 pins newer-tag mutation admission.
+Ordinary invalidation and both own-tag Save outcomes remain unchanged.
+
+No public API/service/DB/schema/placement CAS/PDF/resource changes. Parent owns syntax/
+diff checks, independent review and local commit. Tests/test fixes/type/build/gates/
+formatter/native/runtime/keyboard/VoiceOver remain deferred; canonical acceptance0/26.
+
 ## Shared toolbar focus continuation (baseline 0ee17ee)
 
 Spec1.26's Settings opener phase reuses this root's existing folder presentation

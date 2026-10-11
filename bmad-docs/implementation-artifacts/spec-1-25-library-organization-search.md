@@ -1,6 +1,41 @@
 # Story 1.25 Build Spec — Library organization, search and filters
 
-## Paired detail lifecycle integration; retained tag source contract
+## Paired movement lifecycle integration (baseline 57c4199)
+
+Spec1.17 adds exactly movement as third concrete Browser slot payload on the existing
+retained root native presenter. Shared pending admission and exact current Request
+return remain control-specific: tag More Menu, detail Button, movement Button. Concrete
+kind checks replace identification-not-tag shorthand. No second owner/framework/counter.
+
+Preserve tag drafts/phases/guarded private close/whole-record CAS/explicit revalidation/
+failure and both own-Save outcomes' current-mounted-root refresh. Own completion preserves
+only matching pre-dismissal tag; unmounted completion never queries. Detail synchronous
+live rendering/read-start/post-await/Retry eligibility remains unchanged, passive only.
+
+Admitted late movement success uses narrowly named existing refresh/invalidation mode.
+Only original matching slot may close. A newer pre-dismissal slot loses payload/return
+eligibility while native visibility, closing state and callback identity remain intact;
+refresh current mounted root without rearming old return. Ordinary invalidation still
+closes non-tag slots, and own-tag completion does not use this exception.
+
+A newer tag retains drafts/private close but gets a distinct UI-only late-movement
+mutation-admission veto in existing presentation record. Exact-slot Save/revalidate
+callbacks check it before service admission, including delayed Task entry; missing or
+replaced records deny. Focus-only interruption is not a veto and ordinary tag behavior
+is not broadened. Already admitted Save still finishes and refreshes current mounted
+root on both outcomes, preserving original failure; UI checks never replace service CAS
+or cancel persistence. Detail/movement payload/load/Save remain synchronously ineligible.
+
+Remove obsolete movement item/focus state only. Organization action focus, deletion
+alerts/folder manager remain unchanged. Sole source Browser after paired Spec commit;
+no public API/service/store/schema/resource changes. Parent syntax/diff/independent review
+and local commit only; tests/test fixes/type/build/gates/formatter/native/runtime/
+keyboard/VoiceOver deferred, acceptance0/26.
+
+## Historical paired detail lifecycle integration; retained tag source contract
+
+The movement exclusion below records the two-case phase scope; only the new bounded
+movement continuation above supersedes it. Prior source/evidence remain historical.
 
 Spec1.24's bounded detail continuation extends the existing concrete immutable slot
 and retained lifecycle to exactly tag-editor and identification payloads on the same
