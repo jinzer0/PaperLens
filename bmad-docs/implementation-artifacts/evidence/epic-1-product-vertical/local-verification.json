@@ -126,6 +126,18 @@
     "canonicalStoryCompletionCount": 0,
     "epicAccepted": false
   },
+  "productionBindingAdmission": {
+    "review": "agent://174-ProductionBindingAdmission",
+    "verdict": "NOADMIT",
+    "scope": "Only production Agent purge, parsing geometry and fresh Summary activation seams; not an entire-Epic human-only verdict",
+    "missingGenuineInputs": ["Actual retained AgentLibraryPurging peer/original closure and ACK owner", "Production PDFiumGeometryBinding creator with independently owned complete geometry and calibrated explicit precision", "Certified provider executor/profile, trusted Paper generation and parent-held closure/publication authority for fresh Summary"],
+    "parentCurrentDefinitionChecks": "Production App.start binds agentPurge:nil. Source search in PaperLensApp/Contracts finds PDFiumGeometryBinding type, validator and Main consumer only, no production creator. NativeAPIKeyConnection.swift:65-66 requireCertifiedEnforcement always throws unsupportedProfile; this definition was outside reviewer174 scope and checked by parent.",
+    "oneNextPrerequisite": "Supply the genuine production geometry creator and calibration/precision input, or explicitly settle its missing producer-owned geometry contract before a committed Build Spec and source integration. This is not approval to renew protected trials or use fixture/candidate authority.",
+    "humanQuestionGuard": "The native ask rejected this concrete prerequisite question because separate G001 remains incomplete. Supported record-review-blockers targeting existing G001 was rejected because its source run is handed off/fenced to the recorded successor. No goal/approval/ownership state was fabricated or rewritten; G001 does not become a blanket Epic implementation ban.",
+    "goalCompleteOrPaused": false,
+    "canonicalStoryCompletionCount": 0,
+    "epicAccepted": false
+  },
   "canonicalRemainingAcceptanceInventory": {
     "requirements": "Canonical root bmad-docs/planning-artifacts/epics.md Epic1 Stories1.1–1.26; existing committed spec-epic-1-execution.md and per-Story Specs",
     "mapping": "agent://148-EpicRemainingEvidenceMap; bounded requirements/receipt mapping at34071b09ac1f6accbd52ae6d80cd8d1724b567b2, not independent source review or current broad verification",
