@@ -63,24 +63,26 @@ public struct ParsingStatusView: View {
 
   public var body: some View {
     VStack(alignment: .leading, spacing: 8) {
-      Text("파싱 상태와 복구").font(.headline)
+      Text("파싱 상태와 복구").font(.headline).accessibilityAddTraits(.isHeader)
       Label(title, systemImage: icon)
         .accessibilityLabel(title)
       if status?.usableRevision != nil {
         Text("이전에 완성된 원문을 계속 사용할 수 있습니다.")
           .font(.caption)
       }
-      Text("AI 기능 가용성").font(.subheadline)
+      Text("AI 기능 가용성").font(.subheadline).accessibilityAddTraits(.isHeader)
       Text(aiPreparationReason).font(.caption)
       Text("Translation·Paper Chat·Brief 생성은 아직 구현되지 않았습니다.")
         .font(.caption).foregroundStyle(.secondary)
       if let retryFailure {
-        Text(retryFailure)
+        Label(retryFailure, systemImage: "exclamationmark.triangle")
           .accessibilityLabel(retryFailure)
       }
       if status?.state == "failed" {
-        Button("파싱 다시 시도") { Task { await retryParsing() } }
+        Button(retrying ? "파싱 재시도 요청 중…" : "파싱 다시 시도") { Task { await retryParsing() } }
           .disabled(retrying || recoveryContext == nil || coordinator == nil || unavailable)
+          .accessibilityValue(retrying ? "재시도 요청 처리 중" : "")
+          .accessibilityHint("현재 논문의 파싱 재시도를 명시적으로 요청합니다. 완료를 의미하지 않습니다.")
         if coordinator == nil {
           Text("PDF 파싱 서비스가 연결되지 않았습니다.")
             .font(.caption)

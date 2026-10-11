@@ -1,5 +1,21 @@
 # Story 1.21 Build Spec — Parsing failure and explicit Retry
 
+## Current-source Retry presentation and accessibility
+
+Scope: ParsingStatusView.swift only. The existing explicit Retry button remains
+owned by the same coordinator/context and disabled admission; its label will distinguish
+an in-flight retry request from an idle explicit action. This is request activity, not
+parser progress, accepted dispatch or completion. Expose that distinction and the
+explicit-action purpose to accessibility, mark the status/AI headings as headers, and
+present a retry-action failure as a warning rather than undifferentiated body text.
+Keep native Button keyboard/focus behavior; do not steal focus during persisted polling
+or add global shortcuts, automatic Retry, dispatch authority or a new status owner.
+Availability, safe failure mapping and floating notice remain unchanged. No tests,
+builds, formatters, gates or runtime execution in this slice. Parent source review and
+permitted checks remain required; actual keyboard/VoiceOver, request-state rendering,
+immediate notification, real restart and calibrated parser/Retry remain unproved.
+Canonical acceptance is unchanged.
+
 ## Right-panel recovery and explicit AI availability
 
 Baseline4ff6a2fa80737798092849eadfda350d17510ab6 mounts ParsingStatusView in a
