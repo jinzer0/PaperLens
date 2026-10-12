@@ -23,7 +23,7 @@ public struct LibraryBrowserView: View {
   @State private var deleting: OrganizedPaper?
   @State private var rootMount: UUID?
   @State private var sheetPresentation: LibrarySheetPresentation?
-  @State private var organizationFocusToRestore: (paperID: UUID, generation: UUID, control: OrganizationControlFocus)?
+  @State private var organizationFocusToRestore: OrganizationActionReturn?
   @FocusState private var organizationFocus: OrganizationControlFocus?
   @FocusState private var focusedPaper: UUID?
   @FocusState private var focusedIdentification: UUID?
@@ -279,32 +279,29 @@ public struct LibraryBrowserView: View {
     .onChange(of: refreshRevision) { _, _ in refresh() }
     .onChange(of: filter) { _, _ in refresh() }
     .onChange(of: organizationFocus) { _, value in
+      if let value, value != organizationFocusToRestore?.control { organizationFocusToRestore = nil }
       if value != nil { interruptSheetReturn(newerWork: false) }
     }
     .onChange(of: focusedPaper) { _, value in
+      if value != nil { organizationFocusToRestore = nil }
       if let value, sheetPresentation?.slot.content.isTagEditor != true
         || value != sheetPresentation?.slot.paper.id { interruptSheetReturn(newerWork: false) }
     }
     .onChange(of: focusedIdentification) { _, value in
+      if value != nil { organizationFocusToRestore = nil }
       if let value, sheetPresentation?.slot.content.isIdentification != true
         || value != sheetPresentation?.slot.paper.id { interruptSheetReturn(newerWork: false) }
     }
     .onChange(of: focusedMovement) { _, value in
+      if value != nil { organizationFocusToRestore = nil }
       if let value, sheetPresentation?.slot.content.isMovement != true
         || value != sheetPresentation?.slot.paper.id { interruptSheetReturn(newerWork: false) }
     }
     .onChange(of: operationFailed) { _, value in
-      if value { interruptSheetReturn(newerWork: true) }
+      if value { organizationFocusToRestore = nil; interruptSheetReturn(newerWork: true) }
     }
-    .onChange(of: loading) { _, value in
-      if !value, let opener = organizationFocusToRestore {
-        if organizationFocus == nil || organizationFocus == opener.control {
-          organizationFocus = !loadFailed && snapshot?.papers.contains(where: {
-            $0.id == opener.paperID && $0.generation == opener.generation
-          }) == true ? opener.control : .search
-        }
-        organizationFocusToRestore = nil
-      }
+    .onChange(of: deleting?.id) { _, value in
+      if value != nil { organizationFocusToRestore = nil }
     }
     .alert("논문을 영구 삭제하시겠습니까?",
       isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }), presenting: deleting) { paper in
@@ -404,6 +401,7 @@ public struct LibraryBrowserView: View {
           } else {
             Button("삭제", role: .destructive) {
               guard !nativeSheetPending, !busy else { return }
+              organizationFocusToRestore = nil
               interruptSheetReturn(newerWork: true)
               deleting = paper
             }.disabled(paper.status == .deleting)
@@ -642,6 +640,7 @@ public struct LibraryBrowserView: View {
 
   private func requestManageFolders() {
     guard !nativeSheetPending, !busy else { return }
+    organizationFocusToRestore = nil
     interruptSheetReturn(newerWork: true)
     manageFolders()
   }
@@ -657,9 +656,21 @@ public struct LibraryBrowserView: View {
   private func saveOrganization(_ value: PaperOrganization, for paper: OrganizedPaper,
     origin: OrganizationControlFocus) {
     guard !nativeSheetPending, paper.readable, !busy, !loading, !loadFailed,
+      let mountID = rootMount, renderedPaperControls(for: paper),
+      snapshot?.papers.contains(where: {
+        $0.id == paper.id && $0.generation == paper.generation && $0.readable
+      }) == true, deleting == nil, !operationFailed,
+      focusedPaper == nil, focusedIdentification == nil, focusedMovement == nil,
+      organizationFocus == nil || organizationFocus == origin,
       value != paper.organization else { return }
-    organizationFocusToRestore = (paper.id, paper.generation, origin)
-    perform { try await service.save(value, for: paper) }
+    switch origin {
+    case .favorite(let id), .reading(let id): guard id == paper.id else { return }
+    default: return
+    }
+    let receipt = OrganizationActionReturn(token: UUID(), mountID: mountID,
+      paperID: paper.id, generation: paper.generation, control: origin,
+      filter: filter, refreshRevision: refreshRevision, awaitingRequest: nil)
+    perform(returningOrganization: receipt) { try await service.save(value, for: paper) }
   }
   private func requestImport() {
     guard !nativeSheetPending else { return }
@@ -673,17 +684,28 @@ public struct LibraryBrowserView: View {
     retryImportPDF(paper.id, paper.generation)
     refresh()
   }
-  private func perform(_ operation: @escaping @MainActor () async throws -> Void) {
+  private func perform(returningOrganization receipt: OrganizationActionReturn? = nil,
+    _ operation: @escaping @MainActor () async throws -> Void) {
     guard !nativeSheetPending, !busy else { return }
     busy = true; invalidateObservation()
+    organizationFocusToRestore = receipt
     Task {
-      do { try await operation() } catch { operationFailed = true }
-      busy = false; refresh()
+      do {
+        try await operation()
+        busy = false
+        if rootMount != nil { refresh(completingOrganization: receipt?.token) }
+      } catch {
+        organizationFocusToRestore = nil
+        operationFailed = true
+        busy = false
+        if rootMount != nil { refresh() }
+      }
     }
   }
   private func refresh(preservingEditor slotID: UUID? = nil,
     returningSheet slot: LibrarySheetSlot? = nil,
-    completedMovement movement: LibrarySheetSlot? = nil) {
+    completedMovement movement: LibrarySheetSlot? = nil,
+    completingOrganization token: UUID? = nil) {
     if let slot {
       guard let presentation = sheetPresentation, presentation.slot.id == slot.id,
         rootMount == slot.mountID, presentation.nativeDismissConsumed,
@@ -709,22 +731,31 @@ public struct LibraryBrowserView: View {
       }
       clearObservation()
     } else {
-      invalidateObservation(preservingEditor: slotID)
+      invalidateObservation(preservingEditor: slotID, completingOrganization: token)
     }
     guard rootMount != nil, !busy else { return }
+    if !canPreserveOrganizationReturn(token) { organizationFocusToRestore = nil }
     let request = query.begin(filter: filter)
+    if let receipt = organizationFocusToRestore {
+      organizationFocusToRestore = OrganizationActionReturn(token: receipt.token,
+        mountID: receipt.mountID, paperID: receipt.paperID, generation: receipt.generation,
+        control: receipt.control, filter: receipt.filter, refreshRevision: receipt.refreshRevision,
+        awaitingRequest: request)
+    }
     if let slot, sheetPresentation?.slot.id == slot.id { sheetPresentation?.awaitingRequest = request }
     Task { await load(request) }
   }
-  private func invalidateObservation(preservingEditor slotID: UUID? = nil) {
+  private func invalidateObservation(preservingEditor slotID: UUID? = nil,
+    completingOrganization token: UUID? = nil) {
     if let presentation = sheetPresentation,
       !presentation.slot.content.isTagEditor || presentation.slot.id != slotID
         || presentation.nativeDismissConsumed {
       interruptSheetReturn(newerWork: true)
     }
-    clearObservation()
+    clearObservation(completingOrganization: token)
   }
-  private func clearObservation() {
+  private func clearObservation(completingOrganization token: UUID? = nil) {
+    if !canPreserveOrganizationReturn(token) { organizationFocusToRestore = nil }
     currentFacts = [:]
     folders = []
     folderLoadFailed = false
@@ -762,9 +793,38 @@ public struct LibraryBrowserView: View {
       let generations = Dictionary(uniqueKeysWithValues: value.papers.map { ($0.id, $0.generation) })
       currentFacts = Dictionary(uniqueKeysWithValues: facts.filter { generations[$0.paperID] == $0.generation }.map { ($0.paperID, $0) })
       consumeSheetReturn(request)
+      consumeOrganizationReturn(request)
     } catch {
       query.reject(request: request, currentFilter: filter)
       consumeSheetReturn(request)
+      if query.failed, !query.loading { consumeOrganizationReturn(request) }
+    }
+  }
+  private func organizationReturnIsEligible(_ receipt: OrganizationActionReturn) -> Bool {
+    rootMount == receipt.mountID && filter == receipt.filter
+      && refreshRevision == receipt.refreshRevision && !busy
+      && !nativeSheetPending && deleting == nil && !operationFailed
+      && focusedPaper == nil && focusedIdentification == nil && focusedMovement == nil
+      && (organizationFocus == nil || organizationFocus == receipt.control)
+  }
+
+  private func canPreserveOrganizationReturn(_ token: UUID?) -> Bool {
+    guard let token, let receipt = organizationFocusToRestore,
+      receipt.token == token, receipt.awaitingRequest == nil else { return false }
+    return organizationReturnIsEligible(receipt)
+  }
+
+  private func consumeOrganizationReturn(_ request: OrganizationQueryState.Request) {
+    guard let receipt = organizationFocusToRestore, receipt.awaitingRequest == request,
+      !query.loading else { return }
+    organizationFocusToRestore = nil
+    guard organizationReturnIsEligible(receipt) else { return }
+    if let paper = snapshot?.papers.first(where: {
+      $0.id == receipt.paperID && $0.generation == receipt.generation && $0.readable
+    }), renderedPaperControls(for: paper) {
+      organizationFocus = receipt.control
+    } else {
+      organizationFocus = .search
     }
   }
   private func readingLabel(_ status: PaperReadingStatus) -> String {
@@ -780,6 +840,17 @@ public struct LibraryBrowserView: View {
     case .tombstone: return "삭제됨"
     }
   }
+}
+
+private struct OrganizationActionReturn {
+  let token: UUID
+  let mountID: UUID
+  let paperID: UUID
+  let generation: UUID
+  let control: OrganizationControlFocus
+  let filter: OrganizationFilter
+  let refreshRevision: Int
+  let awaitingRequest: OrganizationQueryState.Request?
 }
 
 private enum OrganizationControlFocus: Hashable {

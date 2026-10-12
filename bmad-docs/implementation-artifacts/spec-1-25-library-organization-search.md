@@ -451,3 +451,24 @@ plus parent Browser syntax parsing/git diff --check pass and independent202 SOUR
 verify the bounded source paths, not native delivery. Tests/type/build/native/runtime/
 keyboard/VoiceOver proof remain deferred. No services, tests, public APIs or
 schema changed, and canonical acceptance remains0/26.
+
+### Ordinary organization action source-only receipt
+
+Against committed contract90a7205, LibraryBrowserView replaces the ordinary
+loading observer/tuple with private immutable OrganizationActionReturn captures.
+Favorite/Reading admission checks the original mounted, rendered readable accepted
+Paper generation and compatible focus/modal state; perform installs only after its
+guarded initial invalidation and preserves whole observed-record service admission.
+Own successful completion can preserve only the still-live unbound token through
+ordinary invalidation, then binds its return to the existing exact query Request.
+Acceptance installs query facts before consumption; failed/not-loading rejection
+also consumes, releasing the receipt before eligibility checks and focus effects.
+Other work, focus, conditions, mount or alerts permanently revoke the return.
+Both operation outcomes clear busy and refresh the current mounted root even after
+revocation/remount; failure clears return eligibility before the original alert.
+Native tag/detail/movement paths and deletion-alert behavior are unchanged. Parent
+Browser syntax parsing/git diff --check pass; independent209 SOURCE CLEAR verifies
+bounded source interleavings, remount/query interruption and native-path preservation.
+Tests/test fixes/type/build/gates/formatter/native runtime/keyboard/VoiceOver remain
+deferred and were not run. No services, public APIs, tests or schema changed;
+this note does not promote acceptance0/26.
