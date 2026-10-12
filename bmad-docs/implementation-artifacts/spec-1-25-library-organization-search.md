@@ -1,5 +1,59 @@
 # Story 1.25 Build Spec — Library organization, search and filters
 
+## Bounded ordinary Favorite/Reading Status focus return (baseline b978770)
+
+Existing sidebar/direct-controls delivery requires after-actual-requery return to the
+same Paper-generation control or search if unavailable, without replacing other focus.
+Architect207 SOURCE_SLICE_READY identifies three current P2 gaps: a loading=false tuple
+lacks original-root/own-query entitlement; membership admits disabled/unrendered controls;
+earlier different focus, changed conditions and pending alerts do not permanently revoke
+it. Supersede only prior bounded exclusions leaving ordinary organization focus unchanged.
+Commit this single amendment before sole LibraryBrowserView.swift implementation.
+
+Refine existing organizationFocusToRestore into one private UI-only receipt: completion
+UUID, original mount, Paper/generation, exact favorite/reading control, filter/revision,
+optional existing OrganizationQueryState.Request. No fourth native slot/dismissal,
+second owner/query counter/service/store/schema/resource authority. UUID is equality-only
+completion identity; Request remains sole query freshness authority.
+
+Admission requires existing guards plus current mounted root, rendered readable accepted
+same-generation Paper, matching favorite/reading origin, no pending sheet/delete/failure
+alert and no other-kind focus; organizationFocus is nil or exact origin. Preserve observed
+whole-record organization/Paper and service CAS. Pass immutable capture into existing
+perform, installing receipt only after perform's guarded admission/initial invalidation.
+
+All ordinary invalidation/clearObservation and query.begin paths discard older receipt
+before query.invalidate/begin. Appearance/disappearance, changed filter/revision, different
+nonnil organizationFocus, any nonnil other focus kind, failure alert, work/modal admissions
+without query invalidation also clear it permanently. Keep sheet-kind comparisons intact.
+
+One narrowly named own-organization-completion mode may preserve only still-live matching
+token, awaitingRequest=nil, original mount/filter/revision, compatible focus and no dialog/
+alert. Never recreate a cleared record from captured Task input; never reuse this exception
+once awaiting. It must not bypass ordinary sheet invalidation or borrow editor/movement
+preservation. Both actual operation outcomes clear busy and refresh CURRENT mounted root,
+independent of original return survival. No mounted root means no query. Failure clears
+receipt before existing truthful operationFailed alert; admitted persistence is unaffected.
+
+Successful own completion preserves eligible pending record through invalidation, binds
+only surviving record to exact query.begin Request. Every later invalidation/begin, including
+sheet return/late movement/another refresh, clears it. Remove only ordinary loading observer.
+Consume matching Request adjacent to sheet consumption after guarded acceptance installs
+folders/failure flags/tags/generation facts, or matching current rejection is failed/not
+loading. Catch alone does not prove rejection. Release matching receipt before checks/effects.
+
+Recheck original mount/filter/revision, !busy/!loading, no native pending/delete/failure
+alert, organizationFocus nil/exact origin, all other focus kinds nil. Current same-generation
+accepted Paper must be readable and satisfy renderedPaperControls, including selected-folder
+availability and current list/card branch. Then return original control; otherwise existing
+search without changing conditions. Rejection permits search; Save failure has no return.
+
+Preserve all tag/detail/movement exact native receipts/query return, detail passive live
+read fences, movement late-success retention/newer-tag mutation veto, admitted tag Save
+both-outcome current-root refresh/original error, and deletion alert semantics. Parent owns
+syntax/diff/independent review/local commit. Tests/test fixes/type/build/gates/formatters/
+native/runtime/keyboard/VoiceOver remain deferred; Story/Epic acceptance0/26.
+
 ## Paired movement lifecycle integration (baseline 57c4199)
 
 Spec1.17 adds exactly movement as third concrete Browser slot payload on the existing
