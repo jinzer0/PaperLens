@@ -1050,11 +1050,16 @@ private struct LibraryIdentification {
         }
         if let record = observation.record,
           record.identity.paperID == paper.id, record.identity.generation == paper.generation,
-          case .librarySummary(let summary, _) = record.result.result {
+          case .librarySummary(let summary, let insufficiency) = record.result.result {
           if showEvidence {
             Text(summary.text).textSelection(.enabled)
           } else {
             Text(summary.text).lineLimit(1).truncationMode(.tail)
+          }
+          if insufficiency == "noEvidence" {
+            Text("저장 당시 근거 없음 · 정규 근거 후보가 없습니다.")
+          } else if insufficiency == "budgetLimited" {
+            Text("저장 당시 근거 범위 제한 · 요청 예산으로 일부 근거만 포함되었습니다.")
           }
           if record.claimAnchors.isEmpty {
             Text("근거 부족 · 근거 위치 없음")
