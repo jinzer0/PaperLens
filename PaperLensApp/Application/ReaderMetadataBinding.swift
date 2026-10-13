@@ -57,13 +57,30 @@ public struct ReaderMetadataBindingState {
   /// Reloads durable candidates and the actual outline without starting extraction.
   public func refresh() throws {
     guard !publishing else { throw ReaderMetadataError.staleConfirmation }
-    let next = try access { _, document, metadata in
-      guard let context else { throw ReaderMetadataError.staleIdentity }
-      return try makeState(metadata: metadata, document: document,
-        adapter: ReaderOutlineAdapter(document: document, identity: identity),
-        context: context, observed: nil)
+    let prepared: (ReaderMetadataBindingState, ReaderMetadataContext, ReaderConfirmedLocation?)? =
+      try access { _, document, metadata in
+      guard let expected = context else { throw ReaderMetadataError.staleIdentity }
+      let observed = state?.observedLocation
+      let adapter = ReaderOutlineAdapter(document: document, identity: identity)
+      guard refreshIsCurrent(context: expected, observed: observed) else { return nil }
+      let validatedObservation: ReaderConfirmedLocation?
+      if let observed, let page = document.page(at: observed.pageIndex),
+        page.document === document,
+        observed.isValid(pageCount: document.pageCount, bounds: page.bounds(for: .cropBox)) {
+        validatedObservation = observed
+      } else {
+        validatedObservation = nil
+      }
+      guard refreshIsCurrent(context: expected, observed: observed) else { return nil }
+      let next = try makeState(metadata: metadata, document: document,
+        adapter: adapter, context: expected, observed: validatedObservation)
+      guard refreshIsCurrent(context: expected, observed: observed) else { return nil }
+      return (next, expected, observed)
     }
-    try publish(next)
+    // Supersession must not skip the identity and actual lease postchecks above.
+    guard let prepared else { throw ReaderMetadataError.staleConfirmation }
+    try validateRefresh(context: prepared.1, observed: prepared.2)
+    try publish(prepared.0)
   }
 
   /// Only dispatches intent. Position notifications, not this call, confirm movement.
@@ -117,6 +134,19 @@ public struct ReaderMetadataBindingState {
       }
       throw error
     }
+  }
+
+  private func validateRefresh(context expected: ReaderMetadataContext,
+    observed: ReaderConfirmedLocation?) throws {
+    guard !invalidated else { throw ReaderMetadataError.staleIdentity }
+    guard refreshIsCurrent(context: expected, observed: observed) else {
+      throw ReaderMetadataError.staleConfirmation
+    }
+  }
+
+  private func refreshIsCurrent(context expected: ReaderMetadataContext,
+    observed: ReaderConfirmedLocation?) -> Bool {
+    !invalidated && context == expected && state?.observedLocation == observed
   }
 
   private func publish(_ next: ReaderMetadataBindingState) throws {

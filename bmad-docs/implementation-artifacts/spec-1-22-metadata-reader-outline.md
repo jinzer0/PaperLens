@@ -17,6 +17,32 @@ Leave UI and ReaderMetadataService unchanged. No schema/extraction/OCR/AI/profil
 Tests/test fixes, type/build/gates/formatters/native/rendered/restart verification remain
 deferred; parent syntax/diff and independent source review do not certify Story acceptance.
 
+### Source-only confirmed-selection refresh receipt
+
+Governing c56a722 preceded executor219's single-binding delta. Architect218 identified
+the real counterexample: successful observe/save selects a section, then an unchanged
+metadata-only refresh erases the observation and selection without movement or failure.
+Refresh now carries only the live published observation, checks actual page/count/crop
+bounds and remaps against the fresh outline. Context and observation checks veto a
+superseded preparation; initialization/restoration alone never establishes observation.
+
+Independent220 initially BLOCKED: throwing supersession inside read access could bypass
+original identity/actual lease postchecks after nested observation plus access revocation.
+Parent corrected only this preparation: supersession returns an optional nil result
+through unchanged access postchecks; staleConfirmation is thrown only after successful
+access. Thus original denial/clearing errors take precedence, while a newer valid state
+is not erased by entering the publisher's catch. Original operation errors still propagate.
+Keep the initial BLOCK; corrected re-review returned OKAY — SOURCE CLEAR. It checked the
+actual existing context CAS sequence advance and lease postcheck excerpts, same-location
+observation, failed-observation clearing, invalid/unmapped location, terminal invalidation,
+publisher interruption and initial nil/restoration paths. These are source-derived paths.
+
+Parent frontend parse/diff passed before review (artifact://3502) and after correction.
+UI/service/DB/session APIs and durable save/CAS are unchanged; refresh adds no navigation,
+save, lease, counter, owner, profile or physical ACK. Tests/test fixes and native/rendered/
+keyboard/VoiceOver/restart/type/build verification remain deferred by implementation-first
+instructions. No Story/Epic acceptance; canonical count remains 0/26.
+
 ## Current-source Contents location and accessibility
 
 Scope: MetadataOutlineView.swift only. Contents currently exposes title/current-state
