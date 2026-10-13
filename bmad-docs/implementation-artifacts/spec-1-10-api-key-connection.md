@@ -1,5 +1,20 @@
 # Story 1.10 Build Spec — Native API-Key Connection
 
+## Synchronous native key-edit intent boundary
+
+Source scope: Features/Onboarding/APIKeyConnectionView.swift and this Spec only.
+Every changed SecureField value must synchronously call the existing Application
+invalidateCandidate() before assigning the new field value. Deferred onChange/render
+observation is not the mutation boundary: an edited-away candidate response could
+otherwise promote before the owner learns of the edit. Unchanged values do not revoke
+intent. Remove the deferred edit observer; keep explicit submit, disappearance clearing
+and invalidation, Application arbitration and admitted probe/cleanup retention unchanged.
+Preserve an independently safe active selection; this is not blanket connection removal.
+No root/controller/storage/credential/profile/network authority or API change. Production
+unsupportedProfile remains fail-closed. Tests/test fixes/type/build/native/runtime/gates/
+formatters remain deferred; source review/parse/diff cannot establish real authentication
+or Story/Epic acceptance.
+
 ## Status and authority
 
 Issue#12 / `issue/12-story-1-10`, source baseline `367eafd` in canonical worktree `.build/topology/story-1-10-f47b0f87-869e-42a1-b50a-7c409f3a2b0d`. The new explicit human source-execution directive authorizes development of the actual native source vertical below, independently of missing runtime acceptance. Owners are TO DEVELOP, not human prerequisites. P1=false, P2=false, P3=false, StoryDone=false remain truthful; source creation is not gate acceptance. Story1.9 final product RPC remains outside this native lane.
