@@ -1,5 +1,22 @@
 # Story 1.22 Build Spec — Metadata and Reader Contents
 
+## Preserve confirmed current section across metadata refresh
+
+Source scope: this Spec and Application/ReaderMetadataBinding.swift only. Metadata-only
+refresh must not erase an already-observed and saved current position solely because
+metadata/Contents were reloaded. Carry only this binding's published observedLocation,
+revalidate it against the same admitted document and recalculate its section using the
+fresh actual outline. Restoration candidates do not establish observation; invalid or
+unmapped positions remain unselected. Capture/recheck existing context and observation
+around potentially reentrant PDF reads and before guarded installation: newer observation,
+failed-observation clearing or terminal invalidation supersedes the prepared refresh.
+Preserve Reader read access, identity/document/Paper/generation/SHA/reference/revision
+pins, publication guards, original errors, immutable snapshots and existing context/CAS.
+Refresh must not navigate, restore, save position, acquire a lease or introduce an owner.
+Leave UI and ReaderMetadataService unchanged. No schema/extraction/OCR/AI/profile change.
+Tests/test fixes, type/build/gates/formatters/native/rendered/restart verification remain
+deferred; parent syntax/diff and independent source review do not certify Story acceptance.
+
 ## Current-source Contents location and accessibility
 
 Scope: MetadataOutlineView.swift only. Contents currently exposes title/current-state
