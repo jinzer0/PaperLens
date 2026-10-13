@@ -6,6 +6,7 @@ import ProviderRequest
 
 public enum ExtractionError: String, Error, Sendable {
   case producerUnavailable, geometryUnavailable, invalidBatch, staleAttempt, interrupted, storageFailure
+  case resourceExceeded, parsingFailure
 }
 
 public struct ExtractionIdentity: Equatable, Sendable {
@@ -694,6 +695,12 @@ public struct PDFiumGeometryValidator: ExtractionGeometryValidating {
   }
 }
 
+private struct ExtractionFailureProvenance: Error {
+  enum Origin: Sendable { case publication, inputBudget }
+  let underlying: any Error
+  let origin: Origin
+}
+
 private final class ExtractionPublicationObservation: @unchecked Sendable {
   private let lock = NSLock()
   private var published = false
@@ -725,20 +732,50 @@ public struct ExtractionRevisionService: Sendable {
           scope: scope)
         try scope.checkBudget()
         try await Task.detached {
-          try database.publishExtraction(identity, sentences: sentences,
-            checkBudget: { try scope.checkBudget() })
+          do {
+            try database.publishExtraction(identity, sentences: sentences,
+              checkBudget: {
+                do { try scope.checkBudget() }
+                catch {
+                  throw ExtractionFailureProvenance(underlying: error, origin: .inputBudget)
+                }
+              })
+          } catch {
+            if error is ExtractionFailureProvenance { throw error }
+            throw ExtractionFailureProvenance(underlying: error, origin: .publication)
+          }
         }.value
         observation.recordPublication()
       }
     } catch {
+      let provenance = error as? ExtractionFailureProvenance
+      let original = provenance?.underlying ?? error
       // A post-commit resource-owner cleanup failure is still an error/debt, but
       // cannot truthfully turn an already committed revision into a failed Job.
       // Pin/accounting cleanup can fail after publication; keep that debt distinct.
-      guard !observation.didPublish else { throw error }
-      let failure = (error as? ExtractionError) ?? .storageFailure
+      guard !observation.didPublish else { throw original }
+      let failure = Self.failure(for: original, fromPublication: provenance?.origin == .publication)
       try await Task.detached { try database.failExtraction(identity, failure: failure) }.value
-      throw error
+      throw original
     }
+  }
+
+  private static func failure(for error: any Error, fromPublication: Bool) -> ExtractionError {
+    if let failure = error as? ExtractionError { return failure }
+    if error is CancellationError { return .interrupted }
+    if let failure = error as? PDFiumFailure {
+      switch failure.code {
+      case .cancelled: return .interrupted
+      case .resourceExceeded: return .resourceExceeded
+      case .protocolViolation, .invalidRequest, .identityMismatch, .invalidPDF,
+        .unsupportedGeometry, .unmappableText: return .invalidBatch
+      case .busy, .cleanupIncomplete: return .parsingFailure
+      }
+    }
+    if error is PDFGeometryError { return .invalidBatch }
+    // The transaction also checks the captured budget; typed failures above
+    // retain their parser meaning even when thrown inside publication.
+    return fromPublication ? .storageFailure : .parsingFailure
   }
 
   static func validate(_ batches: [ExtractionBatch], identity: ExtractionIdentity,

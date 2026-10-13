@@ -52,6 +52,33 @@ independent review and local commits. Source proof is not rendered immediate del
 calibrated Retry, physical drain/release, process restart or Story/Epic acceptance.
 Canonical acceptance remains unchanged.
 
+### Source-only failure classification delivery receipt
+
+Governing a03ec1d preceded executor216's two-source implementation; callback-origin
+clarification 5b3f534 preceded the parent's callback provenance extension. Architect215
+identified the real failed-end/resourceExceeded path previously saved as storageFailure.
+One private transient original-error/origin carrier now distinguishes actual publication
+exceptions from captured input/budget callback exceptions. Typed original failures take
+precedence. Unknown callback/producer failures become parsingFailure; unknown database
+publication failures remain storageFailure. Cancellation, resource exhaustion and invalid
+results retain their distinct fixed safe reasons. Parent directly checked the ten actual
+PDFiumFailureCode declarations, not only the worker's supplied category list.
+
+Independent217 returned OKAY — SOURCECLEAR, tracing failed end, cancellation, malformed
+result, unknown callback/DB error, typed transactional budget failure, stale/preflight
+rejection, successful publication followed by cleanup failure, producer unwind failure
+and failure-recording failure. These are source-derived branches, not executed scenarios.
+Original errors, producer unwind, post-commit didPublish protection, guarded failure write,
+current lineage and prior usable revision remain authoritative. No DB/schema/acquirer/
+observer/Retry-admission change, dispatch, lease renewal or cleanup/termination ACK.
+
+Parent `swiftc -frontend -parse` on both changed source files and `git diff --check`
+passed (artifact://3490). Tests/test fixes, type/build/gates/formatters and actual parser/
+provider/native/runtime/keyboard/VoiceOver/restart/physical cleanup trials remain deferred
+under implementation-first instructions. Tests are unchanged for that explicit reason.
+No rendered timing, genuine calibrated Retry or Story/Epic acceptance is certified;
+canonical acceptance remains 0/26.
+
 ## Current-source Retry presentation and accessibility
 
 Scope: ParsingStatusView.swift only. The existing explicit Retry button remains

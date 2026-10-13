@@ -146,6 +146,8 @@ public enum ParsingFailureMessage {
     case "geometryUnavailable": return "검증된 문장 위치 계약이 연결되지 않았습니다."
     case "interrupted": return "파싱이 중단되었습니다. 다시 시도하세요."
     case "invalidBatch": return "원문 파싱 결과를 검증하지 못했습니다. 다시 시도하세요."
+    case "resourceExceeded": return "파싱이 허용된 자원 한도를 초과했습니다. 다시 시도하세요."
+    case "parsingFailure": return "원문 파싱에 실패했습니다. 다시 시도하세요."
     case "staleAttempt": return "논문 또는 설정이 변경되어 파싱을 완료하지 못했습니다."
     case "storageFailure": return "원문 파싱 결과를 저장하지 못했습니다. 다시 시도하세요."
     default: return "원문 파싱에 실패했습니다. 다시 시도하세요."
