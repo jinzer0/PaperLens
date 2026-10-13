@@ -22,6 +22,10 @@ At the existing publishExtraction call retain actual publication-error provenanc
 only a private transient carrier of the original exception. This is not a durable store,
 status mirror or execution owner. Classify explicit parser/budget/cancellation failures
 before publication provenance because the transaction invokes captured checkBudget.
+The actual callback also invokes acquired.validate (LibraryPDFiumInputAcquirer:55–58).
+Unknown errors from that callback remain input/budget failures, not storage failures.
+Retain callback origin in the same private transient provenance mechanism; preserve
+the original error without nested publication wrapping. No changes to that acquirer.
 Only an otherwise unclassified publication exception becomes storageFailure. Unwrap
 the carrier and rethrow the original error; do not move failure recording before the
 existing producer unwind or inside its consumer callback. Keep didPublish: committed
