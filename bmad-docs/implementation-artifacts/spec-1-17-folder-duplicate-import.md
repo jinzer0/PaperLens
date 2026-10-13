@@ -1,5 +1,52 @@
 # Story 1.17 Build Spec — Folder arrangement and duplicate local import
 
+## Bounded inner folder-manager outcome and read recovery (baseline 1d194e0)
+
+Architect210 SOURCE_SLICE_READY grounds this continuation in the existing flat-folder
+create/rename/delete requirement, truthful persisted state, and Spec1.25 failure/requery/
+native Korean state-action accessibility criteria. Exactly this Spec and
+PaperLensApp/Features/Library/ImportConfirmationView.swift, only FolderManagementView,
+may change. Commit this amendment before implementation. Spec1.25 is unchanged.
+
+Current perform merges mutation and subsequent folders() into one catch: completed
+create plus failed read is reported as failed change, retains the create draft, and
+offers no read-only recovery. Initial failed read displays an unobserved empty list.
+Resolve this real product recovery interaction, not merely a defensive guard.
+
+Use one view-private phase for loading/ready/changing/command failure/list unavailable.
+Remember whether an unavailable list follows a successfully returned command; repeated
+read retries must preserve that fact. No new controller/query counter/source store,
+public API/service/CAS/schema/resource ownership or physical acknowledgment. Existing
+folders(), createFolder(name:), renameFolder(id:name:), deleteFolder(id:) stay unchanged.
+
+Unavailable is not observed empty. Show labeled Korean pending/error state and a native
+현재 폴더 다시 불러오기 action. Disable edits/mutations during pending work or unavailable
+list; leave idle read recovery available. Recovery invokes folders() only, never replays
+create/rename/delete. Provide truthful native action/state accessibility semantics.
+
+Capture selected UUID/name synchronously at admitted button command, before delayed Task.
+Separate command catch from read catch. Thrown command preserves attempted selection/name
+and never claims success. Successful create clears its new-folder draft (no required auto-
+selection or dependence on returned creation type); successful delete clears deleted
+selection/name. Successful rename/explicit accepted reload installs actual stored name for
+surviving selected UUID. Missing explicit selection clears/discloses unavailability, never
+silently converts its old draft into a create request. Explain that explicit reload may
+replace a failed existing-folder draft with the stored name; preserve failed new-folder
+draft where no stored selection exists.
+
+One private read-only loader covers initial load, explicit reload and post-command read.
+Successful command plus failed read explicitly says the change completed but current list
+is unavailable; retries preserve that completed-change context until accepted read.
+Failure of command is not success, and read completion is not a new mutation receipt.
+Admitted persistence is not undone/canceled because presentation or read recovery changes.
+
+Do not transplant tag-editor failed-Save revalidation/CAS or native dismissal lifecycle.
+No inner Cancel/close callback, autofocus, specific Return shortcut, new folder auto-select
+or fourth native slot is established here. Outer folder-toolbar receipt, confirmation
+Cancel/Continue, Browser tag/detail/movement/ordinary action and deletion remain unchanged.
+Parent owns source syntax/diff, independent review and local commit. Tests/test fixes/type/
+build/gates/formatter/native/runtime/keyboard/VoiceOver remain deferred; acceptance0/26.
+
 ## Bounded movement native dismissal/current-query return (baseline 57c4199)
 
 Architect203 SOURCE_SLICE_READY identifies the existing opener-focus criterion:
