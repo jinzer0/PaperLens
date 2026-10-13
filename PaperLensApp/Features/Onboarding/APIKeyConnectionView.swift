@@ -19,10 +19,9 @@ public struct APIKeyConnectionView: View {
       Text("모델: \(connection.configuration.model)")
       Text("실제 생성 요청으로 연결을 확인합니다. API 사용 요금이 발생할 수 있습니다.")
         .font(.callout)
-      SecureField("API 키", text: $key)
+      SecureField("API 키", text: keyBinding)
         .textFieldStyle(.roundedBorder)
         .onSubmit { submit() }
-        .onChange(of: key) { _, _ in connection.invalidateCandidate() }
         .accessibilityLabel("OpenAI API 키")
       HStack {
         Button(buttonTitle) { submit() }
@@ -48,6 +47,14 @@ public struct APIKeyConnectionView: View {
       key = ""
       connection.invalidateCandidate()
     }
+  }
+
+  private var keyBinding: Binding<String> {
+    Binding(get: { key }, set: { value in
+      guard value != key else { return }
+      connection.invalidateCandidate()
+      key = value
+    })
   }
 
   private var buttonTitle: String {

@@ -15,6 +15,23 @@ unsupportedProfile remains fail-closed. Tests/test fixes/type/build/native/runti
 formatters remain deferred; source review/parse/diff cannot establish real authentication
 or Story/Epic acceptance.
 
+### Source-only onboarding edit receipt
+
+Governing 1f3ee12 preceded the single-view change. Architect222 identified the source
+ordering gap: a suspended candidate A could return and promote after field edit B but
+before deferred onChange informed the Application owner. The view now uses a private
+Binding: changed values invalidate before assignment, equal values do nothing, and the
+deferred observer is removed. Submit/default action and disappearance clearing remain.
+
+Independent223 completed on resume after an initial failed job with no retained report;
+final verdict OKAY — SOURCECLEAR. It checked existing intent replacement before task
+cancellation/publication, post-suspension intent checks before response validation/CAS,
+fresh subsequent submit, safe active-selection retention and admitted cleanup/debt guards.
+Root/connection/storage APIs and unsupportedProfile enforcement are unchanged. Parent
+frontend parse/diff passed (artifact://3513); no credentials, requests or runtime executed.
+Tests/test fixes/type/build/native/authentication/profile/Story gates remain deferred.
+This is source delivery only; StoryDone=false and canonical acceptance 0/26 remain.
+
 ## Status and authority
 
 Issue#12 / `issue/12-story-1-10`, source baseline `367eafd` in canonical worktree `.build/topology/story-1-10-f47b0f87-869e-42a1-b50a-7c409f3a2b0d`. The new explicit human source-execution directive authorizes development of the actual native source vertical below, independently of missing runtime acceptance. Owners are TO DEVELOP, not human prerequisites. P1=false, P2=false, P3=false, StoryDone=false remain truthful; source creation is not gate acceptance. Story1.9 final product RPC remains outside this native lane.
