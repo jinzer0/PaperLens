@@ -1,5 +1,38 @@
 # Story 1.23 Build Spec — Grounded Library Summary
 
+## Bounded saved-outcome presentation (baseline 448ec86)
+
+Architect213 SOURCE_SLICE_READY identifies loss of the persisted budgetLimited fact
+in LibraryStoredSummary: a valid paper Summary with nonempty original claim anchors
+can carry budgetLimited, but current rendering discards the second typed result payload.
+Existing insufficiency preservation through save/Library/restart and actual-state criteria
+admit this passive UI continuation under the full-Epic source instruction. The historical
+service-only phase below remains historical; this adds no fresh execution permission.
+Commit this contract before source. Exactly this Spec and LibraryBrowserView.swift,
+only LibraryStoredSummary, change. No model/service/schema/projection/public API changes.
+
+Bind the original validated stored librarySummary insufficiency alongside summary within
+the existing displayed Paper UUID/generation guard. Preserve original text and ordered
+passive quote/page evidence. Show noEvidence as a saved-input fact: no canonical evidence
+candidates were available. Show budgetLimited as a saved-input selection limitation:
+the request budget included only part of its evidence. Show neither cue for none.
+Do not derive these facts from current input/configuration, current candidate count,
+absent owners, failed reads, attempt activity or claim-anchor emptiness.
+
+Keep existing empty-claim-anchor insufficient cue independently: validated paper/budgetLimited
+with evidence is still grounded, not failure or ungrounded. Insufficient/noEvidence or
+insufficient/budgetLimited retains its existing insufficient cue plus the saved diagnostic;
+insufficient/none invents neither missing candidates nor budget limits. Preserve independent
+recent running/failed/succeeded attempt and previous verified record, availability/failed
+verification distinctions, one-line preview text and full detail evidence.
+
+Native Korean text must explain saved evidence limitations, not a fresh failure/timeout/
+cleanup acknowledgment or permission to Retry. No fresh generation/Retry/provider/auth/
+calibration/purge/owner/controller/store/counter authority. No native Library sheet lifecycle,
+tag/detail/movement/ordinary focus, deletion, filters or opening-action changes. Parent owns
+source parse/diff, independent review and local source commit; tests/test fixes/type/build/
+gates/formatters/native/runtime/keyboard/VoiceOver remain deferred; canonical acceptance0/26.
+
 ## Independent source-only slice (2026-10-10)
 
 Human session instruction limits edits to LibrarySummaryService.swift,
