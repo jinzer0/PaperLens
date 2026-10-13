@@ -1,5 +1,53 @@
 # Story 1.21 Build Spec — Parsing failure and explicit Retry
 
+## Truthful accepted-current parser failure classification — bounded source correction
+
+Commit this contract before source edits. Exact mutable scope:
+PaperLensApp/Application/ExtractionRevisionService.swift,
+PaperLensApp/Application/ParsingRecoveryCoordinator.swift, and this Spec.
+ParsingStatusView and ProductDatabase remain unchanged. Architect215 identified a
+matching failed producer end/resourceExceeded before publication that is incorrectly
+saved as storageFailure; this is source-derived, not an executed producer scenario.
+
+Keep failed-current context, explicit fresh-lineage reservation, scoped producer
+consumption and guarded failure recording authoritative. Add only safe ExtractionError
+categories resourceExceeded and parsingFailure. Preserve existing ExtractionError values.
+Classify CancellationError/PDFiumFailure.cancelled as interrupted, PDFiumFailure.resourceExceeded
+as resourceExceeded, and protocolViolation/invalidRequest/identityMismatch/invalidPDF/
+unsupportedGeometry/unmappableText and typed geometry validation errors as invalidBatch.
+PDFiumFailure.busy/cleanupIncomplete and unrecognized producer/input/transport errors
+use parsingFailure, never a release/drain acknowledgement or an invented storage cause.
+
+At the existing publishExtraction call retain actual publication-error provenance using
+only a private transient carrier of the original exception. This is not a durable store,
+status mirror or execution owner. Classify explicit parser/budget/cancellation failures
+before publication provenance because the transaction invokes captured checkBudget.
+Only an otherwise unclassified publication exception becomes storageFailure. Unwrap
+the carrier and rethrow the original error; do not move failure recording before the
+existing producer unwind or inside its consumer callback. Keep didPublish: committed
+usable extraction cannot become a failed Job due to subsequent cleanup failure.
+failExtraction stays the sole guarded failure write; if that write fails, propagate its
+error rather than pretending that a failure reason was saved. No swallowed errors,
+automatic Retry, dispatch fallback or rewriting historical failures.
+
+resourceExceeded projects only “파싱이 허용된 자원 한도를 초과했습니다. 다시 시도하세요.”
+parsingFailure uses the existing generic fixed parsing-failure message. interrupted and
+invalidBatch messages stay unchanged. Never expose native/system errors, diagnostics,
+attempt counts, timestamps, durations or history. Existing status title and floating
+notice read the saved code. Availability derives only from accepted usableRevision,
+including a retained revision after replacement failure.
+
+Preserve exact Paper/generation/Job/attempt/fence/input/SHA/reference/current epoch/config
+guards, preflight/stale errors, prior usable revision, invocation history and original
+producer leases. UUIDs, Task completion, retrying=false and saved failure state are not
+physical termination or cleanup proof. No new profile, calibration, counter, controller,
+store, generation, ACK protocol, provider dispatch, observation path or timer.
+Tests/test fixes/harnesses, type/build/gates/formatters and native/runtime/PDF/SDK/helper/
+provider/network/credential execution remain deferred. Parent owns permitted syntax/diff,
+independent review and local commits. Source proof is not rendered immediate delivery,
+calibrated Retry, physical drain/release, process restart or Story/Epic acceptance.
+Canonical acceptance remains unchanged.
+
 ## Current-source Retry presentation and accessibility
 
 Scope: ParsingStatusView.swift only. The existing explicit Retry button remains
