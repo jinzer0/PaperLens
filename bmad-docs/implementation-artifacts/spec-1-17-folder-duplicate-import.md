@@ -47,6 +47,25 @@ Cancel/Continue, Browser tag/detail/movement/ordinary action and deletion remain
 Parent owns source syntax/diff, independent review and local commit. Tests/test fixes/type/
 build/gates/formatter/native/runtime/keyboard/VoiceOver remain deferred; acceptance0/26.
 
+### Source-only folder outcome/read recovery handoff (governing 83ff678)
+
+Changed only FolderManagementView and this note. A private Phase distinguishes loading,
+ready, changing, commandFailed and listUnavailable(completedChange:). Button admission
+freezes selected UUID/name before Task. Command failure retains selection/draft; only
+returned create/delete clears the corresponding draft/selection. A separate read-only
+loadFolders uses folders() for initial, explicit and post-command observations. Failed
+post-command reads and repeated failed reloads keep the completed-change disclosure and
+disable editing without replaying mutations or treating unavailable as observed empty.
+Accepted reads reconcile selected UUID to its stored name, disclose replaced input or
+missing selection, and preserve a new-folder draft with no selection. Korean native
+pending/error labels and 현재 폴더 다시 불러오기 expose recovery independently of mutation.
+No service/API/ownership, confirmation Cancel/Continue or adjacent Browser change.
+Parent ImportConfirmationView syntax parsing/git diff --check pass. Independent212
+SOURCE CLEAR verifies command/read separation, repeated recovery, draft reconciliation,
+admission and unchanged adjacent confirmation controls. Tests/test fixes/type/build/
+gates/formatters/native/runtime/keyboard/VoiceOver were not run and remain deferred.
+Source review and syntax are not runtime proof; canonical acceptance0/26 remains.
+
 ## Bounded movement native dismissal/current-query return (baseline 57c4199)
 
 Architect203 SOURCE_SLICE_READY identifies the existing opener-focus criterion:

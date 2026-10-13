@@ -130,55 +130,148 @@ public struct ImportConfirmationView: View {
 /// Library embeds this for folder maintenance; deleting a folder never deletes its Papers.
 @MainActor
 public struct FolderManagementView: View {
+  private enum Phase {
+    case loading
+    case ready
+    case changing
+    case commandFailed
+    case listUnavailable(completedChange: Bool)
+  }
+
   private let service: FolderImportService
   @State private var folders: [LibraryFolder] = []
   @State private var name = ""
   @State private var selected: UUID?
-  @State private var errorMessage: String?
-  @State private var working = false
+  @State private var phase = Phase.loading
+  @State private var notice: String?
+
+  private var canEdit: Bool {
+    switch phase {
+    case .ready, .commandFailed: return true
+    default: return false
+    }
+  }
+
+  private var pending: Bool {
+    switch phase {
+    case .loading, .changing: return true
+    default: return false
+    }
+  }
 
   public init(service: FolderImportService) { self.service = service }
 
   public var body: some View {
     VStack(alignment: .leading) {
-      Picker("폴더", selection: $selected) {
-        Text("새 폴더").tag(nil as UUID?)
-        ForEach(folders) { Text($0.name).tag(Optional($0.id)) }
-      }
-      .onChange(of: selected) { _, value in
-        name = folders.first(where: { $0.id == value })?.name ?? ""
-      }
-      TextField("폴더 이름", text: $name)
-      HStack {
-        Button(selected == nil ? "폴더 만들기" : "폴더 이름 변경") {
-          perform {
-            if let selected { try await service.renameFolder(id: selected, name: name) }
-            else { _ = try await service.createFolder(name: name) }
-          }
+      Group {
+        Picker("폴더", selection: $selected) {
+          Text("새 폴더").tag(nil as UUID?)
+          ForEach(folders) { Text($0.name).tag(Optional($0.id)) }
         }
-        Button("폴더 삭제 · 논문 유지") {
-          guard let selected else { return }
-          perform { try await service.deleteFolder(id: selected); self.selected = nil }
-        }.disabled(selected == nil)
+        .onChange(of: selected) { _, value in
+          name = folders.first(where: { $0.id == value })?.name ?? ""
+        }
+        TextField("폴더 이름", text: $name)
+        HStack {
+          Button(selected == nil ? "폴더 만들기" : "폴더 이름 변경") {
+            guard canEdit else { return }
+            let capturedSelected = selected
+            let capturedName = name
+            perform {
+              if let capturedSelected {
+                try await service.renameFolder(id: capturedSelected, name: capturedName)
+              } else {
+                _ = try await service.createFolder(name: capturedName)
+              }
+            } completed: {
+              if capturedSelected == nil { name = "" }
+            }
+          }
+          Button("폴더 삭제 · 논문 유지") {
+            guard canEdit, let capturedSelected = selected else { return }
+            perform {
+              try await service.deleteFolder(id: capturedSelected)
+            } completed: {
+              selected = nil
+              name = ""
+            }
+          }.disabled(selected == nil)
+        }
+      }.disabled(!canEdit)
+      switch phase {
+      case .loading:
+        ProgressView("현재 폴더를 불러오는 중…")
+      case .changing:
+        ProgressView("폴더 변경을 저장하는 중…")
+      case .commandFailed:
+        Label("폴더 변경 요청에 실패했습니다. 입력과 선택을 유지했습니다.",
+          systemImage: "exclamationmark.triangle").foregroundStyle(.red)
+      case .listUnavailable(let completedChange):
+        Label(completedChange
+          ? "폴더 변경은 완료했지만 현재 폴더 목록을 불러오지 못했습니다. 변경을 반복하지 말고 목록을 다시 불러오세요."
+          : "현재 폴더 목록을 불러오지 못했습니다. 폴더가 없는 상태로 확인된 것은 아닙니다.",
+          systemImage: "exclamationmark.triangle").foregroundStyle(.red)
+      case .ready:
+        if folders.isEmpty { Text("저장된 폴더가 없습니다.") }
       }
-      if let errorMessage { Text(errorMessage).foregroundStyle(.red) }
+      if let notice { Label(notice, systemImage: "info.circle") }
+      if selected != nil, !pending {
+        Text("다시 불러오면 입력한 이름이 현재 저장된 폴더 이름으로 바뀔 수 있습니다.")
+      }
+      Button("현재 폴더 다시 불러오기") {
+        guard !pending else { return }
+        let completedChange: Bool
+        if case .listUnavailable(let completed) = phase {
+          completedChange = completed
+        } else {
+          completedChange = false
+        }
+        phase = .loading
+        Task { await loadFolders(completedChange: completedChange, explicitReload: true) }
+      }
+      .disabled(pending)
+      .accessibilityHint("폴더 변경 없이 현재 저장된 목록만 확인합니다.")
     }
-    .disabled(working)
-    .task {
-      do { folders = try await service.folders() }
-      catch { errorMessage = "폴더를 불러오지 못했습니다." }
-    }
+    .task { await loadFolders(completedChange: false, explicitReload: false) }
   }
 
-  private func perform(_ action: @escaping @MainActor () async throws -> Void) {
-    working = true
+  private func perform(_ action: @escaping @MainActor () async throws -> Void,
+    completed: @escaping @MainActor () -> Void) {
+    phase = .changing
+    notice = nil
     Task {
       do {
         try await action()
-        folders = try await service.folders()
-        errorMessage = nil
-      } catch { errorMessage = "폴더 변경에 실패했습니다. 현재 저장된 배치를 다시 확인하세요." }
-      working = false
+      } catch {
+        phase = .commandFailed
+        return
+      }
+      completed()
+      phase = .loading
+      await loadFolders(completedChange: true, explicitReload: false)
+    }
+  }
+
+  private func loadFolders(completedChange: Bool, explicitReload: Bool) async {
+    do {
+      let currentFolders = try await service.folders()
+      folders = currentFolders
+      notice = nil
+      if let selected {
+        if let stored = currentFolders.first(where: { $0.id == selected }) {
+          if explicitReload, name != stored.name {
+            notice = "입력한 이름을 현재 저장된 폴더 이름으로 바꿨습니다."
+          }
+          name = stored.name
+        } else {
+          self.selected = nil
+          name = ""
+          notice = "선택한 폴더가 더 이상 없습니다. 선택과 이름을 지웠습니다. 새 폴더를 만들려면 이름을 새로 입력하세요."
+        }
+      }
+      phase = .ready
+    } catch {
+      phase = .listUnavailable(completedChange: completedChange)
     }
   }
 }
