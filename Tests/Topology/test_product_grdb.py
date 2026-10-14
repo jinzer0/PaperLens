@@ -47,6 +47,8 @@ class GRDBPreparationTests(unittest.TestCase):
         }
         self.write_receipt()
         self.output = self.root / "fresh-output"
+        self.arch = "arm64"
+        self.built_arch = None
         self.calls = []
         self.overrides = {}
         self.build_returncode = 0
@@ -74,14 +76,14 @@ class GRDBPreparationTests(unittest.TestCase):
             entries.append(b"100644 blob " + oid.encode() + b"\t" + name.encode() + b"\0")
         return b"".join(entries) + self.tree_extras
 
-    def framework(self):
+    def framework(self, arch):
         root = self.output / "products/GRDB.framework"
         version = root / "Versions/A"
         for name, data in {
             "GRDB": b"synthetic Mach-O, only mocked static tools inspect it",
             "Headers/GRDB.h": b"// synthetic header",
             "Modules/module.modulemap": b"framework module GRDB {}",
-            "Modules/GRDB.swiftmodule/arm64-apple-macos.swiftmodule": b"synthetic module",
+            "Modules/GRDB.swiftmodule/" + arch + "-apple-macos.swiftmodule": b"synthetic module",
             "Resources/Info.plist": plistlib.dumps({"CFBundleExecutable": "GRDB", "CFBundlePackageType": "FMWK"}),
         }.items():
             path = version / name
@@ -112,12 +114,16 @@ class GRDBPreparationTests(unittest.TestCase):
         elif tool == "/usr/sbin/sysctl":
             result = b"0\n"
         elif tool == "/usr/bin/xcodebuild":
-            self.framework()
+            requested = [arg.removeprefix("ARCHS=") for arg in args if str(arg).startswith("ARCHS=")]
+            self.assertEqual(requested, [self.arch])
+            self.built_arch = requested[0]
+            self.framework(self.built_arch)
             if self.build_hook:
                 self.build_hook()
             result, error, code = b"complete build output\nwarning: retained\n", b"complete stderr\n", self.build_returncode
         elif tool == "/usr/bin/lipo":
-            result = b"arm64\n"
+            self.assertIn(self.built_arch, ("arm64", "x86_64"))
+            result = (self.built_arch + "\n").encode()
         elif tool == "/usr/bin/otool":
             identifier = "@rpath/GRDB.framework/Versions/A/GRDB"
             result = {
@@ -136,7 +142,7 @@ class GRDBPreparationTests(unittest.TestCase):
         return subprocess.CompletedProcess(argv, code)
 
     def prepare(self):
-        return grdb.prepare(self.receipt, self.output, self.manifest)
+        return grdb.prepare(self.receipt, self.output, self.arch, self.manifest)
 
     def assert_failure(self, code):
         with self.assertRaises(grdb.Failure) as failure:
@@ -162,6 +168,13 @@ class GRDBPreparationTests(unittest.TestCase):
             '(allow file-write* (literal "/dev/null"))')
 
     def test_real_recipe_exclusive_receipt_and_readonly_input(self):
+        self.assert_recipe("arm64")
+
+    def test_x86_recipe_on_native_arm64_host(self):
+        self.assert_recipe("x86_64")
+
+    def assert_recipe(self, arch):
+        self.arch = arch
         before = grdb.inventory(self.source)
         receipt_bytes = self.receipt.read_bytes()
         result = self.prepare()
@@ -169,6 +182,11 @@ class GRDBPreparationTests(unittest.TestCase):
         self.assertEqual(self.receipt.read_bytes(), receipt_bytes)
         self.assertEqual(json.loads((self.output / "preparation.json").read_bytes()), result)
         build, env = next((argv, env) for argv, env in self.calls if argv[3] == "/usr/bin/xcodebuild")
+        self.assertIn("ARCHS=" + arch, build)
+        self.assertIn("ONLY_ACTIVE_ARCH=NO", build)
+        self.assertEqual(result["architecture"], arch)
+        self.assertFalse(result["runtimeExecuted"])
+        self.assertIn("Versions/A/Modules/GRDB.swiftmodule/" + arch + "-apple-macos.swiftmodule", result["frameworkInventory"])
         self.assertIn("CODE_SIGNING_ALLOWED=NO", build)
         self.assertIn("MACOSX_DEPLOYMENT_TARGET=15.0", build)
         self.assertEqual(build[build.index("-target") + 1], "GRDB")
@@ -325,13 +343,93 @@ class GRDBPreparationTests(unittest.TestCase):
         self.assert_failure("OUTPUT_INVALID")
 
     def test_framework_missing_module_is_refused(self):
-        self.build_hook = lambda: (self.output / "products/GRDB.framework/Versions/A/Modules/GRDB.swiftmodule/arm64-apple-macos.swiftmodule").unlink()
-        self.assert_failure("OUTPUT_INVALID")
+        for arch in ("arm64", "x86_64"):
+            with self.subTest(arch=arch):
+                self.arch = arch
+                self.output = self.root / ("missing-module-" + arch)
+                self.build_hook = lambda: (self.output / "products/GRDB.framework/Versions/A/Modules/GRDB.swiftmodule" / (self.arch + "-apple-macos.swiftmodule")).unlink()
+                self.assert_failure("OUTPUT_INVALID")
+
+    def test_wrong_and_fat_binary_cpu_are_refused_for_each_requested_cpu(self):
+        for arch, other in (("arm64", "x86_64"), ("x86_64", "arm64")):
+            for index, reported in enumerate((other, "arm64 x86_64")):
+                with self.subTest(arch=arch, reported=reported):
+                    self.arch = arch
+                    self.output = self.root / ("wrong-cpu-" + arch + str(index))
+                    self.overrides = {("/usr/bin/lipo", "-archs"): ((reported + "\n").encode(), b"", 0)}
+                    self.assert_failure("OUTPUT_INVALID")
+
+    def test_other_cpu_swiftmodule_is_not_a_fallback(self):
+        for arch, other in (("arm64", "x86_64"), ("x86_64", "arm64")):
+            with self.subTest(arch=arch):
+                self.arch = arch
+                self.output = self.root / ("wrong-module-" + arch)
+                def mismatch():
+                    modules = self.output / "products/GRDB.framework/Versions/A/Modules/GRDB.swiftmodule"
+                    (modules / (arch + "-apple-macos.swiftmodule")).rename(modules / (other + "-apple-macos.swiftmodule"))
+                self.build_hook = mismatch
+                self.assert_failure("OUTPUT_INVALID")
+
+    def test_invalid_architecture_never_probes_or_creates_output(self):
+        for arch in (None, "", "ARM64", "aarch64", "arm64 x86_64", "x86_64;touch owned", "x86_64\nCODE_SIGNING_ALLOWED=YES"):
+            with self.subTest(arch=arch):
+                self.arch = arch
+                self.assert_failure("INVALID_ARCHITECTURE")
+                with self.assertRaises(grdb.Failure) as failure:
+                    grdb.build_arguments(self.source, self.output, self.lock, arch)
+                self.assertEqual(failure.exception.code, "INVALID_ARCHITECTURE")
+                with self.assertRaises(grdb.Failure) as failure:
+                    grdb.validate_output(self.output, self.lock, {}, arch)
+                self.assertEqual(failure.exception.code, "INVALID_ARCHITECTURE")
+                self.assertEqual(self.calls, [])
+                self.assertFalse(self.output.exists())
+
+    def test_architecture_is_required_by_all_builder_apis(self):
+        for function, args in (
+            (grdb.prepare, (self.receipt, self.output)),
+            (grdb.build_arguments, (self.source, self.output, self.lock)),
+            (grdb.validate_output, (self.output, self.lock, {})),
+        ):
+            with self.subTest(function=function.__name__), self.assertRaises(TypeError):
+                function(*args)
+        self.assertEqual(self.calls, [])
+        self.assertFalse(self.output.exists())
+
+    def test_cli_missing_invalid_or_injected_architecture_has_no_owned_effects(self):
+        base = ["prepare-grdb.py", "--source-receipt", str(self.receipt), "--output", str(self.output)]
+        for suffix in ([], ["--arch", "aarch64"], ["--arch", "x86_64;touch owned"], ["--arch", "arm64 x86_64"]):
+            with self.subTest(suffix=suffix), mock.patch.object(grdb.sys, "argv", base + suffix), mock.patch("sys.stderr"), mock.patch.object(grdb, "prepare") as prepare:
+                with self.assertRaises(SystemExit) as failure:
+                    grdb.main()
+                self.assertEqual(failure.exception.code, 2)
+                prepare.assert_not_called()
+        self.assertEqual(self.calls, [])
+        self.assertFalse(self.output.exists())
+
+    def test_cli_forwards_each_explicit_artifact_architecture(self):
+        for arch in ("arm64", "x86_64"):
+            argv = ["prepare-grdb.py", "--source-receipt", str(self.receipt), "--output", str(self.output), "--manifest", str(self.manifest), "--arch", arch]
+            with self.subTest(arch=arch), mock.patch.object(grdb.sys, "argv", argv), mock.patch("builtins.print"), mock.patch.object(grdb, "prepare", return_value={"schemaRevision": "grdb-unsigned-preparation-v1"}) as prepare:
+                self.assertEqual(grdb.main(), 0)
+                prepare.assert_called_once_with(self.receipt, self.output, arch, self.manifest)
 
     def test_translated_host_never_starts_build(self):
         self.overrides[("/usr/sbin/sysctl", "-in")] = (b"1\n", b"", 0)
-        self.assert_failure("NATIVE_ARM64_REQUIRED")
-        self.assertFalse(self.output.exists())
+        for arch in ("arm64", "x86_64"):
+            with self.subTest(arch=arch):
+                self.arch = arch
+                self.assert_failure("NATIVE_ARM64_REQUIRED")
+                self.assertFalse(self.output.exists())
+        self.assertFalse(any(argv[3] == "/usr/bin/xcodebuild" for argv, _ in self.calls))
+
+    def test_explicit_artifact_cpu_does_not_expand_execution_hosts(self):
+        for arch in ("arm64", "x86_64"):
+            for system, machine in (("darwin", "x86_64"), ("linux", "arm64")):
+                with self.subTest(arch=arch, system=system, machine=machine), mock.patch.object(grdb.sys, "platform", system), mock.patch.object(grdb.platform, "machine", return_value=machine):
+                    self.arch = arch
+                    self.assert_failure("NATIVE_ARM64_REQUIRED")
+                    self.assertFalse(self.output.exists())
+        self.assertFalse(any(argv[3] == "/usr/bin/xcodebuild" for argv, _ in self.calls))
 
     def test_local_git_command_configuration_is_refused(self):
         (self.source / ".git/config").write_text('[include]\npath = /private/user-config\n')

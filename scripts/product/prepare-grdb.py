@@ -224,11 +224,12 @@ def validate_toolchain(lock, env, output):
     return {"pins": expected, "linkerSha256": digest(read_bytes(linker))}
 
 
-def build_arguments(source, output, lock):
+def build_arguments(source, output, lock, arch):
+    require(arch in ("arm64", "x86_64"), "INVALID_ARCHITECTURE")
     return [
         "/usr/bin/xcodebuild", "-project", source / "GRDB.xcodeproj", "-target", "GRDB",
         "-configuration", "Release", "-sdk", "macosx", "build",
-        "ARCHS=arm64", "ONLY_ACTIVE_ARCH=YES", "SUPPORTED_PLATFORMS=macosx",
+        "ARCHS=" + arch, "ONLY_ACTIVE_ARCH=NO", "SUPPORTED_PLATFORMS=macosx",
         "MACOSX_DEPLOYMENT_TARGET=" + lock["toolchain"]["deploymentTarget"],
         "CODE_SIGNING_ALLOWED=NO", "CODE_SIGNING_REQUIRED=NO", "CODE_SIGN_IDENTITY=",
         "SYMROOT=" + str(output / "build"), "OBJROOT=" + str(output / "intermediates"),
@@ -240,7 +241,8 @@ def build_arguments(source, output, lock):
     ]
 
 
-def validate_output(output, lock, env):
+def validate_output(output, lock, env, arch):
+    require(arch in ("arm64", "x86_64"), "INVALID_ARCHITECTURE")
     require(not (output / "products").is_symlink(), "OUTPUT_INVALID")
     framework = output / "products/GRDB.framework"
     require(framework.is_dir() and not framework.is_symlink(), "OUTPUT_INVALID")
@@ -251,8 +253,8 @@ def validate_output(output, lock, env):
     def inspect(flag, label):
         return command(["/usr/bin/otool", flag, binary], env, output=output, label=label).decode("utf-8")
 
-    arch = command(["/usr/bin/lipo", "-archs", binary], env, output=output, label="cpu").decode().split()
-    require(arch == ["arm64"], "OUTPUT_INVALID")
+    binary_archs = command(["/usr/bin/lipo", "-archs", binary], env, output=output, label="cpu").decode().split()
+    require(binary_archs == [arch], "OUTPUT_INVALID")
     require(set(re.findall(r"\b(EXECUTE|DYLIB|BUNDLE)\b", inspect("-hv", "macho"))) == {"DYLIB"}, "OUTPUT_INVALID")
     identifiers = inspect("-D", "install-id").splitlines()[1:]
     require(len(identifiers) == 1 and identifiers[0].strip() == "@rpath/GRDB.framework/Versions/A/GRDB", "OUTPUT_INVALID")
@@ -269,7 +271,7 @@ def validate_output(output, lock, env):
     require(re.search(r"^\s*platform (?:1|MACOS)\s*$", version, re.M), "OUTPUT_INVALID")
     for field, expected in (("minos", lock["toolchain"]["deploymentTarget"]), ("sdk", lock["toolchain"]["sdk"])):
         require(re.search(r"^\s*" + field + r" " + re.escape(expected) + r"(?:\.0)?\s*$", version, re.M), "OUTPUT_INVALID")
-    for relative in ("Headers/GRDB.h", "Modules/module.modulemap", "Modules/GRDB.swiftmodule/arm64-apple-macos.swiftmodule", "Resources/Info.plist"):
+    for relative in ("Headers/GRDB.h", "Modules/module.modulemap", "Modules/GRDB.swiftmodule/" + arch + "-apple-macos.swiftmodule", "Resources/Info.plist"):
         path = framework / relative
         require(path.is_file() and path.resolve(strict=True).is_relative_to(framework) and path.stat().st_size > 0, "OUTPUT_INVALID")
     info = plistlib.loads((framework / "Resources/Info.plist").read_bytes())
@@ -278,7 +280,8 @@ def validate_output(output, lock, env):
     return files
 
 
-def prepare(receipt_path, output, manifest_path=MANIFEST):
+def prepare(receipt_path, output, arch, manifest_path=MANIFEST):
+    require(arch in ("arm64", "x86_64"), "INVALID_ARCHITECTURE")
     output = checked_path(output)
     require(not output.exists(), "OUTPUT_OCCUPIED")
     require(output.parent.is_dir(), "OUTPUT_PARENT_MISSING")
@@ -299,10 +302,10 @@ def prepare(receipt_path, output, manifest_path=MANIFEST):
     tools = validate_toolchain(lock, env, output)
     driver_hash = digest(read_bytes(Path(__file__)))
     require(validate_inputs(receipt_path, manifest_path)[2] == inputs, "INPUT_TAMPERED")
-    command(build_arguments(source, output, lock), env, output=output, label="build")
+    command(build_arguments(source, output, lock, arch), env, output=output, label="build")
     _, _, after = validate_inputs(receipt_path, manifest_path)
     require(inputs == after and digest(read_bytes(Path(__file__))) == driver_hash, "INPUT_TAMPERED")
-    files = validate_output(output, lock, env)
+    files = validate_output(output, lock, env, arch)
     # Recheck after static inspection as well; no successful receipt on drift.
     require(validate_inputs(receipt_path, manifest_path)[2] == inputs, "INPUT_TAMPERED")
     require(inventory(output / "products/GRDB.framework", framework=True) == files, "OUTPUT_INVALID")
@@ -310,7 +313,7 @@ def prepare(receipt_path, output, manifest_path=MANIFEST):
         "schemaRevision": "grdb-unsigned-preparation-v1", "pin": PIN,
         "inputs": inputs, "driverSha256": driver_hash, "toolchain": tools,
         "framework": "products/GRDB.framework", "frameworkInventory": files,
-        "architecture": "arm64", "configuration": "Release", "codeSigningAllowed": False,
+        "architecture": arch, "configuration": "Release", "codeSigningAllowed": False,
         "runtimeExecuted": False, "lintStatus": "UNKNOWN",
         "logs": {path.name: digest(read_bytes(path)) for path in sorted((output / "logs").iterdir())},
     }
@@ -329,9 +332,10 @@ def main():
     parser.add_argument("--source-receipt", type=Path, required=True)
     parser.add_argument("--manifest", type=Path, default=MANIFEST)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--arch", choices=("arm64", "x86_64"), required=True)
     args = parser.parse_args()
     try:
-        result = prepare(args.source_receipt, args.output, args.manifest)
+        result = prepare(args.source_receipt, args.output, args.arch, args.manifest)
     except Failure as error:
         print(json.dumps({"status": "failed", "code": error.code}))
         return 1

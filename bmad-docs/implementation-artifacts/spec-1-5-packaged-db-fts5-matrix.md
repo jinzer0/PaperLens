@@ -126,3 +126,69 @@ durations; driver paths are not exported. RootPackage/Xcode/startup and all thre
 probe sources remained unchanged; current305/native-z product proof is reused, not rerun.
 No app/helper/renderer/SDK/auth/paid/remote/protected trial ran. sqlite_origin_unverified,
 packagedCellPassed=false/P2false/Storyfalse/canonical0of26 remain unchanged.
+
+## Current WholeEpic continuation — G003 explicit native artifact CPU
+
+WholeEpic G003 continues from integration HEAD `5f08cc2`; this current amendment is
+outside the historical Spec/probe evidence above. Exact authored scope:
+`scripts/product/prepare-grdb.py`, `Tests/Topology/test_product_grdb.py`, and this
+`bmad-docs/implementation-artifacts/spec-1-5-packaged-db-fts5-matrix.md` only.
+Pinned public GRDB7.11.1 commit `b83108d10f42680d78f23fe4d4d80fc88dab3212`
+is reused from the existing parent-validated source-only PASS receipt at
+`../grdb-source-only-cfc8c4b8-0ebb-4728-9575-5db33532443b/grdb-source/source-only.json`;
+the builder validates the existing receipt/tree/source inventory and never clones or fetches.
+
+Preparation requires explicit `--arch arm64` or `--arch x86_64`; `prepare`,
+`build_arguments`, and `validate_output` require the same explicit artifact CPU.
+Invalid/omitted CPU cannot start a build or create an owned output. Native Darwin
+arm64 and untranslated execution-host requirements remain unchanged: x86_64 here
+means cross-compilation on that host, not actual Intel execution. Xcode receives
+one `ARCHS` value with `ONLY_ACTIVE_ARCH=NO`; static verification requires exactly
+that thin lipo CPU and its exact `<CPU>-apple-macos.swiftmodule`, with no module
+fallback. The successful receipt reports the validated requested artifact CPU.
+Unchanged controls include exact Xcode27.0/SDK27.0/Swift6.4/linker27037.1 pins,
+macOS15.0 deployment target, controlled environment, deny-network/owned-write
+sandbox, fresh output/exclusive logs, unsigned framework, load-command/system-link
+and inventory checks, and no runtime execution.
+
+Synthetic tests are authored for both CPUs on the same arm64 host, wrong/fat CPU,
+missing/other-CPU module, invalid/injected/omitted CPU at API/CLI boundaries, and
+unchanged execution-host restrictions alongside the existing guards. No tests,
+builds, gates, formatters, SDK calls or source-receipt mutations are performed by
+this delegated edit. Parent owns integration, focused tests, actual fresh thin
+framework build and static verification, evidence and commits; no actual new
+artifact identity or validation PASS is asserted here.
+
+Architecture P2 still requires TWO actual CPU artifacts and FOUR independently
+bound physical OS×CPU executions. Cross-compilation establishes only artifact
+preparation, not SDK/auth/runtime/Intel/OS-cell/P2 acceptance. No four fabricated
+artifact hashes, physical-cell results, consumed-trial replay or acceptance
+promotion is authorized. G003 and the aggregate original three goals remain
+incomplete; a missing local cross-compiled dependency is autonomous engineering
+work, not evidence that all remaining work is human-only.
+
+### Parent current verification and operation-scoped blocker
+
+Current CPU-builder fixtures: 30 tests PASS, including the subsequently authored
+PIFCache permission-failure regression. The regression checks preservation of
+inputs/failed namespace and absence of a successful receipt; canned failure bytes
+are not actual tool evidence. GRDBArtifactIntegrityReview approves CPU source
+routing with no findings; overall WATCH and no artifact/P2 acceptance.
+
+Actual x86_64 preparation failed before compilation with BUILD_FAILED. Preserve
+`.build/grdb-x86_64-94CF0DA8-C5FC-4C1B-AAD8-3F3946683233`, complete build logs and
+all failed diagnostics. No preparation.json or new validated thin framework exists.
+Actual pinned source validation succeeded and the strict toolchain checks reached
+the build. Xcode PIFCache workspace save reported Cocoa513/POSIX1 despite owned
+destination writes being allowed by the unchanged profile.
+
+Bounded public diagnostics distinguish the operation: direct POSIX exclusive
+write in that namespace succeeds; Foundation Data atomic save fails even under
+the exact preparation environment including owned TMPDIR. NSTemporaryDirectory
+was observed outside the owned root; public itemReplacementDirectory appropriate
+for the owned destination also fails513/POSIX1. These isolate temporary/replacement
+selection, not a universally unsupported Xcode operation. No supported caller
+override was established. No vendor/private interposition, external-temp write
+grant, source/home write, weakened sandbox, blind retry or fabricated success is
+allowed. A supported containment mechanism or separately scoped preparation-design
+decision preserving ownership is required before another actual build.
