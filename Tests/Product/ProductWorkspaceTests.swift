@@ -66,7 +66,7 @@ import ProviderRequest
     let id = try await fixture.workspace.imports.continueImport(pending.id, destinationFolderID: nil)
     fixture.workspace.imported(id)
     fixture.workspace.sheet = nil
-    fixture.workspace.dismissSheet()
+    _ = await fixture.workspace.dismissSheet()?.value
     return id
   }
 
@@ -182,9 +182,39 @@ import ProviderRequest
       do { _ = try await f.workspace.imports.continueImport(fresh.id, destinationFolderID: nil); XCTFail("Fresh Continue replayed") }
       catch { XCTAssertEqual(error as? FolderImportError, .consumedIntent) }
       f.workspace.sheet = nil
-      f.workspace.presentationDidDismiss()
+      _ = await f.workspace.presentationDidDismiss(confirmationID: fresh.id)?.value
       XCTAssertFalse(f.workspace.sheetCleanupPending)
     }
+  }
+
+  func testConfirmationDismissalNeedsMatchingIdentityAndCompletedCancellationBeforeNewImport() async throws {
+    let f = try await fixture()
+    try await f.workspace.prepareImport(source: f.source)
+    let first = try confirmation(f.workspace)
+    f.workspace.sheet = nil
+    XCTAssertTrue(f.workspace.sheetCleanupPending)
+    XCTAssertNil(f.workspace.presentationDidDismiss(), "An unbound callback cannot cancel an intent")
+    XCTAssertNil(f.workspace.presentationDidDismiss(confirmationID: UUID()))
+    let cleanup = try XCTUnwrap(f.workspace.presentationDidDismiss(confirmationID: first.id))
+    XCTAssertTrue(f.workspace.sheetCleanupPending, "Starting cancellation is not its acknowledgment")
+    do {
+      try await f.workspace.prepareImport(source: f.source)
+      XCTFail("Import admitted before the actual cancellation task finished")
+    } catch { XCTAssertEqual(error as? ProductWorkspaceError, .busy) }
+    let cancelledID = await cleanup.value
+    XCTAssertEqual(cancelledID, first.id)
+    XCTAssertFalse(f.workspace.sheetCleanupPending)
+    let pending = await f.workspace.imports.pendingConfirmationCount
+    XCTAssertEqual(pending, 0)
+    XCTAssertTrue(try f.database.libraryRecords().isEmpty)
+    XCTAssertEqual(try Data(contentsOf: f.source), Data("%PDF-1.4\nsynthetic workspace fixture\n%%EOF\n".utf8))
+    try await f.workspace.prepareImport(source: f.source)
+    let fresh = try confirmation(f.workspace)
+    XCTAssertNotEqual(fresh.id, first.id)
+    XCTAssertNil(f.workspace.presentationDidDismiss(confirmationID: first.id))
+    XCTAssertEqual(try confirmation(f.workspace), fresh)
+    f.workspace.sheet = nil
+    _ = await f.workspace.presentationDidDismiss(confirmationID: fresh.id)?.value
   }
 
   func testWorkspaceObsoleteDismissCallbackDuringOwnedImportPreparationDoesNotInvalidateInput() async throws {
@@ -282,7 +312,7 @@ import ProviderRequest
       generation: identity.generation).encoded, old.encoded)
     await f.workspace.imports.cancel(cancelled.id)
     f.workspace.sheet = nil
-    f.workspace.presentationDidDismiss()
+    _ = await f.workspace.presentationDidDismiss(confirmationID: cancelled.id)?.value
     XCTAssertEqual(try f.database.captureRetryableImport(paperID: identity.paperID,
       generation: identity.generation).encoded, old.encoded, "Cancel leaves the exact failed history intact")
     do { _ = try await f.workspace.imports.continueImport(cancelled.id, destinationFolderID: nil); XCTFail("Cancelled Retry replayed") }
@@ -355,7 +385,7 @@ import ProviderRequest
     let cancelled = try confirmation(f.workspace)
     await f.workspace.imports.cancel(cancelled.id)
     f.workspace.sheet = nil
-    f.workspace.dismissSheet()
+    _ = await f.workspace.dismissSheet()?.value
     XCTAssertEqual(try f.database.captureRetryableImport(paperID: identity.paperID,
       generation: identity.generation).encoded, old.encoded)
     do { _ = try await f.workspace.imports.continueImport(cancelled.id, destinationFolderID: nil); XCTFail("Cancelled Retry replayed") }
@@ -918,7 +948,8 @@ import ProviderRequest
       XCTFail("An outstanding confirmation must not be replaced")
     } catch { XCTAssertTrue(error is ProductWorkspaceError) }
     await f.workspace.imports.cancel(cancelled.id)
-    f.workspace.sheet = nil; f.workspace.dismissSheet()
+    f.workspace.sheet = nil
+    _ = await f.workspace.dismissSheet()?.value
     do {
       _ = try await f.workspace.imports.continueImport(cancelled.id, destinationFolderID: nil)
       XCTFail("Cancelled confirmation must not import")
@@ -930,7 +961,8 @@ import ProviderRequest
       _ = try await f.workspace.imports.continueImport(changed.id, destinationFolderID: nil)
       XCTFail("Changed source must require another confirmation")
     } catch { XCTAssertEqual(error as? FolderImportError, .sourceChanged) }
-    f.workspace.sheet = nil; f.workspace.dismissSheet()
+    f.workspace.sheet = nil
+    _ = await f.workspace.dismissSheet()?.value
     XCTAssertTrue(try f.database.libraryRecords().isEmpty)
     XCTAssertEqual(try f.database.adapterRead { try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM importJob") }, 0)
     XCTAssertFalse(FileManager.default.fileExists(atPath: f.database.root.appendingPathComponent("papers").path))

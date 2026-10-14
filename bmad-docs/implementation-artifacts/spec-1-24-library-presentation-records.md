@@ -1,5 +1,27 @@
 # Story 1.24 Build Spec — Library presentation and record revisits
 
+## Current isolated workspace verification — 2026-10-14
+
+The current full-Epic execution request resumes permitted private-fixture verification.
+ProductWorkspace owns an asynchronous confirmation-cancellation acknowledgment;
+nil visibility is not owner completion. The native presenter already carries the
+matching confirmation UUID and waits for that task. Five old workspace regressions
+used an unbound dismissal callback or started another operation without awaiting
+actual cancellation. Align those test callsites with the existing contract, without
+weakening the busy barrier, changing production behavior or releasing unknown quotas.
+The shared import fixture now waits for its returned cleanup task. Add a regression
+for unbound/wrong callbacks, admission denial before actual acknowledgment, preserved
+input/zero durable effects and old callbacks not canceling a newer confirmation.
+
+Initial process-isolated Product coverage: 480 cases, 475 passed and five stale
+workspace cases failed. The corrected Workspace set has 37 actual isolated cases,
+all PASS, including the new acknowledgment regression. The remaining 444 unchanged
+cases retain their current-build pass evidence. These are private-file/GRDB/model
+checks, not authenticated entry, real Agent purge, rendered focus/accessibility,
+signed packaging, P1/P2/P3/P6 or Story/Epic completion. The initial shared-process
+run also failed due to deliberately retained process-lifetime unknown-close quotas;
+preserve that failure rather than reset production ownership to make a suite pass.
+
 ## Bounded native detail dismissal and opener-return continuation (baseline 1ef847c)
 
 Architect200 finds the explicit detail focus-return criterion executable within
