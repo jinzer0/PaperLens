@@ -33,6 +33,9 @@ AGENT_ID = MAIN_ID + '.ProviderAgent'
 GROUP_ID = '397452Z366.io.github.jinzer0.PaperLens.TopologyFixture'
 MARKER = b'PaperLens topology canary\n'
 LIMITS = CONTRACT['limits']
+# Public Darwin sys/fcntl.h: O_SEARCH = O_EXEC (0x40000000) | O_DIRECTORY.
+# CPython's os module does not expose O_SEARCH on all admitted Darwin builds.
+DARWIN_O_SEARCH = 0x40000000 | os.O_DIRECTORY
 
 
 def fixture_profile() -> tuple[Path, Path]:
@@ -1106,9 +1109,10 @@ class Fixtures:
 
     @staticmethod
     def parent_descriptor(path: Path) -> int:
-        # The pinned Darwin runtime exposes O_SEARCH. Traversal must not
-        # request directory-data reads before the actual fixed leaf syscall.
-        flags = os.O_SEARCH | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK
+        # Search only; no directory-data read or alternate-platform flag inference.
+        if sys.platform != 'darwin':
+            raise OSError(errno.ENOTSUP, 'searchTraversalUnavailable')
+        flags = DARWIN_O_SEARCH | os.O_NOFOLLOW | os.O_NONBLOCK
         fd = os.open(path.anchor, flags)
         try:
             for component in path.parts[1:]:

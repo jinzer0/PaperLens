@@ -16,6 +16,46 @@ context:
   - '{project-root}/bmad-docs/planning-artifacts/architecture/architecture-PaperLens-2026-08-28/SOLUTION-DESIGN.md'
 ---
 
+## Whole-Epic topology source correction — 2026-10-14
+
+G003 runs under the current Epic1 range execution on integration branch
+issue/epic-1-product-vertical-integration-20261010, baseline ee0e27f. This is a
+local source correction, not renewal of any consumed signed/renderer/collector
+trial, new privacy decision or modification of the frozen prototype intent.
+
+The permitted offline nine-suite topology run found seven errors among 476 cases:
+Fixtures.parent_descriptor assumed os.O_SEARCH, absent from current Darwin
+CPython3.13.12. The assumption raised AttributeError before any ancestor/leaf probe.
+It is not sandbox denial or observed leaf-operation evidence. Do not skip these
+tests or replace search-only traversal with directory-data O_RDONLY permission.
+
+Public current Xcode SDK usr/include/sys/fcntl.h defines O_EXEC=0x40000000 and
+O_SEARCH=(O_EXEC|O_DIRECTORY). Bind that Darwin ABI directly in ProviderAgent/agent.py;
+retain O_NOFOLLOW/O_NONBLOCK for each descriptor-relative ancestor open. Refuse
+non-Darwin invocation before open rather than substitute a different platform flag.
+No SDK internals, credential profile, private syscall or numeric budget is involved.
+Leaf open/read/write and safe-redacted observation remain unchanged; ancestor denial
+continues to yield unknown without a leaf-observed claim. No permissions are repaired.
+
+Exact source union is ProviderAgent/agent.py, paired Tests/Topology/test_agent.py
+and this existing Spec. New regressions assert exact search-only relative-open flags
+and ancestor closure; actual private Darwin descriptor is non-inheritable, reports
+O_EXEC and rejects directory-data read with EBADF; non-Darwin refusal performs no
+open and returns no observed leaf outcome. All 18 FixtureTests PASS, including the
+previously failing retained-link, no-truncation, separate read/write denial and
+individual-syscall observations. Actual private fixture checks prove this local ABI
+binding only, not packaged Python, signed isolation, CPU/OS cells or P1/P2/P3/P6.
+
+Integrated parent verification: 494 offline topology/account/discovery cases PASS
+across ten named modules; separate offline GRDB-preparation 22 cases PASS; pure
+ProviderRequest Python 35 cases PASS. Native ProviderRequest32 and ProviderRPC20
+cases PASS with automatic resolution disabled. None invokes signed SDK/collector,
+renderer or live auth/paid operations. Asyncio fixture slow-task diagnostics remain
+visible, not suppressed. Prior 476/7-error output is retained, not rewritten.
+Scoped DarwinTraversalIntegrityReview returns CLEAR/APPROVE with no findings after
+reading the public header and this exact three-file delta. Parent alone observed
+the test results. This advisory review is not a checkpoint cohort or gate receipt.
+
 <frozen-after-approval reason="human-owned intent — do not modify unless human renegotiates">
 
 ## Intent

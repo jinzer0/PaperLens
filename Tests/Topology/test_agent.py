@@ -2145,6 +2145,42 @@ class ProfileTests(unittest.TestCase):
 
 class FixtureTests(unittest.TestCase):
 
+    def test_ancestor_traversal_uses_public_darwin_search_only_flags(self):
+        flags = 0x40100000 | os.O_NOFOLLOW | os.O_NONBLOCK
+        with patch.object(agent.os, 'open', side_effect=[40, 41, 42]) as opened, \
+                patch.object(agent.os, 'close') as closed:
+            fd = agent.Fixtures.parent_descriptor(Path('/fixture/owned'))
+            self.assertEqual(fd, 42)
+            self.assertEqual(opened.call_args_list, [
+                unittest.mock.call('/', flags),
+                unittest.mock.call('fixture', flags, dir_fd=40),
+                unittest.mock.call('owned', flags, dir_fd=41),
+            ])
+            self.assertEqual(closed.call_args_list,
+                             [unittest.mock.call(40), unittest.mock.call(41)])
+
+    def test_actual_search_descriptor_cannot_read_directory_data_or_be_inherited(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fd = agent.Fixtures.parent_descriptor(Path(directory).resolve())
+            try:
+                self.assertTrue(os.fstat(fd).st_mode & 0o040000)
+                self.assertFalse(os.get_inheritable(fd))
+                self.assertTrue(agent.fcntl.fcntl(fd, agent.fcntl.F_GETFL) & 0x40000000)
+                with self.assertRaises(OSError) as caught:
+                    os.read(fd, 1)
+                self.assertEqual(caught.exception.errno, errno.EBADF)
+            finally:
+                os.close(fd)
+
+    def test_other_platform_never_substitutes_directory_read_for_search(self):
+        with patch.object(agent.sys, 'platform', 'linux'), patch.object(agent.os, 'open') as opened:
+            with self.assertRaises(OSError) as caught:
+                agent.Fixtures.parent_descriptor(Path('/fixture'))
+            self.assertEqual(caught.exception.errno, errno.ENOTSUP)
+            self.assertEqual(agent.Fixtures.access(Path('/fixture/leaf'), write=False),
+                             agent.Fixtures.observation())
+            opened.assert_not_called()
+
     def test_retained_links_keep_exact_inode_and_target_until_cleanup(self):
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory).resolve()
