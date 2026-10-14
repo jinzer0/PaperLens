@@ -1,0 +1,237 @@
+import Darwin
+import Dispatch
+import Foundation
+import XCTest
+
+@testable import PaperLensProduct
+
+/// Run EACH method in a fresh isolated test process. Unknown roots intentionally never reset.
+/// Fixture teardown is physical hygiene only; it cannot discharge production debt.
+@MainActor
+final class OwnedChildRetirementTests: XCTestCase {
+  // Existing aggregate owned-cleanup AC, not a new production duration/default/grace.
+  private let cleanupBudgetNanoseconds: UInt64 = 300_000_000
+
+  private final class Counts: @unchecked Sendable {
+    let lock = NSLock()
+    var effects = 0
+    var terminals = 0
+    var closeAttempts = 0
+    func effect() { lock.withLock { effects += 1 } }
+    func terminal() { lock.withLock { terminals += 1 } }
+    func closeAttempt() { lock.withLock { closeAttempts += 1 } }
+    var snapshot: (Int, Int, Int) { lock.withLock { (effects, terminals, closeAttempts) } }
+  }
+  private func cwd() throws -> URL {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(
+      at: directory, withIntermediateDirectories: false,
+      attributes: [.posixPermissions: 0o700])
+    XCTAssertEqual(chmod(directory.path, 0o700), 0)
+    return directory
+  }
+  private func owner(
+    _ fixture: OwnedChildRetirement.Fixture, _ directory: URL,
+    hooks: OwnedChildRetirement.Hooks = .init(), remaining: UInt64? = nil
+  ) -> OwnedChildRetirement {
+    OwnedChildRetirement(
+      fixture: fixture, privateWorkingDirectory: directory,
+      deadlineUptimeNanoseconds: DispatchTime.now().uptimeNanoseconds
+        + (remaining ?? cleanupBudgetNanoseconds),
+      hooks: hooks)
+  }
+  private func terminalExpectation(_ owner: OwnedChildRetirement, counts: Counts? = nil)
+    -> XCTestExpectation
+  {
+    let done = expectation(description: "native terminal")
+    owner.observeTerminal { _ in
+      counts?.terminal()
+      done.fulfill()
+    }
+    return done
+  }
+  private var budgetSeconds: TimeInterval { Double(cleanupBudgetNanoseconds) / 1_000_000_000 }
+  private func assertClean(_ owner: OwnedChildRetirement) {
+    XCTAssertEqual(owner.terminal, .clean(.init(checkedDescriptorCloses: 6, childReaped: true)))
+    XCTAssertTrue(owner.testingChildExists)
+    XCTAssertTrue(owner.testingReaped)
+    XCTAssertEqual(owner.testingDescriptorCount, 0)
+    XCTAssertFalse(owner.testingRetained)
+  }
+
+  func testTrueActualReapAndSixCheckedClosesSoleInvocation() async throws {
+    let directory = try cwd()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let counts = Counts()
+    var hooks = OwnedChildRetirement.Hooks()
+    hooks.before = { _ in counts.effect() }
+    let child = owner(.trueUtility, directory, hooks: hooks)
+    let done = terminalExpectation(child, counts: counts)
+    child.retire()
+    child.retire()
+    await fulfillment(of: [done], timeout: budgetSeconds)
+    assertClean(child)
+    let before = counts.snapshot
+    child.retire()
+    XCTAssertEqual(counts.snapshot.0, before.0)
+    XCTAssertEqual(counts.snapshot.1, 1)
+  }
+
+  func testCatActualStdinEOFThenWaitpidAndCheckedCloses() async throws {
+    let directory = try cwd()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let child = owner(.cat, directory)
+    let done = terminalExpectation(child)
+    child.retire()
+    await fulfillment(of: [done], timeout: budgetSeconds)
+    assertClean(child)
+  }
+
+  func testTrueAlreadyExitedUnreapedNativeChild() async throws {
+    let directory = try cwd()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let exited = expectation(description: "kernel observed exited without reaping")
+    var hooks = OwnedChildRetirement.Hooks()
+    hooks.afterSpawn = { actualChild in
+      var information = siginfo_t()
+      // A genuine blocking native observation on the operation lane, not a forged PID/proof.
+      let result = waitid(P_PID, id_t(actualChild), &information, WEXITED | WNOWAIT)
+      XCTAssertEqual(result, 0)
+      XCTAssertEqual(information.si_pid, actualChild)
+      exited.fulfill()
+    }
+    let child = owner(.trueUtility, directory, hooks: hooks)
+    let done = terminalExpectation(child)
+    child.retire()
+    await fulfillment(of: [exited, done], timeout: budgetSeconds)
+    assertClean(child)
+  }
+
+  func testHeldRealLaneIndependentExpiryFacadeLossNoLateCleanOrReplacement() async throws {
+    let directory = try cwd()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let counts = Counts()
+    let held = expectation(description: "real spawned child lane held")
+    let release = DispatchSemaphore(value: 0)
+    var hooks = OwnedChildRetirement.Hooks()
+    hooks.before = { effect in
+      counts.effect()
+      if case .close = effect {
+        held.fulfill()
+        release.wait()
+      }
+    }
+    let start = DispatchTime.now().uptimeNanoseconds
+    var facade: OwnedChildRetirement? = owner(
+      .cat, directory, hooks: hooks,
+      remaining: cleanupBudgetNanoseconds / 2)
+    weak var weakFacade = facade
+    let rooted = facade!.testingRootWitness
+    let done = terminalExpectation(facade!, counts: counts)
+    facade!.retire()
+    await fulfillment(of: [held, done], timeout: budgetSeconds)
+    XCTAssertLessThan(DispatchTime.now().uptimeNanoseconds - start, cleanupBudgetNanoseconds)
+    XCTAssertEqual(facade!.terminal, .unknown(.deadline))
+    XCTAssertTrue(facade!.testingChildExists)
+    XCTAssertFalse(facade!.testingReaped)
+    XCTAssertEqual(facade!.testingDescriptorCount, 6)
+    let effects = counts.snapshot.0
+    facade!.retire()
+    XCTAssertEqual(counts.snapshot.0, effects)
+    XCTAssertTrue(rooted())
+    // Capture hygiene before dropping the facade; the production root owns the actual core.
+    let hygiene = expectation(description: "separate physical teardown")
+    facade!.testingPhysicalTeardown { allWereOpen in
+      XCTAssertTrue(allWereOpen)
+      hygiene.fulfill()
+    }
+    facade = nil
+    XCTAssertNil(weakFacade)
+    XCTAssertTrue(rooted())
+    release.signal()
+    await fulfillment(of: [hygiene], timeout: budgetSeconds)
+    XCTAssertTrue(rooted())
+    XCTAssertEqual(counts.snapshot.0, effects)
+    XCTAssertEqual(counts.snapshot.1, 1)
+    let replacement = owner(.trueUtility, directory)
+    let refused = terminalExpectation(replacement)
+    replacement.retire()
+    await fulfillment(of: [refused], timeout: budgetSeconds)
+    XCTAssertEqual(replacement.terminal, .unknown(.admissionBlocked))
+    XCTAssertFalse(replacement.testingChildExists)
+    XCTAssertEqual(replacement.testingDescriptorCount, 0)
+  }
+
+  func testPartialSetupActualPipeRetentionNoRetry() async throws {
+    let directory = try cwd()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let counts = Counts()
+    var hooks = OwnedChildRetirement.Hooks()
+    hooks.before = { _ in counts.effect() }
+    hooks.afterPipeFault = { true }
+    let child = owner(.trueUtility, directory, hooks: hooks)
+    let done = terminalExpectation(child, counts: counts)
+    child.retire()
+    await fulfillment(of: [done], timeout: budgetSeconds)
+    XCTAssertEqual(child.terminal, .unknown(.setup))
+    XCTAssertEqual(child.testingDescriptorCount, 2)
+    XCTAssertFalse(child.testingChildExists)
+    XCTAssertTrue(child.testingRetained)
+    let before = counts.snapshot.0
+    child.retire()
+    XCTAssertEqual(counts.snapshot.0, before)
+    let hygiene = expectation(description: "physical pipe teardown")
+    child.testingPhysicalTeardown { allWereOpen in
+      XCTAssertTrue(allWereOpen)
+      hygiene.fulfill()
+    }
+    await fulfillment(of: [hygiene], timeout: budgetSeconds)
+    XCTAssertTrue(child.testingRetained)
+    XCTAssertEqual(child.terminal, .unknown(.setup))
+  }
+
+  func testActualCloseEBADFLeavesAllOwnedFDsAndNoRetry() async throws {
+    let directory = try cwd()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let counts = Counts()
+    var hooks = OwnedChildRetirement.Hooks()
+    hooks.closeFault = {
+      counts.closeAttempt()
+      return true
+    }
+    let child = owner(.cat, directory, hooks: hooks)
+    let done = terminalExpectation(child, counts: counts)
+    child.retire()
+    await fulfillment(of: [done], timeout: budgetSeconds)
+    XCTAssertEqual(child.terminal, .unknown(.close))
+    XCTAssertTrue(child.testingChildExists)
+    XCTAssertEqual(child.testingDescriptorCount, 6)
+    XCTAssertFalse(child.testingReaped)
+    XCTAssertTrue(child.testingRetained)
+    child.retire()
+    XCTAssertEqual(counts.snapshot.2, 1)
+    let hygiene = expectation(description: "physical child teardown")
+    child.testingPhysicalTeardown { allWereOpen in
+      XCTAssertTrue(allWereOpen)
+      hygiene.fulfill()
+    }
+    await fulfillment(of: [hygiene], timeout: budgetSeconds)
+    XCTAssertTrue(child.testingRetained)
+    XCTAssertEqual(child.terminal, .unknown(.close))
+    XCTAssertEqual(counts.snapshot.1, 1)
+  }
+
+  func testAlreadyExpiredDeadlineAdmitsNoNativeEffect() async throws {
+    let directory = try cwd()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let child = OwnedChildRetirement(
+      fixture: .trueUtility, privateWorkingDirectory: directory,
+      deadlineUptimeNanoseconds: DispatchTime.now().uptimeNanoseconds)
+    let done = terminalExpectation(child)
+    child.retire()
+    await fulfillment(of: [done], timeout: budgetSeconds)
+    XCTAssertEqual(child.terminal, .unknown(.deadline))
+    XCTAssertFalse(child.testingChildExists)
+    XCTAssertEqual(child.testingDescriptorCount, 0)
+  }
+}

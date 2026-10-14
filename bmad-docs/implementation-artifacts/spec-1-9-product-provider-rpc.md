@@ -136,6 +136,70 @@ must be explicitly renegotiated by its owner. The latter is not authorized here.
 SDK descendant/resource/private-state and actual cleanup remain unproved; neither
 this conflict nor a potential mechanism is a blanket Epic source gate.
 
+### Parent successor admission: native deadline-isolated direct child
+
+TerminalBlockerAudit PAUSE-1/ITERATE confirms this mechanical successor is parent-
+owned autonomous engineering. Synchronous Popen proposal stays stopped. Exact union:
+PaperLensApp/Application/OwnedChildRetirement.swift, Tests/Product/OwnedChildRetirementTests.swift,
+Package.swift and PaperLens.xcodeproj/project.pbxproj registration, and this Spec.
+Actual public Darwin posix_spawn creates the owned child, never arbitrary PID or
+synthetic owner. Only fixture /usr/bin/true or /bin/cat, empty argument list, no
+shell; exact PATH=/usr/bin:/bin:/usr/sbin:/sbin, LANG=C, LC_ALL=C; fresh private cwd.
+Public close-on-exec-default actions duplicate explicitly owned pipe stdio and
+prevent ambient FD inheritance. No SDK/app/helper/network or credentials.
+
+Prepare an independent native operation lane before cleanup starts. Spawn/setup,
+each checked raw pipe close and blocking waitpid run only there. The independent
+deadline/terminal-selection lane NEVER performs or joins those blocking effects.
+Caller supplies the unchanged absolute monotonic deadline; no new timeout, grace,
+poll interval, resource constant, queue or retry. One retirement invocation per
+immutable actual child identity. On-time clean requires actual waitpid reaping
+and every observed physical close, not EOF/signal acceptance or destructors.
+
+For these no-input fixtures, checked stdin closure requests EOF; waitpid observes
+actual child reaping, then checked stdout/stderr closure. Check the absolute clock
+before every next effect and before success. At expiry/uncertainty select sticky
+unknown and retain actual child/handles/operation lane in a process-lifetime strong
+root with its admission barrier. Never retry unknown close or admit replacement
+against that debt. In-flight operations may finish late but cannot start another
+effect after expiry, issue a second terminal, clear debt or affect a newer identity.
+Timer scheduling/measurement failure remains failure evidence, not fabricated
+hard realtime proof. No potentially blocking call is made bounded by timeout checks.
+
+Parent verifies actual true/cat reaping/checked closes, actual already-exited child,
+held real worker with independent deadline expiry, facade-loss root retention,
+no late success/replacement, partial-start/close uncertainty and no retry. A private
+synchronization gate may hold the genuine operation lane; separate fixture teardown
+never discharges production uncertainty or certifies SDK/descendant/content absence.
+This primitive is not usable product Provider dispatch or full SDK cleanup and
+cannot satisfy Story/P1/P2/P3/P6 acceptance on fixture evidence.
+
+### Native successor parent verification — actual local proof only
+
+The exact five-file native successor union is implemented and registered in the
+Swift package and actual Main Xcode target. NativeChildOwnershipIntegrityReview:
+CLEAR/APPROVE, no findings, direct true/cat ownership scope only. Parent formatted
+the two new Swift files once, rebuilt the caller bundle, then ran all496 Product
+cases in fresh native processes:496 PASS, zero failures/errors, including all seven
+OwnedChildRetirementTests. Current report:
+`.build/isolated-product-native-child-formatted.json`. Actual unsigned arm64 Main/
+nested XPC compilation also BUILD SUCCEEDED with automatic resolution disabled.
+
+Observed cases include real waitpid/checked six-FD closes, cat EOF followed by
+reaping, true exit observed WNOWAIT, held actual operation lane with independent
+deadline expiry/facade loss/no late clean/replacement refusal, partial setup real
+pipe retention, actual EBADF close failure and expired-no-effect. Unknown roots
+are intentionally never reset; physical fixture teardown is not cleanup evidence.
+Dispatch timer/scheduling and untested arbitrary syscall interleavings remain
+explicit limitations, not hard realtime/P3 or full SDK shutdown guarantees.
+
+Only trusted fixed fixture utilities are admitted. No product RPC activation,
+SDK login/probe, auth/private layout, descendant/content absence/purge, protected
+trial, signed OS×CPU proof or acceptance was delivered by this primitive. HIGH
+shared product/private-state decisions above and the actual SDK owner remain
+unresolved. Terminal critic ITERATE was addressed with genuine autonomous source
+work; full original three-goal aggregate remains active and incomplete.
+
 - Work unit: Story1.9 / Issue#11 / `issue/11-story-1-9`; planning checkpoint based on `51492b8b0b3b454d741d16eef8019ed45ed7d67b`.
 - Product implementation BLOCKED; P1=false, P2=false, P3=false, StoryDone=false. This is not an implementation-ready final method specification.
 - Supplied approval provenance: PRODUCT `5eac3bb9424ad893eca7d63bc319b71f580838ed`, ARCHITECTURE `1195c92227cc628e325f5ff24d70cc93639bf7a9`, https://github.com/jinzer0/PaperLens/issues/3#issuecomment-6049004229. Existing Whole-Epic authority permits in-scope own-branch Spec commits; it neither passes gates nor authorizes remote operations, credentials, paid requests or consumed-trial retries.

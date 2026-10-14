@@ -26,6 +26,7 @@ let package = Package(
         "Application/JobRecoveryPolicy.swift",
         "Application/ProductJobRecovery.swift",
         "Application/AgentConnectionLifecycle.swift",
+        "Application/OwnedChildRetirement.swift",
         "Application/LocalLibraryLifecycle.swift",
         "Application/ImportRecoveryJournal.swift",
         "Infrastructure/ProductDatabase+ImportRecovery.swift",
@@ -92,7 +93,7 @@ let package = Package(
         "LibrarySummaryServiceTests.swift", "PDFiumExtractionProducerTests.swift",
         "ExtractionFixtureBudget.swift", "LibraryExtractionReadPinTests.swift",
         "PDFiumExtractionResourceOwnerTests.swift", "LibraryPDFiumInputAcquirerTests.swift",
-        "OwnedPipeAgentRPCChannelTests.swift", "MainPDFiumParsingCompositionTests.swift",
+        "OwnedPipeAgentRPCChannelTests.swift", "OwnedChildRetirementTests.swift", "MainPDFiumParsingCompositionTests.swift",
         "ImportRecoveryJournalTests.swift", "ImportRecoveryPersistenceTests.swift",
         "LegacyImportFixture.swift"]
     ),
