@@ -1878,3 +1878,54 @@ four-target native build1677 SUCCEEDED, no binaries launched or protected trials
 Mid-read/actual FD-close cancellation and unknown-close startup injection are not
 exercised; no immediate cancellation/atomic-recovery rollback, aggregate/RSS, hostile
 mutation, authenticated provider, purge, OS×CPU or canonical acceptance is inferred.
+
+### Current isolated Product XCTest verification driver
+
+`scripts/product/verify-isolated-tests.py` accepts an existing caller-built
+`ProductTests.xctest`, optional `--package-path` caller package directory
+(default current directory), required `--report`, optional exact class/case
+`--filter`, and finite positive per-case `--timeout` seconds (default120). Installed
+`xcrun xctest --help` documents only `-XCTest`, not native JSON listing;
+`swift test list --help` also has no JSON-format option. Discovery uses supported
+`swift test list --skip-build --disable-automatic-resolution` in that explicit
+package directory, with a120-second subprocess timeout and separate stdout/stderr.
+Every nonempty stdout line must be a native Module.Class/testCase selector;
+well-formed other modules are validated but not executed. Malformed/injected or
+duplicate selectors, empty ProductTests output, listing failure/timeout deny all
+case execution. The caller must build matching package/bundle artifacts first;
+the driver neither builds nor infers cases from source. No JSON-input alias remains.
+
+Each selected case runs sequentially in a fresh process with argv
+`xcrun xctest -XCTest ProductTests.Class/testCase /path/ProductTests.xctest`.
+Exit0 alone is insufficient: exactly one matching start/pass and positive
+exactly-one XCTest summary with zero failures/skips are required. Crash/nonzero,
+skip, zero/multiple execution, missing evidence and timeout fail; owned children
+are killed/reaped on timeout/interruption. Progress is emitted per case and at
+bounded ten-second wait intervals, failures retained, JSON includes every case's
+output/result and listing stdout/stderr/errors; exit0 means all selected cases passed,
+exit1 case failure, exit2 input/report error. Exact filtering deliberately covers
+only that subset. Package/bundle build correspondence, foreign output spoofing, descendant-process
+cleanup and aggregate memory/disk limits are not attested. Report output can
+contain test diagnostics and must remain in caller-owned evidence storage.
+
+Usage: `python3 scripts/product/verify-isolated-tests.py /path/ProductTests.xctest
+--package-path /path/package --report /path/report.json --timeout 120`.
+No builds/resolution/network/app/SDK/renderer actions, runtime quota/root reset,
+skip or logical closure ACK are performed by this driver. Mocked fixture tests in
+`Tests/Topology/test_isolated_product_tests.py` cover execution/evidence failures,
+timeouts/reaping, discovery, selector injection and reports; all test executions,
+builds, gates and formatters are explicitly deferred to the parent. Help-only CLI
+inspection is not verification, and no Story/Epic/runtime acceptance is promoted.
+
+Parent verification on 2026-10-14: the revised driver's 15 offline fixture tests
+PASS, including nonzero/crash/skip/zero/multiple evidence, selector denial,
+timeout/reap, supported discovery and report failures. Its actual native full run
+discovered and executed 481 Product cases, each in a separate owned process:
+481 PASS, zero failures/errors, no skipped-case promotion. Evidence report:
+`.build/isolated-product-8C627C92-348F-473A-A735-466D0EA28510.json`.
+The prior shared-process failure and five stale workspace-test failures remain
+recorded; production ownership/quota/admission was not weakened. These current
+private-fixture tests do not prove genuine auth, actual Agent purge, rendered
+accessibility, OS×CPU or P1/P2/P3/P6/Story/Epic completion. No configured project
+formatter was found; focused Python tests, actual XCTest execution and diff checks
+provide this slice's verification, not a substituted product acceptance gate.
