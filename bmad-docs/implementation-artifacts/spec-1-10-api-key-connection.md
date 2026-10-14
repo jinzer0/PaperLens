@@ -1,5 +1,64 @@
 # Story 1.10 Build Spec — Native API-Key Connection
 
+## Current shared Provider routing contract — 2026-10-14
+
+Whole-Epic G002 continues at integration baseline `a7de6d6`. The existing sole
+providerConfig row stored slot/generation/model but no Provider discriminator;
+native routing could not distinguish a future Codex selection with the same UUID
+and model from a native key. Implement the already-required equal-provider/single-
+selector foundation, without inventing SDK wire fields or authenticated activation.
+
+ProviderKind is exactly openAIAPIKey or codexChatGPT. ProviderConfiguration requires
+explicit optional kind; inactive slot requires nil kind, selected slot requires a
+known kind. Metadata identifies routing, never credential location, SDK capability,
+probe success or eligibility. No implicit runtime native default or second selector.
+The DB CAS requires explicit replacementKind and compares the entire expected
+kind/slot/model/generation; all directly affected callers must supply it. One atomic
+commit increments generation, including kind-only changes. Native adapters require
+openAIAPIKey plus exact model before reading a selected key or granting references.
+The opaque slot/generation token remains usable for a deliberate cross-provider CAS;
+that token alone does not authorize native credential reads. Existing leased keys
+remain owned until termination and cannot publish after any changed selector.
+
+Forward migration providerSelectorKindV1 adds providerConfig.kind and frozen
+extractionAttempt.configKind. All pre-change selected metadata was native-only;
+label those known historical selected rows once without changing UUID/model/generation.
+Inactive rows stay nil. Current reads refuse unknown or inconsistent pairs; no schema
+fallback, compatibility alias or provider inference from directory/slot names.
+Frozen extraction reservations, guarded reads/publication and retry state preserve
+their original kind independently of the current selector. Retry reads current kind
+in the same DB snapshot and rejects role drift, including drift without a generation
+bump; failed-context kind is never inferred from today's selector.
+
+Core source union: Infrastructure/ProductDatabase.swift, DatabaseAPIKeySelector.swift,
+ProductDatabase+Extraction.swift and Application/ParsingRecoveryCoordinator.swift.
+Paired behavior is in ProductCompositionTests, ExtractionRevisionTests and
+ParsingRecoveryCoordinatorTests. Direct required-argument fixture updates additionally
+touch LocalLibraryLifecycleTests, MainPDFiumParsingCompositionTests,
+PDFiumExtractionProducerTests, PDFiumExtractionResourceOwnerTests,
+LibrarySummaryServiceTests and ProductWorkspaceTests. This existing Spec records the
+whole union; no extra plan, fake SDK slot store or backend activation is created.
+
+Focused native verification: 37 cases PASS across routing/composition/extraction/retry.
+Tests use private metadata/keys only: cross-role same UUID/model refusal, held-lease
+retention, cross-role CAS, kind/slot pair denial, full-snapshot CAS/ABA, forward schema
+preservation of native/inactive/frozen state, no runtime default and no stale parsing
+publication/retry. None executes the SDK or claims genuine Codex authentication.
+Independent data-integrity review and full current-bundle verification are parent-
+owned before delivery; SDK/RPC/private-stage/real-probe/CAS integration remains open.
+
+Parent actual isolated native verification of the current bundle: 489 Product
+cases PASS, zero failures/errors or skip promotion. Report:
+`.build/isolated-product-94C0CBD3-5FE6-4930-A061-4985C0CB9742.json`.
+Read-only ProviderRoutingIntegrityReview (`agent://2-ProviderRoutingIntegrityReview`)
+returns CLEAR/APPROVE with no findings for the four core routing/persistence/recovery
+files and this Spec. It confirms full transactional CAS, no native default, forward
+native-only data labeling, separate frozen/current kind and no metadata-derived SDK
+activation. Native lease-owner implementation and full tests were parent-verified,
+not independently inspected in that five-file review. This is advisory risk review,
+not a boundary-cohort receipt, runtime gate or Story/Epic completion. Build warnings
+in unchanged extraction/UI/weak-reference code remain disclosed and were not suppressed.
+
 ## Current stored-selector revalidation repair — 2026-10-14
 
 Continue this existing Story on the product integration branch, baseline `9f3aedf`,

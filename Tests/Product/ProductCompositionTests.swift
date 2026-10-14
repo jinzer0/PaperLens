@@ -62,6 +62,143 @@ final class ProductCompositionTests: XCTestCase {
     XCTAssertEqual(try store.read(slot), "synthetic-key-not-a-credential")
   }
 
+  func testProviderSwitchKeepsOneSelectorAndRefusesNativeCredentialRoutingForCodex() throws {
+    let root = try privateRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let database = try ProductDatabase.open(at: root.appendingPathComponent("database"))
+    let configuration = try NativeOpenAIConfiguration(model: "fixture-model")
+    let slots = try APIKeySlotStore(directory: root.appendingPathComponent("slots"))
+    let slot = try slots.create(key: "synthetic-selected-key")
+    let adapter = DatabaseAPIKeySelector(database: database, configuration: configuration)
+    XCTAssertNil(try adapter.currentSelection())
+    _ = try XCTUnwrap(adapter.compareAndSwap(expected: nil, slotID: slot))
+    let native = try database.providerConfiguration()
+    XCTAssertEqual(native.kind, .openAIAPIKey)
+    let transport = CompositionProbe()
+    let connection = NativeAPIKeyConnection(configuration: configuration, slots: slots,
+      persistence: adapter, transport: transport, authority: try ProviderRequest())
+    connection.restore()
+    let oldLease = try connection.acquireLease()
+    // Deliberately same UUID/model: routing must use metadata, never slot names or key presence.
+    // This fixture changes stored metadata, not actual SDK authentication/activation.
+    let codex = try database.compareAndSwapProviderConfiguration(expected: native,
+      replacementKind: .codexChatGPT, replacementSlotID: slot, replacementModel: configuration.model)
+    XCTAssertGreaterThan(codex.generation, native.generation)
+    XCTAssertEqual(try ProductDatabase.open(at: database.root).providerConfiguration(), codex)
+    XCTAssertFalse(try adapter.selectionMatchesConfiguration(configuration))
+    connection.restore()
+    XCTAssertFalse(connection.eligibleForEntry)
+    XCTAssertNil(connection.activeSelection)
+    XCTAssertEqual(connection.phase, .failed(.unsupportedProfile))
+    XCTAssertThrowsError(try connection.acquireLease())
+    XCTAssertEqual(try connection.key(for: oldLease), "synthetic-selected-key")
+    XCTAssertFalse(try connection.mayPublish(oldLease))
+    let nativeSlot = try slots.create(key: "synthetic-new-native-key")
+    let token = try XCTUnwrap(adapter.currentSelection())
+    _ = try XCTUnwrap(adapter.compareAndSwap(expected: token, slotID: nativeSlot))
+    XCTAssertEqual(try database.providerConfiguration().kind, .openAIAPIKey)
+    XCTAssertTrue(try adapter.selectionMatchesConfiguration(configuration))
+    connection.restore()
+    XCTAssertTrue(connection.eligibleForEntry)
+    XCTAssertFalse(try connection.mayPublish(oldLease))
+    try connection.releaseAfterTermination(oldLease)
+    XCTAssertEqual(transport.calls, 0)
+    XCTAssertEqual(try database.adapterRead { try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM providerConfig") }, 1)
+  }
+
+  func testProviderKindPairValidationAndCompleteExpectedSnapshotAreAtomic() throws {
+    let root = try privateRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let database = try ProductDatabase.open(at: root.appendingPathComponent("database"))
+    let initial = try database.providerConfiguration()
+    for (kind, slot) in [(ProviderKind?.none, UUID?.some(UUID())),
+                         (ProviderKind?.some(.codexChatGPT), UUID?.none)] {
+      XCTAssertThrowsError(try database.compareAndSwapProviderConfiguration(expected: initial,
+        replacementKind: kind, replacementSlotID: slot, replacementModel: "fixture-model")) {
+        XCTAssertEqual($0 as? ProductDatabaseError, .invalidRecord)
+      }
+      XCTAssertEqual(try database.providerConfiguration(), initial)
+    }
+    let slot = UUID()
+    let selected = try database.compareAndSwapProviderConfiguration(expected: initial,
+      replacementKind: .openAIAPIKey, replacementSlotID: slot, replacementModel: "fixture-model")
+    let wrongKind = ProviderConfiguration(kind: .codexChatGPT, slotID: slot,
+      generation: selected.generation, model: selected.model)
+    XCTAssertThrowsError(try database.compareAndSwapProviderConfiguration(expected: wrongKind,
+      replacementKind: .codexChatGPT, replacementSlotID: UUID(), replacementModel: "fixture-model")) {
+      XCTAssertEqual($0 as? ProductDatabaseError, .staleConfiguration)
+    }
+    XCTAssertEqual(try database.providerConfiguration(), selected)
+    let cleared = try database.compareAndSwapProviderConfiguration(expected: selected,
+      replacementKind: nil, replacementSlotID: nil, replacementModel: nil)
+    XCTAssertNil(cleared.kind)
+    XCTAssertNil(cleared.slotID)
+    XCTAssertGreaterThan(cleared.generation, selected.generation)
+    XCTAssertThrowsError(try database.compareAndSwapProviderConfiguration(expected: selected,
+      replacementKind: .codexChatGPT, replacementSlotID: slot, replacementModel: selected.model))
+    XCTAssertEqual(try database.providerConfiguration(), cleared)
+  }
+
+  func testProviderRoutingMigrationPreservesPriorNativeSelectionAndFrozenAttempt() throws {
+    for hasSelection in [false, true] {
+      let root = try privateRoot()
+      defer { try? FileManager.default.removeItem(at: root) }
+      let database = try ProductDatabase.open(at: root.appendingPathComponent("database"))
+      let slot = hasSelection ? UUID() : nil
+      let before = try database.compareAndSwapProviderConfiguration(expected: database.providerConfiguration(),
+        replacementKind: hasSelection ? .openAIAPIKey : nil, replacementSlotID: slot,
+        replacementModel: "fixture-model")
+      let paper = UUID()
+      try database.adapterWrite { db in
+        try db.execute(sql: """
+          INSERT INTO paper(id, generation, title, status, createdAt)
+          VALUES (?, ?, 'private migration fixture', 'importFailed', 0)
+          """, arguments: [paper.uuidString, UUID().uuidString])
+        try db.execute(sql: """
+          INSERT INTO extractionAttempt(paperID, generation, pdfSHA256, pdfReference, revision,
+            job, attempt, fence, correlation, input, epoch, configSlot, configGeneration, configKind, state)
+          VALUES (?, ?, ?, 'fixture.pdf', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'failed')
+          """, arguments: [paper.uuidString, UUID().uuidString, String(repeating: "a", count: 64),
+            UUID().uuidString, UUID().uuidString, UUID().uuidString, UUID().uuidString,
+            UUID().uuidString, UUID().uuidString, UUID().uuidString, slot?.uuidString,
+            before.generation, before.kind?.rawValue])
+        // Reconstruct the exact preceding schema only in this private fixture.
+        try db.execute(sql: """
+          ALTER TABLE providerConfig DROP COLUMN kind;
+          ALTER TABLE extractionAttempt DROP COLUMN configKind;
+          DELETE FROM grdb_migrations WHERE identifier = 'providerSelectorKindV1';
+          """)
+      }
+      let reopened = try ProductDatabase.open(at: database.root)
+      XCTAssertEqual(try reopened.providerConfiguration(), before)
+      let frozen: String? = try reopened.adapterRead {
+        try String.fetchOne($0, sql: "SELECT configKind FROM extractionAttempt WHERE paperID = ?",
+          arguments: [paper.uuidString])
+      }
+      XCTAssertEqual(frozen, before.kind?.rawValue)
+      XCTAssertEqual(try reopened.adapterRead {
+        try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM grdb_migrations WHERE identifier = 'providerSelectorKindV1'")
+      }, 1)
+      XCTAssertEqual(try ProductDatabase.open(at: database.root).providerConfiguration(), before)
+    }
+  }
+
+  func testMissingOrInvalidProviderKindNeverBecomesANativeDefault() throws {
+    let root = try privateRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let database = try ProductDatabase.open(at: root.appendingPathComponent("database"))
+    let selected = try database.compareAndSwapProviderConfiguration(expected: database.providerConfiguration(),
+      replacementKind: .openAIAPIKey, replacementSlotID: UUID(), replacementModel: "fixture-model")
+    XCTAssertThrowsError(try database.adapterWrite {
+      try $0.execute(sql: "UPDATE providerConfig SET kind = 'unsupported'")
+    })
+    XCTAssertEqual(try database.providerConfiguration(), selected)
+    try database.adapterWrite { try $0.execute(sql: "UPDATE providerConfig SET kind = NULL") }
+    XCTAssertThrowsError(try database.providerConfiguration()) {
+      XCTAssertEqual($0 as? ProductDatabaseError, .invalidRecord)
+    }
+  }
+
   func testNilABAAndStaleSelectionNeverWin() throws {
     let root = try privateRoot()
     defer { try? FileManager.default.removeItem(at: root) }
@@ -71,9 +208,9 @@ final class ProductCompositionTests: XCTestCase {
     XCTAssertNil(try adapter.currentSelection())
     let initial = try database.providerConfiguration()
     let selected = try database.compareAndSwapProviderConfiguration(expected: initial,
-      replacementSlotID: UUID(), replacementModel: configuration.model)
+      replacementKind: .openAIAPIKey, replacementSlotID: UUID(), replacementModel: configuration.model)
     let cleared = try database.compareAndSwapProviderConfiguration(expected: selected,
-      replacementSlotID: nil, replacementModel: nil)
+      replacementKind: nil, replacementSlotID: nil, replacementModel: nil)
     XCTAssertNil(try adapter.currentSelection())
     XCTAssertNil(try adapter.compareAndSwap(expected: nil, slotID: UUID()))
     XCTAssertEqual(try database.providerConfiguration(), cleared)
@@ -108,7 +245,7 @@ final class ProductCompositionTests: XCTestCase {
         try database.adapterWrite { try $0.execute(sql: "UPDATE providerConfig SET generation = 0") }
       } else {
         _ = try database.compareAndSwapProviderConfiguration(expected: database.providerConfiguration(),
-          replacementSlotID: slot, replacementModel: "different-fixture-model")
+          replacementKind: .openAIAPIKey, replacementSlotID: slot, replacementModel: "different-fixture-model")
       }
       let invalidSelected = try database.providerConfiguration()
       connection.restore()
@@ -143,13 +280,13 @@ final class ProductCompositionTests: XCTestCase {
     connection.restore()
     let oldLease = try connection.acquireLease()
     _ = try database.compareAndSwapProviderConfiguration(expected: database.providerConfiguration(),
-      replacementSlotID: oldSlot, replacementModel: "different-fixture-model")
+      replacementKind: .openAIAPIKey, replacementSlotID: oldSlot, replacementModel: "different-fixture-model")
     connection.restore()
     XCTAssertFalse(connection.eligibleForEntry)
     XCTAssertNil(connection.activeSelection)
     let freshSlot = try slots.create(key: "synthetic-new-selected-key")
     let replacement = try database.compareAndSwapProviderConfiguration(expected: database.providerConfiguration(),
-      replacementSlotID: freshSlot, replacementModel: configuration.model)
+      replacementKind: .openAIAPIKey, replacementSlotID: freshSlot, replacementModel: configuration.model)
     connection.restore()
     XCTAssertTrue(connection.eligibleForEntry)
     XCTAssertEqual(connection.activeSelection,
@@ -231,7 +368,7 @@ final class ProductCompositionTests: XCTestCase {
     let slots = try APIKeySlotStore(directory: root.appendingPathComponent("api-key-slots"))
     let slot = try slots.create(key: "synthetic-legacy-key")
     try database.adapterWrite { db in
-      try db.execute(sql: "UPDATE providerConfig SET slotID = ?, generation = 1, model = NULL WHERE singleton = 1",
+      try db.execute(sql: "UPDATE providerConfig SET kind = 'openAIAPIKey', slotID = ?, generation = 1, model = NULL WHERE singleton = 1",
         arguments: [slot.uuidString])
     }
     let transport = CompositionProbe()

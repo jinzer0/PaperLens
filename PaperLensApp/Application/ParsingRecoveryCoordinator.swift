@@ -77,12 +77,14 @@ public actor ParsingRecoveryCoordinator {
       // Replace only the admitted failure; do not touch old revision/sentence/FTS rows.
       try db.execute(sql: """
         UPDATE extractionAttempt SET revision = ?, attempt = ?, fence = ?, correlation = ?,
-          input = ?, epoch = ?, configSlot = ?, configGeneration = ?, state = 'running', failure = NULL
+          input = ?, epoch = ?, configSlot = ?, configGeneration = ?, configKind = ?,
+          state = 'running', failure = NULL
         WHERE paperID = ? AND state = 'failed' AND attempt = ? AND revision = ?
         """, arguments: [identity.revision.uuidString, identity.attempt.uuidString,
           identity.fence.uuidString, identity.correlation.uuidString, identity.input.uuidString,
           identity.epoch.uuidString, identity.configuration.slotID?.uuidString,
-          identity.configuration.generation, paperID.uuidString, old.attempt.uuidString,
+          identity.configuration.generation, identity.configuration.kind?.rawValue,
+          paperID.uuidString, old.attempt.uuidString,
           old.revision.uuidString])
       guard db.changesCount == 1 else { throw ParsingRecoveryError.staleContext }
     }
@@ -95,6 +97,7 @@ public actor ParsingRecoveryCoordinator {
   private static func context(in db: Database, paperID: UUID) throws -> ParsingRecoveryContext? {
     guard let row = try Row.fetchOne(db, sql: """
       SELECT extractionAttempt.*, providerConfig.slotID AS currentSlot,
+        providerConfig.kind AS currentKind,
         providerConfig.generation AS currentConfigGeneration, providerConfig.model AS currentModel
       FROM extractionAttempt JOIN paper ON paper.id = extractionAttempt.paperID
       CROSS JOIN providerConfig
@@ -114,6 +117,16 @@ public actor ParsingRecoveryCoordinator {
       guard let id = UUID(uuidString: value) else { throw ProductDatabaseError.invalidRecord }
       return id
     }
+    func configuration(kindColumn: String, slotColumn: String,
+      generationColumn: String, model: String?) throws -> ProviderConfiguration {
+      let rawKind: String? = row[kindColumn]
+      let kind = rawKind.flatMap(ProviderKind.init(rawValue:))
+      let slot = try optionalUUID(slotColumn)
+      guard (slot == nil) == (rawKind == nil), rawKind == nil || kind != nil else {
+        throw ProductDatabaseError.invalidRecord
+      }
+      return .init(kind: kind, slotID: slot, generation: row[generationColumn], model: model)
+    }
     let revision = try String.fetchOne(db, sql: """
       SELECT extractionRevision.id FROM extractionVisible
       JOIN extractionRevision ON extractionRevision.id = extractionVisible.revision
@@ -130,11 +143,11 @@ public actor ParsingRecoveryCoordinator {
       pdfReference: row["pdfReference"], revision: try uuid("revision"), job: try uuid("job"),
       attempt: try uuid("attempt"), fence: try uuid("fence"), correlation: try uuid("correlation"),
       input: try uuid("input"), epoch: try uuid("epoch"),
-      configuration: .init(slotID: try optionalUUID("configSlot"),
-        generation: row["configGeneration"], model: nil)),
+      configuration: try configuration(kindColumn: "configKind", slotColumn: "configSlot",
+        generationColumn: "configGeneration", model: nil)),
       usableRevision: usableRevision,
-      currentConfiguration: .init(slotID: try optionalUUID("currentSlot"),
-        generation: row["currentConfigGeneration"], model: row["currentModel"]))
+      currentConfiguration: try configuration(kindColumn: "currentKind", slotColumn: "currentSlot",
+        generationColumn: "currentConfigGeneration", model: row["currentModel"]))
   }
 }
 

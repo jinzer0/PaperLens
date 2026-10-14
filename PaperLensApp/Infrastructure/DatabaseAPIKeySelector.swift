@@ -25,7 +25,8 @@ public final class DatabaseAPIKeySelector: APIKeySelectorPersistence {
 
   public func selectionMatchesConfiguration(_ configuration: NativeOpenAIConfiguration) throws -> Bool {
     let snapshot = try database.providerConfiguration()
-    return snapshot.slotID != nil && snapshot.model == configuration.model
+    return snapshot.kind == .openAIAPIKey && snapshot.slotID != nil
+      && snapshot.model == configuration.model
       && configuration.model == model
   }
 
@@ -44,7 +45,8 @@ public final class DatabaseAPIKeySelector: APIKeySelectorPersistence {
     }
     do {
       let committed = try database.compareAndSwapProviderConfiguration(
-        expected: snapshot, replacementSlotID: slotID, replacementModel: model)
+        expected: snapshot, replacementKind: .openAIAPIKey,
+        replacementSlotID: slotID, replacementModel: model)
       return APIKeySelection(slotID: slotID, configGeneration: committed.generation)
     } catch ProductDatabaseError.staleConfiguration {
       return nil

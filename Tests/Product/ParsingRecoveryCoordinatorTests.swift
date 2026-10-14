@@ -68,6 +68,35 @@ final class ParsingRecoveryCoordinatorTests: XCTestCase {
     try database.adapterRead { try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM extractionInvocation") ?? 0 }
   }
 
+  func testRetryPreservesFrozenProviderAndRejectsCurrentRoutingDrift() async throws {
+    let (database, old, root) = try fixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let configuration = try database.compareAndSwapProviderConfiguration(expected: database.providerConfiguration(),
+      replacementKind: .openAIAPIKey, replacementSlotID: UUID(), replacementModel: "fixture-model")
+    let native = ExtractionIdentity(paperID: old.paperID, generation: old.generation,
+      pdfSHA256: old.pdfSHA256, pdfReference: old.pdfReference, revision: UUID(), job: old.job,
+      attempt: UUID(), fence: UUID(), correlation: UUID(), input: UUID(), epoch: UUID(),
+      configuration: configuration)
+    try database.reserveExtraction(native)
+    try database.failExtraction(native, failure: .invalidBatch)
+    let producer = HeldFailureProducer()
+    let coordinator = ParsingRecoveryCoordinator(service: .init(database: database,
+      producer: producer, geometryValidator: RejectingValidator()), currentEpoch: UUID())
+    let captured = try await coordinator.context(paperID: old.paperID)
+    let expected = try XCTUnwrap(captured)
+    XCTAssertEqual(expected.failedAttempt.configuration.kind, .openAIAPIKey)
+    try database.adapterWrite { try $0.execute(sql: "UPDATE providerConfig SET kind = 'codexChatGPT'") }
+    let changed = try await coordinator.context(paperID: old.paperID)
+    XCTAssertEqual(changed?.failedAttempt.configuration.kind, .openAIAPIKey)
+    XCTAssertEqual(changed?.currentConfiguration.kind, .codexChatGPT)
+    let before = try invocationCount(database)
+    do { try await coordinator.retry(expected); XCTFail("Role drift reused a captured retry") }
+    catch { XCTAssertEqual(error as? ParsingRecoveryError, .staleContext) }
+    XCTAssertEqual(try invocationCount(database), before)
+    let calls = await producer.identities
+    XCTAssertTrue(calls.isEmpty)
+  }
+
   func testMissingProductionBoundariesRejectBeforeReservation() async throws {
     let (database, old, root) = try fixture()
     defer { try? FileManager.default.removeItem(at: root) }

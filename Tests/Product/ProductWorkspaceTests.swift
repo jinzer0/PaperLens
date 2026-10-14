@@ -43,7 +43,8 @@ import ProviderRequest
     let slots = try APIKeySlotStore(directory: physical.appendingPathComponent("api-key-slots"))
     let configuration = try NativeOpenAIConfiguration(model: "fixture-model")
     _ = try database.compareAndSwapProviderConfiguration(expected: database.providerConfiguration(),
-      replacementSlotID: slots.create(key: "fixture-secret"), replacementModel: configuration.model)
+      replacementKind: .openAIAPIKey, replacementSlotID: slots.create(key: "fixture-secret"),
+      replacementModel: configuration.model)
     let connection = NativeAPIKeyConnection(configuration: configuration, slots: slots,
       persistence: DatabaseAPIKeySelector(database: database, configuration: configuration),
       transport: WorkspaceNoNetworkTransport(), authority: try ProviderRequest())

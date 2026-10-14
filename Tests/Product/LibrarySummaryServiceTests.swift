@@ -164,7 +164,7 @@ final class LibrarySummaryServiceTests: XCTestCase {
         arguments: [newer.uuidString, f.identity.paperID.uuidString])
     }
     _ = try f.db.compareAndSwapProviderConfiguration(expected: f.db.providerConfiguration(),
-      replacementSlotID: nil, replacementModel: "new configuration")
+      replacementKind: nil, replacementSlotID: nil, replacementModel: "new configuration")
     let reopened = try ProductDatabase.open(at: f.root)
     let restored = try XCTUnwrap(LibrarySummaryService(database: reopened, geometry: codec)
       .restore(paperID: f.identity.paperID))
@@ -209,7 +209,7 @@ final class LibrarySummaryServiceTests: XCTestCase {
         arguments: [newer.uuidString, f.identity.paperID.uuidString])
     }
     _ = try f.db.compareAndSwapProviderConfiguration(expected: f.db.providerConfiguration(),
-      replacementSlotID: nil, replacementModel: "new configuration")
+      replacementKind: nil, replacementSlotID: nil, replacementModel: "new configuration")
     let reopened = try ProductDatabase.open(at: f.root)
     // Neither geometry nor provider is injected: only the registered original archive owns restore.
     let restored = try XCTUnwrap(LibrarySummaryService(database: reopened)
@@ -646,7 +646,7 @@ final class LibrarySummaryServiceTests: XCTestCase {
     defer { try? FileManager.default.removeItem(at: f.root) }
     try reserve(f)
     _ = try f.db.compareAndSwapProviderConfiguration(expected: f.db.providerConfiguration(),
-      replacementSlotID: nil, replacementModel: "changed")
+      replacementKind: nil, replacementSlotID: nil, replacementModel: "changed")
     XCTAssertThrowsError(try publish(f))
     XCTAssertEqual(try f.db.adapterRead { try Int.fetchOne($0,
       sql: "SELECT COUNT(*) FROM librarySummaryResult") }, 0)
@@ -687,7 +687,7 @@ final class LibrarySummaryServiceTests: XCTestCase {
     try reserve(f)
     let saved = try publish(f)
     _ = try f.db.compareAndSwapProviderConfiguration(expected: f.db.providerConfiguration(),
-      replacementSlotID: nil, replacementModel: "changed")
+      replacementKind: nil, replacementSlotID: nil, replacementModel: "changed")
     try f.db.failLibrarySummary(f.identity)
     let restored = try XCTUnwrap(LibrarySummaryService(database: f.db,
       geometry: originalGeometry(f)).restore(paperID: f.identity.paperID))

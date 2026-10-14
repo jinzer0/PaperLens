@@ -1,11 +1,17 @@
 import Foundation
 import GRDB
 
+public enum ProviderKind: String, Equatable, Sendable {
+  case openAIAPIKey, codexChatGPT
+}
+
 public struct ProviderConfiguration: Equatable, Sendable {
+  public let kind: ProviderKind?
   public let slotID: UUID?
   public let generation: Int64
   public let model: String?
-  public init(slotID: UUID?, generation: Int64, model: String?) {
+  public init(kind: ProviderKind?, slotID: UUID?, generation: Int64, model: String?) {
+    self.kind = kind
     self.slotID = slotID
     self.generation = generation
     self.model = model
@@ -113,6 +119,16 @@ public final class ProductDatabase: @unchecked Sendable {
             ('agentPurgeUnavailable', 'agentClosureUnproved', 'deletionIncomplete'))
         """)
     }
+    migrator.registerMigration("providerSelectorKindV1") { db in
+      try db.execute(sql: """
+        ALTER TABLE providerConfig ADD COLUMN kind TEXT
+          CHECK (kind IS NULL OR kind IN ('openAIAPIKey', 'codexChatGPT'));
+        UPDATE providerConfig SET kind = 'openAIAPIKey' WHERE slotID IS NOT NULL;
+        ALTER TABLE extractionAttempt ADD COLUMN configKind TEXT
+          CHECK (configKind IS NULL OR configKind IN ('openAIAPIKey', 'codexChatGPT'));
+        UPDATE extractionAttempt SET configKind = 'openAIAPIKey' WHERE configSlot IS NOT NULL;
+        """)
+    }
     try migrator.migrate(queue)
     try fm.setAttributes([.posixPermissions: 0o600],
       ofItemAtPath: root.appendingPathComponent("library.sqlite").path)
@@ -135,29 +151,41 @@ public final class ProductDatabase: @unchecked Sendable {
 
   public func providerConfiguration() throws -> ProviderConfiguration {
     try queue.read { db in
-      guard let row = try Row.fetchOne(db, sql: "SELECT slotID, generation, model FROM providerConfig")
+      guard let row = try Row.fetchOne(db, sql: "SELECT kind, slotID, generation, model FROM providerConfig")
       else { throw ProductDatabaseError.invalidRecord }
       let slot: String? = row["slotID"]
+      let rawKind: String? = row["kind"]
+      let kind = rawKind.flatMap(ProviderKind.init(rawValue:))
+      guard (slot == nil) == (rawKind == nil), rawKind == nil || kind != nil else {
+        throw ProductDatabaseError.invalidRecord
+      }
       if let slot, UUID(uuidString: slot) == nil { throw ProductDatabaseError.invalidRecord }
-      return ProviderConfiguration(slotID: slot.flatMap(UUID.init(uuidString:)),
+      return ProviderConfiguration(kind: kind, slotID: slot.flatMap(UUID.init(uuidString:)),
         generation: row["generation"], model: row["model"])
     }
   }
 
   public func compareAndSwapProviderConfiguration(
-    expected: ProviderConfiguration, replacementSlotID: UUID?, replacementModel: String?
+    expected: ProviderConfiguration, replacementKind: ProviderKind?,
+    replacementSlotID: UUID?, replacementModel: String?
   ) throws -> ProviderConfiguration {
+    guard (expected.slotID == nil) == (expected.kind == nil),
+      (replacementSlotID == nil) == (replacementKind == nil) else {
+      throw ProductDatabaseError.invalidRecord
+    }
     guard expected.generation >= 0, expected.generation < Int64.max else {
       throw ProductDatabaseError.generationExhausted
     }
     return try queue.write { db in
       try db.execute(sql: """
-        UPDATE providerConfig SET slotID = ?, model = ?, generation = generation + 1
-        WHERE singleton = 1 AND generation = ? AND slotID IS ? AND model IS ?
-        """, arguments: [replacementSlotID?.uuidString, replacementModel, expected.generation,
+        UPDATE providerConfig SET kind = ?, slotID = ?, model = ?, generation = generation + 1
+        WHERE singleton = 1 AND generation = ? AND kind IS ? AND slotID IS ? AND model IS ?
+        """, arguments: [replacementKind?.rawValue, replacementSlotID?.uuidString,
+          replacementModel, expected.generation, expected.kind?.rawValue,
           expected.slotID?.uuidString, expected.model])
       guard db.changesCount == 1 else { throw ProductDatabaseError.staleConfiguration }
-      return ProviderConfiguration(slotID: replacementSlotID, generation: expected.generation + 1,
+      return ProviderConfiguration(kind: replacementKind, slotID: replacementSlotID,
+        generation: expected.generation + 1,
         model: replacementModel)
     }
   }

@@ -70,6 +70,27 @@ final class ExtractionRevisionTests: XCTestCase {
     return (batch, validator)
   }
 
+  func testProviderKindDriftRejectsExtractionBeforePublication() throws {
+    let (db, paper, generation, root) = try fixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    _ = try db.compareAndSwapProviderConfiguration(expected: db.providerConfiguration(),
+      replacementKind: .openAIAPIKey, replacementSlotID: UUID(), replacementModel: "fixture-model")
+    let captured = try identity(db, paper, generation)
+    try db.reserveExtraction(captured)
+    let frozen = try db.adapterRead {
+      try String.fetchOne($0, sql: "SELECT configKind FROM extractionAttempt WHERE paperID = ?",
+        arguments: [paper.uuidString])
+    }
+    XCTAssertEqual(frozen, ProviderKind.openAIAPIKey.rawValue)
+    try db.adapterWrite { try $0.execute(sql: "UPDATE providerConfig SET kind = 'codexChatGPT'") }
+    XCTAssertEqual(try db.providerConfiguration().generation, captured.configuration.generation)
+    XCTAssertThrowsError(try publishFixtureExtraction(db, captured, sentences: rows("stale role"))) {
+      XCTAssertEqual($0 as? ExtractionError, .staleAttempt)
+    }
+    XCTAssertEqual(try db.adapterRead { try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM extractionSentence") }, 0)
+    XCTAssertEqual(try db.adapterRead { try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM extractionVisible") }, 0)
+  }
+
   func testCanonicalTextMismatchRejectsBeforePersistenceAndRetainsUsableRevision() throws {
     let (db, paper, generation, root) = try fixture()
     defer { try? FileManager.default.removeItem(at: root) }
@@ -213,7 +234,8 @@ final class ExtractionRevisionTests: XCTestCase {
     XCTAssertEqual(try db.extractionStatus(paperID: paper).failure, "interrupted")
     let retry = try identity(db, paper, generation)
     try db.reserveExtraction(retry)
-    _ = try db.compareAndSwapProviderConfiguration(expected: retry.configuration, replacementSlotID: UUID(),
+    _ = try db.compareAndSwapProviderConfiguration(expected: retry.configuration,
+      replacementKind: .openAIAPIKey, replacementSlotID: UUID(),
       replacementModel: "fixture-snapshot")
     XCTAssertThrowsError(try publishFixtureExtraction(db, retry, sentences: rows("stale")))
     let saga = try XCTUnwrap(db.beginDeletion(paper)).saga

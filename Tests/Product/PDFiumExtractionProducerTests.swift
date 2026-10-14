@@ -59,7 +59,7 @@ final class PDFiumExtractionProducerTests: XCTestCase {
       attempt: original?.attempt ?? UUID(), fence: original?.fence ?? UUID(),
       correlation: original?.correlation ?? UUID(), input: original?.input ?? UUID(),
       epoch: original?.epoch ?? UUID(), configuration: original?.configuration
-        ?? ProviderConfiguration(slotID: nil, generation: 0, model: nil))
+        ?? ProviderConfiguration(kind: nil, slotID: nil, generation: 0, model: nil))
   }
   private func limits() throws -> PDFiumExtractionLimits {
     let a = try ProviderRequest()

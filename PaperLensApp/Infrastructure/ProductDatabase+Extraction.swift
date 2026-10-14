@@ -56,10 +56,11 @@ extension ProductDatabase {
       WHERE paper.id = ? AND paper.generation = ? AND paper.pdfSHA256 = ?
         AND paper.pdfReference = ? AND paper.status = 'ready' AND paper.deletionID IS NULL
         AND providerConfig.singleton = 1 AND providerConfig.generation = ? AND providerConfig.slotID IS ?
-        AND providerConfig.model IS ?
+        AND providerConfig.model IS ? AND providerConfig.kind IS ?
       """, arguments: [identity.paperID.uuidString, identity.generation.uuidString,
         identity.pdfSHA256, identity.pdfReference, identity.configuration.generation,
-        identity.configuration.slotID?.uuidString, identity.configuration.model])
+        identity.configuration.slotID?.uuidString, identity.configuration.model,
+        identity.configuration.kind?.rawValue])
     guard count == 1 else { throw ExtractionError.staleAttempt }
   }
 
@@ -70,7 +71,7 @@ extension ProductDatabase {
       SELECT COUNT(*) FROM extractionAttempt WHERE paperID = ? AND generation = ?
         AND pdfSHA256 = ? AND pdfReference = ? AND revision = ? AND job = ? AND attempt = ?
         AND fence = ? AND correlation = ? AND input = ? AND epoch = ?
-        AND configSlot IS ? AND configGeneration = ? AND state = 'running'
+        AND configSlot IS ? AND configGeneration = ? AND configKind IS ? AND state = 'running'
       """, arguments: attemptArguments(identity))
     guard count == 1 else { throw ExtractionError.staleAttempt }
   }
@@ -79,7 +80,8 @@ extension ProductDatabase {
     [i.paperID.uuidString, i.generation.uuidString, i.pdfSHA256, i.pdfReference,
       i.revision.uuidString, i.job.uuidString, i.attempt.uuidString, i.fence.uuidString,
       i.correlation.uuidString, i.input.uuidString, i.epoch.uuidString,
-      i.configuration.slotID?.uuidString, i.configuration.generation]
+      i.configuration.slotID?.uuidString, i.configuration.generation,
+      i.configuration.kind?.rawValue]
   }
 
   /// Admission facts from one read snapshot; never claims or moves a Reader session.
@@ -124,8 +126,8 @@ extension ProductDatabase {
         arguments: [identity.paperID.uuidString])
       try db.execute(sql: """
         INSERT INTO extractionAttempt(paperID, generation, pdfSHA256, pdfReference, revision,
-          job, attempt, fence, correlation, input, epoch, configSlot, configGeneration, state)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running')
+          job, attempt, fence, correlation, input, epoch, configSlot, configGeneration, configKind, state)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running')
         """, arguments: attemptArguments(identity))
     }
   }

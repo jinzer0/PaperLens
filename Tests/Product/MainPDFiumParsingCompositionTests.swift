@@ -52,7 +52,8 @@ import XCTest
     let paper = try await lifecycle.importPDF(from: source)
     let configuration = try database.providerConfiguration()
     _ = try database.compareAndSwapProviderConfiguration(expected: configuration,
-      replacementSlotID: UUID(), replacementModel: "explicit-owned-fixture-model")
+      replacementKind: .openAIAPIKey, replacementSlotID: UUID(),
+      replacementModel: "explicit-owned-fixture-model")
     let snapshot = try database.readerSnapshot(paperID: paper)
     let sha = try database.adapterRead {
       try XCTUnwrap(String.fetchOne($0, sql: "SELECT pdfSHA256 FROM paper WHERE id = ?",

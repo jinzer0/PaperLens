@@ -40,7 +40,7 @@ import XCTest
     .init(paperID: UUID(), generation: UUID(), pdfSHA256: String(repeating: "a", count: 64),
       pdfReference: "synthetic.pdf", revision: UUID(), job: UUID(), attempt: UUID(), fence: UUID(),
       correlation: UUID(), input: UUID(), epoch: UUID(),
-      configuration: ProviderConfiguration(slotID: nil, generation: 0, model: nil))
+      configuration: ProviderConfiguration(kind: nil, slotID: nil, generation: 0, model: nil))
   }
   private func owner(_ observations: Observations, authority: ProviderRequest,
     identity: ExtractionIdentity? = nil, operationID: UUID = UUID()) throws -> PDFiumExtractionResourceOwner {

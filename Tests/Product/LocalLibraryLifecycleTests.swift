@@ -1934,18 +1934,22 @@ final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
     let db = try ProductDatabase.open(at: root)
     let initial = try db.providerConfiguration()
     let slot = UUID()
-    let connected = try db.compareAndSwapProviderConfiguration(expected: initial, replacementSlotID: slot,
+    let connected = try db.compareAndSwapProviderConfiguration(expected: initial,
+      replacementKind: .openAIAPIKey, replacementSlotID: slot,
       replacementModel: "explicit-test-snapshot")
     XCTAssertEqual(connected.slotID, slot)
-    XCTAssertThrowsError(try db.compareAndSwapProviderConfiguration(expected: initial, replacementSlotID: UUID(),
+    XCTAssertThrowsError(try db.compareAndSwapProviderConfiguration(expected: initial,
+      replacementKind: .openAIAPIKey, replacementSlotID: UUID(),
       replacementModel: "explicit-test-snapshot"))
-    let disconnected = try db.compareAndSwapProviderConfiguration(expected: connected, replacementSlotID: nil,
+    let disconnected = try db.compareAndSwapProviderConfiguration(expected: connected,
+      replacementKind: nil, replacementSlotID: nil,
       replacementModel: nil)
     XCTAssertNil(disconnected.slotID)
     XCTAssertGreaterThan(disconnected.generation, initial.generation)
     let restarted = try ProductDatabase.open(at: root)
     XCTAssertEqual(try restarted.providerConfiguration(), disconnected)
-    XCTAssertThrowsError(try restarted.compareAndSwapProviderConfiguration(expected: initial, replacementSlotID: slot,
+    XCTAssertThrowsError(try restarted.compareAndSwapProviderConfiguration(expected: initial,
+      replacementKind: .openAIAPIKey, replacementSlotID: slot,
       replacementModel: "explicit-test-snapshot"))
   }
 }
