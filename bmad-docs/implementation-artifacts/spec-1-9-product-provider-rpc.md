@@ -1,6 +1,140 @@
 # Story 1.9 Build Spec — Product ProviderRPC
 
+## Current minimal SDK/product decision — NOT ADMITTED, 2026-10-14
+
+Whole-Epic continuation is at integration source5f08cc2. This existing Spec, not
+a new plan, records the precise next dependency after explicit sole-Provider kind,
+atomic CAS, frozen extraction/retry routing, real pipe transport and shared browser/
+device presentation state. Actual unsigned arm64/macOS15 Main/XPC build and private
+tests do not settle product RPC or authenticated SDK admission. There is no global
+human-only blocker: independent artifact work and public containment engineering
+continue under current authority. No SDK is invoked by this proposal.
+
+### Fixed semantics — preserve without a new approval loop
+
+- contract.json remains the only wire authority. Keep closed validation, existing
+  envelopes, safe errors, sizes/queues/deadlines and zero streams. Existing
+  1/1/topology-v1 identity is not product capability; no compatibility downgrade,
+  SDK JSON passthrough or borrowed topology-home authority.
+- Browser/device modes are explicit, with their evidenced closed instruction
+  projections and one current intent. Only trusted bounded minimal instructions
+  reach the intentional login surface. Missing/wrong/late/duplicate identity never
+  certifies auth; every returned late SDK loginId remains owned for cleanup.
+- Bind a never-reused stage to expected selector/configuration, current intent and
+  generation. Preserve last-good and actual leases during candidate work. Only
+  the Application serialized SQLite CAS winner activates. Metadata kind, auth
+  completion, slot names or token existence are not usable-connection authority.
+- Fixed inner connectionTest: empty input, prompt Reply exactly PAPERLENS_OK.,
+  exact text PAPERLENS_OK and unchanged version/request/operation. Actual
+  authenticated output only; no local sentinel, simulated usable stage or replay.
+- One eventual terminal across usable/failure/cancel/timeout/exit. Cancel selection
+  is not cessation. Separately correlated cleanup must prove revocation, producer/
+  FD closure, correct ownership/generation and scoped absence. Missing/stale/failed
+  proof retains affected barriers and old/new leased state.
+- Agent exclusively owns auth/config; persistent metadata excludes Paper content.
+  Required Paper bytes are attempt-scoped. Protected creation, directory0700/
+  file0600, descendant backup exclusion, no permission repair or abandoned-stage
+  promotion, protocol-only stdout and closed safe diagnostics remain mandatory.
+
+### Two HIGH shared choices requiring concrete owner input
+
+1. Settle the product handshake/version/capability and closed carrier/call
+   boundaries for current browser/device instructions and the eventual terminal:
+   exact names/fields/results/safe errors, immutable stage/expected configuration/
+   current-intent correlation and independently correlated cleanup ACK. Settle
+   instruction delivery within existing timeout/size/zero-stream policy; do not
+   infer notifications, poll intervals, expiry or streams. Unrelated final Paper
+   Chat fields need not block settlement of this minimum.
+2. Settle complete Agent-only auth/stage/lease/attempt layout, selected versus
+   abandoned startup policy and exact permitted environment/output projection.
+   Include ownership/backup validation for SDK-created descendants and how auth/
+   session/log state stays separate from Paper attempt content. No guessed SDK
+   paths, borrowed topology homes, privacy waiver or enlarged resource budgets.
+
+Owners may pin these choices or explicitly delegate bounded settlement. Ordinary
+public process/filesystem/serialization mechanics do not need per-edit approvals.
+No exact new wire name, path, constant, authorization or SDK effect is invented here.
+
+### Public supervisor feasibility remains autonomous engineering
+
+The strongest candidate is an independently owned public worker, not client._proc
+or the topology RuntimeProbe. Establish exclusive launch/stdio ownership and
+partial-start/descendant handling; exact environment replacement before SDK import;
+denied unexpected command/file effects; bounds for all internal queues/pending login
+storage, not just four outer frames; revoke/unblock/join/reap/checked-close ordering
+under the unchanged aggregate budget; retained uncertainty debt; and generation-
+checked scoped absence that cannot erase newer/leased stages.
+
+Neither a process group, cancellation, EOF, cancel ACK nor SDK close return proves
+the whole boundary. Current evidence also does not prove supervision impossible;
+the SDK's2s wait timeout is not necessarily a mandatory2s delay. Approval cannot
+make unsupported SDK effects supported. Do not repeat unchanged source-fact audits.
+
+No executable process slice is admitted by the old pipe-only phase. Parent must
+first pin a trusted no-SDK/no-network/no-credential fixture executable identity,
+exact arguments/environment/working-directory/stdio, exclusive descendant policy,
+existing deadline/cleanup applicability, observable termination/debt assertions
+and exact source/test union. That is bounded source admission, not automatically
+a new HIGH decision or permission to enlarge budgets. It must create a real owned
+process and measured local failure proof, not an inactive fake SDK/slot owner.
+
+Architect4 NextSDKBoundaryDecision is BLOCK/COMMENT for this successor only.
+It explicitly leaves independent Epic implementation and this public-boundary
+feasibility resolvable. After minimal policy settlement, the existing five-file
+authority/parity slice below is the real source successor, followed separately by
+the actual SDK owner. No goal/Story/P1/P2/P3/FR-002 completion follows from this text.
+
 ## Status and authority
+
+### Withdrawn direct-child implementation admission: public deadline conflict
+
+The Whole-Epic parent proposed an independent public ownership slice, not SDK
+dispatch or shared product/privacy policy. Proposed union: ProviderAgent/owned_child.py,
+Tests/Topology/test_owned_child.py, Package.swift Python-test exclusion, and this
+existing Spec. Capture exclusively owned actual subprocess.Popen plus its actual
+pipe FileObjects; constructor does not launch anything or accept a synthetic peer.
+No Popen means no process ownership claim. Direct child only: no descendant, SDK
+content absence, remote cancellation, auth or product cleanup ACK is inferred.
+
+The tests launch only existing trusted system /usr/bin/true and /bin/cat, explicit
+argument arrays, shell=false, stdin/stdout/stderr owned PIPEs, close_fds=true,
+an exact environment with PATH=/usr/bin:/bin:/usr/sbin:/sbin and LANG/LC_ALL=C,
+and a fresh private temporary working directory. No helper/SDK/app/network/document
+or credential path is launched. Constructor and retirement use public Popen PID,
+poll/terminate/kill/wait and actual file.close, never SDK _proc or a new slot store.
+These host utilities are private process fixtures, never packaged SDK fallback.
+
+Caller supplies its existing absolute monotonic cleanup deadline; no new duration,
+polling interval, resource limit or grace period. Select revoke once; no reads or
+writes by this owner. Observe wait/reaping and each captured physical pipe close
+before success. Deadline/termination/wait/close uncertainty retains the actual owner
+and handles in a process-lifetime strong root with no blind close/reap retry or
+destructor inference. Constructor/setup/partial capture must not silently abandon
+transferred ownership. Redacted typed state only; no argv/environment/path/raw output.
+
+Verify actual already-exited child and held pipe child retirement, idempotent
+successful observation, one terminal/no callbacks or close retry after unknown,
+deadline exhaustion and physical wait/close uncertainty retention after facade loss.
+Test fixture manual teardown never certifies production unknown debt. Parent runs
+tests/build/risk review only after the conflict below is resolved. The intended
+proof would cover local direct-child ownership only, not full SDK descendant/
+resource/private-state supervision. No primitive or passing fixture exists.
+
+The proposed executable slice above is BLOCKED, not delivered or admitted for
+implementation. ActualDirectChildRetirement found that buffered stdin.close may
+flush/block; actual pipe close, poll, terminate and kill lack deadline/cancellation
+contracts. wait(timeout=remaining) cannot bound those surrounding synchronous
+effects or guarantee return at the supplied absolute deadline. Parent explicitly
+ordered implementation stopped and the original deadline unchanged: no deadline-
+checked blocking substitute, extra grace or successful retirement claim. Worker
+made no source/test/Package changes and launched no fixture. The named files above
+are proposal targets only, not present delivered ownership code.
+
+A separately specified deadline-isolated execution mechanism with retained
+ownership and late-effect semantics must be admitted and proved, or acceptance
+must be explicitly renegotiated by its owner. The latter is not authorized here.
+SDK descendant/resource/private-state and actual cleanup remain unproved; neither
+this conflict nor a potential mechanism is a blanket Epic source gate.
 
 - Work unit: Story1.9 / Issue#11 / `issue/11-story-1-9`; planning checkpoint based on `51492b8b0b3b454d741d16eef8019ed45ed7d67b`.
 - Product implementation BLOCKED; P1=false, P2=false, P3=false, StoryDone=false. This is not an implementation-ready final method specification.
