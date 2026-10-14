@@ -301,6 +301,7 @@ public final class NativeAPIKeyConnection: ObservableObject {
   /// Startup never replays a probe or infers a selection from files. Unknown abandoned
   /// files remain unselected; cross-process reference proof belongs to the DB owner.
   public func restore() {
+    eligibleForEntry = false
     do {
       guard !ownerRetired else { throw APIKeyConnectionError.staleCandidate }
       guard !storageBlocked else { throw APIKeyConnectionError.cleanupBlocked }
@@ -317,7 +318,10 @@ public final class NativeAPIKeyConnection: ObservableObject {
       activeSelection = selected
       eligibleForEntry = selected != nil
       phase = selected.map(APIKeyConnectionPhase.connected) ?? .idle
-    } catch { fail(error) }
+    } catch {
+      activeSelection = nil
+      fail(error)
+    }
   }
 
   /// Edits invalidate intent immediately, even when the user has not pressed Retry.

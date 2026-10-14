@@ -1,5 +1,41 @@
 # Story 1.10 Build Spec — Native API-Key Connection
 
+## Current stored-selector revalidation repair — 2026-10-14
+
+Continue this existing Story on the product integration branch, baseline `9f3aedf`,
+under the current full Story1.1–1.26 execution request. A warm NativeAPIKeyConnection
+previously retained eligibleForEntry and its old activeSelection when restore failed
+for a changed model or invalid selected generation. Continue already performs a fresh
+lease/selector check, so this finding is stale eligibility/status, not proof of an
+unauthorized actual Library admission. It nevertheless misreports a prior selection
+as safely retained after the sole database selector has changed.
+
+Revoke entry eligibility before revalidation. On failure clear only the connection's
+validated active snapshot; never alter the database, cancel existing leases, remove
+slots or infer cleanup. Existing leased keys remain retained for finishing old work,
+and existing live database generation/model checks still reject stale publication.
+Successful later validation may admit the actual current stored selection again;
+it must not replay a probe. Failed candidate replacement semantics are unchanged:
+this repair affects restore, not normal connect failure/last-good retention.
+
+Exact delta: Application/NativeAPIKeyConnection.swift, paired
+Tests/Product/ProductCompositionTests.swift and this same Spec. No kind/schema/RPC
+expansion, SDK activation, model certification, privacy/resource relaxation or actual
+credentials/network/trial is authorized or delivered by this repair.
+
+Private prepopulated-selector regressions reproduce the original failure with four
+assertion failures in one case; the repaired failure/recovery checks pass without an
+injected successful login/probe. Verify changed model and zero selected generation,
+no new admission, held lease/key preservation, stale-result denial, unchanged selected
+database/slot data, explicit valid replacement recovery and zero transport calls.
+Affected native suites: 13 ProductComposition + 11 APIKeyConnection + 7 ProviderSettings
+cases PASS. Real authentication and P1/P2/P3/StoryDone remain unproved.
+
+The current caller-built Product bundle was then exercised by the real isolated
+driver: 483 cases PASS, zero failures/errors or skip promotion. Report:
+`.build/isolated-product-6C723CFA-0ED1-47B0-8A5D-8B9950B63DE3.json`.
+The failing-before-repair case remains observed evidence, not suppressed or relabeled.
+
 ## Synchronous native key-edit intent boundary
 
 Source scope: Features/Onboarding/APIKeyConnectionView.swift and this Spec only.

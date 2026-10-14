@@ -86,6 +86,86 @@ final class ProductCompositionTests: XCTestCase {
       slotID: UUID()))
   }
 
+  func testFailedStoredSelectionRevalidationRevokesEntryWithoutDroppingExistingLease() throws {
+    // Private prepopulated metadata only, never a simulated authenticated probe.
+    for invalidGeneration in [false, true] {
+      let root = try privateRoot()
+      defer { try? FileManager.default.removeItem(at: root) }
+      let database = try ProductDatabase.open(at: root.appendingPathComponent("database"))
+      let configuration = try NativeOpenAIConfiguration(model: "fixture-model")
+      let slots = try APIKeySlotStore(directory: root.appendingPathComponent("slots"))
+      let slot = try slots.create(key: "synthetic-revalidation-key")
+      let adapter = DatabaseAPIKeySelector(database: database, configuration: configuration)
+      XCTAssertNil(try adapter.currentSelection())
+      _ = try XCTUnwrap(adapter.compareAndSwap(expected: nil, slotID: slot))
+      let transport = CompositionProbe()
+      let connection = NativeAPIKeyConnection(configuration: configuration, slots: slots,
+        persistence: adapter, transport: transport, authority: try ProviderRequest())
+      connection.restore()
+      XCTAssertTrue(connection.eligibleForEntry)
+      let lease = try connection.acquireLease()
+      if invalidGeneration {
+        try database.adapterWrite { try $0.execute(sql: "UPDATE providerConfig SET generation = 0") }
+      } else {
+        _ = try database.compareAndSwapProviderConfiguration(expected: database.providerConfiguration(),
+          replacementSlotID: slot, replacementModel: "different-fixture-model")
+      }
+      let invalidSelected = try database.providerConfiguration()
+      connection.restore()
+      XCTAssertFalse(connection.eligibleForEntry, "A previous success cannot survive failed revalidation")
+      XCTAssertNil(connection.activeSelection)
+      XCTAssertEqual(connection.phase, .failed(invalidGeneration ? .persistenceFailure : .unsupportedProfile))
+      XCTAssertThrowsError(try connection.acquireLease())
+      XCTAssertFalse(connection.canReplaceOwner, "Old work still retains its real reference")
+      XCTAssertEqual(try connection.key(for: lease), "synthetic-revalidation-key")
+      XCTAssertFalse(try connection.mayPublish(lease))
+      XCTAssertEqual(try database.providerConfiguration(), invalidSelected)
+      XCTAssertEqual(transport.calls, 0, "Revalidation must never replay a request")
+      try connection.releaseAfterTermination(lease)
+      XCTAssertTrue(connection.canReplaceOwner)
+      XCTAssertEqual(try slots.read(slot), "synthetic-revalidation-key", "Failure is not cleanup authority")
+    }
+  }
+
+  func testFreshStoredSelectionCanRevalidateAfterFailureWhileOldLeaseFinishes() throws {
+    let root = try privateRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let database = try ProductDatabase.open(at: root.appendingPathComponent("database"))
+    let configuration = try NativeOpenAIConfiguration(model: "fixture-model")
+    let slots = try APIKeySlotStore(directory: root.appendingPathComponent("slots"))
+    let oldSlot = try slots.create(key: "synthetic-old-selected-key")
+    let adapter = DatabaseAPIKeySelector(database: database, configuration: configuration)
+    XCTAssertNil(try adapter.currentSelection())
+    _ = try XCTUnwrap(adapter.compareAndSwap(expected: nil, slotID: oldSlot))
+    let transport = CompositionProbe()
+    let connection = NativeAPIKeyConnection(configuration: configuration, slots: slots,
+      persistence: adapter, transport: transport, authority: try ProviderRequest())
+    connection.restore()
+    let oldLease = try connection.acquireLease()
+    _ = try database.compareAndSwapProviderConfiguration(expected: database.providerConfiguration(),
+      replacementSlotID: oldSlot, replacementModel: "different-fixture-model")
+    connection.restore()
+    XCTAssertFalse(connection.eligibleForEntry)
+    XCTAssertNil(connection.activeSelection)
+    let freshSlot = try slots.create(key: "synthetic-new-selected-key")
+    let replacement = try database.compareAndSwapProviderConfiguration(expected: database.providerConfiguration(),
+      replacementSlotID: freshSlot, replacementModel: configuration.model)
+    connection.restore()
+    XCTAssertTrue(connection.eligibleForEntry)
+    XCTAssertEqual(connection.activeSelection,
+      APIKeySelection(slotID: freshSlot, configGeneration: replacement.generation))
+    let freshLease = try connection.acquireLease()
+    XCTAssertEqual(try connection.key(for: oldLease), "synthetic-old-selected-key")
+    XCTAssertFalse(try connection.mayPublish(oldLease))
+    XCTAssertEqual(try connection.key(for: freshLease), "synthetic-new-selected-key")
+    XCTAssertTrue(try connection.mayPublish(freshLease))
+    try connection.releaseAfterTermination(oldLease)
+    try connection.releaseAfterTermination(freshLease)
+    XCTAssertTrue(connection.canReplaceOwner)
+    XCTAssertEqual(transport.calls, 0, "Only private stored metadata was validated, not authentication")
+    XCTAssertEqual(try slots.read(oldSlot), "synthetic-old-selected-key")
+  }
+
   func testSyntheticFixtureCannotCommitOrEnterLibrary() async throws {
     let root = try privateRoot()
     defer { try? FileManager.default.removeItem(at: root) }
