@@ -1,5 +1,38 @@
 # Story 1.11 Build Spec — ChatGPT Browser-Login Connection
 
+## Current whole-Epic source continuation — 2026-10-14
+
+The Story1.1–1.26 execution request resumes this existing work unit on integration
+branch `issue/epic-1-product-vertical-integration-20261010`, baseline `57fa3c4`.
+The historical planning/source-session restrictions below describe those sessions;
+they do not prohibit current parent-owned in-scope implementation/tests/commits.
+P1/P2/P3 and StoryDone remain false; source progress is not runtime admission.
+
+Unify the existing device presentation controller with the evidenced browser SDK
+projection in `ProviderAgent/account_login.py`; remove the old device-only module
+and controller rather than leave aliases or a second lifecycle. The controller
+requires explicit `chatgpt` or `chatgptDeviceCode` mode and accepts only that mode's
+closed SDK projection. Browser fields are exactly type/loginId/authUrl, as evidenced
+below, not newly invented outer RPC fields. Share URL safety, immutable private-repr
+instructions, exact current-token correlation, one terminal and auth-completed-only
+probe handoff. Reject cross-mode payloads and all late/duplicate/missing-login effects;
+never open a browser, import/start the SDK, poll, persist, fabricate a probe or promote
+the selector from this layer. The lifecycle owner still registers every late loginId
+and owns actual cancellation/closure, stage/CAS and trusted bounded SDK admission.
+
+The paired test is now `Tests/Topology/test_account_login.py`; update Package.swift
+for the renamed test and the already-added Python isolated-verifier test exclusion.
+Exactly these two source/test files, Package.swift and the existing Story1.11/1.12
+Specs form this continuation. No native production wire/UI activation is delivered
+by this component. Full usable browser login remains unfinished, not a successful
+login fixture or permission to bypass the actual shared owner/SDK requirements.
+
+Observed verification: 24 private pure account-login regressions PASS, including all
+17 existing device cases plus browser projection, URL/type/extra-field denial,
+explicit/cross-mode refusal, one-time correlated handoff, replacement and cancellation
+without cleanup or connection claims. No user URL/credentials/CODEX_HOME, SDK, paid
+request, signing, renderer trial or remote action occurred.
+
 ## Status and sources
 
 Issue#13 / `issue/13-story-1-11`, base `b1ef1d85116f56ac9b4fdbedd101c918591ff1e6`. Planning ONLY, not implementation-ready: P1=false, P2=false, P3=false, StoryDone=false; product implementation BLOCKED by actual gates and missing Story1.9/1.10 boundaries.

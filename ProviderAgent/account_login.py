@@ -1,4 +1,4 @@
-"""Pure device-login presentation state for the pinned public SDK contract.
+"""Browser and device-login presentation state for the pinned public SDK contract.
 
 No SDK execution, polling, storage, browser launch, cleanup proof, or usable
 connection outcome. The lifecycle owner serializes calls and binds each local
@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from urllib.parse import urlsplit
 
 
-class DeviceLoginError(ValueError):
+class AccountLoginError(ValueError):
     """Closed local error; never includes SDK payloads or exception text."""
 
 
@@ -19,6 +19,12 @@ class DeviceInstructions:
     verification_url: str
 
 
+@dataclass(frozen=True, repr=False)
+class BrowserInstructions:
+    login_id: str
+    auth_url: str
+
+
 def _instruction_text(value):
     return (
         type(value) is str
@@ -26,6 +32,43 @@ def _instruction_text(value):
         and value == value.strip()
         and value.isprintable()
     )
+
+
+def _validate_url(url):
+    if any(character.isspace() for character in url) or "\\" in url:
+        raise AccountLoginError("invalidInstructions")
+    try:
+        parsed = urlsplit(url)
+        valid_url = (
+            parsed.scheme == "https"
+            and bool(parsed.hostname)
+            and parsed.username is None
+            and parsed.password is None
+            and not parsed.netloc.endswith(":")
+            and parsed.port != 0
+        )
+    except ValueError:
+        valid_url = False
+    if not valid_url:
+        raise AccountLoginError("invalidInstructions")
+
+
+def validate_browser_instructions(payload: dict) -> BrowserInstructions:
+    """Project the public response, not endpoint trust or byte-bound admission.
+
+    The owner admits SDK provenance and transport bounds before this call.
+    No browser launch, authenticated URL allowlist or expiry is inferred.
+    """
+    if (
+        type(payload) is not dict
+        or set(payload) != {"type", "loginId", "authUrl"}
+        or type(payload["type"]) is not str
+        or payload["type"] != "chatgpt"
+        or not all(_instruction_text(payload[key]) for key in ("loginId", "authUrl"))
+    ):
+        raise AccountLoginError("invalidInstructions")
+    _validate_url(payload["authUrl"])
+    return BrowserInstructions(payload["loginId"], payload["authUrl"])
 
 
 def validate_device_instructions(payload: dict) -> DeviceInstructions:
@@ -44,24 +87,9 @@ def validate_device_instructions(payload: dict) -> DeviceInstructions:
             "loginId", "userCode", "verificationUrl"
         ))
     ):
-        raise DeviceLoginError("invalidInstructions")
+        raise AccountLoginError("invalidInstructions")
     url = payload["verificationUrl"]
-    if any(character.isspace() for character in url) or "\\" in url:
-        raise DeviceLoginError("invalidInstructions")
-    try:
-        parsed = urlsplit(url)
-        valid_url = (
-            parsed.scheme == "https"
-            and bool(parsed.hostname)
-            and parsed.username is None
-            and parsed.password is None
-            and not parsed.netloc.endswith(":")
-            and parsed.port != 0
-        )
-    except ValueError:
-        valid_url = False
-    if not valid_url:
-        raise DeviceLoginError("invalidInstructions")
+    _validate_url(url)
     return DeviceInstructions(payload["loginId"], payload["userCode"], url)
 
 
@@ -73,7 +101,7 @@ def validate_cancel_status(payload: dict) -> str:
         or type(payload["status"]) is not str
         or payload["status"] not in ("canceled", "notFound")
     ):
-        raise DeviceLoginError("invalidCancelStatus")
+        raise AccountLoginError("invalidCancelStatus")
     return payload["status"]
 
 
@@ -89,17 +117,22 @@ def _validate_completion(payload):
         or payload.get("onboardingEntrypoint") not in (None, "life_sciences")
         or (payload["success"] and payload.get("error") is not None)
     ):
-        raise DeviceLoginError("invalidCompletion")
+        raise AccountLoginError("invalidCompletion")
 
 
-class DeviceLoginController:
+class AccountLoginController:
     """Serialized local current-intent state, never a connection authority.
 
     The owner registers every returned loginId, including stale starts, before
     calling this helper. Stale delivery is ignored, not declared cleaned up.
     """
 
-    def __init__(self):
+    def __init__(self, mode: str):
+        if type(mode) is not str or mode not in ("chatgpt", "chatgptDeviceCode"):
+            raise AccountLoginError("invalidMode")
+        self._validate_instructions = (
+            validate_browser_instructions if mode == "chatgpt" else validate_device_instructions
+        )
         self._intent = None
         self._state = "idle"
         self._instructions = None
@@ -110,7 +143,7 @@ class DeviceLoginController:
         return self._state
 
     @property
-    def instructions(self) -> DeviceInstructions | None:
+    def instructions(self) -> BrowserInstructions | DeviceInstructions | None:
         return self._instructions
 
     @property
@@ -133,8 +166,8 @@ class DeviceLoginController:
         if not self._current(intent, ("pending",)):
             return False
         try:
-            instructions = validate_device_instructions(payload)
-        except DeviceLoginError:
+            instructions = self._validate_instructions(payload)
+        except AccountLoginError:
             self.fail(intent)
             raise
         self._instructions = instructions
@@ -148,7 +181,7 @@ class DeviceLoginController:
             return False
         try:
             _validate_completion(payload)
-        except DeviceLoginError:
+        except AccountLoginError:
             self.fail(intent)
             raise
         if payload.get("loginId") != self._login_id:

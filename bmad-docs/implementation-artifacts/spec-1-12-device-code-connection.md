@@ -1,5 +1,23 @@
 # Story 1.12 Build Spec — Device-code Connection
 
+## Current shared account-login continuation — 2026-10-14
+
+Whole-Epic execution continues on the actual integration branch at baseline
+`57fa3c4`, under the same acceptance/privacy/resource contracts. Existing local
+source-session no-test/no-commit restrictions below apply to those old sessions,
+not this parent-owned current execution. The device-only module/controller is
+superseded by `ProviderAgent/account_login.py` and `AccountLoginController(mode)`;
+there is no backward alias. Device callers choose `chatgptDeviceCode` explicitly.
+Keep the device validator and immutable device instruction projection; share the
+same owner-confined current-token/terminal/cancel/completion logic with browser
+mode, rather than duplicate or relax it. Wrong-mode input fails the current intent
+without exposing instructions or assigning an SDK target. The renamed paired test
+is `Tests/Topology/test_account_login.py`, registered as a non-Swift Package exclusion.
+The existing Story1.11 continuation defines the exact five-file union and current
+parent verification: 24 pure tests PASS, retaining all 17 prior device regressions.
+No SDK wait/start, RPC fields, auth/cost/cleanup proof or connection activation is
+invented; this component is not the missing complete product login implementation.
+
 ## Status and authority
 
 Issue#14 / `issue/14-story-1-12`; planning base `b1ef1d85116f56ac9b4fdbedd101c918591ff1e6`. Local source-order-only instruction/intent slice authorized by the human's independent Story 1.12 session instruction at base `45acff8`; runtime activation remains BLOCKED, P1=false, P2=false, P3=false, StoryDone=false. No capability/auth/UI/gate certification. This session must not commit or execute verification; parent owns Spec/source commit sequencing and gates.

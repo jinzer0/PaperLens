@@ -138,7 +138,7 @@ let package = Package(
         "test_agent_matrix.py", "PackagedDBProbeTests.swift", "JobRecoveryPolicyTests.swift",
         "ReportPublicationTests.swift", "ActorIdentityProbe.swift",
         "PDFiumRollTests.cpp", "test_pdfium_roll.py",
-        "test_product_grdb.py", "test_device_login.py",
+        "test_product_grdb.py", "test_account_login.py", "test_isolated_product_tests.py",
       ],
       sources: ["ProviderRPCTests.swift"]
     ),
