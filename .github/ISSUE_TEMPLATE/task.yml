@@ -50,7 +50,7 @@ body:
     id: acceptance
     attributes:
       label: Acceptance Criteria — 완료 조건
-      description: 이 작업이 완료되었다고 판단할 수 있는 검증 가능한 조건을 작성합니다.
+      description: 실제 사용자 흐름과 실패/복구 동작을 기준으로 작성합니다. 구현·통합·검증·acceptance를 구분하고 문서·커밋·agent 수를 완료 조건으로 삼지 않습니다.
       placeholder: |
         - [ ] 완료 조건 1
         - [ ] 완료 조건 2
@@ -92,7 +92,7 @@ body:
     id: artifacts
     attributes:
       label: 관련 BMAD Artifacts
-      description: 이 작업의 근거가 되는 PRD, SPEC, Architecture, Epic/Story 문서를 기록합니다.
+      description: 기존 PRD/SPEC/Architecture/Epic을 재사용하고 현재 integration branch를 기록합니다. 일반 후속 Spec delta는 구현과 함께 남기며 새 계획이나 선행 commit을 중복 요구하지 않습니다.
       placeholder: |
         PRD:
         SPEC:

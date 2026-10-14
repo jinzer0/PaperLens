@@ -225,7 +225,17 @@ Contracts/
 
 ## Blocking Prototypes & Open Items
 
-P-1..P-6은 final architecture contract에 포함된 blocking evidence/open-item gates다. Finalization 시점에 어떤 gate도 required proof나 decision을 통과한 것으로 간주하지 않으며, 각 row의 stated boundary에서 downstream work를 계속 차단한다.
+P-1..P-6은 final architecture contract에 포함된 blocking evidence/open-item gates다. Finalization 시점에 어떤 gate도 required proof나 decision을 통과한 것으로 간주하지 않는다.
+
+2026-10-14 explicit execution-sequencing amendment: 사용자의 모든 해결책 적용 지시는
+제품 source 구현·통합과 외부 gate 판정을 분리하는 아래 변경에 적용한다. 공통 계약은
+dependent unit 병렬 분할 전에 확정하되 P-1/P-2의 실제 signed/runtime/OS×CPU proof를
+독립적인 source 구현의 선행 조건으로 사용하지 않는다. 아래 표의 before/Blocks는
+해당 보호된 runtime acceptance·packaging·release와 공통 계약 분할 경계에 적용한다.
+P-3 numeric/allowlist 계약 자체가 미정이면 의존 구현을 먼저 분할하지 않는다.
+Paper/Job/DB owner는 구현 대상이며 absence 자체를 human-only gate로 취급하지 않는다.
+실제 인증·Library entry·SDK·격리·삭제·두 CPU·P6 증거와 각 proof 요구는 그대로 유지한다.
+개인정보/인증정보/유료 요청/소진 trial/배포 권한을 새로 부여하거나 gate PASS를 선언하지 않는다.
 
 | ID | Owner / revisit | Must prove or decide | Blocks |
 | --- | --- | --- | --- |
@@ -238,7 +248,7 @@ P-1..P-6은 final architecture contract에 포함된 blocking evidence/open-item
 
 ## Deferred
 
-- Exact ProviderRPC method payload fields, table/column/index schema, migration SQL, scheduler/backoff/lease duration, worker count, FTS ranking, sentence segmentation algorithm, geometry conversion algorithm, alignment correction, prompt text and numeric budgets stay in the named shared Build Specs after P-1..P-3.
+- Exact ProviderRPC method payload fields, table/column/index schema, migration SQL, scheduler/backoff/lease duration, worker count, FTS ranking, sentence segmentation algorithm, geometry conversion algorithm, alignment correction, prompt text and numeric budgets stay in the named shared Build Specs before dependent units split. External P-1/P-2 acceptance remains separately required, not a prerequisite for writing these contracts.
 - Universal binary is not a v1 artifact. Update UX/channel is manual replacement only; an updater is not planned.
 - Local diagnostic retention/export and downgrade/corruption handling are not feature-local choices; P-4/P-5 own them. No telemetry backend or cloud recovery is introduced.
 - Cloud service/account/sync/backup/recovery, web/mobile, local model, recommendation, knowledge graph and general-purpose AI Chat are outside v1.

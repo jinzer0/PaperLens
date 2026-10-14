@@ -307,12 +307,12 @@ The channel is direct Developer ID, not App Store. Users manually replace the ap
 
 ## 10. Verification And Blocking Gates
 
-P-1..P-6은 final contract의 일부지만 required evidence/decision은 아직 통과하지 않았다. 각 gate는 아래 stated boundary에서 downstream work를 계속 차단하며 finalization 자체는 proof completion이 아니다.
+P-1..P-6은 final contract의 일부지만 required evidence/decision은 아직 통과하지 않았다. ARCHITECTURE-SPINE.md의 2026-10-14 execution-sequencing amendment를 적용한다: 공통 계약은 의존 source 분할 전에 확정하며 외부 P-1/P-2 proof는 실제 runtime acceptance·packaging·release를 차단한다. 독립적인 source 구현·통합의 blanket blocker는 아니다. 아래 제품 gate는 해당 동작의 실제 acceptance를 요구하며 source 구현으로 PASS가 되지 않는다. 인증·Library entry·삭제·격리·두 CPU·소진 trial·유료 요청·배포 제한과 finalization이 proof가 아니라는 원칙은 유지한다.
 
 | Gate | Evidence | Blocks |
 | --- | --- | --- |
-| Execution topology P-1 | Signed/notarized arm64/x86_64 main app, no-network PDFium XPC, separate Provider Agent; sandbox/entitlement and negative file/network tests; no container/group sharing; Agent-zone marker-content absence/purge after success, failure, restart, replacement and deletion | PDFium, Provider Agent, packaging Build Specs |
-| Release lock P-2 | Exact Xcode/SDK, Python SDK/runtime/CLI and PDFium deps/hashes; minimum macOS 15 plus current-supported runtime matrix on both CPU artifacts; DB open/migration, FTS5 create/query/delete, packaged Agent marker-content absence/purge after success/failure/restart/replacement/deletion | helper, CI, persistence, public packaging |
+| Execution topology P-1 | Signed/notarized arm64/x86_64 main app, no-network PDFium XPC, separate Provider Agent; sandbox/entitlement and negative file/network tests; no container/group sharing; Agent-zone marker-content absence/purge after success, failure, restart, replacement and deletion | actual PDFium/Provider Agent topology acceptance and release packaging, not independent source |
+| Release lock P-2 | Exact Xcode/SDK, Python SDK/runtime/CLI and PDFium deps/hashes; minimum macOS 15 plus current-supported runtime matrix on both CPU artifacts; DB open/migration, FTS5 create/query/delete, packaged Agent marker-content absence/purge after success/failure/restart/replacement/deletion | actual helper/persistence runtime matrix acceptance, final lock and public packaging |
 | Shared limits P-3 | Application+Provider+Import/PDF-owned operation allowlists and numeric Provider/import/parser/message/stream ceilings, pinned before Provider and Import/PDFium units split | Import/PDFium, Provider, Chat, Translation, Brief Build Specs |
 | Provider secret | Permissions, per-entry backup exclusion, descendant verification, redaction, stage/remove cleanup, accepted risk | FR-002..FR-004, NFR-009 |
 | Provider connection | Smallest real authenticated v1 request, typed usable response, immutable stage, SQLite CAS selector, config generation, startup cleanup, last active preservation | FR-001..FR-004, SM-001 |
@@ -327,14 +327,14 @@ P-1..P-6은 final contract의 일부지만 required evidence/decision은 아직 
 | Diagnostics P-4 | Local location/retention/export/redaction/deletion policy without telemetry | public release plan |
 | Dual artifact | Common locks/contracts/migrations/entitlements/smoke corpus, nested inventory, signing/notary/Gatekeeper parity | FR-035, FR-036, SM-006 |
 
-If the conditional Provider Agent cannot satisfy P-1/P-2 on either architecture, implementation remains blocked. Because ChatGPT/device-code is launch-blocking, scope change requires PRD correction and a new PRODUCT approval.
+If the conditional Provider Agent cannot satisfy P-1/P-2 on either architecture, actual topology acceptance and release remain blocked; independent fixed-contract source implementation may continue. Because ChatGPT/device-code is launch-blocking, scope change still requires PRD correction and a new PRODUCT approval.
 
 ## 11. Final Contract And Gate Revisit Conditions
 
 | Final contract / open gate | Revisit | Required disposition |
 | --- | --- | --- |
 | AD-1 hexagonal/Application authority | Before a unit requests direct durable ownership | Update spine; do not create a second state owner. |
-| AD-2 ProviderRPC details, Agent isolation and Paper-state purge | P-1/P-2 before native/Agent split | Pin contract, prove signed artifact and marker cleanup across success/failure/restart/replacement/deletion; failure follows product-correction path. |
+| AD-2 ProviderRPC details, Agent isolation and Paper-state purge | Shared contract before native/Agent source split; P-1/P-2 before actual topology acceptance | Pin contract, prove signed artifact and marker cleanup across success/failure/restart/replacement/deletion; failure follows product-correction path. |
 | AD-3 EvidenceBundle policy | P-3 before Provider adapters split | Pin common allowlists/budgets, never adapter-local policy. |
 | AD-5 staged lifecycle | Provider connection prototype | Preserve real-request success and SQLite sole selector. |
 | AD-6 persistence/migrations/cross-store | Before first schema/artifact story | Preserve DB visibility authority, one migration registry, writer permit from first access through close/cancel cleanup, and distinct permit-held final publication with synchronous failed-guard cleanup. |
@@ -343,7 +343,7 @@ If the conditional Provider Agent cannot satisfy P-1/P-2 on either architecture,
 | AD-14 Template/Brief lifecycle | Brief regeneration race prototype | Preserve immutable provenance and Paper-independent Template ownership. |
 | P-4 diagnostics | Before public packaging | Application/Release define retention/export; no telemetry backend. |
 | P-5 downgrade/corruption | Before public packaging | Persistence/Release define fail-closed support boundary. |
-| P-2 runtime matrix | Before helper/CI/packaging/persistence units split | Cover minimum macOS 15 and current supported builds on both CPUs with DB/FTS/Agent cleanup smoke. |
+| P-2 runtime matrix | Before actual runtime matrix acceptance, final release lock and public packaging | Cover minimum macOS 15 and current supported builds on both CPUs with DB/FTS/Agent cleanup smoke. |
 | P-3 shared limits | Before Provider and Import/PDFium units split | Application+Provider+Import/PDF pin one common contract. |
 | P-6 timing profile | Before Import/Reader timing instrumentation Build Specs split and approved release QA plan | Pin one deterministic probe/completion signal; keep named events and soft-target semantics unchanged. |
 

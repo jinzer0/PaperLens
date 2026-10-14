@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 10-05-2026 10:30
-last_updated: 10-05-2026 10:30
+last_updated: 2026-10-14
 project: PaperLens
 project_key: NOKEY
 tracking_system: file-system
@@ -50,26 +50,26 @@ development_status:
   # Issue #5: Python/native contracts and security boundaries verified; no actual Provider/P1/P2 claim.
   1-7-공통-요청-허용-범위와-자원-한도-확정: in-progress
   1-8-pdf가-실제로-응답하는-시점의-측정-계약-확정: in-progress
-  # Stories1.9–1.26 have own committed gated Specs; planning is not ready-for-dev or actual gate PASS.
-  1-9-main-app과-provider-agent의-공통-통신-계약-확정: backlog
-  1-10-openai-api-key를-실제-요청으로-연결하기: backlog
+  # Current product integration has source; in-progress does not claim verification or gate PASS.
+  1-9-main-app과-provider-agent의-공통-통신-계약-확정: in-progress
+  1-10-openai-api-key를-실제-요청으로-연결하기: in-progress
   1-11-공식-codex-sdk의-chatgpt-로그인-연결: backlog
   1-12-chatgpt-device-code-연결-제공: backlog
-  # Issue #15: pure25 + actual synthetic4 + lifecycle-negative6 verified; durable product recovery pending.
+  # Issue #15: durable product recovery source integrated; actual acceptance remains pending.
   1-13-job-종류별-실패-재실행-retry-계약-확정: in-progress
-  1-14-연결-후-library에서-로컬-pdf-추가-삭제: backlog
-  1-15-추가한-pdf를-reader에서-읽고-이어-읽기: backlog
-  1-16-pdf에-highlight-note-남기고-다시-확인하기: backlog
-  1-17-library-폴더와-중복-확인-후-가져오기: backlog
-  1-18-세-url-경로로-pdf-가져오기: backlog
-  1-19-공통-문장-좌표와-anchor-변환-계약-입증: backlog
-  1-20-pdf-파싱과-검색용-revision을-안전하게-공개하기: backlog
-  1-21-파싱-실패를-이해하고-다시-시도하기: backlog
-  1-22-paper-metadata와-reader-목차-확인하기: backlog
-  1-23-근거-기반-한-줄-요약으로-paper-식별하기: backlog
-  1-24-library-카드-목록-정렬과-기록-재방문: backlog
-  1-25-태그-읽기-상태-favorite와-검색-필터: backlog
-  1-26-settings에서-provider를-재연결하고-상태-확인하기: backlog
+  1-14-연결-후-library에서-로컬-pdf-추가-삭제: in-progress
+  1-15-추가한-pdf를-reader에서-읽고-이어-읽기: in-progress
+  1-16-pdf에-highlight-note-남기고-다시-확인하기: in-progress
+  1-17-library-폴더와-중복-확인-후-가져오기: in-progress
+  1-18-세-url-경로로-pdf-가져오기: in-progress
+  1-19-공통-문장-좌표와-anchor-변환-계약-입증: in-progress
+  1-20-pdf-파싱과-검색용-revision을-안전하게-공개하기: in-progress
+  1-21-파싱-실패를-이해하고-다시-시도하기: in-progress
+  1-22-paper-metadata와-reader-목차-확인하기: in-progress
+  1-23-근거-기반-한-줄-요약으로-paper-식별하기: in-progress
+  1-24-library-카드-목록-정렬과-기록-재방문: in-progress
+  1-25-태그-읽기-상태-favorite와-검색-필터: in-progress
+  1-26-settings에서-provider를-재연결하고-상태-확인하기: in-progress
   epic-1-retrospective: optional
 
   epic-2: backlog

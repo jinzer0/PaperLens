@@ -111,10 +111,11 @@ risky action. No fixed retry budget is invented here: actual per-run limits gove
 
 ## Work units and context
 
-For non-trivial source changes retain the BMAD Story / GitHub Issue / task branch /
-Pull Request work unit and the Build Spec before implementation. Commit the Spec
-and in-scope follow-up Specs before implementation when commits are permitted; these
-are durable checkpoints, not human approval requests. Link existing task artifacts.
+For non-trivial source changes retain the existing Story / Issue / task branch /
+planned PR traceability and reuse its Build Spec. Establish missing substantive
+contracts before implementation. Routine in-scope Spec deltas belong with the
+implementation and Evidence commit, not in mandatory separate precursor commits.
+File counts and Stage labels do not define implementation admission or risk.
 A trivial LOW correction needs only proportionate intent/diff/verification Evidence,
 not a new Epic/Story or mandatory full workflow. An unavailable remote Issue is a
 synchronization prerequisite, not permission to create it remotely.
@@ -123,6 +124,46 @@ Branch conventions: `planning/<release>`, `chore/<slug>` for governance/maintena
 `issue/<issue-number>-<slug>` for Stories. Choose a safe task branch/worktree under
 actual authority; naming conventions alone do not justify switching a dirty worktree.
 A fresh session can help, but session boundaries are not project memory or new authority.
+
+### Functional delivery and current execution state
+
+Use the existing Epic execution Spec as the current cross-session entry point. Record
+the objective, integration branch, source baseline, Story implementation/integration
+status, verification debt and operation-specific blockers there. Resolve the branch
+HEAD at use time; an old root checkout or historical goal receipt is not current
+product status. Do not relabel another session's native goal, forge runtime receipts
+or copy runtime state to make a repository transition appear complete.
+
+Deliver one observable functional slice with its affected tests, necessary Spec delta
+and result. Parallelize independent features only after their shared contract is
+fixed; integrate into one parent branch. Batch parent verification and independent
+review by actual change and risk. Routine LOW/MEDIUM work uses focused verification
+and implementer diff review; independent review is reserved for HIGH decisions,
+load-bearing shared contracts, concurrency/data integrity or explicit requirements.
+Do not delegate separate selection, admission and review rounds for every small fix.
+
+Every investigation needs a concrete unresolved question, exact relevant inputs and
+an exit condition. Reuse unchanged findings and test results; a new session, Stage or
+wording change does not justify another audit. Track progress by usable integrated
+flows, observed failure/recovery behavior and remaining acceptance, not counts of
+commits, tests, agents, reviews or documents.
+
+Separate source implementation, integration, permitted verification and acceptance.
+Missing hardware blocks that matrix cell; missing authentication/cost authority
+blocks the actual probe; consumed trials block only their rerun. These do not block
+independent source work or waive genuine authenticated Library entry. Missing
+Paper/Job/storage owners are implementation work, not inherently human-only blockers.
+Shared contract decisions still precede dependent parallel work. Preserve all
+privacy, runtime proof, paid-request, release and per-run requirements. Each blocker
+names the affected operation and dependencies, needed input and safe remaining work.
+
+Historical Story phase plans and reviews remain evidence of their original scope,
+not perpetual precommit, five-file, serial-review or blanket gate requirements.
+Current execution follows this policy and the Epic's explicit sequencing amendment;
+unchanged product acceptance and protected execution restrictions remain binding.
+Tool source-hash/capture failures are workflow-proof failures, not product failures
+or reasons to invent source work. Use a clean dedicated worktree when permitted;
+never delete user work, manufacture hashes or weaken capture to pass.
 
 ## Decision records
 
@@ -162,8 +203,8 @@ An explicit human instruction for an identified whole Story grants routine local
 lifecycle authority within its existing acceptance criteria. This is an application
 of the common policy, not an exception requiring every later Spec SHA approval.
 Record Story ID, governing Issue, baseline Spec/current commit, actual instruction
-and retained limits; the baseline commit is an audit reference. Commit in-scope Spec
-updates before implementation when permitted, without another Scope/Implementation
+and retained limits; the baseline commit is an audit reference. Include routine Spec
+updates with implementation when permitted, without another Scope/Implementation
 approval. Passing Evidence and truthful unresolved limitations remain necessary.
 
 It does not authorize another Story, changed acceptance criteria, material architecture
@@ -175,9 +216,9 @@ Seek specific approval for the changed boundary, not for all safe remaining work
 An explicit instruction to plan, implement and verify an identified Story range
 applies scoped authority to every existing Story in that range. Record the instruction
 and range on the governing Epic and link each Story Issue when remote writes are
-permitted; otherwise record pending synchronization locally. Preserve one
-Spec/Issue/task-branch work unit per Story, pre-implementation Spec commits when
-permitted, parent verification and independent review. Do not reduce the instruction
+permitted; otherwise record pending synchronization locally. Preserve existing
+Spec/Issue/task-branch traceability, combined routine Spec/implementation commits,
+parent verification and risk-triggered independent review. Do not reduce the instruction
 to the active Story or repeatedly ask for in-scope approval.
 
 Continue dependency-ready Stories despite an environment-only blocker elsewhere.
@@ -210,6 +251,12 @@ Do not use a routine feature request to rewrite an approved baseline silently.
 `APPROVED: MERGE @ <pull-request-head-sha>` authorizes that actual Merge.
 Recheck HEAD immediately before Merge; any HEAD change makes that approval stale.
 Tests, implementation approval and review are Evidence, not Merge permission.
+
+An explicit instruction to integrate the requested work into a named local top-level
+branch authorizes that local branch merge after focused verification and diff review.
+Record the actual instruction, source and target; check both HEADs and worktree state
+before merging. This is not a PR merge approval token and does not authorize push,
+GitHub writes, release or distribution. Never fabricate APPROVED: MERGE records.
 
 Release/deploy approval identifies the current revision/artifact/version, destination,
 environment and permitted operations. A changed target invalidates it. Merge alone

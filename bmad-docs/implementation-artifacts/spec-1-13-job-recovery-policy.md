@@ -8,9 +8,9 @@ Canonical requirements: **caller-supplied canonical excerpt**, Story1.13 epics.m
 
 Fix one Application-owned policy before the first product Import Job Build Spec: input version, dispatch history, terminal/interruption, explicit Retry, usable-result preservation, fenced publication, writer/publication permits and synchronous cleanup across Import, parsing, Translation, Chat preparation, Chat request, Brief and Library one-line summary. Future Paper/Reader/annotation/Folder implementation and full schema generation are NOT prerequisites.
 
-- Planning now; commit this own-branch Spec BEFORE source.
+- Reuse this policy contract; routine in-scope Spec deltas accompany implementation and Evidence under docs/ai-governance.md.
 - Admit a bounded complete pure Application policy and deterministic tests after parent ownership/convention checks. It needs no product persistence, helper/CI or actual P2. Python may compose tests with existing real registered-synthetic writers, never duplicate policy.
-- Product integration BLOCKED: P1=false, P2=false, P3=false; actual product RPC, real1.10–12 connections, durable authority and Main class-specific data owners are absent. StoryDone=false; no P6 promotion, blankCapture remains FAIL.
+- Product recovery source now includes Application/ProductJobRecovery.swift and the shared durable ProductDatabase/import lifecycle. Actual authenticated integration and P1/P2/P3 acceptance remain unproven, not blanket source blockers. StoryDone=false; no P6 promotion, historical blankCapture remains FAIL.
 - `14dd7b3` proves registered-synthetic closure/scoped purge, not SDK/Main publisher/permanent post-lease deletion. `c93e873` proves local GRDB, not product persistence/P2. No rerun/promotion of historical gates.
 
 ## Single policy and immutable lineage

@@ -10,6 +10,57 @@ approval: explicit-human-story-range-execution
 
 # 전체 실행 계약
 
+## Current execution entry point — 2026-10-14
+
+- Objective: Epic 1 Stories 1.1–1.26; 1.27 remains undefined. This is product work,
+  not the historical policy-refactoring G001. Native receipts in other sessions
+  remain historical and are not rewritten or reused as current execution admission.
+- Product source baseline: `62e1b3e`; policy integration baseline: `35f93ae`.
+  Working integration branch: `issue/epic-1-product-vertical-integration-20261010`.
+  Delivery branch: local `main`; resolve its HEAD at use time after integration.
+  The old root branch `issue/10-story-1-8` is not the current product checkout.
+- Actual human instruction: “모든 해결 방법 적용해. 적용후 main 이든 devel이든
+  최상위 브랜치에도 merge해”. Authority covers these execution corrections and
+  local main integration, not push, PR merge, credentials, paid probes or release.
+- Implemented/integrated source includes product RPC/API-key connection, durable
+  Paper/Job/import/delete, Reader/annotations/folders/URL import, extraction and
+  recovery, metadata/summary, Library presentation/organization and Settings.
+  Source presence is not compilation, runtime, genuine authentication or Done.
+  Browser/device-code acceptance and actual P1/P2/P3/P6 remain unproven.
+- Verification debt: prior implementation-first source slices explicitly deferred
+  product tests, builds, independent review and rendered accessibility/runtime
+  proof. Those debts remain open; policy checks do not discharge them. Verify the
+  affected integrated flows when permitted, without renewing consumed trials.
+- Blockers are operation-scoped: absent hosts block their OS×CPU cells; absent
+  auth/cost authority blocks real probes; exhausted trials block those reruns;
+  unknown shared contracts block dependent splits. No blanket Epic pause follows.
+- Each next slice delivers one usable flow or concrete correction with affected
+  tests, necessary Spec delta and Evidence. Batch risk-required review and parent
+  verification; no per-edit selection/admission/review agent chain or five-file cap.
+  Reuse prior unchanged findings and stop evidence-only loops. Current policy in
+  docs/ai-governance.md supersedes historical phase ceremony, not acceptance facts.
+
+### Execution-correction verification
+
+- Policy/schema/progress/visibility checks: 41 assertions PASS; actual TOML and
+  YAML parsing PASS; changed diff whitespace check PASS. Generated `.build`/`.gjc`
+  are excluded from Git discovery without deleting artifacts or user work;
+  application source remains visible. This does not prove native source-hash capture.
+- Integrated `swift build --target PaperLensProduct --skip-update
+  --disable-automatic-resolution`: PASS using materialized dependencies. Observed
+  warnings remain: deprecated skip-update option, unnecessary await in
+  ExtractionRevisionService and two deprecated onChange uses in URLImportView.
+  No warning suppression or unrelated source cleanup was performed.
+- Product tests, app executable packaging, native UI/accessibility scenarios,
+  authentication, consumed trials and CPU/OS acceptance were not run by this
+  correction. A successful library target compile does not discharge those debts.
+- Independent execution-boundary review found two concrete stale Epic clauses:
+  actual gate PASS before source and universal Story independent review. Both were
+  corrected; affected SOLUTION-DESIGN sequencing was aligned. The bounded final
+  delta verdict is CLEAR/APPROVE (`agent://0-ExecutionBoundaryReview`), not product
+  acceptance or runtime proof. Subsequent editorial evidence updates need no new
+  independent review unless their authority/safety/acceptance meaning changes.
+
 사용자 명시적 지시: **Story 1.1~1.27 전체 계획·구현·검증을 워크플로대로 진행**. 승인 provenance는 Epic #3이다. 현재 열린 Story1.1의 진단만으로 전체 목표를 축소하지 않는다. 각 in-scope 단계마다 승인을 다시 요청하지 않는다.
 
 Canonical Story 정의는 `bmad-docs/planning-artifacts/epics.md`의 Epic1이다. 현재 정의와 sprint registry에는 **1.1~1.26만 존재**하며 1.27은 정의 공백이다. 미존재 Story의 요구/AC를 만들어내거나 전체 완료로 계산하지 않는다. 기존 Product/Architecture 승인과 Story 분해의 AC를 baseline으로 삼는다. Draft/pending frontmatter보다 실제 human 승인 기록을 우선한다.
@@ -37,7 +88,7 @@ Canonical Story 정의는 `bmad-docs/planning-artifacts/epics.md`의 Epic1이다
 | 1.6 | packaged Agent matrix | 1.2~1.5 기반 success/failure/restart/replacement/delete 사건의 OS×CPU evidence 및 P2 판정 |
 | 1.7 | 공통 요청 허용·자원 한도 | ProviderRequest 단일 versioned allowlist/item-byte-token-message-stream/import-parser numeric ceilings와 Application 공통 budget policy |
 | 1.8 | PDF readiness 측정 계약 | 단일 자동 navigation 또는 zoom probe, main-thread visible completion, ImportAcceptedAt/FirstInteractivePageAt·네 입력·두 CPU·초과 disposition |
-| 1.9 | Main/Agent 제품 RPC | P1/P2/P3 실제 gate 이후 단일 framing/handshake/method/correlation/terminal/cancel/purge/error/bounds 계약 양쪽 검증 |
+| 1.9 | Main/Agent 제품 RPC | 고정된 공통 계약으로 단일 framing/handshake/method/correlation/terminal/cancel/purge/error/bounds를 구현·검증한다. 실제 P1/P2/P3 proof는 acceptance와 보호된 실행에 별도로 요구한다 |
 | 1.10 | OpenAI API key 연결 | 실제 최소 인증 요청·typed response·staged slot/SQLite selector CAS·기존 active 보존. secret/유료 real request 검증은 필요한 human 입력 없이 실행하지 않음 |
 | 1.11 | Codex ChatGPT 로그인 | packaged official SDK browser login·stage/usable request/config generation·정리와 safe auth 상태 |
 | 1.12 | device-code 연결 | 동일 Provider 계약의 device-code 로그인·취소/기한/실패/old active 보존 |
@@ -60,19 +111,19 @@ Canonical Story 정의는 `bmad-docs/planning-artifacts/epics.md`의 Epic1이다
 ## 선행 경계 및 순서
 
 - 검증 substrate: 1.1 → 1.2 → 1.3, 이후 1.4 → 1.5/1.6; P1/P2 증거를 CPU/OS/사건별로 검증한다.
-- 공통 계약: 1.7 및 1.8의 required source/limit/readiness 결정을 제품 분기 전에 고정한다. 1.9는 P1/P2/P3 actual pass를 소비한다.
-- 제품 Provider: 1.9 이후 1.10~1.12, 공통 Job1.13 이후 local import1.14. 실제 credentials/device/browser input·billable request를 synthetic success로 대체하지 않는다.
+- 공통 계약: 1.7 및 1.8의 required source/limit/readiness 결정을 의존 제품 분기 전에 고정한다. 1.9 source는 고정된 계약을 소비하며 실제 P1/P2/P3 proof는 acceptance와 보호된 실행에 요구한다.
+- 제품 Provider: 1.9 공통 계약 확정 후 독립적인 1.10~1.12 source를 병렬 구현한다. 공통 Job1.13 계약 후 local import1.14를 구현한다. 실제 credentials/device/browser input·billable request를 synthetic success로 대체하지 않는다.
 - Reader/import: 1.14 → 1.15/1.16/1.17 → 1.18. 화면 별 native semantic styling/한국어 copy/resize/focus/keyboard/VoiceOver와 해당 데이터의 복구·삭제 경합을 같이 검증한다.
 - extraction: 1.19 계약 후 1.20 → 1.21. metadata/outline1.22, summary1.23, Library1.24~1.25, Settings1.26은 각 canonical AC/공통 gate를 소비한다.
 - 구현 가능 여부는 synthetic prototype와 downstream 제품 분기를 분리해 판단한다. 외부 환경이 없다는 이유로 전체 작업을 한 log control에 고정하지 않지만, architecture의 필수 gate를 승인만으로 PASS 처리하지도 않는다.
 
 ## 검증 matrix와 완료 증거
 
-각 Story는 Spec/Issue/branch/구현 commit, automated focused+union tests, 독립 리뷰, 실제 scenario 증거, limitations를 보유해야 한다. 실제 사용자가 제공하지 않은 auth/문서로 검증하지 않는다. macOS15/현재 OS×arm64/x86_64 packaged execution, signed sandbox negative-access attribution, TCC/coverage/clock, 실제 인증 요청은 해당 실제 환경/권한/입력의 증거가 없으면 blocked다. Intel 동적 실행은 현 요청에서 자동 복구되지 않았고 면제는 PASS가 아니다.
+각 Story는 기존 Spec/Issue/branch/구현 commit, 영향받는 focused+통합 검증, 실제 scenario 증거와 limitations를 보유해야 한다. 독립 리뷰는 HIGH·공통 핵심 계약·동시성·데이터 무결성 또는 명시적 acceptance 요구에만 적용하며 관련 변경을 묶어 Story별 결과를 구분할 수 있다. 실제 사용자가 제공하지 않은 auth/문서로 검증하지 않는다. macOS15/현재 OS×arm64/x86_64 packaged execution, signed sandbox negative-access attribution, TCC/coverage/clock, 실제 인증 요청은 해당 실제 환경/권한/입력의 증거가 없으면 해당 검증만 blocked다. Intel 동적 실행은 현 요청에서 자동 복구되지 않았고 면제는 PASS가 아니다.
 
 로컬 구현 테스트와 physical CPU·packaged execution·public distribution 완료를 혼동하지 않는다. push/PR/remote CI/notary/stapler/spctl/upload/배포/merge는 별도 human 지시 대상이다. 사용자의 `.gitignore` 및 unrelated untracked와 기존 report/fixture/receipt/package namespace를 보존한다. raw request/response/log/path/secret는 safe diagnostics에 남기지 않는다.
 
-## 현재 상태
+## Historical pre-product checkpoint (current state is the entry point above)
 
 - 전체 human SCOPE+IMPLEMENTATION 및 workflow 기록: Epic#3.
 - Story1.1: 구현/진단 evidence 존재, 전체 AC와 P1 blocked; 과거 소진된 batch 재실행 없음.
@@ -90,7 +141,7 @@ Canonical Story 정의는 `bmad-docs/planning-artifacts/epics.md`의 Epic1이다
 - Story1.13: Issue#15, initialSpec119a28a / completion amendmentf14f15f BEFORE purepolicyf4bc76b; helper-ownership amendmentdb3702b BEFORE composition387c578. Native25pure +4actual registered producer/purge +6negative lifecycle =35 PASS/0warnings (bc9763fd), static59 pure CLEAR and63 corrected-delta registered-synthetic CLEAR. Fresh scoped cleanup/removal invocation IDs, immutable target/debt, observed writer-FD closure, lower-fence recovery no-unlink, all-exit helper/pipe reap, complete4096-byte/2s controls and single earliest300ms teardown proved only CODE/synthetic. Initial20PASS/review48BLOCK, compile-label failure,29PASS/review61BLOCK and35/16failed cross-clock trial preserved. Public CLOCK_UPTIME_RAW/Python mach_absolute_time test clock pairing is not signed P1 clock proof. Actual Main publisher/durable Job allocation/SQLite/SDK/P1/P2/P3/P6 remain unproved; Story not done.
 - Story1.27: requirements gap. 이 공백은 나머지 정의된 Story의 계획/검증용 선행 작업을 막지 않는다.
 
-## Own-branch gated planning checkpoints
+## Historical own-branch planning checkpoints (not current source status)
 
 | Story / Issue | Spec/source checkpoint | Current scope |
 | --- | --- | --- |
@@ -113,4 +164,4 @@ Canonical Story 정의는 `bmad-docs/planning-artifacts/epics.md`의 Epic1이다
 | 1.25 / #27 | 68e370f | Durable tags/status/Favorite/current query projection/distinct Library states |
 | 1.26 / #28 | 77672e3 | Actual authenticated reconnect/last-good CAS/leases/no covert replay |
 
-Future paths/APIs/schema/geometry tolerance unknown인 곳은 same-Spec ownership amendment 후 exact≤5-file source/test phases만 허용한다. Native semantic/Korean/accessibility/focus/resize/current-data lifecycle 조건을 각 UI Story에서 검증하며 마지막 polish로 미루지 않는다. Public SDK generated login shapes는 expiry/interval/bounded queues/environment/approval/shutdown/auth-zone/actual generation capability를 입증하지 않는다. 인증·필수 packaged CPU/OS·실제 sandbox/P6 검증 없이 제품을 scaffold/mock/fallback으로 대체하지 않는다.
+Future paths/APIs/schema/geometry tolerance unknown인 곳은 기존 Spec에서 실제 공통 계약을 확정하고 완결된 기능 단위로 구현한다. 일반 후속 Spec delta는 구현·증거와 함께 commit하며 파일 수 제한이나 단계별 독립 리뷰를 추가하지 않는다. Native semantic/Korean/accessibility/focus/resize/current-data lifecycle 조건은 해당 기능의 영향받는 검증으로 확인한다. Public SDK generated login shapes는 expiry/interval/bounded queues/environment/approval/shutdown/auth-zone/actual generation capability를 입증하지 않는다. 인증·필수 packaged CPU/OS·실제 sandbox/P6 검증 없이 acceptance를 승격하거나 제품을 scaffold/mock/fallback으로 대체하지 않는다.
