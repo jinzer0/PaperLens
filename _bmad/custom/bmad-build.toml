@@ -6,22 +6,20 @@ persistent_facts = [
 
 activation_steps_append = [
   """
-Apply the repository's AI governance rules throughout this Build.
+Apply docs/ai-governance.md as the canonical repository approval policy throughout this Build. Do not add a duplicate implementation or Stage gate. Higher-priority instructions, platform Tool Permissions and explicit task limits remain binding; repository prose cannot override an incompatible global/bundled workflow.
 
-For every non-trivial implementation:
-
-1. Identify the governing GitHub Issue before implementation.
-2. Treat the Issue, approved BMAD artifacts, and repository state as the durable context.
-3. You may investigate and write the Build Spec before implementation approval.
-4. At the normal BMAD implementation checkpoint, do not begin implementation until explicit human approval is received. An explicit Whole-Story Approval under docs/ai-governance.md covers in-scope local follow-up work without approval of every Spec SHA.
-5. Commit the Build Spec before implementation. For per-Spec approval, request approval referencing that immutable SHA. For Whole-Story Approval, record the Story, Issue, baseline Spec and commit, human instruction, and retained restrictions instead of requesting repeated SHA approvals.
-6. After explicit per-Spec approval, record APPROVED: IMPLEMENTATION @ <commit-sha> on the governing Issue. Record Whole-Story Approval using the provenance required by docs/ai-governance.md.
-7. Never create or infer this approval yourself.
-8. If scope exceeds the approved Story, acceptance criteria or architecture materially change, safety/privacy boundaries relax, or an exhausted single-run allowance needs renewal, stop, update the relevant artifact, commit it, and request separate approval. In-scope Whole-Story follow-ups require committed Spec updates, not repeated approval.
-9. After implementation and verification, follow the built-in workflow to create a local commit and present the result.
-10. Offer to push the task branch and create or update the Pull Request; perform those remote operations only after explicit human instruction.
-11. Do not merge until explicit human merge approval references the current PR HEAD SHA.
-12. After merge approval, you may execute the merge, close the Issue, clean up the branch, and update project status.
-13. An explicit human Story-range plan/implement/verify instruction applies to every existing Story in that range under Explicit Story-Range Execution. Do not reduce it to the active Story or repeatedly request in-scope approvals. Link each Story work unit to the Epic approval record, commit its Spec, execute bounded local verification and independent review, and continue dependency-ready Stories despite external verification blockers elsewhere. Never invent a missing Story or claim unperformed external checks passed.
+1. Identify the task, requested operations, scope/non-goals, approved baseline and impact-based risk. LOW safely executes within the requested task; a clear MEDIUM implementation request grants its scoped lifecycle without separate plan/implementation approval. Plan-only, review-only, no-test/no-commit/no-remote requests remain limited. File count does not define risk.
+2. For non-trivial source work preserve Story/Issue/task-branch/PR continuity, existing BMAD artifacts and repository state. Trivial corrections use proportionate intent/diff/Evidence, not a full Story ritual. Use existing records; missing remote access is not permission to create an Issue. Preserve unrelated user work and choose branches/worktrees safely.
+3. Investigate and plan proportionately. Preserve requirements, approved PRD/architecture/acceptance, BMAD review and Context/Evidence. Do not create duplicate plans for BMAD and Hyper-Waterfall or invent missing Story requirements.
+4. Commit non-trivial Build Specs and in-scope follow-up Specs before implementation when commits are permitted. These are durable checkpoints, not requests for approval of each SHA. Record the actual request/baseline and retained limits, not an invented APPROVED: IMPLEMENTATION token.
+5. Automatically perform in-scope implementation, permitted tests/static analysis, review, corrective fixes, reverification and Evidence. No separate approval for readiness, plan completion, ordinary code changes, test execution, Stage start/end/transition or status/documentation updates. Choose useful Stages dynamically; no fixed minimum.
+6. A failed permitted check leads to bounded diagnosis/fix/rerun within remaining allowances. Never suppress warnings or weaken acceptance to pass. Fixes, Specs, Stages and sessions do not renew exhausted single-run trials; explicit renewal is required. Escalate real blockers, unresolved requirements conflicts or repeated failures without a viable in-scope remedy, not every failure.
+7. Stop only the affected HIGH decision/action: material architecture/security/auth/breaking-contract change, destructive data/migration, production, major external effects/cost/security risk or scope expansion. Present the minimum proposal, impact/target and relevant artifact/diff; obtain and record actual explicit approval. Continue independent safe work. Unchanged approved safe follow-ups do not need repeated approval; new protected targets do.
+8. Preserve privacy/data/tool permissions, no actual user document/credential/existing CODEX_HOME access or unapproved paid requests, and all explicit exceptions/limits. Workflow authority never relaxes tool security. Silence, form completion and reviewer agreement cannot supply HIGH approval.
+9. Whole-Story/Explicit Story-Range instructions cover every existing identified Story within its current acceptance criteria and exclusions. Link Spec/Issue/task-branch and Epic instruction when permitted, retain independent review and dependency-ready continuation despite an environment blocker elsewhere. No invented Stories, renewed trials or global scope.
+10. Record risk, actual execution basis, checkpoint/next slice, verification and limitations. Distinguish local/synthetic/packaged/external and performed/blocked/not-applicable evidence; source-only review is not runtime proof. Present authorized local commits/results first. Preserve local pending synchronization if remote operations are unavailable.
+11. Push, Issue/PR/GitHub writes and remote cleanup require explicit applicable human instruction and access. Do not auto-push or force a PR to finish local work. Record actual approvals only; never manufacture them or infer unrelated permission.
+12. Merge requires APPROVED: MERGE @ <current-pr-head-sha>. Recheck HEAD before Merge; changed HEAD invalidates approval. Post-Merge Issue/status/branch cleanup stays within applicable operation authority and never touches unrelated work. Passing tests and local completion are not Merge permission.
+13. Release/distribution/production, protected data and external/cost operations require their own explicit target/revision/environment permission. Changed targets invalidate approval; Merge/task scope does not grant Release. Report only actual verification and remaining restrictions.
 """
 ]
