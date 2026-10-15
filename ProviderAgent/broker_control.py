@@ -1,4 +1,4 @@
-"""Authenticated startup-only broker lifecycle; never an SDK RPC transport.
+"""Authenticated finite broker lifecycle; never an SDK RPC transport.
 
 All effects use one lane. Unknown owners deliberately remain rooted and alive.
 Python clock checks are NOT an independent execution bound. Native production
@@ -7,6 +7,7 @@ routing and the public SDK worker are intentionally not implemented here.
 from __future__ import annotations
 
 import array
+from collections import deque
 import ctypes
 from dataclasses import dataclass
 import errno
@@ -34,13 +35,14 @@ _MAX_CONTROL = 1024
 _UINT64 = (1 << 64) - 1
 _FIELDS = {
     'hello': (), 'run': ('startupDeadlineNs', 'cwdDevice', 'cwdInode'),
-    'running': (), 'revokeNeeded': ('code',), 'revoke': ('deadlineNs',),
+    'running': (), 'dispatch': (), 'dispatching': (),
+    'revokeNeeded': ('code',), 'revoke': ('deadlineNs',),
     'cliRetired': ('deadlineNs', 'scope', 'waitStatus'),
     'preLaunchRetired': ('deadlineNs',), 'unknown': ('code',),
     'brokerOffered': (), 'reapBroker': ('deadlineNs',),
     'brokerReaped': ('deadlineNs', 'waitStatus'),
 }
-_CODES = frozenset(('startupDeadline', 'stdioEOF', 'cliExit'))
+_CODES = frozenset(('startupDeadline', 'stdioEOF', 'cliExit', 'sessionLimit', 'scopeRetire'))
 _UNKNOWN_CODES = frozenset(('roleUncertain', 'controlUncertain', 'relayUncertain'))
 
 
@@ -127,7 +129,7 @@ class ControlFrames:
         return message
 
 
-def _record_counts(data, records, partial):
+def _record_counts(data, records, partial, limit=_QUEUE):
     for value in data:
         partial += 1
         if partial > _FRAME:
@@ -135,9 +137,83 @@ def _record_counts(data, records, partial):
         if value == 10:
             records += 1
             partial = 0
-        if records + bool(partial) > _QUEUE:
+        if records + bool(partial) > limit:
             raise ControlError('relayCumulativeRecords')
     return records, partial
+
+
+class _RelayBuffer:
+    """Rooted records, including a partially written head and one open tail.
+
+    readv fills a reserved byte in the tail itself: no unaccounted read spill.
+    A forwarded startup prefix is removed, but its open record keeps its slot.
+    """
+    def __init__(self):
+        self.closed = deque()
+        self.partial = bytearray()
+        self.open = False
+        self.bytes = 0
+
+    @property
+    def slots(self):
+        return len(self.closed) + self.open
+
+    def clear(self):
+        self.closed.clear()
+        self.partial.clear()
+        self.open = False
+        self.bytes = 0
+
+    def read_byte(self, fd):
+        if self.bytes >= _BYTES or (not self.open and self.slots >= _QUEUE):
+            return None
+        was_open = self.open
+        self.partial.append(0)  # Reserve before the syscall; rooted on any fault.
+        self.bytes += 1
+        self.open = True
+        try:
+            view = memoryview(self.partial)[-1:]
+            try:
+                count = os.readv(fd, [view])
+            finally:
+                view.release()
+        except BlockingIOError:
+            self.partial.pop()
+            self.bytes -= 1
+            self.open = was_open
+            return None
+        if count == 0:
+            self.partial.pop()
+            self.bytes -= 1
+            self.open = was_open
+            return False
+        if count != 1:
+            raise ControlError('relayReadUncertain')
+        value = self.partial[-1]
+        if value == 10:
+            self.closed.append(self.partial)
+            self.partial = bytearray()
+            self.open = False
+        return value
+
+    def write(self, fd, live):
+        head = self.closed[0] if self.closed else (None if live else self.partial)
+        if not head:
+            return
+        view = memoryview(head)
+        try:
+            count = os.write(fd, view)
+        except BlockingIOError:
+            return
+        finally:
+            view.release()
+        if not 0 < count <= len(head):
+            raise ControlError('relayWriteUncertain')
+        self.bytes -= count
+        del head[:count]
+        if self.closed:
+            if not head:
+                self.closed.popleft()
 
 
 class _AuditToken(ctypes.Structure):
@@ -384,10 +460,10 @@ class AuthenticatedBroker(_Resources):
 
 
 class WorkerRendezvous(_Resources):
-    """Future worker entry must park on rooted helper failure, never unwind/exit.
+    """Worker entry must park on rooted helper failure, never unwind/exit.
 
     Helpers expose fixed failures so a fixture can inspect the retained debt.
-    The actual SDK worker entry point and its independent bound do not exist.
+    These Python helpers do not establish an independent execution bound.
     """
     def __init__(self, run_id, startup_deadline_ns):
         super().__init__()
@@ -525,8 +601,8 @@ class _Role(_Resources):
         self.startup_deadline = None
         self.decoder = ControlFrames()
         self.control_out = bytearray()
-        self.input = bytearray()
-        self.output = bytearray()
+        self.input = _RelayBuffer()
+        self.output = _RelayBuffer()
         self.read_buffer = b''
         self.control_message = None
         self.input_bytes = 0
@@ -538,6 +614,9 @@ class _Role(_Resources):
         self.stderr_bytes = 0
         self.peer = None
         self.run_seen = False
+        self.dispatch_seen = False
+        self.running_sent = False
+        self.startup_counters = None
         self.revoke_needed = False
         self.frozen = False
         self.control_blocked = False
@@ -593,6 +672,14 @@ class _Role(_Resources):
                 if (message['startupDeadlineNs'] != self.startup_deadline
                         or (message['cwdDevice'], message['cwdInode']) != (info.st_dev, info.st_ino)):
                     raise ControlError('namespaceMismatch')
+            elif (op == 'dispatch' and self.running_sent and not self.dispatch_seen
+                  and self.state == 'relaying' and not self.frozen and self.deadline is None
+                  and time.monotonic_ns() < self.startup_deadline):
+                self.startup_counters = (self.input_bytes, self.input_lines, self.input_partial,
+                                         self.stdout_bytes, self.stdout_lines, self.stdout_partial,
+                                         self.stderr_bytes)
+                self.dispatch_seen = True
+                self.queue('dispatching')
             else:
                 raise ControlError('invalidTransition')
             self.control_message = None
@@ -605,7 +692,7 @@ class _Role(_Resources):
             self.retire()
         if self.cli is not None and self.cli.record['exitObserved']:
             self.request_revoke('cliExit')
-        if time.monotonic_ns() >= self.startup_deadline:
+        if not self.dispatch_seen and time.monotonic_ns() >= self.startup_deadline:
             if self.control_blocked and self.control_out:
                 raise ControlError('controlBackpressure')
             self.request_revoke('startupDeadline')
@@ -693,18 +780,18 @@ class _Role(_Resources):
         self.queue('running')
 
     def input_count(self, data):
-        self.input_bytes += len(data)
-        if self.input_bytes > _BYTES:
+        if self.input_bytes + len(data) > _BYTES:
             raise ControlError('inputCumulativeBytes')
         self.input_lines, self.input_partial = _record_counts(
-            data, self.input_lines, self.input_partial)
+            data, self.input_lines, self.input_partial, 256 if self.dispatch_seen else _QUEUE)
+        self.input_bytes += len(data)
 
     def stdout_count(self, data):
-        self.stdout_bytes += len(data)
-        if self.stdout_bytes > _BYTES:
+        if self.stdout_bytes + len(data) > _BYTES:
             raise ControlError('stdoutCumulativeBytes')
         self.stdout_lines, self.stdout_partial = _record_counts(
-            data, self.stdout_lines, self.stdout_partial)
+            data, self.stdout_lines, self.stdout_partial, 256 if self.dispatch_seen else _QUEUE)
+        self.stdout_bytes += len(data)
 
     def relay_once(self):
         self.priority()
@@ -717,42 +804,50 @@ class _Role(_Resources):
             self.priority()
             if self.frozen:
                 return
-            capacity = 4096 if target is None else min(4096, _BYTES - len(target))
-            if capacity == 0:
-                continue
-            try:
-                self.read_buffer = os.read(fd, capacity)
-            except BlockingIOError:
-                continue
-            data = self.read_buffer
-            if not data:
-                if kind != 'stderr':
-                    self.request_revoke('stdioEOF')
+            # Control and the actual CLI watch gate each bounded read burst;
+            # polling both again for every byte needlessly multiplies syscalls.
+            for _ in range(256):
+                prefix = 'stdout' if kind == 'output' else kind
+                total = getattr(self, prefix + '_bytes')
+                if total == _BYTES:
+                    self.request_revoke('sessionLimit')
                     return
-                continue
-            if kind == 'input':
-                self.input_count(data)
-            elif kind == 'output':
-                self.stdout_count(data)
-            else:
-                self.stderr_bytes += len(data)
-                if self.stderr_bytes > _BYTES:
-                    raise ControlError('stderrCumulativeBytes')
-            if target is not None:
-                target.extend(data)
-            self.read_buffer = b''
+                if target is not None:
+                    lines = getattr(self, prefix + '_lines')
+                    partial = getattr(self, prefix + '_partial')
+                    if partial == _FRAME or (not partial and lines == (256 if self.dispatch_seen else _QUEUE)):
+                        self.request_revoke('sessionLimit')
+                        return
+                    value = target.read_byte(fd)
+                    if value is None:
+                        break
+                    if value is False:
+                        self.request_revoke('stdioEOF')
+                        return
+                    # The only new byte is already rooted in its record.
+                    if value == 10:
+                        setattr(self, prefix + '_lines', lines + 1)
+                        setattr(self, prefix + '_partial', 0)
+                    else:
+                        setattr(self, prefix + '_partial', partial + 1)
+                else:
+                    if self.output.bytes == _BYTES:
+                        break  # Reserve stderr's one-byte scratch on the output lane.
+                    try:
+                        self.read_buffer = os.read(fd, 1)
+                    except BlockingIOError:
+                        break
+                    if not self.read_buffer:
+                        break
+                    self.read_buffer = b''
+                setattr(self, prefix + '_bytes', total + 1)
+                if target is not None and value == 10:
+                    break  # Give each completed record a write turn before admission.
         for fd, pending in ((source['stdin'], self.input), (self.fds['stdout'], self.output)):
             self.priority()
             if self.frozen:
                 return
-            if pending:
-                try:
-                    count = os.write(fd, pending)
-                except BlockingIOError:
-                    continue
-                if count <= 0:
-                    raise ControlError('relayWriteUncertain')
-                del pending[:count]
+            pending.write(fd, self.dispatch_seen)
 
     def retire(self) -> NoReturn:
         self.frozen = True
@@ -804,6 +899,8 @@ class _Role(_Resources):
                             raise ControlError('controlWriteUncertain')
                         self.control_blocked = False
                         del self.control_out[:count]
+                        if not self.control_out and self.state == 'relaying':
+                            self.running_sent = True
                 select.select([self.fds['control']], [], [], 0.001)
         except BaseException:
             if self.definite_refusal and not self.factory_entered:

@@ -391,9 +391,94 @@ Final review29 inspected the corrected five-file source boundary and returned
 CLEAR/APPROVE with no residual finding. This is scoped role acceptance, not the
 aggregate goal's terminal completion cohort or external acceptance.
 
-## Current minimal SDK/product decision — NOT ADMITTED, 2026-10-14
+Source slice (contract30, implemented below): callable exact
+`--official-sdk-worker`, genuine lazy CodexClient/config/generated-model calls,
+explicit product-mode existing Server (no topology fixture construction), actual
+worker-owned rendezvous/SCM_RIGHTS and retained blocking SDK jobs. No Native
+production launch is added before this real worker and same-Core control support
+exist. Native forwards authenticated dispatching and first revoke D on FD5;
+worker never competes for broker control reads and SDK.close never competes for
+broker waitpid. FD3/4 meanings are unchanged. HOME=cwd=N, CODEX_HOME=N/codex,
+TMPDIR=N/tmp: reuse the actual owned namespace, not a new home/store/FD6.
 
-Whole-Epic continuation is at integration source5f08cc2. This existing Spec, not
+Explicit private dispatch/dispatching phase may end the startup timer and raise
+only the lifetime record allowance from4 to256; startup totals remain retained.
+Both direction cumulative byte totals stay<=262160 FOR THE WHOLE SESSION, never
+reset; individual records<=65540 and pending slots<=4 including partial/scratch.
+This finite-ingress guard replaces the first contract30 suggestion of unrestricted
+ongoing relay, which would not bound SDK router ingress. Pending closed records
+use backpressure, no read-and-drop fifth record; control/revoke retain priority.
+Exhaustion requests sessionLimit, never retry/replacement or a larger allowance.
+Actual owned-scope retirement requests use private revokeNeeded(scopeRetire)
+before terminal uncertainty; no new notifications/descriptor effects after unknown.
+Real SDK imports/authentication/Provider calls remain unperformed and unauthorized;
+offline scripted public-contract objects must never be called real SDK evidence.
+SDKFileObject/queue/content purge remains unproved, requiring permanent retained
+unknown rather than a fake clean result, namespace deletion or voluntary exit.
+
+### Official worker and finite relay source checkpoint — 2026-10-15
+
+The source delta over265384178165ad40e9404c9fe47b5fbc3a6ca3e7 adds
+sdk_worker.py, exact --official-sdk-worker entry and explicit product Server;
+packaging includes byte-identical worker/control resources and import-purity
+checks. Package.swift excludes both Python broker/worker test modules from the
+Swift test target. These are genuine lazy public SDK calls, not SDK execution:
+no openai_codex import/start/initialize/authentication or Provider request ran.
+
+Actual login/cancel/thread/turn objects, late IDs/results/exceptions, blocked jobs,
+notification readers, loop and namespace remain rooted. Wire cancellation never
+releases blocked SDK-job debt. Exact-stage admission gates ordinary SDK work;
+loop-side acceptance revalidates the same stage and retirement fence before
+publishing instructions/usable or committing probe validation. Only an admitted
+ordinary job's actual stage receives its wire-terminal invalidation; unstarted,
+unbound/hello/observe/unowned-paper requests cannot stale an unrelated stage.
+SDK-thread timeout checks refuse work without selecting loop-owned terminals.
+The hello-created global reader remains session-scoped; login/probe readers are
+stage-bound. Unsupported paper scopes fail closed before bookkeeping or account
+retirement; no paper registry/absence record is invented. Matched stage/startup
+retirement asks for actual Native D and never fabricates whole-SDK cleanup proof.
+
+Review34 initially blocked stale successful publication, stale ordinary SDK
+admission and unowned paper retirement (F1–F3). Corrections added scripted
+interleavings, then re-review found F4: binding the global reader to the cancelled
+stage could select unknown before reserved cancellation. The global reader's
+stage argument was removed; its new real scripted-thread interleaving holds the
+reserved cancellation, returns a global notice after stage cancellation, observes
+the second global read without unknown, then verifies actual cancellation runs.
+Final review34 inspected this correction and returned scoped CLEAR/APPROVE with
+F1–F4 resolved and no residual finding; this is not the terminal goal cohort.
+These are scripted public-contract objects, not a fake installed SDK or runtime
+authentication evidence. Review33's bounded-burst follow-up is CLEAR/APPROVE:
+control/watch priority occurs each at-most256-byte burst and payload write, not
+every byte and not a Python wall-clock/preemption guarantee.
+
+Historical affected194 gate failed two physical-role observation deadlines plus
+an injection's missing errno import (artifact649). Import fixed; removing redundant
+per-byte priority polling preserved real five-second assertions, resource/watch
+checks, reservations and counters. Affected194 then passed (654), corrected208
+passed (665), full622 passed (668), and the final F4-corrected full offline union
+passed623 in22.364s (673). Asyncio slow-task diagnostics remain visible. Fresh
+Product514/0 failures/0 errors passed (670), report
+.build/isolated-product-sdk-worker-4B96AE2B-87AB-4FB5-A408-1219B267CD98.json;
+unsigned arm64 Main/all three XPC Release build passed (raw671). Those native
+gates preceded the final worker-only F4 correction; Native/agent source remained
+unchanged. Failed/intermediate evidence is retained rather than relabelled passed.
+
+Public Swift ancillary-macro import failure648 is resolved as an implementation
+input, not a production bridge: direct public sys/socket.h/arm/_param.h align32,
+cmsghdr size and CMSG_LEN/SPACE translations compiled and actually transferred a
+/dev/null descriptor with sendmsg/recvmsg, matching fstat identity and four checked
+closes (.build/public-swift-ancillary.swift). Header12/dataOffset12/len16/space16
+are observed self-ABI values, not invented offsets or signed-child acceptance.
+The Native same-Core WorkerLaunch/control/SCM production route is still absent;
+source authentication/probe does not activate Settings, serialized selector CAS,
+reconnection or dependent purge. SDK FileObjects/internal queues/content closure,
+P1/P3/P6, signed/minimum/current OS acceptance and Story/goal completion remain
+unproved. G002 and aggregate stay active; implementable engineering is not paused.
+
+## Historical minimal SDK/product proposal — initially NOT ADMITTED, 2026-10-14
+
+At this earlier checkpoint integration source was5f08cc2. This existing Spec, not
 a new plan, records the precise next dependency after explicit sole-Provider kind,
 atomic CAS, frozen extraction/retry routing, real pipe transport and shared browser/
 device presentation state. Actual unsigned arm64/macOS15 Main/XPC build and private

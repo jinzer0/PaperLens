@@ -140,6 +140,7 @@ let package = Package(
         "ReportPublicationTests.swift", "ActorIdentityProbe.swift",
         "PDFiumRollTests.cpp", "test_pdfium_roll.py",
         "test_product_grdb.py", "test_account_login.py", "test_isolated_product_tests.py",
+        "test_sdk_broker.py", "test_sdk_worker.py",
       ],
       sources: ["ProviderRPCTests.swift"]
     ),

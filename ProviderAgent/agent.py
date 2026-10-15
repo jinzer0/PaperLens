@@ -1480,10 +1480,14 @@ class Pending:
 
 class Server:
     def __init__(self, runtime: RuntimeProbe | None = None, fixtures: Fixtures | None = None,
-                 session: AttemptSession | None = None) -> None:
-        self.runtime = runtime or RuntimeProbe()
-        self.fixtures = fixtures or Fixtures()
-        self.attempts = AttemptFixtures(session)
+                 session: AttemptSession | None = None, *, mode: str = 'topology',
+                 worker=None) -> None:
+        if mode not in ('topology', 'product') or (mode == 'product' and worker is None):
+            raise ValueError('explicitWorkerRequired')
+        self.mode, self.worker = mode, worker
+        self.runtime = (runtime or RuntimeProbe()) if mode == 'topology' else None
+        self.fixtures = (fixtures or Fixtures()) if mode == 'topology' else None
+        self.attempts = AttemptFixtures(session) if mode == 'topology' else None
         self.seen: set[str] = set()
         self.pending: dict[str, Pending] = {}
         self.runtime_workers: dict[str, asyncio.Task] = {}
@@ -1495,7 +1499,7 @@ class Server:
         self.started = 0.0
 
     def emit(self, value: dict, method: str) -> None:
-        if self.closed:
+        if self.closed or (self.worker is not None and self.worker.unknown):
             return
         validate_terminal(value, method)
         try:
@@ -1514,11 +1518,15 @@ class Server:
 
     def finish(self, identifier: str, *, result: dict | None = None, code: str | None = None,
                cancel: bool = False) -> bool:
+        if self.worker is not None and self.worker.unknown:
+            return False
         record = self.pending.pop(identifier, None)
         if record is None:
             return False
         if record.timer is not None:
             record.timer.cancel()
+        if cancel and self.worker is not None:
+            self.worker.wire_terminal(identifier, code)
         emitted = False
         try:
             if code is not None:
@@ -1544,7 +1552,7 @@ class Server:
         return self.finish(identifier, code=code, cancel=True)
 
     def accept(self, request: dict, *, received: float | None = None) -> None:
-        if self.closed:
+        if self.closed or (self.worker is not None and self.worker.unknown):
             raise ProtocolError('protocolViolation')
         if received is None:
             received = asyncio.get_running_loop().time()
@@ -1572,6 +1580,27 @@ class Server:
         deadline = received + request['timeoutMs'] / 1000
         if asyncio.get_running_loop().time() >= deadline:
             self.error(identifier, 'timeout', method)
+            return
+        if self.mode == 'product':
+            if method == 'cancel':
+                accepted = self.terminate(params['targetID'], 'cancelled')
+                self.emit({'kind': 'result', 'id': identifier, 'result': {'accepted': accepted}}, method)
+                return
+            if not method.startswith('product.'):
+                self.error(identifier, 'unknownMethod', method)
+                return
+            if method == 'product.hello':
+                if self.ready or any(p.method == method for p in self.pending.values()):
+                    self.error(identifier, 'invalidParams', method)
+                    return
+                deadline = min(deadline, self.started + LIMITS['handshakeTimeoutMs'] / 1000)
+            elif not self.ready:
+                self.error(identifier, 'handshakeRequired', method)
+                return
+            record = Pending(method)
+            self.pending[identifier] = record
+            record.timer = asyncio.get_running_loop().call_at(deadline, self.terminate, identifier, 'timeout')
+            record.task = asyncio.create_task(self.execute(request, deadline))
             return
         if method == 'hello':
             if self.ready:
@@ -1638,7 +1667,13 @@ class Server:
             if asyncio.get_running_loop().time() >= deadline:
                 self.terminate(identifier, 'timeout')
                 return
-            if method == 'topology.wait':
+            if self.mode == 'product':
+                result = await self.worker.dispatch(method, params, request_id=identifier, deadline=deadline)
+                if self.worker.unknown:
+                    return
+                if method == 'product.hello' and asyncio.get_running_loop().time() < deadline:
+                    self.ready = True
+            elif method == 'topology.wait':
                 await asyncio.sleep(params['durationMs'] / 1000)
                 result = {'elapsed': True}
             elif method == 'topology.runtime':
@@ -1695,6 +1730,8 @@ class Server:
                 self.terminate(identifier, 'timeout')
             else:
                 self.finish(identifier, code='busy')
+        except ProtocolError as error:
+            self.finish(identifier, code=error.code)
         except Exception:
             if asyncio.get_running_loop().time() >= deadline:
                 self.terminate(identifier, 'timeout')
@@ -1703,14 +1740,20 @@ class Server:
 
     async def serve(self) -> None:
         decoder = FrameDecoder()
+        if self.worker is not None:
+            self.worker.transport_decoder = decoder
         self.started = asyncio.get_running_loop().time()
         loop = asyncio.get_running_loop()
         os.set_blocking(0, False)
         os.set_blocking(1, False)
         async def read_chunk() -> bytes:
+            if self.worker is not None and self.worker.unknown:
+                await self.worker.park_async()
             future = loop.create_future()
             def readable() -> None:
                 if future.done():
+                    return
+                if self.worker is not None and self.worker.unknown:
                     return
                 try:
                     data = os.read(0, 4096)
@@ -1724,8 +1767,11 @@ class Server:
             try:
                 return await future
             finally:
-                loop.remove_reader(0)
+                if self.worker is None or not self.worker.unknown:
+                    loop.remove_reader(0)
         async def writable() -> None:
+            if self.worker is not None and self.worker.unknown:
+                await self.worker.park_async()
             future = loop.create_future()
             def ready() -> None:
                 if not future.done():
@@ -1734,13 +1780,18 @@ class Server:
             try:
                 await future
             finally:
-                loop.remove_writer(1)
+                if self.worker is None or not self.worker.unknown:
+                    loop.remove_writer(1)
         async def write_frames() -> None:
             while True:
                 identifier, frame = await self.outgoing.get()
+                if self.worker is not None:
+                    self.worker.transport_output = (identifier, frame)
                 try:
                     offset = 0
                     while offset < len(frame):
+                        if self.worker is not None and self.worker.unknown:
+                            await self.worker.park_async()
                         try:
                             count = os.write(1, frame[offset:])
                         except BlockingIOError:
@@ -1756,6 +1807,8 @@ class Server:
         fatal = asyncio.create_task(self.fatal.wait())
         try:
             while not self.closed:
+                if self.worker is not None and self.worker.unknown:
+                    await self.worker.park_async()
                 if writer.done():
                     writer.result()
                 timeout = None if self.ready else max(
@@ -1776,12 +1829,16 @@ class Server:
                     if reader not in finished:
                         raise TimeoutError
                     data = reader.result()
+                    if self.worker is not None:
+                        self.worker.transport_input = data
                 finally:
                     reader.cancel()
                     await asyncio.gather(reader, return_exceptions=True)
                 if not data:
                     decoder.finish()
                     break
+                if self.worker is not None and self.worker.unknown:
+                    await self.worker.park_async()
                 received = loop.time()
                 for frame in decoder.feed(data):
                     self.accept(decode_frame(frame), received=received)
@@ -1790,8 +1847,14 @@ class Server:
                 if len(self.seen) == LIMITS['maxRequestsPerConnection']:
                     await asyncio.gather(*(p.task for p in self.pending.values() if p.task), return_exceptions=True)
                     self.closed = True
+            if self.worker is not None:
+                self.worker.select_unknown()
+                await self.worker.park_async()
             await asyncio.wait_for(self.outgoing.join(), 2)
         finally:
+            if self.worker is not None:
+                self.worker.select_unknown()
+                await self.worker.park_async()
             self.closed = True
             remaining = list(self.pending.items())
             for identifier, _ in remaining:
@@ -1808,6 +1871,9 @@ class Server:
 
 
 def main(*, _broker_resource_factory=None) -> int:
+    if sys.argv[1:] == ['--official-sdk-worker']:
+        from sdk_worker import worker_main
+        worker_main(lifecycle_fd=5)
     if sys.argv[1:] == ['--native-broker']:
         from broker_control import native_broker_main
         if _broker_resource_factory is None:

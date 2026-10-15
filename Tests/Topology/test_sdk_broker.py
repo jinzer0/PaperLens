@@ -3,6 +3,7 @@
 Every actual owner lives in a fresh -I -B native Python process. Unknown roots and
 one-shot invocation state are never reset, including by physical fixture teardown.
 """
+import errno
 import importlib.util
 import json
 import os
@@ -498,7 +499,10 @@ class BrokerControlValidationTests(unittest.TestCase):
     def test_closed_frames_split_at_every_byte(self):
         run = str(uuid.uuid4())
         cases = [('hello', {}), ('run', dict(startupDeadlineNs=123, cwdDevice=1, cwdInode=2)),
-                 ('running', {}), ('revokeNeeded', dict(code='cliExit')),
+                 ('running', {}), ('dispatch', {}), ('dispatching', {}),
+                 ('revokeNeeded', dict(code='cliExit')),
+                 ('revokeNeeded', dict(code='sessionLimit')),
+                 ('revokeNeeded', dict(code='scopeRetire')),
                  ('revoke', dict(deadlineNs=123)),
                  ('cliRetired', dict(deadlineNs=123, scope='localDirectCLIResources', waitStatus=0)),
                  ('preLaunchRetired', dict(deadlineNs=123)), ('brokerOffered', {}),
@@ -567,6 +571,191 @@ class BrokerControlValidationTests(unittest.TestCase):
         role = self.control._Role(broker.fixture_stdin_sink)
         role.input_count(b'x' * 65539 + b'\n')
         self.assertEqual((role.input_lines, role.input_partial), (1, 0))
+
+    def test_live_lifetime_boundaries_include_startup_and_never_reset(self):
+        # Pure accounting, not actual CLI/SDK execution evidence.
+        for count_name, lines_name, bytes_name in (
+                ('input_count', 'input_lines', 'input_bytes'),
+                ('stdout_count', 'stdout_lines', 'stdout_bytes')):
+            role = self.control._Role(broker.fixture_cat)
+            count = getattr(role, count_name)
+            count(b'start\n')
+            role.dispatch_seen = True
+            for _ in range(255):
+                count(b'\n')
+            self.assertEqual(getattr(role, lines_name), 256)
+            before = getattr(role, bytes_name)
+            with self.assertRaises(self.control.ControlError):
+                count(b'\n')
+            self.assertEqual(getattr(role, bytes_name), before)
+            role = self.control._Role(broker.fixture_cat)
+            role.dispatch_seen = True
+            count = getattr(role, count_name)
+            for _ in range(4):
+                count(b'x' * 65539 + b'\n')
+            self.assertEqual(getattr(role, bytes_name), 262160)
+            with self.assertRaises(self.control.ControlError):
+                count(b'x')
+            self.assertEqual(getattr(role, bytes_name), 262160)
+
+    def test_dispatch_authenticated_phase_snapshot_and_cleanup_priority(self):
+        # Injected control reads only; kernel authority is tested by _ROLE_CASE.
+        run = str(uuid.uuid4())
+        role = self.control._Role(broker.fixture_cat)
+        role.run_id = run
+        role.fds['control'] = 999
+        role.state = 'relaying'
+        role.running_sent = True
+        role.startup_deadline = 100
+        role.input_count(b'prefix\x00')
+        def receive(raw):
+            with patch.object(self.control.os, 'read', side_effect=[raw[:4], raw[4:], BlockingIOError()]):
+                role.receive()
+        with patch.object(self.control.time, 'monotonic_ns', return_value=1):
+            receive(self.control.encode_control(run, 'dispatch'))
+        self.assertTrue(role.dispatch_seen)
+        snapshot = role.startup_counters
+        self.assertEqual(snapshot, (7, 0, 7, 0, 0, 0, 0))
+        self.assertEqual(self.decode(bytes(role.control_out))['op'], 'dispatching')
+        role.input_count(b' continuation\n')
+        self.assertEqual(role.startup_counters, snapshot)
+        with self.assertRaises(self.control.ControlError):
+            receive(self.control.encode_control(run, 'dispatch'))
+        with patch.object(role, 'receive'), patch.object(role, 'observe'), \
+                patch.object(self.control.time, 'monotonic_ns', return_value=200):
+            role.priority()  # Dispatch disables only the startup timer.
+            self.assertFalse(role.frozen)
+            role.deadline = 250
+            with patch.object(role, 'retire', side_effect=RuntimeError('actualD')) as retire:
+                with self.assertRaisesRegex(RuntimeError, 'actualD'):
+                    role.priority()
+                retire.assert_called_once_with()
+        for state, sent, stale in (('awaitingRun', False, False),
+                                    ('relaying', False, False), ('relaying', True, True)):
+            role = self.control._Role(broker.fixture_cat)
+            role.run_id, role.fds['control'] = run, 999
+            role.state, role.running_sent = state, sent
+            role.startup_deadline = 100
+            raw = self.control.encode_control(str(uuid.uuid4()) if stale else run, 'dispatch')
+            with patch.object(self.control.os, 'read', side_effect=[raw[:4], raw[4:]]), \
+                    patch.object(self.control.time, 'monotonic_ns', return_value=1):
+                with self.assertRaises(self.control.ControlError):
+                    role.receive()
+            self.assertFalse(role.dispatch_seen)
+
+    def test_real_pipe_four_slots_partial_head_and_no_fifth_read(self):
+        # Real nonblocking pipe pressure, not an SDK queue/purge claim.
+        pending = self.control._RelayBuffer()
+        source, writer = os.pipe()
+        sink, destination = os.pipe()
+        try:
+            for fd in (source, writer, sink, destination):
+                os.set_blocking(fd, False)
+            os.write(writer, b'a\nb\nc\nd\ne\n')
+            for _ in range(8):
+                self.assertIsNotNone(pending.read_byte(source))
+            self.assertEqual((pending.slots, pending.bytes), (4, 8))
+            self.assertIsNone(pending.read_byte(source))
+            # Fill the actual destination, then verify the head stays rooted.
+            while True:
+                try:
+                    os.write(destination, b'p' * 4096)
+                except BlockingIOError:
+                    break
+            first = pending.closed[0]
+            pending.write(destination, True)
+            self.assertIs(pending.closed[0], first)
+            self.assertEqual(pending.slots, 4)
+            while True:
+                try:
+                    os.read(sink, 4096)
+                except BlockingIOError:
+                    break
+            # Injected short write delegates the actual byte to the real pipe.
+            actual_write = os.write
+            with patch.object(self.control.os, 'write', side_effect=lambda fd, data: actual_write(fd, data[:1])):
+                pending.write(destination, True)
+            self.assertEqual((pending.slots, pending.bytes), (4, 7))
+            self.assertIsNone(pending.read_byte(source))
+            pending.write(destination, True)
+            self.assertEqual(pending.slots, 3)
+            self.assertEqual(pending.read_byte(source), ord('e'))
+            self.assertEqual(pending.read_byte(source), 10)
+            self.assertEqual(pending.slots, 4)
+            self.assertEqual(os.read(sink, 2), b'a\n')
+            self.assertEqual([bytes(record) for record in pending.closed], [b'b\n', b'c\n', b'd\n', b'e\n'])
+        finally:
+            for fd in (source, writer, sink, destination):
+                os.close(fd)
+
+    def test_real_pipe_session_limit_freezes_before_fifth_and_waits_for_actual_d(self):
+        # Inject only priority/kernel watching; these are real pipe bytes, not SDK evidence.
+        role = self.control._Role(broker.fixture_cat)
+        role.run_id = str(uuid.uuid4())
+        source, writer = os.pipe()
+        empty, empty_writer = os.pipe()
+        sink, destination = os.pipe()
+        try:
+            for fd in (source, writer, empty, empty_writer, sink, destination):
+                os.set_blocking(fd, False)
+            role.fds.update(stdin=source, stdout=destination)
+            role.endpoints = dict(stdin=destination, stdout=empty, stderr=empty)
+            os.write(writer, b'a\nb\nc\nd\ne\n')
+            with patch.object(role, 'priority'):
+                for _ in range(5):
+                    role.relay_once()
+            self.assertTrue(role.frozen)
+            self.assertIsNone(role.deadline)
+            self.assertEqual((role.input_bytes, role.input_lines), (8, 4))
+            self.assertEqual(os.read(source, 2), b'e\n')
+            self.assertEqual(self.decode(bytes(role.control_out))['code'], 'sessionLimit')
+            snapshot = (role.input_bytes, role.input.slots, role.input.bytes)
+            with patch.object(role, 'priority'), patch.object(self.control.os, 'readv') as readv, \
+                    patch.object(self.control.os, 'write') as write:
+                role.relay_once()
+                readv.assert_not_called()
+                write.assert_not_called()
+            self.assertEqual((role.input_bytes, role.input.slots, role.input.bytes), snapshot)
+        finally:
+            for fd in (source, writer, empty, empty_writer, sink, destination):
+                os.close(fd)
+
+    def test_read_reservation_stays_rooted_on_uncertain_syscall(self):
+        # Injected failure, never a claim that the OS actually returned uncertain IO.
+        pending = self.control._RelayBuffer()
+        with patch.object(self.control.os, 'readv', side_effect=OSError(errno.EIO, 'injected')):
+            with self.assertRaises(OSError):
+                pending.read_byte(999)
+        self.assertEqual((pending.slots, pending.bytes), (1, 1))
+        self.assertEqual(pending.partial, b'\x00')
+
+    def test_real_pipe_startup_prefix_transition_never_replays(self):
+        pending = self.control._RelayBuffer()
+        source, writer = os.pipe()
+        sink, destination = os.pipe()
+        try:
+            os.set_blocking(source, False)
+            os.set_blocking(sink, False)
+            os.write(writer, b'opaque\x00')
+            for _ in range(7):
+                pending.read_byte(source)
+            pending.write(destination, False)
+            self.assertEqual(os.read(sink, 7), b'opaque\x00')
+            self.assertEqual((pending.slots, pending.bytes), (1, 0))
+            os.write(writer, b' tail')
+            for _ in range(5):
+                pending.read_byte(source)
+            pending.write(destination, True)
+            with self.assertRaises(BlockingIOError):
+                os.read(sink, 1)
+            os.write(writer, b'\n')
+            pending.read_byte(source)
+            pending.write(destination, True)
+            self.assertEqual(os.read(sink, 6), b' tail\n')
+            self.assertEqual((pending.slots, pending.bytes), (0, 0))
+        finally:
+            for fd in (source, writer, sink, destination):
+                os.close(fd)
 
     def test_single_deadline_and_sticky_primitive_observation(self):
         now = 9_000_000_000
@@ -706,7 +895,7 @@ assert case != 'longCwd' or len(os.fsencode(root)) > 104
 cwd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
 original = os.stat('.')
 run = str(uuid.uuid4())
-startup = time.monotonic_ns() + 8_000_000_000
+startup = time.monotonic_ns() + (3_000_000_000 if case == 'dispatchDeadline' else 8_000_000_000)
 report_r, report_w = os.pipe()
 native, lifecycle = socket.socketpair()
 worker = os.fork()
@@ -780,6 +969,7 @@ if worker == 0:
         raw_write = os.write
         factory_calls = []
         close_calls = []
+        physical_pressure = []
         original_close = control._Role.close
         original_park = control._Role.park
         original_send_pending = control._Role.send_pending
@@ -798,7 +988,11 @@ if worker == 0:
                 else:
                     assert not factory_calls and not broker._INVOKED
             packet(evidence_w, dict(exit=status, calls=len(factory_calls),
-                                    closes=close_calls, state=role.state))
+                                    closes=close_calls, state=role.state,
+                                    inputBytes=role.input_bytes, stdoutBytes=role.stdout_bytes,
+                                    inputLines=role.input_lines, stdoutLines=role.stdout_lines,
+                                    startupCounters=role.startup_counters,
+                                    physicalPressure=len(physical_pressure)))
             raw_exit(status)
 
         def fixture_park(role):
@@ -873,7 +1067,7 @@ if worker == 0:
             assert environment['HOME'] == str(root)
             chosen = broker.fixture_true if case == 'earlyExit' else (
                 broker.fixture_fork if case == 'fork' else (
-                    broker.fixture_stdin_sink if case in ('inputRecordFlood', 'inputLineFlood')
+                    broker.fixture_stdin_sink if case in ('inputRecordFlood', 'inputLineFlood', 'dispatchSink', 'dispatchBytes')
                     else broker.fixture_cat))
             cli = chosen(fd, environment)
             if case == 'fork':
@@ -900,6 +1094,15 @@ if worker == 0:
                 assert exact(teardown_r, 1) == b'R'
             return cli
 
+        if case == 'dispatchPressure':
+            def observed_write(fd, data):
+                try:
+                    return raw_write(fd, data)
+                except BlockingIOError:
+                    if fd == 1:
+                        physical_pressure.append(True)  # Actual kernel EAGAIN, not injection.
+                    raise
+            os.write = observed_write
         if case == 'partialIO':
             attempts = {}
             def partial_write(fd, data):
@@ -993,6 +1196,8 @@ if worker == 0:
         os.write(fd, raw)
         retired = message(fd)
         assert retired['op'] == 'preLaunchRetired'
+    elif case == 'earlyDispatch':
+        send(fd, run, 'dispatch')
     else:
         info = os.fstat(cwd)
         send(fd, run, 'run', startupDeadlineNs=startup, cwdDevice=info.st_dev,
@@ -1009,6 +1214,29 @@ if worker == 0:
         else:
             running = message(fd)
             assert running['op'] == 'running'
+            if case.startswith('dispatch') or case in ('duplicateDispatch', 'staleDispatch'):
+                if case == 'dispatchPartial':
+                    os.write(parent_in, b'prefix\x00')
+                    assert exact(parent_out, 7) == b'prefix\x00'
+                send(fd, run, 'dispatch')
+                ack = message(fd)
+                assert ack == dict(v=1, runID=run, op='dispatching')
+                if case == 'dispatchDeadline':
+                    time.sleep(max(0, (startup - time.monotonic_ns()) / 1e9) + 0.05)
+                if case in ('dispatchCat', 'dispatchPartial', 'dispatchDeadline'):
+                    payload = b'opaque\x00 live\n' if case != 'dispatchPartial' else b' tail\n'
+                    os.write(parent_in, payload)
+                    assert exact(parent_out, len(payload)) == payload
+                if case == 'dispatchSink':
+                    os.write(parent_in, b'not echoed\x00\n')
+                    assert not select.select([parent_out], [], [], 0.02)[0]
+                if case == 'dispatchPressure':
+                    payload = (b'opaque\x00' + b'x' * 64992 + b'\n') * 4
+                    assert len(payload) == 260000
+                    for offset in range(0, len(payload), 4096):
+                        os.write(parent_in, payload[offset:offset + 4096])
+                    time.sleep(0.05)  # Parent deliberately withholds the real pipe drain.
+                    assert exact(parent_out, len(payload)) == payload
             if case in ('cat', 'longCwd', 'partialIO'):
                 for data in (b'opaque\x00', b' split', b'\nsecond\n'):
                     os.write(parent_in, data)
@@ -1016,7 +1244,19 @@ if worker == 0:
             if case == 'earlyExit':
                 needed = message(fd)
                 assert needed['op'] == 'revokeNeeded' and needed['code'] in ('cliExit', 'stdioEOF')
-            if case == 'inputRecordFlood':
+            if case == 'dispatchRecords':
+                for _ in range(255):
+                    os.write(parent_in, b'x\n')
+                    assert exact(parent_out, 2) == b'x\n'
+                os.write(parent_in, b'last\nnot admitted\n')
+            elif case == 'dispatchBytes':
+                data = (b'x' * 65539 + b'\n') * 4 + b'!'
+                while data:
+                    count = os.write(parent_in, data[:4096])
+                    data = data[count:]
+            elif case in ('duplicateDispatch', 'staleDispatch'):
+                send(fd, str(uuid.uuid4()) if case == 'staleDispatch' else run, 'dispatch')
+            elif case == 'inputRecordFlood':
                 os.write(parent_in, b'a\nb\nc\nd\ne\n')
             elif case == 'inputLineFlood':
                 data = b'x' * 65541
@@ -1024,10 +1264,10 @@ if worker == 0:
                     count = os.write(parent_in, data[:4096])
                     data = data[count:]
             elif case == 'cumulativeFlood':
-                for _ in range(4):
+                for _ in range(3):
                     os.write(parent_in, b'x\n')
                     assert exact(parent_out, 2) == b'x\n'
-                os.write(parent_in, b'fifth\n')
+                os.write(parent_in, b'fourth\nfifth\n')
             elif case == 'lineFlood':
                 data = b'x' * 65541
                 while data:
@@ -1054,7 +1294,7 @@ if worker == 0:
             else:
                 deadline = time.monotonic_ns() + 300_000_000
                 raw = control.encode_control(run, 'revoke', deadlineNs=deadline)
-                if case == 'duplicateDeadline':
+                if case in ('duplicateDeadline', 'dispatchDuplicateDeadline'):
                     raw += raw
                 if case == 'changedDeadline':
                     raw += control.encode_control(run, 'revoke', deadlineNs=deadline - 1)
@@ -1065,8 +1305,16 @@ if worker == 0:
                     retired = message(fd)
                     assert retired['op'] == 'cliRetired' and retired['deadlineNs'] == deadline
                     assert retired['scope'] == 'localDirectCLIResources'
-    unknown = case in ('fork', 'watchError', 'wrongNamespace', 'waitECHILD', 'cumulativeFlood', 'lineFlood',
-        'inputRecordFlood', 'inputLineFlood', 'controlEOF',
+    if case in ('cumulativeFlood', 'lineFlood', 'inputRecordFlood', 'inputLineFlood', 'dispatchRecords', 'dispatchBytes'):
+        needed = message(fd)
+        assert needed['op'] == 'revokeNeeded' and needed['code'] == 'sessionLimit'
+        deadline = time.monotonic_ns() + 300_000_000
+        send(fd, run, 'revoke', deadlineNs=deadline)
+        retired = message(fd)
+        assert retired['op'] == 'cliRetired' and retired['deadlineNs'] == deadline
+        assert retired['scope'] == 'localDirectCLIResources'
+    unknown = case in ('fork', 'watchError', 'wrongNamespace', 'waitECHILD', 'controlEOF',
+        'earlyDispatch', 'duplicateDispatch', 'staleDispatch',
         'badLength', 'badJSON', 'duplicateRun', 'boolDeadline', 'floatDeadline',
         'expiredDeadline', 'farDeadline', 'changedDeadline', 'afterCleanClose', 'afterCleanEINTR', 'afterCleanSend',
         'partialControl', 'lateClose')
@@ -1081,7 +1329,7 @@ if worker == 0:
             assert evidence['cli']['state'] == 'clean' and not evidence['live']['control']
         elif case in ('partialControl', 'lateClose'):
             assert evidence['cli']['state'] == 'clean' and evidence['live']['control']
-        elif case == 'wrongNamespace':
+        elif case in ('wrongNamespace', 'earlyDispatch'):
             assert evidence['cli'] is None and not evidence['factoryEntered']
         else:
             assert evidence['cli']['state'] == 'unknown'
@@ -1099,6 +1347,18 @@ if worker == 0:
         assert record.wait_status == 0 and time.monotonic_ns() < deadline
         evidence = message(evidence_r)
         assert evidence['exit'] == 0 and evidence['state'] == 'clean'
+        assert evidence['inputBytes'] <= 262160 and evidence['stdoutBytes'] <= 262160
+        if case == 'dispatchRecords':
+            assert evidence['inputLines'] == 256 and evidence['inputBytes'] == 515
+        if case == 'dispatchBytes':
+            assert evidence['inputBytes'] == 262160 and evidence['inputLines'] == 4
+            assert evidence['stdoutBytes'] == 0
+        if case == 'dispatchPartial':
+            assert evidence['startupCounters'] == [7, 0, 7, 7, 0, 7, 0]
+            assert evidence['inputBytes'] == 13 and evidence['stdoutBytes'] == 13
+        if case == 'dispatchPressure':
+            assert evidence['physicalPressure'] > 0
+            assert evidence['inputBytes'] == 260000 and evidence['stdoutBytes'] == 260000
         assert evidence['calls'] == (0 if case in ('preFactory', 'preFactoryRun', 'preHelloRevoke') else 1)
         rendezvous.retire(deadline)
         assert rendezvous.state == 'clean'
@@ -1322,12 +1582,16 @@ os.close(fd)
             self.assertEqual(result.returncode, 0, result.stderr.decode('utf-8', 'replace'))
 
     def test_actual_fresh_role_lifecycle_and_retained_unknown(self):
-        unknown = {'fork', 'watchError', 'wrongNamespace', 'waitECHILD', 'cumulativeFlood', 'lineFlood',
-                   'inputRecordFlood', 'inputLineFlood', 'controlEOF',
+        unknown = {'fork', 'watchError', 'wrongNamespace', 'waitECHILD', 'controlEOF',
+                   'earlyDispatch', 'duplicateDispatch', 'staleDispatch',
                    'badLength', 'badJSON', 'duplicateRun', 'boolDeadline', 'floatDeadline',
                    'expiredDeadline', 'farDeadline', 'changedDeadline', 'afterCleanClose', 'afterCleanEINTR', 'afterCleanSend',
                    'partialControl', 'lateClose'}
         cases = ('cat', 'partialIO', 'earlyExit', 'preFactory', 'preFactoryRun', 'preHelloRevoke', 'factoryRevoke', 'longCwd',
+                 'cumulativeFlood', 'lineFlood', 'inputRecordFlood', 'inputLineFlood',
+                 'dispatchCat', 'dispatchPartial', 'dispatchDeadline', 'dispatchSink', 'dispatchRecords', 'dispatchBytes',
+                 'dispatchDuplicateDeadline',
+                 'dispatchPressure',
                  'duplicateDeadline', 'scmRights', 'wrongParent', *sorted(unknown))
         for case in cases:
             with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:

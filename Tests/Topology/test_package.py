@@ -222,6 +222,7 @@ class PackagingTests(unittest.TestCase):
         self.file("ProviderAgent/account_login.py", b"# private account controller fixture\n")
         self.file("ProviderAgent/broker.py", b"# owned CLI fixture\n")
         self.file("ProviderAgent/broker_control.py", b"# private lifecycle fixture\n")
+        self.file("ProviderAgent/sdk_worker.py", b"# official worker fixture\n")
         self.file("Contracts/ProviderRPC/provider_rpc.py")
         self.file("Contracts/ProviderRPC/contract.json", b"{}")
         framework = package.install_runtime(app, runtime, cli.relative_to(runtime), self.root)
@@ -232,6 +233,8 @@ class PackagingTests(unittest.TestCase):
         self.assertEqual((agent / "Resources/broker.py").read_bytes(), b"# owned CLI fixture\n")
         self.assertEqual((agent / "Resources/broker_control.py").read_bytes(),
                          b"# private lifecycle fixture\n")
+        self.assertEqual((agent / "Resources/sdk_worker.py").read_bytes(),
+                         b"# official worker fixture\n")
         self.assertEqual((agent / "MacOS/python3").resolve(), version / "bin/python3.13")
         self.assertEqual((agent / "MacOS/codex").resolve(), version / cli.relative_to(runtime))
         self.assertFalse((version / cli.relative_to(runtime)).is_symlink())
@@ -250,13 +253,13 @@ class PackagingTests(unittest.TestCase):
         runtime, cli, _ = self.runtime()
         repository = MODULE_PATH.parents[2]
         for relative in ("ProviderAgent/agent.py", "ProviderAgent/account_login.py", "ProviderAgent/broker.py",
-                         "ProviderAgent/broker_control.py",
+                         "ProviderAgent/broker_control.py", "ProviderAgent/sdk_worker.py",
                          "Contracts/ProviderRPC/provider_rpc.py", "Contracts/ProviderRPC/contract.json"):
             self.file(relative, (repository / relative).read_bytes())
         package.install_runtime(app, runtime, cli.relative_to(runtime), self.root)
         resources = app / "Contents/XPCServices/ProviderAgent.xpc/Contents/Resources"
         for relative in ("ProviderAgent/agent.py", "ProviderAgent/account_login.py", "ProviderAgent/broker.py",
-                         "ProviderAgent/broker_control.py",
+                         "ProviderAgent/broker_control.py", "ProviderAgent/sdk_worker.py",
                          "Contracts/ProviderRPC/provider_rpc.py", "Contracts/ProviderRPC/contract.json"):
             self.assertEqual((resources / Path(relative).name).read_bytes(),
                              (repository / relative).read_bytes())
@@ -287,36 +290,62 @@ class PackagingTests(unittest.TestCase):
         control_spec = importlib.util.spec_from_file_location(
             "_packaged_broker_control_fixture", resources / "broker_control.py")
         control = importlib.util.module_from_spec(control_spec)
+        agent_spec = importlib.util.spec_from_file_location(
+            "_packaged_agent_fixture", resources / "agent.py")
+        agent_module = importlib.util.module_from_spec(agent_spec)
+        worker_spec = importlib.util.spec_from_file_location(
+            "_packaged_sdk_worker_fixture", resources / "sdk_worker.py")
+        worker = importlib.util.module_from_spec(worker_spec)
+        # Preload standard-library socket subclasses before forbidding explicit
+        # socket construction; the copied product modules still execute guarded.
+        importlib.import_module("asyncio")
         original_import = __import__
+        original_import_module = importlib.import_module
 
         def closed_import(name, *args, **kwargs):
             if name == "openai_codex" or name.startswith("openai_codex."):
                 raise AssertionError("packaged broker imported SDK")
             return original_import(name, *args, **kwargs)
 
+        def closed_import_module(name, *args, **kwargs):
+            if name == "openai_codex" or name.startswith("openai_codex."):
+                raise AssertionError("packaged worker dynamically imported SDK")
+            return original_import_module(name, *args, **kwargs)
+
         forbidden = AssertionError("packaged broker performed an import-time native effect")
         with patch.dict(sys.modules, {broker_spec.name: broker, "broker": broker,
-                                      control_spec.name: control, "provider_rpc": rpc}), \
+                                      control_spec.name: control, "broker_control": control,
+                                      agent_spec.name: agent_module, "agent": agent_module,
+                                      worker_spec.name: worker, "provider_rpc": rpc,
+                                      "account_login": login}), \
                 patch("builtins.__import__", side_effect=closed_import), \
+                patch("importlib.import_module", side_effect=closed_import_module), \
                 patch("ctypes.CDLL", side_effect=forbidden), \
                 patch("subprocess.Popen", side_effect=forbidden), \
                 patch("os.posix_spawn", side_effect=forbidden), \
+                patch("os.open", side_effect=forbidden), \
+                patch("os.dup", side_effect=forbidden), \
+                patch("os.chdir", side_effect=forbidden), \
+                patch("os.fchdir", side_effect=forbidden), \
+                patch("threading.Thread.__init__", side_effect=forbidden), \
                 patch("socket.socket", side_effect=forbidden), \
                 patch("select.kqueue", create=True, side_effect=forbidden):
             broker_spec.loader.exec_module(broker)
             control_spec.loader.exec_module(control)
+            agent_spec.loader.exec_module(agent_module)
+            worker_spec.loader.exec_module(worker)
 
     def test_agent_resources_missing_or_symlink_refuses_before_runtime_copy(self):
         parent = self.root
         for resource, kind in ((resource, kind)
-                               for resource in ("account_login.py", "broker.py", "broker_control.py")
+                               for resource in ("account_login.py", "broker.py", "broker_control.py", "sdk_worker.py")
                                for kind in ("missing", "directory", "source_symlink", "destination_symlink")):
             with self.subTest(resource=resource, kind=kind):
                 self.root = parent / resource / kind
                 app = self.app()
                 runtime, cli, _ = self.runtime()
                 self.file("ProviderAgent/agent.py")
-                for other in ("account_login.py", "broker.py", "broker_control.py"):
+                for other in ("account_login.py", "broker.py", "broker_control.py", "sdk_worker.py"):
                     if other != resource:
                         self.file("ProviderAgent/" + other)
                 self.file("Contracts/ProviderRPC/provider_rpc.py")
@@ -616,6 +645,7 @@ class PackagingTests(unittest.TestCase):
         self.file("ProviderAgent/account_login.py")
         self.file("ProviderAgent/broker.py")
         self.file("ProviderAgent/broker_control.py")
+        self.file("ProviderAgent/sdk_worker.py")
         self.file("Contracts/ProviderRPC/provider_rpc.py")
         self.file("Contracts/ProviderRPC/contract.json", b"{}")
         order = []
