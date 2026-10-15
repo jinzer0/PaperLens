@@ -278,6 +278,7 @@ def install_runtime(app, runtime, cli_relative, root):
     sources = (
         (root / "ProviderAgent/agent.py", "agent.py"),
         (root / "ProviderAgent/account_login.py", "account_login.py"),
+        (root / "ProviderAgent/broker.py", "broker.py"),
         (root / "Contracts/ProviderRPC/provider_rpc.py", "provider_rpc.py"),
         (root / "Contracts/ProviderRPC/contract.json", "contract.json"),
     )

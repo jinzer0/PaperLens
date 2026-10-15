@@ -2,6 +2,16 @@ import Darwin
 import Dispatch
 import Foundation
 
+/// Implemented by the actual transport owner in the Main-only adapter, never a proof payload.
+@MainActor
+internal protocol OwnedChildTransport: AnyObject, Sendable {
+  var ownerIdentity: UUID { get }
+  var checkedEndpointsClosed: Bool { get }
+  func requestClose()
+  func releaseCleanRoot()
+  func testingPhysicalTeardown()
+}
+
 /// Native direct-child retirement. Clean proves owned retirement, not metadata admission or SDK work.
 public final class OwnedChildRetirement: @unchecked Sendable {
   public enum Fixture: Sendable { case trueUtility, cat }
@@ -11,12 +21,12 @@ public final class OwnedChildRetirement: @unchecked Sendable {
     let script: URL
     let reference: String
   }
-  private enum Command: Sendable {
+  internal enum Command: Sendable {
     case fixture(Fixture, URL)
     case backup(BackupLaunch)
   }
-  public enum Failure: Sendable, Equatable {
-    case deadline, setup, spawn, close, wait, admissionBlocked
+  public enum Failure: Error, Sendable, Equatable {
+    case deadline, setup, spawn, close, wait, admissionBlocked, revoked
   }
   public struct Proof: Sendable, Equatable {
     public let checkedDescriptorCloses: Int
@@ -34,6 +44,8 @@ public final class OwnedChildRetirement: @unchecked Sendable {
     // Private EBADF injection leaves the real descriptor owned, never certifies closure.
     var closeFault: @Sendable () -> Bool = { false }
     var afterPipeFault: @Sendable () -> Bool = { false }
+    var beforeChannelSetup: @Sendable () -> Void = {}
+    var afterClose: @Sendable () -> Void = {}
   }
 
   // Lifetime roots, not a second product store. Unknown debt permanently closes admission.
@@ -56,10 +68,11 @@ public final class OwnedChildRetirement: @unchecked Sendable {
     }
   }
 
-  private final class Core: @unchecked Sendable {
+  internal final class Core: @unchecked Sendable {
     let identity = UUID()
     let command: Command
-    let deadline: UInt64
+    var deadline: UInt64
+    let runningFixture: Bool
     let hooks: Hooks
     // Prepared before the invocation. The terminal lane never joins the operation lane.
     let operation = DispatchQueue(label: "PaperLens.fixture.child.operation")
@@ -76,11 +89,224 @@ public final class OwnedChildRetirement: @unchecked Sendable {
     // Setup handles are real ownership too and survive partial setup/expiry.
     var actions: posix_spawn_file_actions_t?
     var attributes: posix_spawnattr_t?
+    var startupTimer: DispatchSourceTimer?
+    var revoked = false
+    var handoff = false
+    var endpoints: (Int32, Int32)?
+    var channel: (any OwnedChildTransport)?
+    var stderrSource: DispatchSourceRead?
+    var stderrJoined = true
+    var cleanupQueued = false
+    var readyFailure: (@MainActor @Sendable (Failure) -> Void)?
+    var consumeTransport: (@MainActor @Sendable (Core) -> Void)?
 
-    init(command: Command, deadline: UInt64, hooks: Hooks) {
+    init(command: Command, deadline: UInt64, hooks: Hooks, runningFixture: Bool = false) {
       self.command = command
       self.deadline = deadline
       self.hooks = hooks
+      self.runningFixture = runningFixture
+    }
+    var allowsIO: Bool {
+      lock.withLock {
+        terminal == nil && !revoked && DispatchTime.now().uptimeNanoseconds < deadline
+      }
+    }
+    @MainActor
+    func begin(
+      _ startupDeadline: UInt64,
+      consume: @escaping @MainActor @Sendable (Core) -> Void,
+      failure: @escaping @MainActor @Sendable (Failure) -> Void
+    ) {
+      let first = lock.withLock { () -> Bool in
+        guard !invoked else { return false }
+        invoked = true
+        deadline = startupDeadline
+        readyFailure = failure
+        consumeTransport = consume
+        return true
+      }
+      guard first else { return }
+      guard Roots.shared.admit(self) else {
+        failed(.admissionBlocked)
+        return
+      }
+      let source = DispatchSource.makeTimerSource(queue: terminalLane)
+      source.setEventHandler { @Sendable [self] in revoke(startupOnly: true) }
+      source.schedule(
+        deadline: DispatchTime(uptimeNanoseconds: startupDeadline), leeway: .nanoseconds(0))
+      lock.withLock { startupTimer = source }
+      source.resume()
+      operation.async { [self] in run() }
+    }
+    @discardableResult
+    func revoke(startupOnly: Bool = false) -> UInt64 {
+      guard runningFixture else {
+        invoke()
+        return lock.withLock { deadline }
+      }
+      var needsAdmission = false
+      let first = lock.withLock { () -> Bool in
+        guard !revoked else { return false }
+        if startupOnly {
+          guard startupTimer != nil, DispatchTime.now().uptimeNanoseconds >= deadline else {
+            return false
+          }
+        }
+        needsAdmission = !invoked
+        invoked = true
+        revoked = true
+        deadline = DispatchTime.now().uptimeNanoseconds + 300_000_000
+        return true
+      }
+      if first {
+        if needsAdmission, !Roots.shared.admit(self) {
+          select(.unknown(.admissionBlocked))
+          return lock.withLock { deadline }
+        }
+        let source = DispatchSource.makeTimerSource(queue: terminalLane)
+        source.setEventHandler { [self] in select(.unknown(.deadline)) }
+        let (deadline, startup) = lock.withLock { () -> (UInt64, DispatchSourceTimer?) in
+          let startup = startupTimer
+          startupTimer = nil
+          timer = source
+          return (self.deadline, startup)
+        }
+        startup?.cancel()
+        source.schedule(
+          deadline: DispatchTime(uptimeNanoseconds: deadline), leeway: .nanoseconds(0))
+        source.resume()
+        resolveStartupFailure(startupOnly ? .deadline : .revoked)
+        operation.async { [self] in beginRunningCleanup() }
+      }
+      return lock.withLock { deadline }
+    }
+    func reservedEndpoints() throws -> (Int32, Int32) {
+      try lock.withLock {
+        guard handoff, let endpoints else { throw Failure.setup }
+        return endpoints
+      }
+    }
+    @MainActor
+    func markRunning() -> Bool {
+      var startup: DispatchSourceTimer?
+      let accepted = lock.withLock { () -> Bool in
+        guard terminal == nil, !revoked,
+          DispatchTime.now().uptimeNanoseconds < deadline
+        else { return false }
+        startup = startupTimer
+        startupTimer = nil
+        deadline = UInt64.max
+        readyFailure = nil
+        return true
+      }
+      startup?.cancel()
+      if !accepted { revoke(startupOnly: true) }
+      return accepted
+    }
+    @MainActor
+    func capture(_ actual: any OwnedChildTransport) {
+      lock.withLock {
+        channel = actual
+        if let endpoints {
+          descriptors.remove(endpoints.0)
+          descriptors.remove(endpoints.1)
+        }
+        endpoints = nil
+        handoff = false
+      }
+      // Even a late capture remains retained. No effects are authorized after unknown.
+      if lock.withLock({ terminal == nil && revoked }) {
+        operation.async { [self] in beginRunningCleanup() }
+      }
+    }
+    func permitChannelClose() -> Bool { permit(.close) }
+    func recordChannelClose(_ closed: Bool) {
+      if closed { lock.withLock { closes += 1 } }
+      _ = withinDeadline()
+    }
+    @MainActor
+    func channelClosed(ownerIdentity: UUID) {
+      guard let actual = lock.withLock({ terminal == nil ? channel : nil }),
+        actual.ownerIdentity == ownerIdentity
+      else { return }
+      guard actual.checkedEndpointsClosed else {
+        failed(.close)
+        return
+      }
+      operation.async { [self] in beginRunningCleanup() }
+    }
+    func beginRunningCleanup() {
+      guard lock.withLock({ revoked }) else { return }
+      guard withinDeadline() else { return }
+      let state = lock.withLock { (handoff, channel, stderrSource, stderrJoined) }
+      guard !state.0 else { return }
+      if let source = state.2 {
+        lock.withLock { stderrSource = nil }
+        source.cancel()
+        return  // cancel handler joins the actual discard work on this same lane
+      }
+      guard state.3 else { return }
+      if let actual = state.1 {
+        Task { @MainActor [self] in
+          guard withinDeadline() else { return }
+          if actual.checkedEndpointsClosed {
+            operation.async { [self] in finishRunningCleanup() }
+          } else {
+            actual.requestClose()
+          }
+        }
+      } else {
+        finishRunningCleanup()
+      }
+    }
+    func finishRunningCleanup() {
+      guard withinDeadline() else { return }
+      let first = lock.withLock { () -> Bool in
+        guard !cleanupQueued else { return false }
+        cleanupQueued = true
+        return true
+      }
+      guard first else { return }
+      if actions != nil {
+        guard permit(.close) else { return }
+        let result = posix_spawn_file_actions_destroy(&actions)
+        if result == 0 { actions = nil }
+        guard withinDeadline() else { return }
+        guard result == 0 else {
+          failed(.setup)
+          return
+        }
+      }
+      if attributes != nil {
+        guard permit(.close) else { return }
+        let result = posix_spawnattr_destroy(&attributes)
+        if result == 0 { attributes = nil }
+        guard withinDeadline() else { return }
+        guard result == 0 else {
+          failed(.setup)
+          return
+        }
+      }
+      // Channel has joined its actual IO before its checked physical closure.
+      let remaining = lock.withLock { descriptors }
+      for fd in remaining { guard closeOwned(fd) else { return } }
+      let pid = lock.withLock { child }
+      guard let pid, permit(.wait) else {
+        failed(.wait)
+        return
+      }
+      var status: Int32 = 0
+      let result = waitpid(pid, &status, 0)
+      if result == pid { lock.withLock { reaped = true } }
+      guard withinDeadline() else { return }
+      guard result == pid else {
+        failed(.wait)
+        return
+      }
+      let proof = lock.withLock {
+        Proof(checkedDescriptorCloses: closes, childReaped: reaped, childExitStatus: status)
+      }
+      select(.clean(proof))
     }
     func invoke() {
       let first = lock.withLock { () -> Bool in
@@ -142,20 +368,59 @@ public final class OwnedChildRetirement: @unchecked Sendable {
         return source
       }
       source?.cancel()
+      if case .clean = selected {
+        let actual = lock.withLock { channel }
+        if let actual { Task { @MainActor in actual.releaseCleanRoot() } }
+      }
+      if case .unknown(let failure) = selected {
+        resolveStartupFailure(failure)
+      } else {
+        resolveStartupFailure(.revoked)
+      }
       terminalLane.async { for callback in callbacks { callback(selected) } }
     }
+    func resolveStartupFailure(_ failure: Failure) {
+      let completion = lock.withLock { () -> (@MainActor @Sendable (Failure) -> Void)? in
+        let completion = readyFailure
+        readyFailure = nil
+        return completion
+      }
+      if let completion {
+        Task { @MainActor in completion(failure) }
+      }
+    }
     func permit(_ effect: Effect) -> Bool {
+      guard withinDeadline() else { return false }
+      if runningFixture, lock.withLock({ revoked }) {
+        switch effect {
+        case .pipe, .spawn: return false
+        case .close, .wait: break
+        }
+      }
       hooks.before(effect)
+      if runningFixture, lock.withLock({ revoked }) {
+        switch effect {
+        case .pipe, .spawn: return false
+        case .close, .wait: break
+        }
+      }
       return withinDeadline()
     }
     func withinDeadline() -> Bool {
-      if DispatchTime.now().uptimeNanoseconds >= deadline {
+      if DispatchTime.now().uptimeNanoseconds >= lock.withLock({ deadline }) {
+        if runningFixture, !lock.withLock({ revoked }) {
+          revoke(startupOnly: true)
+          return false
+        }
         select(.unknown(.deadline))
         return false
       }
       return lock.withLock { terminal == nil }
     }
-    func failed(_ failure: Failure) { select(.unknown(failure)) }
+    func failed(_ failure: Failure) {
+      if runningFixture { revoke() }
+      select(.unknown(failure))
+    }
     func closeOwned(_ descriptor: Int32) -> Bool {
       guard permit(.close) else { return false }
       let target: Int32 = hooks.closeFault() ? -1 : descriptor
@@ -165,11 +430,12 @@ public final class OwnedChildRetirement: @unchecked Sendable {
         failed(.close)
         return false
       }
+      hooks.afterClose()
       lock.withLock {
         descriptors.remove(descriptor)
         closes += 1
       }
-      return true
+      return withinDeadline()
     }
     func run() {
       guard permit(.pipe) else { return }
@@ -327,6 +593,67 @@ public final class OwnedChildRetirement: @unchecked Sendable {
       }
       actions = nil
       for fd in aliases { guard closeOwned(fd) else { return } }
+      if runningFixture {
+        for fd in [pipes[0][0], pipes[1][1], pipes[2][1]] {
+          guard closeOwned(fd) else { return }
+        }
+        guard allowsIO else { return }
+        let fd = pipes[2][0]
+        let flags = fcntl(fd, F_GETFL)
+        guard allowsIO else { return }
+        guard flags >= 0, fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0 else {
+          failed(.setup)
+          return
+        }
+        guard allowsIO else { return }
+        let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: operation)
+        lock.withLock {
+          stderrSource = source
+          stderrJoined = false
+        }
+        source.setEventHandler { [self] in
+          guard allowsIO else { return }
+          var bytes = [UInt8](repeating: 0, count: 4096)
+          for _ in 0..<4 {
+            guard allowsIO else { return }
+            let count = bytes.withUnsafeMutableBytes { Darwin.read(fd, $0.baseAddress, $0.count) }
+            let code = errno
+            guard allowsIO else { return }
+            if count == 0 {
+              let current = lock.withLock { () -> DispatchSourceRead? in
+                let current = stderrSource
+                stderrSource = nil
+                return current
+              }
+              current?.cancel()
+              return
+            }
+            if count < 0 {
+              if code == EINTR { continue }
+              if code != EAGAIN { failed(.setup) }
+              return
+            }
+          }
+        }
+        source.setCancelHandler { [self] in
+          lock.withLock { stderrJoined = true }
+          beginRunningCleanup()
+        }
+        source.activate()
+        lock.withLock {
+          handoff = true
+          endpoints = (pipes[1][0], pipes[0][1])
+        }
+        Task { @MainActor [self] in
+          let consume = lock.withLock { () -> (@MainActor @Sendable (Core) -> Void)? in
+            let consume = consumeTransport
+            consumeTransport = nil
+            return consume
+          }
+          consume?(self)
+        }
+        return
+      }
       // Close the parent's child-side copies, then no-input EOF. No pipe read is needed.
       for fd in [pipes[0][0], pipes[1][1], pipes[2][1], pipes[0][1]] {
         guard closeOwned(fd) else { return }
@@ -346,7 +673,14 @@ public final class OwnedChildRetirement: @unchecked Sendable {
     }
   }
 
-  private let core: Core
+  internal let core: Core
+  internal init(runningFixture: Fixture, privateWorkingDirectory: URL, hooks: Hooks = Hooks()) {
+    core = Core(
+      command: .fixture(runningFixture, privateWorkingDirectory),
+      deadline: UInt64.max, hooks: hooks, runningFixture: true)
+  }
+  @discardableResult internal func revoke() -> UInt64 { core.revoke() }
+  deinit { if core.runningFixture { core.revoke() } }
   /// Caller supplies the existing absolute monotonic cleanup deadline and a fresh 0700 cwd.
   /// No child exists until the sole `retire` invocation; no arbitrary executable/PID is accepted.
   public convenience init(
@@ -371,7 +705,9 @@ public final class OwnedChildRetirement: @unchecked Sendable {
     core = Core(
       command: .backup(backup), deadline: deadlineUptimeNanoseconds, hooks: hooks)
   }
-  public func retire() { core.invoke() }
+  public func retire() {
+    if core.runningFixture { core.revoke() } else { core.invoke() }
+  }
   public func observeTerminal(_ observer: @escaping @Sendable (Terminal) -> Void) {
     core.observe(observer)
   }
@@ -399,7 +735,15 @@ public final class OwnedChildRetirement: @unchecked Sendable {
         var status: Int32 = 0
         _ = waitpid(child, &status, 0)
       }
-      done(allWereOpen)
+      let actual = core.lock.withLock { core.channel }
+      if let actual {
+        Task { @MainActor in
+          actual.testingPhysicalTeardown()
+          done(allWereOpen)
+        }
+      } else {
+        done(allWereOpen)
+      }
     }
   }
 }

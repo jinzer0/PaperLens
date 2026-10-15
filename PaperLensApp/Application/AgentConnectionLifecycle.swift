@@ -36,15 +36,20 @@ public final class AgentConnectionLifecycle {
   /// Exclusive Main-owned FIFO transfer. Construct/bind before any I/O; start remains
   /// explicit. Duplex endpoint closure is not SDK shutdown or process-reaping proof.
   public static func ownedPipe(readStdout: FileHandle, writeStdin: FileHandle) throws
-    -> AgentConnectionLifecycle {
+    -> AgentConnectionLifecycle
+  {
     let channel = try OwnedPipeAgentRPCChannel(readStdout: readStdout, writeStdin: writeStdin)
+    return try AgentConnectionLifecycle(ownedPipe: channel)
+  }
+
+  public convenience init(ownedPipe channel: OwnedPipeAgentRPCChannel) throws {
+    guard !channel.lifecycleBound else { throw OwnedPipeAgentRPCChannel.Failure.busy }
     do {
-      let lifecycle = try AgentConnectionLifecycle(channel: channel)
-      channel.observeClosure { [weak lifecycle] outcome in
+      try self.init(channel: channel)
+      channel.bindLifecycleClosure { [weak self] outcome in
         guard outcome.bothClosed else { return }
-        lifecycle?.transportDidClose()
+        self?.transportDidClose()
       }
-      return lifecycle
     } catch {
       channel.requestClose()
       throw error
@@ -52,10 +57,15 @@ public final class AgentConnectionLifecycle {
   }
 
   public func start() throws {
-    guard !started, !closeIssued, !closureReported else { throw AgentRPCConnection.Failure.notReady }
+    guard !started, !closeIssued, !closureReported else {
+      throw AgentRPCConnection.Failure.notReady
+    }
     started = true
     connection.expire()
-    guard !connection.closeRequested else { synchronize(); return }
+    guard !connection.closeRequested else {
+      synchronize()
+      return
+    }
     reader = Task { [weak self] in
       guard let self else { return }
       do {
@@ -91,7 +101,9 @@ public final class AgentConnectionLifecycle {
 
   @discardableResult
   public func cancel(targetID: UUID, timeoutMs: Int) throws -> UUID {
-    try request(method: "cancel", params: ["targetID": targetID.uuidString.lowercased()], timeoutMs: timeoutMs)
+    try request(
+      method: "cancel", params: ["targetID": targetID.uuidString.lowercased()], timeoutMs: timeoutMs
+    )
   }
 
   public func drain() {
@@ -130,8 +142,7 @@ public final class AgentConnectionLifecycle {
     }
     if let deadline = connection.nextDeadline {
       timer = Task { [weak self] in
-        do { try await ContinuousClock().sleep(until: deadline) }
-        catch { return }
+        do { try await ContinuousClock().sleep(until: deadline) } catch { return }
         guard let self else { return }
         connection.expire()
         synchronize()

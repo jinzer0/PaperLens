@@ -245,6 +245,81 @@ entry/signing/inherited-sandbox seams before any actual SDK execution; failure
 does not authorize a new helper, signature workaround or entitlement. Native
 controlled fixtures supplement, never replace real SDK/signed acceptance.
 
+Implemented bounded resource layer: ProviderAgent/broker.py and
+Tests/Topology/test_sdk_broker.py implement and exercise the real Darwin CLI
+resource owner before dependent SDK-worker/control integration. Production launch
+selects only the existing sibling MacOS/codex with fixed app-server --listen
+stdio:// arguments; no caller-selected executable or shell. Public posix_spawn
+starts it suspended; checked kqueue NOTE_FORK/NOTE_EXIT registration precedes
+SIGCONT. Actual captured child/pipe/kqueue/cwd resources survive every uncertainty;
+only actual reap, checked closes and an on-time deadline check support a scoped
+retirement record. This layer does not make blocking Python/C calls bounded:
+the independent native terminal remains mandatory for the integrated owner.
+Controlled fresh-process true/cat/fork-and-reap programs prove kernel behavior,
+not actual SDK/CLI execution, descendant absence or signed acceptance. The module
+is not a replacement SDK transport or a new product selector/admission store.
+--native-broker and the SDK worker remain unimplemented until integrated; no
+unused module is represented as a callable product connection flow.
+
+Architect23 resolves the next native running interval without another owner:
+extend the existing Core/Roots and consume its stdin-write/stdout-read into the
+existing OwnedPipeAgentRPCChannel exactly once. AgentConnectionLifecycle binds
+that same channel. A separate startup deadline does not start/reset cleanup;
+first revoke fences IO and fixes one absolute <=300ms cleanup deadline returned
+unchanged by later revocations. Capture the actual channel before fallible setup,
+reserve handoff against cleanup, quiesce IO before checked closes, and read actual
+same-instance closure state rather than accepting cleanup booleans. Unknown keeps
+Core/channel/namespace/FDs/lanes and metadata lease permanently rooted. This slice
+adds OwnedPipeAgentRPCChannel.swift, AgentConnectionLifecycle.swift and
+OwnedPipeAgentRPCChannelTests.swift to the existing native-owner/test source union.
+Only real running true/cat fixtures are integrated now: no missing-worker launch
+stub, production routing switch or claim of SDK/Broker/content retirement.
+
+Execution deviation: worker22 reports reading a public CPython source URL to
+check select's exported flags despite the offline instruction. This was not an
+SDK/Provider request or an auth trial, but is not reported as zero network use.
+The parent instructed all remaining workers to use local SDK headers/repository
+sources only; no further public fetch is authorized. The parent receipt does not
+contain that URL or proof of transmitted request contents.
+
+Parent verified this scoped source union: 568 offline Python tests (artifact580),
+15 native-owner and 11 actual-channel isolated cases, and the complete 514-case
+fresh-process Product union (artifact602). The final unsigned arm64 Release Main
+and all three nested XPC targets built successfully, plist lint and diffcheck
+passed (artifact603). Existing nine metadata cases remain included, with no
+backup-exclusion, mutation-lease or physical no-repair assertion weakened.
+
+Preserved failures drove actual corrections: missing environment forwarding and
+suspended spawn EBADF were fixed; the raw kqueue is created after captured spawn
+and registered before resume. Darwin's initial suspended wait status is observed
+as 0x7f (WIFSTOPPED, WSTOPSIG zero), not presumed SIGSTOP. CLI cleanup uses one
+UInt64 absolute monotonic-nanosecond deadline, polls queued fork/exit events before
+retirement effects and never retries uncertain closes. Physical registration
+failure and fork uncertainty remain permanently unknown; injected EINTR is labeled
+an injected return/errno, not an actual OS interruption.
+
+The initial native 13/14 run crashed on the startup timer's inherited MainActor
+executor check. Its explicitly @Sendable handler fixes the independent terminal
+lane without moving effects under a lock. Source review then found two passing-
+suite omissions: replaceable public observers suppressed lifecycle acknowledgement,
+and clean retirement could discard a pending startup result. Strengthened tests
+reproduced both failures (native14/15 and channel10/11, artifact601). The actual
+channel now has a protected single lifecycle binding; duplicate binding refuses
+before endpoint effects, and external observer replacement cannot remove closure
+acknowledgement. First revocation consumes the pending startup failure exactly
+once independently of retirement evidence; genuine clean retirement stays clean.
+The new captured-cat setup regression requires both failed startup and actual
+clean reap/six checked closes. Both regressions and the full union pass afterward.
+
+Scoped source reviews25 and26 returned CLEAR/APPROVE for the corrected native
+ownership and CLI/packaging layers respectively. They are not the final goal
+completion cohort. --native-broker, SDK worker/control/kernel-peer integration,
+official authenticated dispatch/probe/CAS and content retirement/purge remain
+unfinished engineering. Python effects are not independently bounded until the
+native enclosing chain is integrated. No SDK import/start, real authentication,
+Provider request, signed acceptance, P1/P3/P6 or Story Done is certified by these
+fixtures/builds. G002 and the aggregate objective remain active, not paused.
+
 ## Current minimal SDK/product decision — NOT ADMITTED, 2026-10-14
 
 Whole-Epic continuation is at integration source5f08cc2. This existing Spec, not
