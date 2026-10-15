@@ -1807,7 +1807,14 @@ class Server:
                 await asyncio.gather(writer, fatal, return_exceptions=True)
 
 
-def main() -> int:
+def main(*, _broker_resource_factory=None) -> int:
+    if sys.argv[1:] == ['--native-broker']:
+        from broker_control import native_broker_main
+        if _broker_resource_factory is None:
+            native_broker_main()
+        else:
+            # Private code-only fixture seam, never chosen by argv/environment.
+            native_broker_main(_resource_factory=_broker_resource_factory)
     if sys.argv[1:]:
         status = 1
         try:

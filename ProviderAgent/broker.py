@@ -106,6 +106,14 @@ def fixture_cat(cwd_fd, environment):
     return _create(('/bin/cat',), cwd_fd, _environment(environment), fixture=True)
 
 
+def fixture_stdin_sink(cwd_fd, environment):
+    """Controlled non-echoing consumer; output limits cannot mask input faults."""
+    _platform()
+    return _create((str(Path(sys.executable).resolve(strict=True)), '-I', '-B', '-c',
+                    'import os\nwhile os.read(0, 4096): pass'),
+                   cwd_fd, _environment(environment), fixture=True)
+
+
 def fixture_fork(cwd_fd, environment):
     """Fixed host-Python fixture; its direct parent actually reaps its fork."""
     _platform()
@@ -226,6 +234,24 @@ class _CLIResourceOwner:
             self._state, self._reason = 'unknown', reason
         return self.record
 
+    def mark_unknown(self, fixed_code):
+        """Latch uncertainty without granting any resource retirement authority."""
+        if fixed_code not in ('roleUncertain', 'controlUncertain', 'relayUncertain'):
+            raise ValueError('invalidUnknownCode')
+        return self._unknown(fixed_code)
+
+    def observe_pending(self):
+        """Drain the actual watch to empty, including events queued after EXIT."""
+        if self.state in ('unknown', 'clean'):
+            return self.record
+        try:
+            self._events(0)
+        except BaseException as error:
+            self._unknown('watchUncertain')
+            if not isinstance(error, Exception):
+                raise
+        return self.record
+
     @property
     def record(self):
         return MappingProxyType({'state': self.state, 'reason': self._reason,
@@ -244,6 +270,8 @@ class _CLIResourceOwner:
         fd = self._fds[name]
         if fd is not None:
             try:
+                if self._registered:
+                    self._events(0)
                 actual = os.fstat(fd)
                 expected = self._identities[name]
                 if (actual.st_dev, actual.st_ino, actual.st_mode) != (
@@ -370,6 +398,7 @@ class _CLIResourceOwner:
         if self.state != 'suspended' or not self._registered:
             return self._unknown('resumeWithoutRegistration')
         try:
+            self._events(0)
             # A successful registration while START_SUSPENDED prevents the
             # unobserved pre-registration fork gap. No TRACK/CHILD delegation.
             os.kill(self.pid, signal.SIGCONT)
@@ -424,8 +453,12 @@ class _CLIResourceOwner:
         return self.record
 
     def _events(self, timeout_ns):
-        events = self._kevents(None, timeout_ns)
-        for event in events:
+        while True:
+            events = self._kevents(None, timeout_ns)
+            if not events:
+                return
+            timeout_ns = 0
+            event, = events
             if (event.ident != self.pid or event.filter != select.KQ_FILTER_PROC
                     or event.flags & select.KQ_EV_ERROR
                     or event.fflags & ~(select.KQ_NOTE_FORK | select.KQ_NOTE_EXIT)
@@ -460,6 +493,7 @@ class _CLIResourceOwner:
             # Capture waitpid result immediately, even if the post-effect clock
             # expires: it must never cause a second wait or reused-PID signal.
             status = ctypes.c_int()
+            self._effect(self._events, 0)
             self._clock()
             reaped = self._spawn.lib.waitpid(self.pid, ctypes.byref(status), 0)
             if reaped == self.pid:
@@ -469,6 +503,7 @@ class _CLIResourceOwner:
                     os.WIFEXITED(status.value) or os.WIFSIGNALED(status.value)):
                 raise OwnershipError('waitIdentityUncertain')
             for name in tuple(self._fds):
+                self._effect(self._events, 0)
                 self._effect(self._close_fd, name)
             if self._attr_live or self._actions_live or self._uncertain_fds:
                 raise OwnershipError('setupRetirementUncertain')

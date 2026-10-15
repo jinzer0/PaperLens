@@ -320,6 +320,77 @@ native enclosing chain is integrated. No SDK import/start, real authentication,
 Provider request, signed acceptance, P1/P3/P6 or Story Done is certified by these
 fixtures/builds. G002 and the aggregate objective remain active, not paused.
 
+Next callable slice composes, rather than replaces, those owners: exact
+--native-broker dispatch, a separate broker_control.py for authenticated lifecycle
+rendezvous/opaque bounded relay, and small observe-pending/unknown operations on
+the existing broker.py primitive. Agent and its broker tests are the other worker
+targets; parent owns packaging inventory/tests and this existing Spec. This
+four-file worker boundary keeps Darwin resource ownership separate from control
+and relay without adding another CLI owner, product method or SDK transport.
+Use a fixed relative AF_UNIX name in the actual inherited private cwd, never an
+overlong container socket path, native global chdir or /dev/fd traversal. Kernel
+peer UID/PID/audit token and public token-bound process/BSD parent observations
+must establish the actual direct parent; payload PID/UUID does not authorize
+effects. A future Native-worker FD5 socketpair/SCM_RIGHTS interface is lifecycle
+only; inherited socketpair peer PID is not worker identity proof. No absent SDK
+worker launch command or production routing switch is admitted by this slice.
+Real fresh parent/true/cat/fork fixtures must prove relay, bounded cumulative
+startup traffic, checked closure/reap, one supplied absolute deadline and retained
+uncertainty. Broker-local resource records never certify inaccessible SDK
+FileObjects, content purge, external writer absence or full initialized dispatch.
+Unknown parks actual owned resources; no voluntary exit, retries, new effects or
+best-effort write after terminal uncertainty. All SDK imports/execution, Provider
+network/authentication and signed acceptance remain unperformed.
+
+Callable broker layer now implemented with real fresh-process parent/child
+fixtures, not an SDK client mock. Kernel UID/PID/audit-token/public BSD parent
+checks authenticate both directions; the separate real grandchild case refuses
+before CLI creation. Relative rendezvous works in a private cwd whose absolute
+path exceeds104 bytes. Actual fixture grandparent/worker/broker SCM_RIGHTS handoff
+preserves the worker's sole waitpid responsibility; no Native worker command is
+added. Split/NUL bytes relay unchanged, CLI stderr is bounded discard, and both
+directions enforce65540-byte LF/partial records plus four cumulative records and
+262160 cumulative bytes, never reset by draining. Only the six closed environment
+keys reach the existing fixed CLI owner.
+
+Parent preserved the initial45-test run's ten failures (artifact616): Darwin
+socket permission bits change0140666 to0140000 when the peer exits while device/
+inode/filetype stay fixed. Checked socket closure now uses those stable identity
+fields, without dropping full mode checks for directories or the namespace socket
+entry. A closed peer query fails with fixed unavailable identity, never a weaker
+fallback. The real wrong-parent fixture holds the grandchild until actual kernel
+ancestry rejection, then permits its independent parent refusal; it does not
+pretend a disappeared peer still supplied ancestry evidence.
+
+Review29 found gaps despite the first576 offline/514 Product passes. Real direct
+authenticated-child helper cases plus a non-echoing stdin consumer reproduced ten
+failures (artifact628): uncertain close retries, descriptor effects after failed
+wait/unknown, changed/malformed/expired cleanup deadlines, and input records whose
+rejection was previously masked by cat's output. The shared close helper now
+enforces terminal state before effects, selects unknown itself on any failure,
+retains actual close results and forbids a different deadline once D is latched.
+Shared opaque record counting admits neither a fifth input record nor a split
+65541-byte record. These are actual source corrections, not relaxed assertions.
+
+An additional gated real pre-hello revoke exposed the stale startup bound after
+receiving the first cleanup D (artifact631). Pending hello delivery now adopts
+only that already-latched D and rechecks it before writing; the cleanup deadline
+never changes. The fixture proves preLaunchRetired with zero factory invocations,
+actual exit0/reap and checked role retirement. The initial omitted zero-count test
+case also failed (artifact632) and is preserved. Final complete offline union:
+578 PASS (artifact633, including47 focused broker/package tests). Complete514
+fresh-process Product, actual unsigned arm64 Main/all three XPC Release build,
+plist and diffcheck PASS (artifact630); Native source remains unchanged635765d.
+The local public-C self-socketpair probe established32-byte audit token/136-byte
+BSD snapshot and token-bound lookup/accessor exports, not sandbox or ancestry
+acceptance; the separate actual role fixtures establish only unsandboxed parentage.
+EINTR/ECHILD/clock/partial-I/O fault injections stay explicitly labeled injections.
+SDK worker, initialized dispatch, Native enclosing integration and authenticated
+product probe/CAS/purge remain unfinished, not human-only blockers or Story Done.
+Final review29 inspected the corrected five-file source boundary and returned
+CLEAR/APPROVE with no residual finding. This is scoped role acceptance, not the
+aggregate goal's terminal completion cohort or external acceptance.
+
 ## Current minimal SDK/product decision — NOT ADMITTED, 2026-10-14
 
 Whole-Epic continuation is at integration source5f08cc2. This existing Spec, not

@@ -1,16 +1,20 @@
-"""Offline public-Darwin fixtures; no SDK import, Agent role, or worker integration.
+"""Offline public-Darwin CLI and callable-role fixtures; never import the SDK.
 
 Every actual owner lives in a fresh -I -B native Python process. Unknown roots and
 one-shot invocation state are never reset, including by physical fixture teardown.
 """
 import importlib.util
+import json
 import os
 from pathlib import Path
 import subprocess
 import sys
+import struct
 import tempfile
+import time
 import unittest
-from unittest.mock import patch
+import uuid
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location('sdk_broker_under_test', ROOT / 'ProviderAgent/broker.py')
@@ -466,6 +470,875 @@ class DarwinCLIResourceOwnerTests(unittest.TestCase):
                 self.assertEqual(record['state'], 'unknown' if case in (
                     'fork', 'expired', 'tooFar', 'changedDeadline', 'facadeLoss',
                     'badClose', 'badRegistration', 'injectedCloseEINTR') else 'clean')
+
+
+def load_control():
+    spec = importlib.util.spec_from_file_location(
+        'broker_control_under_test', ROOT / 'ProviderAgent/broker_control.py')
+    module = importlib.util.module_from_spec(spec)
+    with patch.dict(sys.modules, {'broker': broker, spec.name: module}), \
+            patch.object(sys, 'path', [str(ROOT / 'Contracts/ProviderRPC'), *sys.path]):
+        spec.loader.exec_module(module)
+    return module
+
+
+class BrokerControlValidationTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.control = load_control()
+
+    def decode(self, raw):
+        decoder = self.control.ControlFrames()
+        result = None
+        for byte in raw:
+            result = decoder.feed(bytes([byte]))
+        self.assertEqual(decoder.buffer, b'')
+        return result
+
+    def test_closed_frames_split_at_every_byte(self):
+        run = str(uuid.uuid4())
+        cases = [('hello', {}), ('run', dict(startupDeadlineNs=123, cwdDevice=1, cwdInode=2)),
+                 ('running', {}), ('revokeNeeded', dict(code='cliExit')),
+                 ('revoke', dict(deadlineNs=123)),
+                 ('cliRetired', dict(deadlineNs=123, scope='localDirectCLIResources', waitStatus=0)),
+                 ('preLaunchRetired', dict(deadlineNs=123)), ('brokerOffered', {}),
+                 ('reapBroker', dict(deadlineNs=123)),
+                 ('brokerReaped', dict(deadlineNs=123, waitStatus=0))]
+        for op, fields in cases:
+            with self.subTest(op=op):
+                self.assertEqual(self.decode(self.control.encode_control(run, op, **fields)),
+                                 dict(v=1, runID=run, op=op, **fields))
+
+    def test_malformed_closed_json_and_lengths(self):
+        run = str(uuid.uuid4())
+        valid = dict(v=1, runID=run, op='revoke', deadlineNs=123)
+        invalid = [dict(valid, v=True), dict(valid, deadlineNs=True),
+                   dict(valid, deadlineNs=1.0), dict(valid, deadlineNs=-1),
+                   dict(valid, deadlineNs=1 << 64), dict(valid, pid=os.getpid()),
+                   dict(valid, runID=run.upper()), dict(valid, op='initialize'),
+                   {key: value for key, value in valid.items() if key != 'deadlineNs'}]
+        for value in invalid:
+            raw = json.dumps(value).encode()
+            with self.subTest(value=value), self.assertRaises((ValueError, self.control.ControlError)):
+                self.decode(struct.pack('!I', len(raw)) + raw)
+        for raw in (b'{"v":1,"v":1}', b'\xff', b'[]', b'{'):
+            with self.subTest(raw=raw), self.assertRaises((ValueError, self.control.ControlError)):
+                self.decode(struct.pack('!I', len(raw)) + raw)
+        for size in (0, 1025, (1 << 32) - 1):
+            decoder = self.control.ControlFrames()
+            with self.assertRaises(self.control.ControlError):
+                decoder.feed(struct.pack('!I', size))
+
+    def test_stdout_cumulative_record_and_byte_budgets_never_reset_on_drain(self):
+        role = self.control._Role(broker.fixture_cat)
+        role.stdout_count(b'a' * (65540 - 1))
+        role.stdout_count(b'\n')
+        role.output.clear()
+        role.stdout_count(b'b\nc\nd\n')
+        with self.assertRaises(self.control.ControlError):
+            role.stdout_count(b'e')
+        role = self.control._Role(broker.fixture_cat)
+        with self.assertRaises(self.control.ControlError):
+            role.stdout_count(b'x' * 65541)
+        role = self.control._Role(broker.fixture_cat)
+        for _ in range(4):
+            role.stdout_count(b'x' * 65539 + b'\n')
+            role.output.clear()
+        self.assertEqual(role.stdout_bytes, 262160)
+        with self.assertRaises(self.control.ControlError):
+            role.stdout_count(b'\n')
+
+    def test_input_record_limits_are_cumulative_across_drains_and_split_reads(self):
+        role = self.control._Role(broker.fixture_stdin_sink)
+        for data in (b'a\n', b'b\n', b'c\n', b'd\n'):
+            role.input_count(data)
+            role.input.clear()
+        self.assertEqual(role.input_lines, 4)
+        self.assertEqual(role.stdout_bytes, 0)
+        with self.assertRaises(self.control.ControlError):
+            role.input_count(b'e')
+        role = self.control._Role(broker.fixture_stdin_sink)
+        role.input_count(b'x' * 65539)
+        role.input.clear()
+        role.input_count(b'x')
+        self.assertEqual(role.input_partial, 65540)
+        with self.assertRaises(self.control.ControlError):
+            role.input_count(b'x')
+        role = self.control._Role(broker.fixture_stdin_sink)
+        role.input_count(b'x' * 65539 + b'\n')
+        self.assertEqual((role.input_lines, role.input_partial), (1, 0))
+
+    def test_single_deadline_and_sticky_primitive_observation(self):
+        now = 9_000_000_000
+        owner = self.control._Resources()
+        with patch.object(self.control.time, 'monotonic_ns', return_value=now):
+            for bad in (True, 1.0, now, now + 300_000_001, 1 << 64):
+                with self.assertRaises(self.control.ControlError):
+                    owner.latch(bad)
+            owner.latch(now + 300_000_000)
+            owner.latch(now + 300_000_000)
+            with self.assertRaises(self.control.ControlError):
+                owner.latch(now + 299_000_000)
+        primitive = broker._CLIResourceOwner(False)
+        primitive._state = 'running'
+        with patch.object(primitive, '_events', side_effect=broker.OwnershipError('forkObserved')) as events:
+            result = primitive.observe_pending()
+            self.assertEqual(result['state'], 'unknown')
+            with self.assertRaises(TypeError):
+                result['state'] = 'clean'
+            primitive.observe_pending()
+            primitive.mark_unknown('roleUncertain')
+            self.assertEqual(events.call_count, 1)
+
+    def test_injected_identity_denied_short_and_mismatched_token_fail_closed(self):
+        # These are injected API failures, NOT actual kernel authentication.
+        for failure in ('denied', 'short', 'tokenMismatch', 'missingExport', 'disconnected'):
+            lib, proc, bsm = Mock(), Mock(), Mock()
+            lib.getpeereid.return_value = -1 if failure == 'denied' else 0
+            bsm.audit_token_to_pidversion.return_value = 1
+            bsm.audit_token_to_pid.return_value = 0
+            if failure == 'missingExport':
+                del bsm.audit_token_to_pidversion
+            pid = b'' if failure == 'short' else struct.pack('=i', 999)
+            observations = OSError(57, 'fixture disconnected socket') if failure == 'disconnected' else [pid, bytes(32)]
+            with self.subTest(failure=failure), \
+                    patch.object(self.control.sys, 'platform', 'darwin'), \
+                    patch.object(self.control.ctypes, 'CDLL', side_effect=[lib, proc, bsm]), \
+                    patch.object(self.control, '_borrow_socket', side_effect=observations):
+                with self.assertRaises((self.control.ControlError, AttributeError)):
+                    self.control.peer_identity(999)
+                proc.proc_pidinfo.assert_not_called()
+
+
+_ROLE_CASE = r'''
+import array
+import ctypes
+import errno
+import json
+import os
+from pathlib import Path
+import select
+import signal
+import socket
+import struct
+import sys
+import time
+import uuid
+
+source = Path(sys.argv[1])
+case = sys.argv[2]
+root = Path(sys.argv[3]).resolve()
+sys.path[:0] = [str(source / 'ProviderAgent'), str(source / 'Contracts/ProviderRPC')]
+import agent
+import broker
+import broker_control as control
+
+fixture_exit = os._exit
+owned_fixture_child = None
+def physical_teardown(*unused):
+    # Fixture-only exact captured-child teardown, never group/descendant discovery
+    # and never a clean result. Keep this independent of patched role os._exit.
+    for owner in broker._ROOTS:
+        if isinstance(owner, broker._CLIResourceOwner) and owner._fixture:
+            owner.fixture_teardown()
+    if owned_fixture_child is not None:
+        try:
+            child, _ = os.waitpid(owned_fixture_child, os.WNOHANG)
+            if child == 0:
+                os.kill(owned_fixture_child, signal.SIGTERM)
+                os.waitpid(owned_fixture_child, 0)
+        except (ProcessLookupError, ChildProcessError):
+            pass
+    fixture_exit(97)
+
+original_exception_hook = sys.excepthook
+def failed_fixture(kind, value, traceback):
+    original_exception_hook(kind, value, traceback)
+    physical_teardown()
+sys.excepthook = failed_fixture
+signal.signal(signal.SIGTERM, physical_teardown)
+signal.signal(signal.SIGALRM, physical_teardown)
+signal.alarm(15)
+
+def exact(fd, size):
+    value = bytearray()
+    end = time.monotonic_ns() + 5_000_000_000
+    while len(value) < size:
+        assert time.monotonic_ns() < end, ('readExpired', case)
+        ready, _, _ = select.select([fd], [], [], max(0, (end - time.monotonic_ns()) / 1e9))
+        assert ready, ('notReadable', case)
+        try:
+            data = os.read(fd, size - len(value))
+        except BlockingIOError:
+            continue
+        assert data, ('EOF', case, bytes(value))
+        value.extend(data)
+    return bytes(value)
+
+def message(fd):
+    size, = struct.unpack('!I', exact(fd, 4))
+    assert 0 < size <= 1024
+    return json.loads(exact(fd, size))
+
+def send(fd, run, op, **fields):
+    raw = control.encode_control(run, op, **fields)
+    while raw:
+        try:
+            count = os.write(fd, raw)
+        except BlockingIOError:
+            select.select([], [fd], [], 1)
+            continue
+        assert count > 0
+        raw = raw[count:]
+
+def packet(fd, value):
+    raw = json.dumps(value).encode()
+    os.write(fd, struct.pack('!I', len(raw)) + raw)
+
+root.chmod(0o700)
+if case == 'longCwd':
+    for _ in range(4):
+        root = root / ('private-directory-' + 'x' * 30)
+        root.mkdir(mode=0o700)
+assert case != 'longCwd' or len(os.fsencode(root)) > 104
+(root / 'codex').mkdir(mode=0o700)
+(root / 'tmp').mkdir(mode=0o700)
+cwd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+original = os.stat('.')
+run = str(uuid.uuid4())
+startup = time.monotonic_ns() + 8_000_000_000
+report_r, report_w = os.pipe()
+native, lifecycle = socket.socketpair()
+worker = os.fork()
+if worker == 0:
+    signal.alarm(12)
+    owned_fixture_child = None
+    native.close()
+    os.close(report_r)
+    # Reserve the real lifecycle FD5, without overwriting another fixture owner.
+    if report_w == 5:
+        report_w = os.dup(report_w)
+    if cwd == 5:
+        cwd = os.dup(cwd)
+    original_lifecycle = lifecycle.detach()
+    os.dup2(original_lifecycle, 5)
+    if original_lifecycle != 5:
+        os.close(original_lifecycle)
+    lifecycle = socket.socket(fileno=5)
+    lifecycle_owner = control._Resources()
+    lifecycle_owner.own('lifecycle', 5)
+    # Fixture worker, not the controller, starts in the required real cwd.
+    os.fchdir(cwd)
+    rendezvous = control.open_worker_rendezvous(cwd, run_id=run, startup_deadline_ns=startup)
+    before = os.stat('.')
+    child_in, parent_in = os.pipe()
+    parent_out, child_out = os.pipe()
+    evidence_r, evidence_w = os.pipe()
+    teardown_r, teardown_w = os.pipe()
+    wrong_parent = None
+    # A listener created by this worker cannot authenticate its grandchild as
+    # direct child. In the wrong-parent fixture the intermediary forks broker.
+    broker_pid = os.fork()
+    if broker_pid:
+        owned_fixture_child = broker_pid
+    if broker_pid == 0 and case == 'wrongParent':
+        nested = os.fork()
+        if nested:
+            owned_fixture_child = nested
+            _, status = os.waitpid(nested, 0)
+            os._exit(os.WEXITSTATUS(status))
+    if broker_pid == 0:
+        signal.alarm(10)
+        owned_fixture_child = None
+        os.close(evidence_r)
+        os.close(teardown_w)
+        os.close(report_w)
+        lifecycle.close()
+        os.close(parent_in)
+        os.close(parent_out)
+        # Do not inherit the worker listener as an accidental extra witness.
+        os.close(rendezvous.fds['listener'])
+        os.close(rendezvous.fds['cwd'])
+        os.close(cwd)
+        os.dup2(child_in, 0)
+        os.dup2(child_out, 1)
+        diagnostic = os.open('/dev/null', os.O_WRONLY)
+        os.dup2(diagnostic, 2)
+        os.close(diagnostic)
+        os.close(child_in)
+        os.close(child_out)
+        os.environ.clear()
+        os.environ.update(PATH='/usr/bin:/bin', LANG='C', LC_ALL='C', HOME=str(root),
+                          CODEX_HOME=str(root / 'codex'), TMPDIR=str(root / 'tmp'),
+                          PAPERLENS_BROKER_RUN_ID=run,
+                          PAPERLENS_BROKER_START_DEADLINE_NS=str(startup))
+        # These cannot choose a backend or enter the CLI replacement environment.
+        os.environ['PAPERLENS_BROKER_FACTORY'] = 'fixture_true'
+        os.environ['OPENAI_API_KEY'] = 'not-a-credential'
+        sys.argv = ['agent.py', '--native-broker']
+        raw_exit = os._exit
+        raw_write = os.write
+        factory_calls = []
+        close_calls = []
+        original_close = control._Role.close
+        original_park = control._Role.park
+        original_send_pending = control._Role.send_pending
+
+        def checked_exit(status):
+            role = next(item for item in broker._ROOTS if isinstance(item, control._Role))
+            if status == 0:
+                assert role.state == 'clean'
+                assert all(fd is None for fd in role.fds.values())
+                assert role.deadline > time.monotonic_ns()
+                if role.factory_entered:
+                    assert role.cli.record['state'] == 'clean'
+                    assert role.cli.record['scope'] == 'localDirectCLIResources'
+                    assert role.cli.record['waitStatus'] is not None
+                    assert all(fd is None for fd in role.cli._fds.values())
+                else:
+                    assert not factory_calls and not broker._INVOKED
+            packet(evidence_w, dict(exit=status, calls=len(factory_calls),
+                                    closes=close_calls, state=role.state))
+            raw_exit(status)
+
+        def fixture_park(role):
+            assert role.state == 'unknown' and role in broker._ROOTS
+            cli = role.cli
+            debt = dict(cli._fds) if cli is not None else None
+            record = dict(cli.record) if cli is not None else None
+            role_debt = dict(role.fds)
+            live = {}
+            for name, fd in role.fds.items():
+                if fd is not None:
+                    try:
+                        os.fstat(fd)
+                        live[name] = True
+                    except OSError:
+                        live[name] = False
+            if cli is not None and cli.state == 'unknown':
+                assert cli in broker._ROOTS
+                assert cli.observe_pending()['state'] == 'unknown'
+                assert cli.cleanup(time.monotonic_ns() + 300_000_000, terminate=True)['state'] == 'unknown'
+                assert cli._fds == debt
+            fork_reaped = False
+            if case == 'fork':
+                # Fixture-only observation after production has permanently stopped.
+                assert exact(cli._fds['stdout'], 7) == b'reaped\n'
+                fork_reaped = True
+            if case in ('inputRecordFlood', 'inputLineFlood'):
+                assert role.stdout_bytes == 0 and role.read_buffer
+                assert role.input_bytes < 262160
+            packet(evidence_w, dict(state=role.state, factoryEntered=role.factory_entered,
+                calls=len(factory_calls), cli=record, live=live, forkReaped=fork_reaped,
+                closes=close_calls, roots=len(broker._ROOTS)))
+            assert exact(teardown_r, 1) == b'T'
+            if cli is not None:
+                cli.fixture_teardown()  # Physical fixture action, NOT proof discharge.
+                assert dict(cli.record) == record and cli._fds == debt
+            assert role.state == 'unknown' and role.fds == role_debt
+            packet(evidence_w, dict(teardown=True, state=role.state))
+            original_park(role)
+
+        def role_close(role, name, deadline=None):
+            close_calls.append(name)
+            if case == 'afterCleanClose' and name == 'stdin':
+                assert role.cli.state == 'clean'
+                os.close(role.fds[name])  # Real EBADF in checked raw close path.
+            if case == 'afterCleanEINTR' and name == 'stdin':
+                assert role.cli.state == 'clean'
+                role.lib = ctypes.CDLL('/usr/lib/libSystem.B.dylib', use_errno=True)
+                role.lib.close.argtypes, role.lib.close.restype = [ctypes.c_int], ctypes.c_int
+                def injected_close(fd):
+                    assert fd == role.fds['stdin']
+                    ctypes.set_errno(errno.EINTR)
+                    return -1  # Injected error; the actual descriptor stays open.
+                role.lib.close = injected_close
+            result = original_close(role, name, deadline)
+            if case == 'lateClose' and name == 'stdin':
+                # Inject a delayed return after the actual checked close.
+                time.sleep(max(0, (role.deadline - time.monotonic_ns()) / 1e9) + 0.01)
+            return result
+
+        def send_pending(role, deadline):
+            if case == 'preHelloRevoke' and role.deadline is None:
+                packet(evidence_w, dict(helloPending=True))
+                assert exact(teardown_r, 1) == b'H'
+            if case == 'afterCleanSend' and role.cli is not None and role.cli.state == 'clean':
+                os.close(role.fds['control'])  # Actual EBADF, not a fabricated ACK.
+            return original_send_pending(role, deadline)
+
+        def factory(fd, environment):
+            factory_calls.append(1)
+            assert set(environment) == broker._ENV_KEYS
+            assert environment['HOME'] == str(root)
+            chosen = broker.fixture_true if case == 'earlyExit' else (
+                broker.fixture_fork if case == 'fork' else (
+                    broker.fixture_stdin_sink if case in ('inputRecordFlood', 'inputLineFlood')
+                    else broker.fixture_cat))
+            cli = chosen(fd, environment)
+            if case == 'fork':
+                actual_resume = cli.resume
+                def resumed_after_real_fork_reap():
+                    result = actual_resume()
+                    # This fixture's sole line is written only after its real
+                    # child waitpid. Leave bytes untouched for unknown inspection.
+                    ready, _, _ = select.select([cli._fds['stdout']], [], [], 5)
+                    assert ready
+                    return result
+                cli.resume = resumed_after_real_fork_reap
+            if case == 'watchError':
+                def failed_events(*args):
+                    raise broker.OwnershipError('injectedWatchError')
+                cli._kevents = failed_events
+            if case == 'waitECHILD':
+                def failed_wait(*args):
+                    ctypes.set_errno(errno.ECHILD)
+                    return -1  # Injected errno, not an actual external reap.
+                cli._spawn.lib.waitpid = failed_wait
+            if case == 'factoryRevoke':
+                packet(evidence_w, dict(factoryCaptured=True))
+                assert exact(teardown_r, 1) == b'R'
+            return cli
+
+        if case == 'partialIO':
+            attempts = {}
+            def partial_write(fd, data):
+                role = next((item for item in broker._ROOTS if isinstance(item, control._Role)), None)
+                if role is not None and role.cli is not None and fd in (1, role.cli._fds.get('stdin')):
+                    attempts[fd] = attempts.get(fd, 0) + 1
+                    if attempts[fd] % 3 == 1:
+                        raise BlockingIOError(errno.EAGAIN, 'injected')
+                    return raw_write(fd, data[:3])
+                return raw_write(fd, data)
+            os.write = partial_write
+        control._Role.park = fixture_park
+        control._Role.close = role_close
+        control._Role.send_pending = send_pending
+        if case == 'wrongParent':
+            actual_peer_identity = control.peer_identity
+            def observe_listener_after_worker_rejection(fd):
+                # Keep this actual grandchild connected while the worker
+                # observes its kernel parent, before the role refuses itself.
+                assert exact(teardown_r, 1) == b'a'
+                return actual_peer_identity(fd)
+            control.peer_identity = observe_listener_after_worker_rejection
+        os._exit = checked_exit
+        agent.main(_broker_resource_factory=factory)
+        raise AssertionError('role returned')
+
+    os.close(child_in)
+    os.close(child_out)
+    os.close(evidence_w)
+    os.close(teardown_r)
+    if case == 'wrongParent':
+        try:
+            rendezvous.accept_broker()
+        except control.ControlError:
+            assert rendezvous.state == 'unknown'
+            assert rendezvous.accepted.peer.parent_pid != os.getpid()
+        else:
+            raise AssertionError('grandchild admitted')
+        os.write(teardown_w, b'a')
+        refused = message(evidence_r)
+        assert refused['exit'] == 1 and refused['calls'] == 0
+        pid, status = os.waitpid(broker_pid, 0)
+        assert pid == broker_pid and os.WIFEXITED(status) and os.WEXITSTATUS(status) == 1
+        packet(report_w, dict(case=case, outcome='refused'))
+        os._exit(0)
+    authenticated = rendezvous.accept_broker()
+    assert authenticated.peer.pid == broker_pid
+    assert authenticated.peer.parent_pid == os.getpid()
+    assert authenticated.peer.uid == os.getuid() and len(authenticated.peer.token) == 32
+    assert (os.stat('.').st_dev, os.stat('.').st_ino) == (before.st_dev, before.st_ino)
+    try:
+        rendezvous.accept_broker()
+    except control.ControlError:
+        pass
+    else:
+        raise AssertionError('second admission')
+    fd = authenticated.fds['control']
+    if case == 'scmRights':
+        assert lifecycle.fileno() == 5
+        rendezvous.offer_to_native(5, authenticated)
+        packet(report_w, dict(worker=os.getpid(), broker=broker_pid))
+        instruction = message(lifecycle.fileno())
+        assert instruction['op'] == 'reapBroker' and instruction['runID'] == run
+        deadline = instruction['deadlineNs']
+        reaped = authenticated.wait_direct_child(deadline)
+        assert reaped.wait_status == 0
+        rendezvous.retire(deadline)
+        assert rendezvous.state == 'clean' and rendezvous.entry is None
+        send(lifecycle.fileno(), run, 'brokerReaped', deadlineNs=deadline, waitStatus=reaped.wait_status)
+        lifecycle_owner.latch(deadline)
+        lifecycle_owner.close('lifecycle')
+        lifecycle.detach()
+        packet(report_w, dict(case=case, outcome='clean'))
+        os._exit(0)
+    if case == 'preHelloRevoke':
+        assert message(evidence_r)['helloPending']
+        deadline = time.monotonic_ns() + 300_000_000
+        send(fd, run, 'revoke', deadlineNs=deadline)
+        os.write(teardown_w, b'H')
+    assert message(fd)['op'] == 'hello'
+    if case == 'preHelloRevoke':
+        retired = message(fd)
+        assert retired['op'] == 'preLaunchRetired' and retired['deadlineNs'] == deadline
+    elif case in ('preFactory', 'preFactoryRun'):
+        deadline = time.monotonic_ns() + 300_000_000
+        raw = control.encode_control(run, 'revoke', deadlineNs=deadline)
+        if case == 'preFactoryRun':
+            info = os.fstat(cwd)
+            raw = control.encode_control(run, 'run', startupDeadlineNs=startup,
+                                        cwdDevice=info.st_dev, cwdInode=info.st_ino) + raw
+        os.write(fd, raw)
+        retired = message(fd)
+        assert retired['op'] == 'preLaunchRetired'
+    else:
+        info = os.fstat(cwd)
+        send(fd, run, 'run', startupDeadlineNs=startup, cwdDevice=info.st_dev,
+             cwdInode=info.st_ino + (1 if case == 'wrongNamespace' else 0))
+        if case == 'factoryRevoke':
+            assert message(evidence_r)['factoryCaptured']
+            deadline = time.monotonic_ns() + 300_000_000
+            send(fd, run, 'revoke', deadlineNs=deadline)
+            os.write(teardown_w, b'R')
+            retired = message(fd)
+            assert retired['op'] == 'cliRetired'
+        elif case in ('fork', 'watchError', 'wrongNamespace'):
+            retired = None
+        else:
+            running = message(fd)
+            assert running['op'] == 'running'
+            if case in ('cat', 'longCwd', 'partialIO'):
+                for data in (b'opaque\x00', b' split', b'\nsecond\n'):
+                    os.write(parent_in, data)
+                    assert exact(parent_out, len(data)) == data
+            if case == 'earlyExit':
+                needed = message(fd)
+                assert needed['op'] == 'revokeNeeded' and needed['code'] in ('cliExit', 'stdioEOF')
+            if case == 'inputRecordFlood':
+                os.write(parent_in, b'a\nb\nc\nd\ne\n')
+            elif case == 'inputLineFlood':
+                data = b'x' * 65541
+                while data:
+                    count = os.write(parent_in, data[:4096])
+                    data = data[count:]
+            elif case == 'cumulativeFlood':
+                for _ in range(4):
+                    os.write(parent_in, b'x\n')
+                    assert exact(parent_out, 2) == b'x\n'
+                os.write(parent_in, b'fifth\n')
+            elif case == 'lineFlood':
+                data = b'x' * 65541
+                while data:
+                    count = os.write(parent_in, data[:4096])
+                    data = data[count:]
+                    # Drain startup output but never reset its record counter.
+                    ready, _, _ = select.select([parent_out], [], [], 0.01)
+                    if ready:
+                        os.read(parent_out, 4096)
+            elif case == 'controlEOF':
+                os.close(fd)
+            elif case == 'badLength':
+                os.write(fd, struct.pack('!I', 1025))
+            elif case == 'badJSON':
+                raw = b'{"v":1,"v":1}'
+                os.write(fd, struct.pack('!I', len(raw)) + raw)
+            elif case == 'duplicateRun':
+                send(fd, run, 'run', startupDeadlineNs=startup, cwdDevice=info.st_dev, cwdInode=info.st_ino)
+            elif case in ('boolDeadline', 'floatDeadline', 'expiredDeadline', 'farDeadline'):
+                value = {'boolDeadline': True, 'floatDeadline': float(time.monotonic_ns()),
+                         'expiredDeadline': time.monotonic_ns() - 1,
+                         'farDeadline': time.monotonic_ns() + 1_000_000_000}[case]
+                packet(fd, dict(v=1, runID=run, op='revoke', deadlineNs=value))
+            else:
+                deadline = time.monotonic_ns() + 300_000_000
+                raw = control.encode_control(run, 'revoke', deadlineNs=deadline)
+                if case == 'duplicateDeadline':
+                    raw += raw
+                if case == 'changedDeadline':
+                    raw += control.encode_control(run, 'revoke', deadlineNs=deadline - 1)
+                if case == 'partialControl':
+                    raw += b'\x00\x00'
+                os.write(fd, raw)
+                if case not in ('changedDeadline', 'waitECHILD', 'afterCleanSend'):
+                    retired = message(fd)
+                    assert retired['op'] == 'cliRetired' and retired['deadlineNs'] == deadline
+                    assert retired['scope'] == 'localDirectCLIResources'
+    unknown = case in ('fork', 'watchError', 'wrongNamespace', 'waitECHILD', 'cumulativeFlood', 'lineFlood',
+        'inputRecordFlood', 'inputLineFlood', 'controlEOF',
+        'badLength', 'badJSON', 'duplicateRun', 'boolDeadline', 'floatDeadline',
+        'expiredDeadline', 'farDeadline', 'changedDeadline', 'afterCleanClose', 'afterCleanEINTR', 'afterCleanSend',
+        'partialControl', 'lateClose')
+    if unknown:
+        evidence = message(evidence_r)
+        assert evidence['state'] == 'unknown'
+        if case in ('afterCleanClose', 'afterCleanEINTR'):
+            assert evidence['cli']['state'] == 'clean'
+            assert evidence['closes'].count('stdin') == 1
+            assert evidence['live']['stdin'] == (case == 'afterCleanEINTR')
+        elif case == 'afterCleanSend':
+            assert evidence['cli']['state'] == 'clean' and not evidence['live']['control']
+        elif case in ('partialControl', 'lateClose'):
+            assert evidence['cli']['state'] == 'clean' and evidence['live']['control']
+        elif case == 'wrongNamespace':
+            assert evidence['cli'] is None and not evidence['factoryEntered']
+        else:
+            assert evidence['cli']['state'] == 'unknown'
+        assert evidence['roots'] >= 2
+        assert evidence['forkReaped'] == (case == 'fork')
+        os.write(teardown_w, b'T')
+        assert message(evidence_r) == dict(teardown=True, state='unknown')
+        os.kill(broker_pid, signal.SIGKILL)  # Fixture physical teardown only.
+        pid, status = os.waitpid(broker_pid, 0)
+        assert pid == broker_pid and os.WIFSIGNALED(status)
+        assert authenticated.reaped is None
+        packet(report_w, dict(case=case, outcome='unknown'))
+    else:
+        record = authenticated.wait_direct_child(deadline)
+        assert record.wait_status == 0 and time.monotonic_ns() < deadline
+        evidence = message(evidence_r)
+        assert evidence['exit'] == 0 and evidence['state'] == 'clean'
+        assert evidence['calls'] == (0 if case in ('preFactory', 'preFactoryRun', 'preHelloRevoke') else 1)
+        rendezvous.retire(deadline)
+        assert rendezvous.state == 'clean'
+        packet(report_w, dict(case=case, outcome='clean'))
+    os._exit(0)
+
+owned_fixture_child = worker
+lifecycle.close()
+os.close(report_w)
+if case == 'scmRights':
+    offered = message(report_r)
+    # Receive/capture all actual descriptors BEFORE validating the ancillary data.
+    marker, ancillary, flags, _ = native.recvmsg(1, socket.CMSG_SPACE(8 * array.array('i').itemsize))
+    received = []
+    for level, kind, raw in ancillary:
+        assert level == socket.SOL_SOCKET and kind == socket.SCM_RIGHTS
+        rights = array.array('i')
+        rights.frombytes(raw[:len(raw) - len(raw) % rights.itemsize])
+        received.extend(rights)
+    assert marker == b'B' and not flags & (socket.MSG_CTRUNC | socket.MSG_TRUNC)
+    assert len(received) == 1
+    endpoint = received[0]
+    identity = control.peer_identity(endpoint)
+    assert identity.pid == offered['broker'] and identity.parent_pid == worker == offered['worker']
+    # The lifecycle socketpair peer PID is its creator, not worker authority.
+    assert message(native.fileno())['op'] == 'brokerOffered'
+    assert message(endpoint)['op'] == 'hello'
+    info = os.fstat(cwd)
+    send(endpoint, run, 'run', startupDeadlineNs=startup, cwdDevice=info.st_dev, cwdInode=info.st_ino)
+    assert message(endpoint)['op'] == 'running'
+    deadline = time.monotonic_ns() + 300_000_000
+    send(endpoint, run, 'revoke', deadlineNs=deadline)
+    retired = message(endpoint)
+    assert retired['op'] == 'cliRetired' and retired['scope'] == 'localDirectCLIResources'
+    send(native.fileno(), run, 'reapBroker', deadlineNs=deadline)
+    reaped = message(native.fileno())
+    assert reaped['op'] == 'brokerReaped' and reaped['waitStatus'] == 0
+    assert reaped['deadlineNs'] == deadline
+    os.close(endpoint)  # Fixture Native-owned duplicate, not worker's witness.
+result = message(report_r)
+pid, status = os.waitpid(worker, 0)
+assert pid == worker and os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0
+assert (os.stat('.').st_dev, os.stat('.').st_ino) == (original.st_dev, original.st_ino)
+assert result['case'] == case
+print(json.dumps(result))
+'''
+
+
+@unittest.skipUnless(sys.platform == 'darwin', 'authenticated public Darwin broker role')
+class DarwinBrokerRoleTests(unittest.TestCase):
+    def test_direct_authenticated_close_is_irreversible_and_uses_latched_deadline(self):
+        script = r'''
+import ctypes
+import errno
+import os
+from pathlib import Path
+import signal
+import socket
+import sys
+import time
+import uuid
+from unittest.mock import patch
+source, case = Path(sys.argv[1]), sys.argv[2]
+sys.path[:0] = [str(source / 'ProviderAgent'), str(source / 'Contracts/ProviderRPC')]
+import broker_control as control
+cwd = os.open('.', os.O_RDONLY | os.O_DIRECTORY)
+rendezvous = control.open_worker_rendezvous(
+    cwd, run_id=str(uuid.uuid4()),
+    startup_deadline_ns=time.monotonic_ns() + 5_000_000_000)
+child = os.fork()
+if child == 0:
+    for fd in rendezvous.fds.values():
+        os.close(fd)
+    os.close(cwd)
+    peer = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    peer.connect('b')
+    os.read(peer.fileno(), 1)
+    os._exit(0)
+owner = None
+try:
+    owner = rendezvous.accept_broker()
+    assert owner.peer.pid == child and owner.peer.parent_pid == os.getpid()
+    owner.own('other', os.dup(cwd))
+    actual_fstat = os.fstat
+    raw = ctypes.CDLL('/usr/lib/libSystem.B.dylib', use_errno=True)
+    raw.close.argtypes, raw.close.restype = [ctypes.c_int], ctypes.c_int
+    close_calls = []
+    owner.lib = raw
+    deadline = time.monotonic_ns() + 300_000_000
+    if case == 'failedWait':
+        def failed_wait(*args):
+            ctypes.set_errno(errno.ECHILD)
+            return -1  # Injected wait failure; the actual child remains owned.
+        raw.waitpid = failed_wait
+        with patch.object(control.ctypes, 'CDLL', return_value=raw):
+            try:
+                owner.wait_direct_child(deadline)
+            except control.ControlError:
+                pass
+            else:
+                raise AssertionError('injected failed wait succeeded')
+    else:
+        owner.latch(deadline)
+        if case == 'unknown':
+            owner.unknown()
+        elif case == 'eintr':
+            def injected_close(fd):
+                close_calls.append(fd)
+                ctypes.set_errno(errno.EINTR)
+                return -1  # Actual descriptor stays open; never an OS EINTR claim.
+            raw.close = injected_close
+    def refuse(name, explicit=None):
+        try:
+            owner.close(name, explicit)
+        except control.ControlError:
+            return
+        raise AssertionError(('descriptor effect accepted', case, name))
+    with patch.object(control.os, 'fstat', wraps=actual_fstat) as observations:
+        if case == 'expired':
+            with patch.object(control.time, 'monotonic_ns', return_value=deadline + 1):
+                refuse('control')
+        else:
+            explicit = {'changed': deadline + 1, 'bool': True,
+                        'float': float(deadline), 'huge': 1 << 64}.get(case)
+            refuse('control', explicit)
+        assert owner.state == 'unknown' and owner.fds['control'] is not None
+        before = observations.call_count
+        refuse('control', deadline + 1)
+        refuse('other', deadline)
+        assert observations.call_count == before, 'observation after uncertainty'
+        assert len(close_calls) == (1 if case == 'eintr' else 0)
+        for fd in owner.fds.values():
+            actual_fstat(fd)
+    snapshot = dict(owner.fds)
+finally:
+    # Physical fixture teardown, never callable-owner cleanup or debt discharge.
+    if owner is not None:
+        before_state, before_fds = owner.state, dict(owner.fds)
+        for fd in owner.fds.values():
+            if fd is not None:
+                os.close(fd)
+        assert owner.state == before_state and owner.fds == before_fds
+    os.kill(child, signal.SIGKILL)
+    pid, _ = os.waitpid(child, 0)
+    assert pid == child
+    for fd in rendezvous.fds.values():
+        os.close(fd)
+    os.close(cwd)
+'''
+        for case in ('unknown', 'eintr', 'failedWait', 'changed', 'expired', 'bool', 'float', 'huge'):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                root.chmod(0o700)
+                result = subprocess.run(
+                    [sys.executable, '-I', '-B', '-c', script, str(ROOT), case],
+                    env=environment(root), cwd=root, capture_output=True, timeout=10, check=False)
+                self.assertEqual(result.returncode, 0, result.stderr.decode('utf-8', 'replace'))
+
+    def test_missing_listener_is_actual_pre_cli_nonzero_refusal(self):
+        script = r'''
+import os
+from pathlib import Path
+import sys
+root = Path(sys.argv[1])
+sys.path[:0] = [str(root / 'ProviderAgent'), str(root / 'Contracts/ProviderRPC')]
+import agent
+def forbidden(*args):
+    raise AssertionError('factory entered without listener')
+sys.argv = ['agent.py', '--native-broker']
+agent.main(_broker_resource_factory=forbidden)
+raise AssertionError('role returned')
+'''
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            values = dict(environment(root), PAPERLENS_BROKER_RUN_ID=str(uuid.uuid4()),
+                          PAPERLENS_BROKER_START_DEADLINE_NS=str(time.monotonic_ns() + 5_000_000_000))
+            result = subprocess.run([sys.executable, '-I', '-B', '-c', script, str(ROOT)],
+                                    env=values, cwd=root, capture_output=True, timeout=10, check=False)
+            self.assertEqual(result.returncode, 1, result.stderr.decode('utf-8', 'replace'))
+            self.assertEqual(result.stdout, b'')
+            self.assertFalse((root / 'b').exists())
+
+    def test_existing_relative_entry_is_not_unlinked_or_repaired(self):
+        script = r'''
+import os
+from pathlib import Path
+import sys
+import time
+import uuid
+source = Path(sys.argv[1])
+sys.path[:0] = [str(source / 'ProviderAgent'), str(source / 'Contracts/ProviderRPC')]
+import broker
+import broker_control as control
+fd = os.open('.', os.O_RDONLY | os.O_DIRECTORY)
+before = os.stat('b', follow_symlinks=False)
+try:
+    control.open_worker_rendezvous(fd, run_id=str(uuid.uuid4()),
+                                   startup_deadline_ns=time.monotonic_ns() + 1_000_000_000)
+except control.ControlError:
+    owner = broker._ROOTS[-1]
+    assert owner.state == 'unknown' and owner.fds['cwd'] is not None
+    os.fstat(owner.fds['cwd'])
+else:
+    raise AssertionError('unknown entry replaced')
+after = os.stat('b', follow_symlinks=False)
+assert (before.st_dev, before.st_ino, before.st_mode) == (after.st_dev, after.st_ino, after.st_mode)
+assert Path('b').read_bytes() == b'untouched'
+snapshot = dict(owner.fds)
+os.close(owner.fds['cwd'])  # Fixture-only physical teardown, not a debt discharge.
+assert owner.state == 'unknown' and owner.fds == snapshot
+os.close(fd)
+'''
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            (root / 'b').write_bytes(b'untouched')
+            result = subprocess.run([sys.executable, '-I', '-B', '-c', script, str(ROOT)],
+                                    env=environment(root), cwd=root, capture_output=True,
+                                    timeout=10, check=False)
+            self.assertEqual(result.returncode, 0, result.stderr.decode('utf-8', 'replace'))
+
+    def test_actual_fresh_role_lifecycle_and_retained_unknown(self):
+        unknown = {'fork', 'watchError', 'wrongNamespace', 'waitECHILD', 'cumulativeFlood', 'lineFlood',
+                   'inputRecordFlood', 'inputLineFlood', 'controlEOF',
+                   'badLength', 'badJSON', 'duplicateRun', 'boolDeadline', 'floatDeadline',
+                   'expiredDeadline', 'farDeadline', 'changedDeadline', 'afterCleanClose', 'afterCleanEINTR', 'afterCleanSend',
+                   'partialControl', 'lateClose'}
+        cases = ('cat', 'partialIO', 'earlyExit', 'preFactory', 'preFactoryRun', 'preHelloRevoke', 'factoryRevoke', 'longCwd',
+                 'duplicateDeadline', 'scmRights', 'wrongParent', *sorted(unknown))
+        for case in cases:
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                result = subprocess.run(
+                    [sys.executable, '-I', '-B', '-c', _ROLE_CASE, str(ROOT), case, str(root)],
+                    env=environment(root), capture_output=True, timeout=20, check=False)
+                self.assertEqual(result.returncode, 0, result.stderr.decode('utf-8', 'replace'))
+                record = json.loads(result.stdout)
+                self.assertEqual(record['outcome'], 'unknown' if case in unknown else (
+                    'refused' if case == 'wrongParent' else 'clean'))
 
 
 if __name__ == '__main__':
