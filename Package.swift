@@ -93,7 +93,7 @@ let package = Package(
         "LibrarySummaryServiceTests.swift", "PDFiumExtractionProducerTests.swift",
         "ExtractionFixtureBudget.swift", "LibraryExtractionReadPinTests.swift",
         "PDFiumExtractionResourceOwnerTests.swift", "LibraryPDFiumInputAcquirerTests.swift",
-        "OwnedPipeAgentRPCChannelTests.swift", "OwnedChildRetirementTests.swift", "MainPDFiumParsingCompositionTests.swift",
+        "OwnedPipeAgentRPCChannelTests.swift", "OwnedChildRetirementTests.swift", "AgentPrivateBackupTests.swift", "MainPDFiumParsingCompositionTests.swift",
         "ImportRecoveryJournalTests.swift", "ImportRecoveryPersistenceTests.swift",
         "LegacyImportFixture.swift"]
     ),

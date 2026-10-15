@@ -97,6 +97,164 @@ def safe_uuid(value: str) -> str:
     return value
 
 
+class _BackupCoreFoundation:
+    """Public CF objects owned only by the closed metadata process."""
+
+    def __init__(self):
+        import ctypes
+        self.ctypes = ctypes
+        self.objects = []
+        self.cf = ctypes.CDLL('/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation')
+        self.libc = ctypes.CDLL('/usr/lib/libSystem.B.dylib', use_errno=True)
+        pointer = ctypes.c_void_p
+        signatures = {
+            'CFStringCreateWithCString': ([pointer, ctypes.c_char_p, ctypes.c_uint32], pointer),
+            'CFURLCreateWithString': ([pointer, pointer, pointer], pointer),
+            'CFURLIsFileReferenceURL': ([pointer], ctypes.c_ubyte),
+            'CFURLClearResourcePropertyCache': ([pointer], None),
+            'CFURLCopyResourcePropertyForKey': ([pointer, pointer, ctypes.POINTER(pointer),
+                                                ctypes.POINTER(pointer)], ctypes.c_ubyte),
+            'CFURLSetResourcePropertyForKey': ([pointer, pointer, pointer,
+                                               ctypes.POINTER(pointer)], ctypes.c_ubyte),
+            'CFEqual': ([pointer, pointer], ctypes.c_ubyte),
+            'CFRelease': ([pointer], None),
+        }
+        for name, (arguments, result) in signatures.items():
+            function = getattr(self.cf, name)
+            function.argtypes, function.restype = arguments, result
+        self.libc.acl_get_fd_np.argtypes = [ctypes.c_int, ctypes.c_int]
+        self.libc.acl_get_fd_np.restype = pointer
+        self.libc.acl_get_entry.argtypes = [pointer, ctypes.c_int, ctypes.POINTER(pointer)]
+        self.libc.acl_get_entry.restype = ctypes.c_int
+        self.libc.acl_free.argtypes = [pointer]
+        self.libc.acl_free.restype = ctypes.c_int
+        self.keys = {name: pointer.in_dll(self.cf, name).value for name in (
+            'kCFURLFileResourceIdentifierKey', 'kCFURLVolumeIdentifierKey',
+            'kCFURLIsDirectoryKey', 'kCFURLIsExcludedFromBackupKey', 'kCFBooleanTrue')}
+        if not all(self.keys.values()):
+            raise ValueError('missingPublicConstant')
+
+    def own(self, value):
+        if not value:
+            raise ValueError('missingCFValue')
+        self.objects.append(value)
+        return value
+
+    def close(self):
+        for value in reversed(self.objects):
+            self.cf.CFRelease(value)
+        self.objects.clear()
+
+    def url(self, text):
+        string = self.own(self.cf.CFStringCreateWithCString(None, text.encode('utf-8'), 0x08000100))
+        return self.own(self.cf.CFURLCreateWithString(None, string, None))
+
+    def property(self, url, key):
+        value, error = self.ctypes.c_void_p(), self.ctypes.c_void_p()
+        success = self.cf.CFURLCopyResourcePropertyForKey(
+            url, self.keys[key], self.ctypes.byref(value), self.ctypes.byref(error))
+        if error.value:
+            self.own(error.value)
+        if value.value:
+            self.own(value.value)
+        if not success or not value.value or error.value:
+            raise ValueError('resourcePropertyUnavailable')
+        return value.value
+
+    def empty_acl(self, descriptor):
+        # Public sys/acl.h: ACL_TYPE_EXTENDED = 0x100, ACL_FIRST_ENTRY = 0.
+        self.ctypes.set_errno(0)
+        acl = self.libc.acl_get_fd_np(descriptor, 0x100)
+        if not acl:
+            if self.ctypes.get_errno() == errno.ENOENT:
+                return
+            raise PermissionError('aclUnavailable')
+        try:
+            entry = self.ctypes.c_void_p()
+            self.ctypes.set_errno(0)
+            result = self.libc.acl_get_entry(acl, 0, self.ctypes.byref(entry))
+            # Darwin returns -1/EINVAL at the end of a valid ACL, not POSIX's 0.
+            if result != -1 or self.ctypes.get_errno() != errno.EINVAL or entry.value:
+                raise PermissionError('unsafeACL')
+        finally:
+            if self.libc.acl_free(acl) != 0:
+                raise PermissionError('aclReleaseFailed')
+
+    def bind(self, reference, portal):
+        self.cf.CFURLClearResourcePropertyCache(reference)
+        self.cf.CFURLClearResourcePropertyCache(portal)
+        for key in ('kCFURLFileResourceIdentifierKey', 'kCFURLVolumeIdentifierKey'):
+            if not self.cf.CFEqual(self.property(reference, key), self.property(portal, key)):
+                raise PermissionError('referenceMismatch')
+        if not self.cf.CFEqual(self.property(reference, 'kCFURLIsDirectoryKey'),
+                               self.keys['kCFBooleanTrue']):
+            raise PermissionError('notDirectory')
+
+    def exclude(self, reference):
+        error = self.ctypes.c_void_p()
+        success = self.cf.CFURLSetResourcePropertyForKey(
+            reference, self.keys['kCFURLIsExcludedFromBackupKey'],
+            self.keys['kCFBooleanTrue'], self.ctypes.byref(error))
+        if error.value:
+            self.own(error.value)
+        if not success or error.value:
+            raise PermissionError('backupExclusionFailed')
+
+
+def _private_backup_namespace(run_id, identity=None):
+    root, parent = os.fstat(3), os.fstat(4)
+    if (not stat.S_ISDIR(root.st_mode) or root.st_uid != os.getuid()
+            or os.geteuid() != os.getuid() or stat.S_IMODE(root.st_mode) != 0o700
+            or root.st_nlink < 2 or not stat.S_ISDIR(parent.st_mode)):
+        raise PermissionError('unsafeMetadataNamespace')
+    current = (root.st_dev, root.st_ino, parent.st_dev, parent.st_ino)
+    if identity is not None and identity != current:
+        raise PermissionError('metadataDescriptorsChanged')
+    entry = os.stat(run_id, dir_fd=4, follow_symlinks=False)
+    if (not stat.S_ISDIR(entry.st_mode)
+            or (entry.st_dev, entry.st_ino) != current[:2]):
+        raise PermissionError('metadataNamespaceChanged')
+    return current
+
+
+def _private_backup():
+    """FDs authorize identity; only the opaque public reference authorizes CF mutation.
+
+    Success is meaningful only after the native parent reaps this process and
+    performs its own fresh, bound readback. External delegated writes are not joined.
+    """
+    if sys.platform != 'darwin':
+        raise PermissionError('unsupportedMetadataPlatform')
+    reference = os.environ.get('PAPERLENS_BACKUP_REFERENCE', '')
+    if (not reference or len(reference.encode('utf-8')) > 256
+            or any(ord(character) < 32 or 127 <= ord(character) <= 159 for character in reference)):
+        raise ValueError('invalidMetadataReference')
+    run_id = safe_uuid(os.environ.get('PAPERLENS_BACKUP_RUN_ID', ''))
+    identity = _private_backup_namespace(run_id)
+    cf = _BackupCoreFoundation()
+    try:
+        target = cf.url(reference)
+        if not cf.cf.CFURLIsFileReferenceURL(target):
+            raise PermissionError('notFileReference')
+        portal = cf.url('file:///dev/fd/3')
+
+        def bound():
+            _private_backup_namespace(run_id, identity)
+            cf.empty_acl(3)
+            cf.bind(target, portal)
+            _private_backup_namespace(run_id, identity)
+
+        bound()
+        cf.exclude(target)
+        bound()
+        if not cf.cf.CFEqual(cf.property(target, 'kCFURLIsExcludedFromBackupKey'),
+                               cf.keys['kCFBooleanTrue']):
+            raise PermissionError('backupExclusionNotObserved')
+        bound()
+    finally:
+        cf.close()
+
+
 class AttemptBusy(Exception):
     pass
 
@@ -1650,6 +1808,16 @@ class Server:
 
 
 def main() -> int:
+    if sys.argv[1:]:
+        status = 1
+        try:
+            if sys.argv[1:] == ['--private-backup']:
+                _private_backup()
+                status = 0
+        except BaseException:
+            pass
+        # Do not run Python finalizers or leave child-local deferred CF writers alive.
+        os._exit(status)
     try:
         os.umask(0o077)
         if os.getpgrp() != os.getpid():

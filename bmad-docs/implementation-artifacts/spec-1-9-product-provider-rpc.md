@@ -75,6 +75,176 @@ by a failing native regression, corrected with UTF-8 syntax scanning and verifie
 in paired browser/device cases. Final follow-up CLEAR/APPROVE, no remaining scoped
 findings; this does not substitute for the final executor QA/acceptance cohort.
 
+### Native existing-Agent backup enforcement continuation
+
+After7f512d7, enforce approved privacy on the real exclusively created Agent
+runtime namespace before Python/SDK spawn. Reuse TopologyOwnedFixtures and its
+actual retained descriptor/device/inode/parent identity, not a synthetic auth
+store, new owner registry or guessed SDK home. Exact union: existing
+PaperLensApp/App/TopologyFixtures.swift, ProviderAgent/main.swift, Package.swift,
+new Tests/Product/AgentPrivateBackupTests.swift and this Spec.
+
+Bounded public-API experiment, private .build UUID fixtures only: setting
+Foundation backup metadata through /dev/fd failed and did not mark the actual
+directory; ordinary and public file-reference URLs each succeeded and actual
+directory reads confirmed exclusion. No Foundation interposition, SDK import,
+real auth, external temporary-write grant or protected renderer/collector trial.
+Use a public file-reference URL captured for the newly owned empty namespace,
+retain actual descriptor and validate current named/descriptor identity and0700
+ownership before/after metadata operations. Refuse replacement/symlink/wrong mode,
+never repair permissions or reuse an existing namespace. One preparation attempt;
+failure cannot be renewed by later mode repair. Read-only backup validation must
+not reapply missing metadata. Bridge fails before spawning on missing proof.
+
+Tests use only exclusively created .build fixtures and actual Foundation metadata;
+cover successful marking, read-only detection of removed exclusion, sticky failed
+preparation, and replacement/symlink/mode refusal preserving unrelated markers.
+The directory exclusion covers its contents for backup, but does not authenticate
+SDK descendant modes, no-Paper persistence, producer cessation, purge or P1/P3/P6.
+No renderer/native collector/SDK trial is admitted or renewed by this slice.
+
+Scoped independent review18 found HIGH/P1: the captured reference and actual
+descriptor were not joined; an ancestor swap during capture could mark a different
+directory and return success. A real capture-time regression reproduced three
+failures before correction. Public Foundation descriptor identity reads through
+/dev/fd were then demonstrated: non-null opaque file+volume identifiers matched
+the retained directory and rejected another directory on the same volume. Only
+the metadata setter on /dev/fd is unsupported; identity reads are supported here.
+No private identifier decoding or another textual path check is used as proof.
+
+The intermediate preparation compared both public opaque identifiers via NSObject
+equality and required directory types and actual descriptor/named identity before
+metadata mutation and afterward. Missing/unsupported identity failed closed.
+The capture regression supplies a genuinely unrelated moved-directory reference;
+its grouped eight-case PASS was not final fresh-process union proof. The later
+isolated union exposed a real preparation-lifetime failure described below;
+earlier7/503/build receipts do not certify the corrected implementation.
+
+### Next real SDK native-owner contract — scoped source admission
+
+Historical pre-isolation continuation was NOT verified: the 504-case isolated
+union had 503 PASS/1 FAIL; subsequent eight-case runs retained the removal failure.
+Public setxattr/fremovexattr debugger observations (artifact520) establish a
+deferred same-process Spotlight-queue writer from the earlier Foundation setter,
+not a setter in hasBackupExclusion or a demonstrated URL-cache defect. Opaque
+FD-xattr snapshots and ctime exposed actual later reapplication. Architect18 then
+BLOCK/REQUEST CHANGES superseded its intermediate approval for that revision.
+No quiet-period wait, private queue drain or timestamp latch proves completion.
+
+Bounded corrective amendment: reuse the already packaged Python interpreter and
+agent.py in a closed metadata-only entry, without importing/starting the SDK.
+The native owner supplies actual retained directory/parent descriptors as child
+FD3/FD4, the captured public file-reference URI and run UUID, and an exact clean
+environment. The child revalidates directory ownership and public opaque FD/URL
+identity, performs the public CFURL setter and exits. Native actual waitpid plus
+checked local descriptor closes must precede bound parent readback/admission.
+This contains the observed in-process deferred writer; delegated external writer
+authority still requires assessment and is not certified by waitpid. Preserve
+one absolute <=300ms native retirement deadline and permanent actual-owner debt.
+No new binary, entitlement, private API, SDK transport or live SDK execution is
+admitted. The existing interpreter's sandbox/inherit-only signing profile is
+reused; the separate same-ProviderAgent broker target was subsequently withdrawn
+after signing inspection, with the supported replacement detailed below.
+Source union amendment adds existing ProviderAgent/agent.py and
+PaperLensApp/Application/OwnedChildRetirement.swift plus their focused tests;
+existing project target membership is updated only where required. A controlled
+host-Python metadata fixture is not packaged/signed/P1/P3/P6 or SDK acceptance.
+
+Current corrected metadata slice uses a retained public CF reference and CFEqual
+on opaque file+volume identifiers. The parent never invokes the metadata setter.
+The helper's actual zero-status reap and eight checked local descriptor closes
+precede fresh bound readback. Unknown ownership additionally holds an identity-
+bound namespace mutation lease: cleanup, create, links, write-check and the
+bridge's raw directory unlinking are denied. Only selected on-time clean releases
+the lease; late completion or fixture physical teardown cannot discharge debt.
+The failed initial expired-owner fixture did not satisfy namespace preconditions;
+it now uses the existing owned repository .build fixture convention, without
+relaxing production directory validation.
+
+Parent proof: nine fresh-process metadata cases, eight native-owner cases and the
+complete 506-case isolated Product union PASS (artifact556); 562 offline tests
+PASS (artifact559; earlier547); actual unsigned arm64 Main/nested-XPC build and project plist
+lint PASS (artifact558). Physical removal uses the observed newly added attribute
+name without interpreting its format; all FD-xattr bytes and ctime stay unchanged
+during validation and repeated preparation refuses. A real held child verifies
+unknown cleanup refusal, preserved original entry and permanent lease/debt.
+Architect18 final scoped CLEAR/APPROVE resolves both local writer and unknown-
+cleanup findings. Retained warnings include unhandled generated bytecode, weak
+variable diagnostics, unnecessary await and AppIntents extraction; none suppressed.
+This is not delegated-writer absence, signed isolation, actual SDK dispatch/auth,
+content absence/purge, hard-real-time proof, P1/P3/P6 or Story/goal completion.
+
+Non-executing controlled SDK0.160.0 client.py:193–302 exposes public
+CodexConfig.launch_args_override, which supplies Popen argv directly. This is a
+supported way for the official SDK to launch a fixed native broker over its same
+stdio transport; it exposes no process factory/PID. Override bypasses normal
+config_overrides argument construction and checkout-capability setup. No SDK
+import/start/init/auth/network or existing-home access was performed to find it.
+Read-only architect19 WATCH/COMMENT identifies a real bounded startup-only slice,
+not a delivery/QA/privacy verdict or a new policy approval request.
+
+The unchanged ProviderAgent self-execution target is WITHDRAWN. Architect19's
+fresh entitlement inspection establishes that this independently sandboxed XPC
+binary has app-sandbox+network.client, not the inherit-only helper signature.
+Early-main role selection cannot fix sandbox reinitialization. No signed failure
+was executed or invented, and no new binary/entitlement decision is inferred.
+
+Use the already packaged inherit-only Python interpreter and existing agent.py
+as the fixed broker target: launch_args_override=(packagedPython, '-I', '-B',
+existingAgentScript, '--native-broker'). Public SDK start passes the whole tuple
+to its existing Popen/stdio transport. Package CHILD_RIGHTS already signs the
+interpreter and CLI with app-sandbox+inherit only. Architect19 WATCH/COMMENT
+supports this source-level seam; --native-broker remains UNIMPLEMENTED. No new
+binary, entitlement, selector store, alternate RPC backend, SDK private _proc
+access, monkeypatch or automatic SDK close. Fresh native-owned SDK worker uses an exact
+replacement environment; it strongly retains its public SDK client after start.
+Native owns its worker PID/raw pipes/waitpid. SDK Popen closes other inherited
+FDs: use an owned0700 namespace AF_UNIX rendezvous, not an assumed pass_fds hook.
+Native must bind broker identity using kernel peer UID/PID and unique/parent
+process identities matched to its actual captured worker; payload PIDs/UUIDs alone
+never authorize signals, reaping or cleanup. Missing/denied identity fails closed.
+
+Broker launches only the packaged CLI with fixed app-server/--listen/stdio://
+arguments and exact rebuilt environment, initially suspended. Register and check
+EVFILT_PROC NOTE_FORK|NOTE_EXIT while it cannot execute, then resume. Any fork,
+registration gap/error, missing observation or ambiguous identity is permanently
+unknown; no tracking descendants, PID sweeps or killpg. SDK sys/event.h explicitly
+marks NOTE_TRACK/NOTE_TRACKERR/NOTE_CHILD unsupported since10.5, not an available
+atomic descendant tracker. A fork-free observed path is eligible for actual native
+resource retirement; not every path is forced unknown by construction.
+
+Reuse/factor existing operation/independent-terminal/lifetime-root machinery in
+OwnedChildRetirement, not the fixture API or a competing owner. Relay SDK stdio
+unchanged within existing byte/frame/queue/time bounds; private lifecycle control
+is not a new SDK RPC implementation. Startup-only means no SDK initialization,
+login, connectionTest, Paper input or usable/product-clean response. Unsolicited
+startup traffic cannot feed an unbounded SDK router backlog. No per-layer budget
+reset, new timeout, SDK close2s/.5s grace or stdout diagnostics.
+
+Retirement revokes once and shares one absolute monotonic deadline (cumulative
+<=300ms): broker observes CLI exit, actually waitpids it, checks its local closes,
+then emits correlated native-resource record and exits. Worker actually waitpids
+the kernel-authenticated broker child while retaining SDK client; ECHILD is
+unknown, never inferred success. Worker then exits without another SDK call.
+Native actually waitpids worker and checks all its local pipe/listener/control
+closes before internal native-boundary clean. Reaping proves kernel teardown of
+process-private handles, not individually checked SDK FileObject closes. Any
+fork/stall/partial start/close/wait/deadline uncertainty retains actual owners,
+FDs, lanes and namespace forever with admission debt; uncertain broker/worker
+must remain alive to retain their real roots. No _exit/facade loss/late clean or
+replacement releases debt. Native-resource clean is not absent=true, scoped
+SDK-content absence, stageRetire/startupCleanup/paperPurge or P1/P3/P6/StoryDone.
+
+Bounded source union: OwnedChildRetirement.swift, ProviderAgent/main.swift,
+new ProviderAgent/sdk_worker.py, Package.swift, project.pbxproj, topology/build.sh,
+topology/package.py, OwnedChildRetirementTests.swift, new
+Tests/Topology/test_sdk_broker.py and existing test_package.py. Registration-only
+changes where needed; name any necessary bounded amendment before expansion.
+No product contract/validator changes. Parent must check fixed-interpreter bundled
+entry/signing/inherited-sandbox seams before any actual SDK execution; failure
+does not authorize a new helper, signature workaround or entitlement. Native
+controlled fixtures supplement, never replace real SDK/signed acceptance.
+
 ## Current minimal SDK/product decision — NOT ADMITTED, 2026-10-14
 
 Whole-Epic continuation is at integration source5f08cc2. This existing Spec, not

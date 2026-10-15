@@ -121,9 +121,11 @@ private final class PythonBridge: NSObject, ProviderFrameTransport, @unchecked S
     let id = UUID().uuidString.lowercased()
     guard let own = TopologyOwnedFixtures(root: root, runID: id) else { return false }
     runtimeDirectory = own
+    guard own.prepareBackupExclusion() else { return false }
     for name in ["tmp", "codex", "work"] {
       guard mkdirat(own.descriptor, name, 0o700) == 0 else { return false }
     }
+    guard own.hasBackupExclusion() else { return false }
     let privateRoot = root.appendingPathComponent(id)
     let macOS = Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS")
     let interpreter = macOS.appendingPathComponent("python3")
@@ -413,7 +415,7 @@ private final class PythonBridge: NSObject, ProviderFrameTransport, @unchecked S
     let old = connection
     connection = nil
     old?.invalidate()
-    if let own = runtimeDirectory {
+    if let own = runtimeDirectory, own.permitsNamespaceMutation {
       for name in ["tmp", "codex", "work"] { unlinkat(own.descriptor, name, AT_REMOVEDIR) }
       own.cleanup()
     }

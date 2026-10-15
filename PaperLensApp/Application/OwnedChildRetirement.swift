@@ -2,15 +2,26 @@ import Darwin
 import Dispatch
 import Foundation
 
-/// Fixture-only native direct-child retirement. This is not a Provider/SDK adapter.
+/// Native direct-child retirement. Clean proves owned retirement, not metadata admission or SDK work.
 public final class OwnedChildRetirement: @unchecked Sendable {
   public enum Fixture: Sendable { case trueUtility, cat }
+  internal struct BackupLaunch: Sendable {
+    let namespace: TopologyOwnedFixtures
+    let interpreter: URL
+    let script: URL
+    let reference: String
+  }
+  private enum Command: Sendable {
+    case fixture(Fixture, URL)
+    case backup(BackupLaunch)
+  }
   public enum Failure: Sendable, Equatable {
     case deadline, setup, spawn, close, wait, admissionBlocked
   }
   public struct Proof: Sendable, Equatable {
     public let checkedDescriptorCloses: Int
     public let childReaped: Bool
+    public let childExitStatus: Int32
   }
   public enum Terminal: Sendable, Equatable {
     case clean(Proof)
@@ -47,8 +58,7 @@ public final class OwnedChildRetirement: @unchecked Sendable {
 
   private final class Core: @unchecked Sendable {
     let identity = UUID()
-    let fixture: Fixture
-    let cwd: URL
+    let command: Command
     let deadline: UInt64
     let hooks: Hooks
     // Prepared before the invocation. The terminal lane never joins the operation lane.
@@ -67,9 +77,8 @@ public final class OwnedChildRetirement: @unchecked Sendable {
     var actions: posix_spawn_file_actions_t?
     var attributes: posix_spawnattr_t?
 
-    init(fixture: Fixture, cwd: URL, deadline: UInt64, hooks: Hooks) {
-      self.fixture = fixture
-      self.cwd = cwd
+    init(command: Command, deadline: UInt64, hooks: Hooks) {
+      self.command = command
       self.deadline = deadline
       self.hooks = hooks
     }
@@ -82,6 +91,12 @@ public final class OwnedChildRetirement: @unchecked Sendable {
       guard first else { return }
       guard Roots.shared.admit(self) else {
         select(.unknown(.admissionBlocked))
+        return
+      }
+      if case .backup(let launch) = command,
+        !launch.namespace.beginMetadataMutation(owner: identity)
+      {
+        select(.unknown(.setup))
         return
       }
       let source = DispatchSource.makeTimerSource(queue: terminalLane)
@@ -111,6 +126,9 @@ public final class OwnedChildRetirement: @unchecked Sendable {
         }
         let clean: Bool
         if case .clean = selected { clean = true } else { clean = false }
+        if clean, case .backup(let launch) = command {
+          launch.namespace.endMetadataMutation(owner: identity)
+        }
         Roots.shared.finish(self, clean: clean)
         terminal = selected
         let callbacks = observers
@@ -155,19 +173,35 @@ public final class OwnedChildRetirement: @unchecked Sendable {
     }
     func run() {
       guard permit(.pipe) else { return }
-      var info = stat()
-      guard lstat(cwd.path, &info) == 0,
-        info.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR),
-        info.st_mode & 0o777 == 0o700, info.st_uid == getuid()
-      else {
-        failed(.setup)
-        return
-      }
-      guard permit(.pipe) else { return }
-      guard (try? FileManager.default.contentsOfDirectory(atPath: cwd.path).isEmpty) == true
-      else {
-        failed(.setup)
-        return
+      var aliases: [Int32] = []
+      switch command {
+      case .fixture(_, let cwd):
+        var info = stat()
+        guard lstat(cwd.path, &info) == 0,
+          info.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR),
+          info.st_mode & 0o777 == 0o700, info.st_uid == getuid()
+        else {
+          failed(.setup)
+          return
+        }
+        guard permit(.pipe) else { return }
+        guard (try? FileManager.default.contentsOfDirectory(atPath: cwd.path).isEmpty) == true
+        else {
+          failed(.setup)
+          return
+        }
+      case .backup(let launch):
+        for descriptor in [launch.namespace.descriptor, launch.namespace.metadataParentDescriptor] {
+          guard permit(.pipe) else { return }
+          let alias = fcntl(descriptor, F_DUPFD_CLOEXEC, 64)
+          guard alias >= 0 else {
+            failed(.setup)
+            return
+          }
+          // Record actual ownership immediately, including partial/late setup.
+          lock.withLock { _ = descriptors.insert(alias) }
+          aliases.append(alias)
+        }
       }
       var pipes: [[Int32]] = []
       for _ in 0..<3 {
@@ -218,9 +252,24 @@ public final class OwnedChildRetirement: @unchecked Sendable {
         }
       }
       guard permit(.spawn) else { return }
-      guard posix_spawn_file_actions_addchdir_np(&actions, cwd.path) == 0 else {
+      let directoryResult: Int32
+      switch command {
+      case .fixture(_, let cwd):
+        directoryResult = posix_spawn_file_actions_addchdir_np(&actions, cwd.path)
+      case .backup:
+        directoryResult = posix_spawn_file_actions_addfchdir_np(&actions, aliases[0])
+      }
+      guard directoryResult == 0 else {
         failed(.setup)
         return
+      }
+      // High aliases cannot collide with stdio sources or the fixed metadata targets.
+      for (source, target) in zip(aliases, [Int32(3), Int32(4)]) {
+        guard permit(.spawn) else { return }
+        guard posix_spawn_file_actions_adddup2(&actions, source, target) == 0 else {
+          failed(.setup)
+          return
+        }
       }
       guard permit(.spawn) else { return }
       guard posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_CLOEXEC_DEFAULT)) == 0
@@ -231,16 +280,27 @@ public final class OwnedChildRetirement: @unchecked Sendable {
       var spawned: pid_t = 0
       var spawnResult: Int32 = EINVAL
       if permit(.spawn) {
-        let executable = fixture == .trueUtility ? "/usr/bin/true" : "/bin/cat"
-        let strings = [executable, "PATH=/usr/bin:/bin:/usr/sbin:/sbin", "LANG=C", "LC_ALL=C"]
+        let arguments: [String]
+        var environmentStrings = ["PATH=/usr/bin:/bin:/usr/sbin:/sbin", "LANG=C", "LC_ALL=C"]
+        switch command {
+        case .fixture(let fixture, _):
+          arguments = [fixture == .trueUtility ? "/usr/bin/true" : "/bin/cat"]
+        case .backup(let launch):
+          arguments = [launch.interpreter.path, "-I", "-B", launch.script.path, "--private-backup"]
+          environmentStrings += [
+            "PAPERLENS_BACKUP_REFERENCE=" + launch.reference,
+            "PAPERLENS_BACKUP_RUN_ID=" + launch.namespace.runID,
+          ]
+        }
+        let strings = arguments + environmentStrings
         let allocated = strings.map { strdup($0) }
         if allocated.allSatisfy({ $0 != nil }), permit(.spawn) {
-          var argv = [allocated[0], nil]
-          var environment = [allocated[1], allocated[2], allocated[3], nil]
+          var argv = Array(allocated.prefix(arguments.count)) + [nil]
+          var environment = Array(allocated.dropFirst(arguments.count)) + [nil]
           spawnResult = argv.withUnsafeMutableBufferPointer { args in
             environment.withUnsafeMutableBufferPointer { env in
               posix_spawn(
-                &spawned, executable, &actions, &attributes, args.baseAddress!, env.baseAddress!)
+                &spawned, arguments[0], &actions, &attributes, args.baseAddress!, env.baseAddress!)
             }
           }
           if spawnResult == 0 {
@@ -266,6 +326,7 @@ public final class OwnedChildRetirement: @unchecked Sendable {
         return
       }
       actions = nil
+      for fd in aliases { guard closeOwned(fd) else { return } }
       // Close the parent's child-side copies, then no-input EOF. No pipe read is needed.
       for fd in [pipes[0][0], pipes[1][1], pipes[2][1], pipes[0][1]] {
         guard closeOwned(fd) else { return }
@@ -278,7 +339,9 @@ public final class OwnedChildRetirement: @unchecked Sendable {
       }
       lock.withLock { reaped = true }
       for fd in [pipes[1][0], pipes[2][0]] { guard closeOwned(fd) else { return } }
-      let proof = lock.withLock { Proof(checkedDescriptorCloses: closes, childReaped: reaped) }
+      let proof = lock.withLock {
+        Proof(checkedDescriptorCloses: closes, childReaped: reaped, childExitStatus: status)
+      }
       select(.clean(proof))
     }
   }
@@ -299,8 +362,14 @@ public final class OwnedChildRetirement: @unchecked Sendable {
     deadlineUptimeNanoseconds: UInt64, hooks: Hooks
   ) {
     core = Core(
-      fixture: fixture, cwd: privateWorkingDirectory,
+      command: .fixture(fixture, privateWorkingDirectory),
       deadline: deadlineUptimeNanoseconds, hooks: hooks)
+  }
+  internal init(
+    backup: BackupLaunch, deadlineUptimeNanoseconds: UInt64, hooks: Hooks = Hooks()
+  ) {
+    core = Core(
+      command: .backup(backup), deadline: deadlineUptimeNanoseconds, hooks: hooks)
   }
   public func retire() { core.invoke() }
   public func observeTerminal(_ observer: @escaping @Sendable (Terminal) -> Void) {

@@ -35,6 +35,220 @@ def fixture_root(directory):
     return root
 
 
+class PrivateBackupRoleTests(unittest.TestCase):
+    def test_exact_role_exits_without_starting_normal_agent(self):
+        for arguments, succeeds in ((['--private-backup'], True),
+                                    (['--private-backup', 'extra'], False),
+                                    (['--private-backup=anything'], False),
+                                    (['unknown'], False)):
+            with self.subTest(arguments=arguments), \
+                    patch.object(sys, 'argv', ['agent.py', *arguments]), \
+                    patch.object(agent, '_private_backup') as role, \
+                    patch.object(agent, 'Server') as server, \
+                    patch.object(agent.os, '_exit', side_effect=SystemExit) as exit_process:
+                with self.assertRaises(SystemExit):
+                    agent.main()
+                exit_process.assert_called_once_with(0 if succeeds else 1)
+                self.assertEqual(role.call_count, int(succeeds))
+                server.assert_not_called()
+
+    def test_role_error_exits_silently_without_normal_agent(self):
+        with patch.object(sys, 'argv', ['agent.py', '--private-backup']), \
+                patch.object(agent, '_private_backup', side_effect=PermissionError('secret')), \
+                patch.object(agent, 'Server') as server, \
+                patch.object(agent.os, '_exit', side_effect=SystemExit) as exit_process, \
+                patch.object(sys, 'stdout') as stdout, patch.object(sys, 'stderr') as stderr:
+            with self.assertRaises(SystemExit):
+                agent.main()
+            exit_process.assert_called_once_with(1)
+            server.assert_not_called()
+            stdout.write.assert_not_called()
+            stderr.write.assert_not_called()
+
+    def test_nondarwin_has_no_namespace_or_framework_effects(self):
+        with patch.object(sys, 'platform', 'linux'), \
+                patch.object(agent, '_private_backup_namespace') as namespace, \
+                patch.object(agent, '_BackupCoreFoundation') as framework:
+            with self.assertRaises(PermissionError):
+                agent._private_backup()
+            namespace.assert_not_called()
+            framework.assert_not_called()
+
+    def test_invalid_inputs_have_no_namespace_or_framework_effects(self):
+        run = '12345678-1234-4abc-8def-123456789abc'
+        for reference, run_id in (
+                ('', run), ('x' * 257, run), ('é' * 129, run), ('bad\x00uri', run),
+                ('bad\nuri', run), ('bad\x7furi', run), ('bad\x85uri', run),
+                ('\ud800', run), ('file://opaque', ''), ('file://opaque', run.upper()),
+                ('file://opaque', str(uuid.uuid1())), ('file://opaque', '../' + run)):
+            with self.subTest(reference=repr(reference), run_id=run_id), \
+                    patch.object(sys, 'platform', 'darwin'), \
+                    patch.object(agent.os, 'environ', {'PAPERLENS_BACKUP_REFERENCE': reference,
+                                                      'PAPERLENS_BACKUP_RUN_ID': run_id}), \
+                    patch.object(agent, '_private_backup_namespace') as namespace, \
+                    patch.object(agent, '_BackupCoreFoundation') as framework:
+                with self.assertRaises((ValueError, UnicodeError)):
+                    agent._private_backup()
+                namespace.assert_not_called()
+                framework.assert_not_called()
+
+    def test_actual_namespace_rejects_symlink_replacement_and_changed_descriptors(self):
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory)
+            run_id = str(uuid.uuid4())
+            root = parent / run_id
+            root.mkdir(mode=0o700)
+            root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            parent_fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            actual_fstat, actual_stat = os.fstat, os.stat
+            try:
+                def mapped_stat(path, *, dir_fd=None, follow_symlinks=True):
+                    return actual_stat(path, dir_fd=parent_fd if dir_fd == 4 else dir_fd,
+                                       follow_symlinks=follow_symlinks)
+
+                with patch.object(agent.os, 'fstat', side_effect=lambda fd: actual_fstat(
+                        {3: root_fd, 4: parent_fd}[fd])), \
+                        patch.object(agent.os, 'stat', side_effect=mapped_stat):
+                    identity = agent._private_backup_namespace(run_id)
+                    with self.assertRaises(PermissionError):
+                        agent._private_backup_namespace(run_id, (0, 0, 0, 0))
+                    root.chmod(0o755)
+                    with self.assertRaises(PermissionError):
+                        agent._private_backup_namespace(run_id)
+                    root.chmod(0o700)
+                    detached = parent / 'detached'
+                    root.rename(detached)
+                    root.symlink_to(detached, target_is_directory=True)
+                    with self.assertRaises(PermissionError):
+                        agent._private_backup_namespace(run_id)
+                    root.unlink()
+                    root.mkdir(mode=0o700)
+                    with self.assertRaises(PermissionError):
+                        agent._private_backup_namespace(run_id)
+            finally:
+                os.close(root_fd)
+                os.close(parent_fd)
+
+    def test_namespace_failure_never_loads_framework(self):
+        with patch.object(sys, 'platform', 'darwin'), \
+                patch.dict(os.environ, {'PAPERLENS_BACKUP_REFERENCE': 'file://opaque',
+                                        'PAPERLENS_BACKUP_RUN_ID': str(uuid.uuid4())}), \
+                patch.object(agent, '_private_backup_namespace', side_effect=PermissionError), \
+                patch.object(agent, '_BackupCoreFoundation') as framework:
+            with self.assertRaises(PermissionError):
+                agent._private_backup()
+            framework.assert_not_called()
+
+    def test_darwin_acl_end_semantics_reject_entries_and_unknown_errors(self):
+        import ctypes
+        wrapper = agent._BackupCoreFoundation.__new__(agent._BackupCoreFoundation)
+        wrapper.ctypes = ctypes
+        for result, error, accepted in ((-1, errno.EINVAL, True), (0, 0, False),
+                                         (-1, errno.EIO, False), (1, 0, False)):
+            with self.subTest(result=result, error=error):
+                def get_entry(*arguments):
+                    ctypes.set_errno(error)
+                    return result
+                from unittest.mock import Mock
+                wrapper.libc = SimpleNamespace(acl_get_fd_np=Mock(return_value=123),
+                                              acl_get_entry=Mock(side_effect=get_entry),
+                                              acl_free=Mock(return_value=0))
+                if accepted:
+                    wrapper.empty_acl(3)
+                else:
+                    with self.assertRaises(PermissionError):
+                        wrapper.empty_acl(3)
+                wrapper.libc.acl_free.assert_called_once_with(123)
+
+        for error in (errno.ENOENT, errno.EIO, 0):
+            with self.subTest(absent_error=error):
+                def absent(*arguments):
+                    ctypes.set_errno(error)
+                    return None
+                wrapper.libc = SimpleNamespace(acl_get_fd_np=Mock(side_effect=absent),
+                                              acl_free=Mock())
+                if error == errno.ENOENT:
+                    wrapper.empty_acl(3)
+                else:
+                    with self.assertRaises(PermissionError):
+                        wrapper.empty_acl(3)
+                wrapper.libc.acl_free.assert_not_called()
+
+    @unittest.skipUnless(sys.platform == 'darwin', 'public Darwin CoreFoundation fixture')
+    def test_public_cf_role_is_reaped_then_read_back_and_rejects_unbound_targets(self):
+        import ctypes
+        # The fixture launches only the existing Python interpreter and agent script.
+        # It never invokes the SDK, profile resolution, credentials, or normal Agent.
+        cf = agent._BackupCoreFoundation()
+        self.addCleanup(cf.close)
+        pointer = ctypes.c_void_p
+        cf.cf.CFURLCreateFileReferenceURL.argtypes = [pointer, pointer, ctypes.POINTER(pointer)]
+        cf.cf.CFURLCreateFileReferenceURL.restype = pointer
+        cf.cf.CFURLGetString.argtypes = [pointer]
+        cf.cf.CFURLGetString.restype = pointer
+        cf.cf.CFStringGetCString.argtypes = [pointer, ctypes.c_char_p, ctypes.c_long, ctypes.c_uint32]
+        cf.cf.CFStringGetCString.restype = ctypes.c_ubyte
+        def excluded(url):
+            cf.cf.CFURLClearResourcePropertyCache(url)
+            return bool(cf.cf.CFEqual(cf.property(url, 'kCFURLIsExcludedFromBackupKey'),
+                                      cf.keys['kCFBooleanTrue']))
+
+        def reference(url):
+            value = cf.own(cf.cf.CFURLCreateFileReferenceURL(None, url, None))
+            text = ctypes.create_string_buffer(1024)
+            self.assertTrue(cf.cf.CFStringGetCString(cf.cf.CFURLGetString(value), text,
+                                                    len(text), 0x08000100))
+            return text.value.decode('utf-8')
+
+        bootstrap = (
+            'import os,runpy,sys; '
+            'os.dup2(int(sys.argv[1]),3); os.dup2(int(sys.argv[2]),4); '
+            'script=sys.argv[3]; sys.argv=[script]+sys.argv[4:]; '
+            'runpy.run_path(script,run_name="__main__")')
+        for scenario in ('bound', 'unrelated-reference', 'path-url', 'replaced-namespace', 'extra-argv'):
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as directory:
+                parent = Path(directory).resolve()
+                run_id = str(uuid.uuid4())
+                root = parent / run_id
+                root.mkdir(mode=0o700)
+                other = parent / 'unrelated'
+                other.mkdir(mode=0o700)
+                root_url, other_url = cf.url(root.as_uri()), cf.url(other.as_uri())
+                uri = reference(other_url if scenario == 'unrelated-reference' else root_url)
+                if scenario == 'path-url':
+                    uri = root.as_uri()
+                with ExitStack() as stack:
+                    def descriptor(path):
+                        original = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+                        try:
+                            # Avoid dup2 source/target overlap in the child bootstrap.
+                            fd = agent.fcntl.fcntl(original, agent.fcntl.F_DUPFD_CLOEXEC, 10)
+                        finally:
+                            os.close(original)
+                        stack.callback(os.close, fd)
+                        return fd
+                    root_fd, parent_fd = descriptor(root), descriptor(parent)
+                    if scenario == 'replaced-namespace':
+                        root.rename(parent / 'detached')
+                        root.mkdir(mode=0o700)
+                    arguments = ['--private-backup']
+                    if scenario == 'extra-argv':
+                        arguments.append('extra')
+                    completed = agent.subprocess.run(
+                        [sys.executable, '-B', '-c', bootstrap, str(root_fd), str(parent_fd),
+                         str(ROOT / 'ProviderAgent/agent.py'), *arguments],
+                        env={'PYTHONPATH': str(ROOT / 'Contracts/ProviderRPC'),
+                             'PAPERLENS_BACKUP_REFERENCE': uri,
+                             'PAPERLENS_BACKUP_RUN_ID': run_id},
+                        pass_fds=(root_fd, parent_fd), capture_output=True, timeout=10)
+                    self.assertEqual(completed.returncode, 0 if scenario == 'bound' else 1)
+                    self.assertEqual((completed.stdout, completed.stderr), (b'', b''))
+                    # subprocess.run has waited/reaped; this is not an exit-request ACK.
+                    observed = cf.url((parent / 'detached').as_uri()) if scenario == 'replaced-namespace' else root_url
+                    self.assertEqual(excluded(observed), scenario == 'bound')
+                    self.assertFalse(excluded(other_url))
+
+
 class AttemptFixtureTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()

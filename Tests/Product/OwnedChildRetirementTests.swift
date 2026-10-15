@@ -52,7 +52,9 @@ final class OwnedChildRetirementTests: XCTestCase {
   }
   private var budgetSeconds: TimeInterval { Double(cleanupBudgetNanoseconds) / 1_000_000_000 }
   private func assertClean(_ owner: OwnedChildRetirement) {
-    XCTAssertEqual(owner.terminal, .clean(.init(checkedDescriptorCloses: 6, childReaped: true)))
+    XCTAssertEqual(
+      owner.terminal,
+      .clean(.init(checkedDescriptorCloses: 6, childReaped: true, childExitStatus: 0)))
     XCTAssertTrue(owner.testingChildExists)
     XCTAssertTrue(owner.testingReaped)
     XCTAssertEqual(owner.testingDescriptorCount, 0)
@@ -233,5 +235,39 @@ final class OwnedChildRetirementTests: XCTestCase {
     XCTAssertEqual(child.terminal, .unknown(.deadline))
     XCTAssertFalse(child.testingChildExists)
     XCTAssertEqual(child.testingDescriptorCount, 0)
+  }
+
+  func testBackupAlreadyExpiredDeadlineOwnsNamespaceWithoutDuplicatingDescriptors() async throws {
+    let repository = URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+    let directory = repository.appendingPathComponent(
+      ".build/owned-backup-deadline-" + UUID().uuidString.lowercased(), isDirectory: true)
+    try FileManager.default.createDirectory(
+      at: directory, withIntermediateDirectories: false,
+      attributes: [.posixPermissions: 0o700])
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let namespace = try XCTUnwrap(
+      TopologyOwnedFixtures(root: directory, runID: UUID().uuidString.lowercased()))
+    let child = OwnedChildRetirement(
+      backup: .init(
+        namespace: namespace, interpreter: URL(fileURLWithPath: "/usr/bin/python3"),
+        script: URL(fileURLWithPath: "/unopened-agent.py"), reference: "unopened-reference"),
+      deadlineUptimeNanoseconds: DispatchTime.now().uptimeNanoseconds)
+    let done = terminalExpectation(child)
+    child.retire()
+    await fulfillment(of: [done], timeout: budgetSeconds)
+    XCTAssertEqual(child.terminal, .unknown(.deadline))
+    XCTAssertFalse(child.testingChildExists)
+    XCTAssertEqual(child.testingDescriptorCount, 0)
+    XCTAssertTrue(child.testingRetained)
+    XCTAssertGreaterThanOrEqual(fcntl(namespace.descriptor, F_GETFD), 0)
+    XCTAssertGreaterThanOrEqual(fcntl(namespace.metadataParentDescriptor, F_GETFD), 0)
+    XCTAssertFalse(namespace.permitsNamespaceMutation)
+    XCTAssertFalse(namespace.cleanup())
+    XCTAssertFalse(namespace.create("M"))
+    XCTAssertFalse(namespace.prepareLinks(["M"]))
+    var entry = stat()
+    XCTAssertEqual(
+      fstatat(namespace.metadataParentDescriptor, namespace.runID, &entry, AT_SYMLINK_NOFOLLOW), 0)
   }
 }
