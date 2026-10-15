@@ -7,6 +7,11 @@ intent to its real attempt/slot/configuration lineage before activation.
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
+from provider_rpc import CONTRACT
+
+
+_LIMITS = CONTRACT["limits"]
+
 
 class AccountLoginError(ValueError):
     """Closed local error; never includes SDK payloads or exception text."""
@@ -25,13 +30,19 @@ class BrowserInstructions:
     auth_url: str
 
 
-def _instruction_text(value):
-    return (
+def _instruction_text(value, maximum=_LIMITS["maxStringBytes"]):
+    if not (
         type(value) is str
         and bool(value)
+        and len(value) <= maximum
         and value == value.strip()
         and value.isprintable()
-    )
+    ):
+        return False
+    try:
+        return len(value.encode("utf-8", errors="strict")) <= maximum
+    except UnicodeError:
+        return False
 
 
 def _validate_url(url):
@@ -54,9 +65,9 @@ def _validate_url(url):
 
 
 def validate_browser_instructions(payload: dict) -> BrowserInstructions:
-    """Project the public response, not endpoint trust or byte-bound admission.
+    """Project the public response within the approved presentation byte bounds.
 
-    The owner admits SDK provenance and transport bounds before this call.
+    The owner admits SDK provenance and bounds ingress before this call.
     No browser launch, authenticated URL allowlist or expiry is inferred.
     """
     if (
@@ -64,7 +75,8 @@ def validate_browser_instructions(payload: dict) -> BrowserInstructions:
         or set(payload) != {"type", "loginId", "authUrl"}
         or type(payload["type"]) is not str
         or payload["type"] != "chatgpt"
-        or not all(_instruction_text(payload[key]) for key in ("loginId", "authUrl"))
+        or not _instruction_text(payload["loginId"])
+        or not _instruction_text(payload["authUrl"], _LIMITS["maxAuthURLBytes"])
     ):
         raise AccountLoginError("invalidInstructions")
     _validate_url(payload["authUrl"])
@@ -74,9 +86,10 @@ def validate_browser_instructions(payload: dict) -> BrowserInstructions:
 def validate_device_instructions(payload: dict) -> DeviceInstructions:
     """Validate the SDK response root's JSON/alias model projection.
 
-    Shape and safe presentation only: the public SDK specifies no expiry,
-    interval, byte bounds, code alphabet, or authenticated URL allowlist.
-    The caller admits provenance and existing transport bounds first.
+    Shape and bounded presentation only: the public SDK specifies no expiry,
+    interval, byte bounds, code alphabet, or authenticated URL allowlist. The
+    application's approved ordinary-string byte bound applies here; it is not
+    an SDK fact. The caller admits provenance and bounds ingress first.
     """
     if (
         type(payload) is not dict

@@ -1,4 +1,4 @@
-"""Synthetic filesystem/mocked-tool tests; no signing, downloads, or runtime execution."""
+"""Synthetic filesystem/pure projection tests; no signing, downloads, or SDK/native execution."""
 
 import base64
 import copy
@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import plistlib
+import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -218,11 +219,14 @@ class PackagingTests(unittest.TestCase):
         runtime, cli, record = self.runtime()
         cli_hash, record_bytes = package.digest(cli), record.read_bytes()
         self.file("ProviderAgent/agent.py")
+        self.file("ProviderAgent/account_login.py", b"# private account controller fixture\n")
         self.file("Contracts/ProviderRPC/provider_rpc.py")
         self.file("Contracts/ProviderRPC/contract.json", b"{}")
         framework = package.install_runtime(app, runtime, cli.relative_to(runtime), self.root)
         version = framework / "Versions/3.13"
         agent = app / "Contents/XPCServices/ProviderAgent.xpc/Contents"
+        self.assertEqual((agent / "Resources/account_login.py").read_bytes(),
+                         b"# private account controller fixture\n")
         self.assertEqual((agent / "MacOS/python3").resolve(), version / "bin/python3.13")
         self.assertEqual((agent / "MacOS/codex").resolve(), version / cli.relative_to(runtime))
         self.assertFalse((version / cli.relative_to(runtime)).is_symlink())
@@ -235,6 +239,71 @@ class PackagingTests(unittest.TestCase):
         self.assertEqual(package.digest(version / "PythonRuntime"), package.digest(runtime / "lib/libpython3.13.dylib"))
         package.check_tree(app)
         self.assertTrue(cli.is_file() and not cli.is_symlink())
+
+    def test_packaged_account_projection_imports_only_packaged_contract(self):
+        app = self.app()
+        runtime, cli, _ = self.runtime()
+        repository = MODULE_PATH.parents[2]
+        for relative in ("ProviderAgent/agent.py", "ProviderAgent/account_login.py",
+                         "Contracts/ProviderRPC/provider_rpc.py", "Contracts/ProviderRPC/contract.json"):
+            self.file(relative, (repository / relative).read_bytes())
+        package.install_runtime(app, runtime, cli.relative_to(runtime), self.root)
+        resources = app / "Contents/XPCServices/ProviderAgent.xpc/Contents/Resources"
+        for relative in ("ProviderAgent/agent.py", "ProviderAgent/account_login.py",
+                         "Contracts/ProviderRPC/provider_rpc.py", "Contracts/ProviderRPC/contract.json"):
+            self.assertEqual((resources / Path(relative).name).read_bytes(),
+                             (repository / relative).read_bytes())
+        rpc_spec = importlib.util.spec_from_file_location("_packaged_rpc_fixture", resources / "provider_rpc.py")
+        rpc = importlib.util.module_from_spec(rpc_spec)
+        rpc_spec.loader.exec_module(rpc)
+        login_spec = importlib.util.spec_from_file_location("_packaged_account_fixture", resources / "account_login.py")
+        login = importlib.util.module_from_spec(login_spec)
+        with patch.dict(sys.modules, {"provider_rpc": rpc, login_spec.name: login}):
+            login_spec.loader.exec_module(login)
+            self.assertIs(login.CONTRACT, rpc.CONTRACT)
+            self.assertEqual(rpc.CONTRACT, json.loads((resources / "contract.json").read_bytes()))
+            controller = login.AccountLoginController("chatgpt")
+            intent = controller.replace_intent()
+            prefix = "https://example.invalid/"
+            payload = {"type": "chatgpt", "loginId": "private-fixture-login",
+                       "authUrl": prefix + "x" * (4096 - len(prefix))}
+            self.assertTrue(controller.accept_instructions(intent, payload))
+            self.assertEqual(controller.state, "waiting")
+            self.assertEqual(controller.instructions.auth_url, payload["authUrl"])
+            payload["authUrl"] += "x"
+            with self.assertRaises(login.AccountLoginError) as caught:
+                login.validate_browser_instructions(payload)
+            self.assertEqual(str(caught.exception), "invalidInstructions")
+
+    def test_account_resource_missing_or_symlink_refuses_before_runtime_copy(self):
+        parent = self.root
+        for kind in ("missing", "directory", "source_symlink", "destination_symlink"):
+            with self.subTest(kind=kind):
+                self.root = parent / kind
+                app = self.app()
+                runtime, cli, _ = self.runtime()
+                self.file("ProviderAgent/agent.py")
+                self.file("Contracts/ProviderRPC/provider_rpc.py")
+                self.file("Contracts/ProviderRPC/contract.json", b"{}")
+                marker = self.file("untouched-marker", b"private fixture, not a credential")
+                source = self.root / "ProviderAgent/account_login.py"
+                if kind == "directory":
+                    source.mkdir()
+                elif kind == "source_symlink":
+                    source.symlink_to(os.path.relpath(marker, source.parent))
+                elif kind == "destination_symlink":
+                    source.write_bytes(b"controller fixture")
+                    destination = app / "Contents/XPCServices/ProviderAgent.xpc/Contents/Resources/account_login.py"
+                    destination.symlink_to(os.path.relpath(marker, destination.parent))
+                before = package.tree_inventory(self.root)
+                code = "resource_symlink_collision" if kind == "destination_symlink" else "agent_resource_missing"
+                with patch.object(package, "command") as command:
+                    with self.assertRaisesRegex(package.Failure, code):
+                        package.install_runtime(app, runtime, cli.relative_to(runtime), self.root)
+                    command.assert_not_called()
+                self.assertEqual(package.tree_inventory(self.root), before)
+                self.assertEqual(marker.read_bytes(), b"private fixture, not a credential")
+                self.assertFalse((app / "Contents/XPCServices/ProviderAgent.xpc/Contents/Frameworks/PythonRuntime.framework").exists())
 
     def test_architecture_mismatch_fails_before_signing(self):
         with patch.object(package, "command", return_value=(b"x86_64\n", b"")) as command:
@@ -508,6 +577,7 @@ class PackagingTests(unittest.TestCase):
         product_inventory = package.tree_inventory(app)
         keywords = {"prepared_acquisition": acquisition_work, "prepared_runtime": runtime_work} if prepared else {}
         self.file("ProviderAgent/agent.py")
+        self.file("ProviderAgent/account_login.py")
         self.file("Contracts/ProviderRPC/provider_rpc.py")
         self.file("Contracts/ProviderRPC/contract.json", b"{}")
         order = []

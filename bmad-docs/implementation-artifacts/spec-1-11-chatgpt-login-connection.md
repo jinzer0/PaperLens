@@ -16,6 +16,40 @@ credential/CODEX_HOME/protected-trial renewal/remote permission is inferred.
 
 ## Current whole-Epic source continuation — 2026-10-14
 
+### Bounded account presentation / packaged-resource continuation
+
+Continue after312fd1c without reopening the approved RPC/private-state choices.
+The shared account controller is not currently installed by the runtime packager,
+and its SDK instruction projection has no byte bounds. Deliver that concrete
+integration slice in ProviderAgent/account_login.py, its existing paired test,
+scripts/topology/package.py and its existing test. Import limits from the same
+packaged provider_rpc module: loginId/userCode/device verificationUrl stay256
+decoded UTF-8 bytes; browser authUrl alone permits4096. Accept equality, reject
+one-over and malformed surrogate input, and count UTF-8 bytes rather than Unicode
+characters, without exposing SDK instructions/errors.
+Keep current closed mode/key/URL/correlation/terminal rules; owner registers every
+SDK loginId before projection and retains cleanup responsibility on rejection.
+
+Install account_login.py beside agent.py/provider_rpc.py/contract.json using the
+same owned regular-source / no-symlink-destination resource-copy rules. Actual
+runtime packaging owns Python resources; adding an isolated Xcode resource with
+missing Python dependencies is not an alternative. Private synthetic packaging
+tests must check exact copied bytes and refusal of missing/symlink source or
+symlink destination, without invoking signing, downloading or executing the SDK.
+This makes the real controller available to the packaged endpoint; it does not
+implement SDK dispatch, private-root enforcement, auth, polling, CAS or purge.
+
+Parent result: shared canonical limits now enforce decoded UTF-8 boundaries in
+the actual browser/device projector, including fail-closed current intent and no
+private display on overflow. The packager installs account_login.py and preflights
+all four regular sources/no-symlink destinations before copying the runtime.
+554 offline union tests PASS; standalone account27 PASS. Copied-module import uses
+the copied provider_rpc/contract bytes, exercises the4096/4097 browser boundary
+and never imports/initializes the SDK. Missing/directory/symlink source or linked
+destination leaves the whole owned fixture inventory and marker unchanged, with
+no commands/signing. Native Swift and build inputs are unchanged from312fd1c;
+no native build, live auth, physical SDK/backup/purge acceptance or trial is claimed.
+
 The Story1.1–1.26 execution request resumes this existing work unit on integration
 branch `issue/epic-1-product-vertical-integration-20261010`, baseline `57fa3c4`.
 The historical planning/source-session restrictions below describe those sessions;

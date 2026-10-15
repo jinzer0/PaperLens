@@ -275,6 +275,15 @@ def validate_receipts(acquisition_work, root, arch, *, runtime_work, prepared):
 
 def install_runtime(app, runtime, cli_relative, root):
     agent = app / "Contents/XPCServices/ProviderAgent.xpc/Contents"
+    sources = (
+        (root / "ProviderAgent/agent.py", "agent.py"),
+        (root / "ProviderAgent/account_login.py", "account_login.py"),
+        (root / "Contracts/ProviderRPC/provider_rpc.py", "provider_rpc.py"),
+        (root / "Contracts/ProviderRPC/contract.json", "contract.json"),
+    )
+    for source, name in sources:
+        require(source.is_file() and not source.is_symlink(), "agent_resource_missing")
+        require(not (agent / "Resources" / name).is_symlink(), "resource_symlink_collision")
     framework = agent / "Frameworks/PythonRuntime.framework"
     require(not framework.exists(), "runtime_already_embedded")
     version = framework / "Versions/3.13"
@@ -299,7 +308,7 @@ def install_runtime(app, runtime, cli_relative, root):
     cli_destination = agent / "MacOS/codex"
     require(not cli_destination.exists() and not cli_destination.is_symlink(), "cli_destination_exists")
     cli_destination.symlink_to(os.path.relpath(cli_source, cli_destination.parent))
-    for source, name in ((root / "ProviderAgent/agent.py", "agent.py"), (root / "Contracts/ProviderRPC/provider_rpc.py", "provider_rpc.py"), (root / "Contracts/ProviderRPC/contract.json", "contract.json")):
+    for source, name in sources:
         require(source.is_file() and not source.is_symlink(), "agent_resource_missing")
         target = agent / "Resources" / name
         require(not target.is_symlink(), "resource_symlink_collision")

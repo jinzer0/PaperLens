@@ -5,6 +5,7 @@ import unittest
 
 
 _SOURCE = Path(__file__).resolve().parents[2] / "ProviderAgent" / "account_login.py"
+sys.path.insert(0, str(_SOURCE.parent.parent / "Contracts" / "ProviderRPC"))
 _SPEC = importlib.util.spec_from_file_location("paperlens_account_login", _SOURCE)
 device = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = device
@@ -66,6 +67,23 @@ class DeviceInstructionTests(unittest.TestCase):
     def test_no_guessed_code_alphabet_or_expiry(self):
         value = device.validate_device_instructions(instructions(userCode="AB CD-123"))
         self.assertEqual(value.user_code, "AB CD-123")
+
+    def test_device_instruction_fields_enforce_decoded_utf8_bytes(self):
+        for field, attribute in (("loginId", "login_id"), ("userCode", "user_code")):
+            for text in ("x" * 256, "é" * 128):
+                with self.subTest(field=field, bytes=len(text.encode("utf-8"))):
+                    projected = device.validate_device_instructions(instructions(**{field: text}))
+                    self.assertEqual(getattr(projected, attribute), text)
+            for text in ("x" * 257, "é" * 128 + "x", "private\ud800value"):
+                self.assert_invalid(instructions(**{field: text}))
+        prefix = "https://example.invalid/"
+        for text in (prefix + "x" * (256 - len(prefix)),
+                     prefix + "é" * 116):
+            self.assertEqual(len(text.encode("utf-8")), 256)
+            self.assertEqual(device.validate_device_instructions(
+                instructions(verificationUrl=text)).verification_url, text)
+            self.assert_invalid(instructions(verificationUrl=text + "x"))
+        self.assert_invalid(instructions(verificationUrl=prefix + "private\ud800"))
 
     def test_unsafe_url_syntax(self):
         for url in ("http://example.invalid/device", "file:///secret", "javascript:secret",
@@ -220,6 +238,46 @@ def browser_instructions(**changes):
 
 
 class BrowserLoginTests(unittest.TestCase):
+    def test_browser_auth_url_has_the_only_4096_byte_exception(self):
+        prefix = "https://example.invalid/"
+        for size in (256, 257, 4096):
+            remaining = size - len(prefix)
+            for text in (prefix + "x" * remaining,
+                         prefix + "é" * (remaining // 2) + "x" * (remaining % 2)):
+                self.assertEqual(len(text.encode("utf-8")), size)
+                projected = device.validate_browser_instructions(browser_instructions(authUrl=text))
+                self.assertEqual(projected.auth_url, text)
+                if size == 4096:
+                    with self.assertRaises(device.AccountLoginError) as caught:
+                        device.validate_browser_instructions(browser_instructions(authUrl=text + "x"))
+                    self.assertEqual(str(caught.exception), "invalidInstructions")
+        for login_id in ("x" * 256, "é" * 128):
+            self.assertEqual(device.validate_browser_instructions(
+                browser_instructions(loginId=login_id)).login_id, login_id)
+        for payload in (browser_instructions(loginId="x" * 257),
+                        browser_instructions(loginId="é" * 128 + "x"),
+                        browser_instructions(loginId="private\ud800"),
+                        browser_instructions(authUrl=prefix + "private\ud800")):
+            with self.assertRaises(device.AccountLoginError) as caught:
+                device.validate_browser_instructions(payload)
+            self.assertEqual(str(caught.exception), "invalidInstructions")
+
+    def test_oversized_instructions_fail_current_intent_without_private_display(self):
+        for mode, payload in (
+            ("chatgpt", browser_instructions(authUrl="https://example.invalid/" + "x" * 4096)),
+            ("chatgptDeviceCode", instructions(userCode="private" + "x" * 256)),
+        ):
+            controller = device.AccountLoginController(mode)
+            intent = controller.replace_intent()
+            with self.assertRaises(device.AccountLoginError) as caught:
+                controller.accept_instructions(intent, payload)
+            self.assertEqual(str(caught.exception), "invalidInstructions")
+            self.assertEqual(controller.state, "failed")
+            self.assertIsNone(controller.instructions)
+            self.assertIsNone(controller.login_id)
+            self.assertFalse(controller.accept_completion(intent, completion()))
+            self.assertNotIn("private", repr(controller.__dict__))
+
     def test_browser_projection_is_immutable_and_does_not_print_private_values(self):
         value = device.validate_browser_instructions(browser_instructions())
         self.assertEqual(value.login_id, "fixture-login")
