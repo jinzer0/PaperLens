@@ -59,20 +59,21 @@ class DependencyLockTests(unittest.TestCase):
             self.assertEqual(item["cause"], lock_validator.CAUSES[item["code"]])
             self.assertEqual(item["retestCondition"], lock_validator.RETEST[item["code"]])
 
-    def test_initial_candidate_is_exactly_four_blocked_points(self):
+    def test_initial_candidate_is_exactly_two_arm64_points(self):
         code, output = self.validate()
         self.assertEqual(code, 2)
         self.assertTrue(output["conformant"])
         self.assertEqual(output["promotion"], "not_promoted")
         cells = self.matrix["cells"]
+        self.assertEqual(lock_validator.POINTS, ("minimum/arm64", "current/arm64"))
         self.assertEqual([c["osRole"] + "/" + c["cpu"] for c in cells],
                          list(lock_validator.POINTS))
         self.assertEqual([c["status"] for c in cells],
-                         ["blocked", "blocked", "not_run", "blocked"])
+                         ["blocked", "not_run"])
         self.assertEqual([c["osBuild"] for c in cells],
-                         ["24A335", "24A335", "25G241", "25G241"])
+                         ["24A335", "25G241"])
         self.assertEqual([c["osVersion"] for c in cells],
-                         ["15.0", "15.0", "26.7.1", "26.7.1"])
+                         ["15.0", "26.7.1"])
         self.assertEqual(self.matrix["specCommit"],
                          "33dcd8db20a122d13a6ce0a16b92077f278facb6")
         for cell in cells:
@@ -83,21 +84,23 @@ class DependencyLockTests(unittest.TestCase):
                 self.assertIn(missing, cell["blockers"])
             self.assertIn("PACKAGED_PROOF_NOT_RUN", cell["blockers"])
             self.assertNotIn("MIN_OS_BUILD_UNPINNED", cell["blockers"])
-        for index in (0, 1, 3):
-            self.assertIn("NATIVE_EXEC_UNAVAILABLE", cells[index]["blockers"])
-        self.assertNotIn("NATIVE_EXEC_UNAVAILABLE", cells[2]["blockers"])
+        self.assertIn("NATIVE_EXEC_UNAVAILABLE", cells[0]["blockers"])
+        self.assertNotIn("NATIVE_EXEC_UNAVAILABLE", cells[1]["blockers"])
+        self.assertNotIn("x86_64", json.dumps(self.matrix))
         self.assertNotIn("P1", json.dumps(output))
         self.assertNotIn("P2", json.dumps(output))
 
-    def test_minimum_target_requires_exact_build_for_both_cpus(self):
+    def test_arm64_targets_require_exact_os_builds(self):
         for index in (0, 1):
-            for build in (None, "24A348", "24B83", "24Z999", "24A335a",
+            for build in (None, "24A335", "24A348", "24B83", "24Z999", "24A335a",
                           "24", "25G241", True, False, 24, 24.0, [], {}):
                 with self.subTest(cpu=self.matrix["cells"][index]["cpu"], build=build):
                     matrix = copy.deepcopy(self.matrix)
                     matrix["cells"][index]["osBuild"] = build
+                    if build == self.matrix["cells"][index]["osBuild"]:
+                        continue
                     result = self.validate(matrix)
-                    self.invalid(result, "MIN_OS_BUILD_UNPINNED" if build is None
+                    self.invalid(result, "MIN_OS_BUILD_UNPINNED" if build is None and index == 0
                                  else "IDENTITY_MISMATCH")
                     self.assertEqual(result[1]["diagnostics"][0]["pointerOrPoint"],
                                      lock_validator.POINTS[index])
@@ -113,7 +116,7 @@ class DependencyLockTests(unittest.TestCase):
             point = lock_validator.POINTS[index]
             self.assertEqual({d["code"] for d in output["diagnostics"]
                               if d["pointerOrPoint"] == point}, set(cell["blockers"]))
-        for index in (0, 1, 3):
+        for index in (0,):
             for status in ("not_run", "failed", "verified"):
                 with self.subTest(point=lock_validator.POINTS[index], status=status):
                     changed = copy.deepcopy(matrix)
@@ -236,8 +239,8 @@ class DependencyLockTests(unittest.TestCase):
                 matrix[key] = bad
                 self.invalid(self.validate(matrix))
 
-    def test_exact_four_points_and_no_host_as_minimum(self):
-        for index in range(4):
+    def test_exact_two_points_and_no_host_as_minimum(self):
+        for index in range(2):
             matrix = copy.deepcopy(self.matrix)
             del matrix["cells"][index]
             self.invalid(self.validate(matrix), "MATRIX_POINT_MISSING")
@@ -245,13 +248,34 @@ class DependencyLockTests(unittest.TestCase):
         matrix["cells"].append(copy.deepcopy(matrix["cells"][0]))
         self.invalid(self.validate(matrix), "MATRIX_POINT_DUPLICATE")
         matrix = copy.deepcopy(self.matrix)
-        matrix["cells"][0] = copy.deepcopy(matrix["cells"][2])
+        matrix["cells"][0] = copy.deepcopy(matrix["cells"][1])
         self.invalid(self.validate(matrix), "MATRIX_POINT_DUPLICATE")
         for field, value in (("osBuild", "25G241"), ("osVersion", "26.7.1"),
                              ("cpu", "rosetta"), ("osRole", "host")):
             matrix = copy.deepcopy(self.matrix)
             matrix["cells"][0][field] = value
             self.invalid(self.validate(matrix))
+
+    def test_intel_extra_legacy_and_nonnative_cells_are_rejected(self):
+        for cpu in ("x86_64", "i386", "rosetta", "unknown"):
+            for index in range(2):
+                with self.subTest(cpu=cpu, index=index):
+                    matrix = copy.deepcopy(self.matrix)
+                    matrix["cells"][index]["cpu"] = cpu
+                    self.invalid(self.validate(matrix), "IDENTITY_MISMATCH")
+        for roles in (("minimum",), ("current",), ("minimum", "current")):
+            matrix = copy.deepcopy(self.matrix)
+            for role in roles:
+                cell = copy.deepcopy(matrix["cells"][0 if role == "minimum" else 1])
+                cell["cpu"] = "x86_64"
+                matrix["cells"].append(cell)
+            self.invalid(self.validate(matrix), "IDENTITY_MISMATCH")
+        matrix, artifacts, evidence = self.complete_fixture()
+        for point in ("minimum/x86_64", "current/x86_64"):
+            for field, inputs in (("artifacts", artifacts), ("evidence", evidence)):
+                extra = {**inputs, point: b"unused Intel bytes"}
+                args = {"artifacts": artifacts, "evidence": evidence, field: extra}
+                self.invalid(self.validate(matrix, **args), "IDENTITY_MISMATCH")
 
     def test_matrix_closed_keys_types_blockers_and_fake_promotion(self):
         for container in ((), ("cells", 0)):
@@ -324,7 +348,7 @@ class DependencyLockTests(unittest.TestCase):
         for source_id in ("2026-01-01 00:00:00 " + "ab" * 20,
                           "ab" * 21, "/private/SECRET"):
             matrix, artifacts, evidence = self.complete_fixture()
-            cell = matrix["cells"][2]
+            cell = matrix["cells"][1]
             point = "current/arm64"
             cell["sqlite"]["sqliteSourceId"] = source_id
             receipt = json.loads(evidence[point])
@@ -347,7 +371,7 @@ class DependencyLockTests(unittest.TestCase):
         for options, accepted in cases:
             with self.subTest(options=options):
                 matrix, artifacts, evidence = self.complete_fixture()
-                cell = matrix["cells"][2]
+                cell = matrix["cells"][1]
                 point = "current/arm64"
                 cell["sqlite"]["compileOptions"] = options
                 receipt = json.loads(evidence[point])
@@ -365,7 +389,7 @@ class DependencyLockTests(unittest.TestCase):
 
     def test_compile_fact_consumer_requires_exact_list_type(self):
         matrix, _, _ = self.complete_fixture()
-        sqlite = matrix["cells"][2]["sqlite"]
+        sqlite = matrix["cells"][1]["sqlite"]
         for options in (("ENABLE_FTS5",), {"ENABLE_FTS5"}, None):
             changed = copy.deepcopy(sqlite)
             changed["compileOptions"] = options
@@ -402,8 +426,8 @@ class DependencyLockTests(unittest.TestCase):
             self.invalid(self.validate(changed, artifacts=artifacts, evidence=evidence))
         changed = copy.deepcopy(matrix)
         reused = dict(artifacts)
-        reused["minimum/x86_64"] = reused["minimum/arm64"]
-        changed["cells"][1]["artifact"]["sha256"] = lock_validator.digest(reused["minimum/x86_64"])
+        reused["current/arm64"] = reused["minimum/arm64"]
+        changed["cells"][1]["artifact"]["sha256"] = lock_validator.digest(reused["current/arm64"])
         self.invalid(self.validate(changed, artifacts=reused, evidence=evidence),
                      "MATRIX_POINT_DUPLICATE")
 
@@ -425,13 +449,13 @@ class DependencyLockTests(unittest.TestCase):
             changed = copy.deepcopy(matrix)
             proofs = dict(evidence)
             proofs[point] = b"{" + extra + proofs[point][1:]
-            changed["cells"][2]["evidence"]["sha256"] = lock_validator.digest(proofs[point])
+            changed["cells"][1]["evidence"]["sha256"] = lock_validator.digest(proofs[point])
             self.invalid(self.validate(changed, artifacts=artifacts, evidence=proofs))
 
     def test_failed_packaged_point_still_blocks_and_missing_causes_cannot_be_hidden(self):
         matrix = copy.deepcopy(self.matrix)
-        matrix["cells"][2]["status"] = "failed"
-        matrix["cells"][2]["blockers"][0] = "PACKAGED_PROOF_FAILED"
+        matrix["cells"][1]["status"] = "failed"
+        matrix["cells"][1]["blockers"][0] = "PACKAGED_PROOF_FAILED"
         code, output = self.validate(matrix)
         self.assertEqual(code, 2)
         self.assertTrue(output["conformant"])
@@ -453,7 +477,7 @@ class DependencyLockTests(unittest.TestCase):
             receipt = json.loads(proofs[point])
             receipt[field] = value
             proofs[point] = lock_validator.json_bytes(receipt)
-            changed["cells"][2]["evidence"]["sha256"] = lock_validator.digest(proofs[point])
+            changed["cells"][1]["evidence"]["sha256"] = lock_validator.digest(proofs[point])
             self.invalid(self.validate(changed, artifacts=artifacts, evidence=proofs))
         for event in lock_validator.EVENTS:
             for field in ("observed", "ownedPurge"):
@@ -462,16 +486,16 @@ class DependencyLockTests(unittest.TestCase):
                 receipt = json.loads(proofs[point])
                 receipt["events"][event][field] = False
                 proofs[point] = lock_validator.json_bytes(receipt)
-                changed["cells"][2]["evidence"]["sha256"] = lock_validator.digest(proofs[point])
+                changed["cells"][1]["evidence"]["sha256"] = lock_validator.digest(proofs[point])
                 self.invalid(self.validate(changed, artifacts=artifacts, evidence=proofs))
         for field in lock_validator.SQLITE_KEYS:
             changed = copy.deepcopy(matrix)
             proofs = dict(evidence)
-            changed["cells"][2]["sqlite"][field] = None
+            changed["cells"][1]["sqlite"][field] = None
             receipt = json.loads(proofs[point])
-            receipt["sqlite"] = changed["cells"][2]["sqlite"]
+            receipt["sqlite"] = changed["cells"][1]["sqlite"]
             proofs[point] = lock_validator.json_bytes(receipt)
-            changed["cells"][2]["evidence"]["sha256"] = lock_validator.digest(proofs[point])
+            changed["cells"][1]["evidence"]["sha256"] = lock_validator.digest(proofs[point])
             self.invalid(self.validate(changed, artifacts=artifacts, evidence=proofs))
 
     def test_safe_diagnostics_never_echo_keys_values_paths_or_exceptions(self):
@@ -513,9 +537,7 @@ class DependencyLockTests(unittest.TestCase):
                 self.assertEqual(lock_validator.main(args), 1)
             self.assertEqual(matrix_path.read_bytes(), generated)
 
-    def test_delivered_candidate_uses_actual_manifest_and_source_bytes(self):
-        # Parent generates this fourth target after source is final, not with an
-        # example digest. Missing matrix intentionally fails the approved gate.
+    def test_current_candidate_binds_actual_source_without_runtime_promotion(self):
         matrix_bytes = (SCRIPTS / "runtime-matrix.json").read_bytes()
         source = Path(lock_validator.__file__).read_bytes()
         self.assertEqual(json.loads(matrix_bytes),
@@ -523,6 +545,10 @@ class DependencyLockTests(unittest.TestCase):
         code, output = lock_validator.validate(self.lock_bytes, matrix_bytes, source)
         self.assertEqual(code, 2)
         self.assertTrue(output["conformant"])
+        self.assertEqual(output["promotion"], "not_promoted")
+        self.assertTrue(output["diagnostics"])
+        self.assertEqual({cell["cpu"] for cell in json.loads(matrix_bytes)["cells"]},
+                         {"arm64"})
 
 
 if __name__ == "__main__":

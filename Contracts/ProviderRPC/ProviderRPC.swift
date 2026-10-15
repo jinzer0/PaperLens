@@ -193,6 +193,7 @@ private struct Contract {
         let methods = root["methods"] as? [String: Any],
         limits["maxBodyBytes"] == ProviderRPC.maxBodyBytes,
         limits["maxFrameBytes"] == ProviderRPC.maxFrameBytes,
+        limits["maxAuthURLBytes"] == 4096,
         ["maxDepth", "maxObjectKeys", "maxArrayItems", "maxStringBytes"].allSatisfy({
           (limits[$0] ?? 0) > 0
         })
@@ -220,13 +221,28 @@ private struct Contract {
     return value
   }
 
-  func checkString(_ string: String) throws {
-    guard try string.utf8.count <= limit("maxStringBytes") else {
+  func checkString(_ string: String, maximum: Int? = nil) throws {
+    guard try string.utf8.count <= (maximum ?? limit("maxStringBytes")) else {
       throw ProviderRPCError.protocolViolation
     }
   }
 
-  func checkStructure(_ value: Any, depth: Int = 0) throws {
+  func checkStructure(_ value: Any) throws {
+    var browser = false
+    if let object = value as? [String: Any],
+      try matches(object, schema: envelope("result")),
+      let definition = methods["product.loginStart"] as? [String: Any],
+      let schema = definition["result"] as? [String: Any],
+      let result = object["result"] as? [String: Any],
+      try matches(result, schema: schema),
+      let instructions = result["instructions"] as? [String: Any]
+    {
+      browser = instructions["mode"] as? String == "browser"
+    }
+    try checkStructure(value, depth: 0, path: [], browser: browser)
+  }
+
+  private func checkStructure(_ value: Any, depth: Int, path: [String], browser: Bool) throws {
     if value is JSONInteger {
       return
     } else if let object = value as? [String: Any] {
@@ -235,15 +251,21 @@ private struct Contract {
       }
       for (key, item) in object {
         try checkString(key)
-        try checkStructure(item, depth: depth + 1)
+        try checkStructure(item, depth: depth + 1, path: path + [key], browser: browser)
       }
     } else if let array = value as? [Any] {
       guard try depth < limit("maxDepth"), try array.count <= limit("maxArrayItems") else {
         throw ProviderRPCError.protocolViolation
       }
-      for item in array { try checkStructure(item, depth: depth + 1) }
+      for item in array {
+        try checkStructure(item, depth: depth + 1, path: path + [""], browser: browser)
+      }
     } else if let string = value as? String {
-      try checkString(string)
+      var maximum: Int?
+      if browser && path == ["result", "instructions", "authUrl"] {
+        maximum = try limit("maxAuthURLBytes")
+      }
+      try checkString(string, maximum: maximum)
     } else if let number = value as? NSNumber {
       guard number.doubleValue.isFinite else { throw ProviderRPCError.protocolViolation }
     } else if !(value is NSNull) {
@@ -252,6 +274,12 @@ private struct Contract {
   }
 
   func matches(_ value: Any, schema: [String: Any]) throws -> Bool {
+    if schema["nullable"] as? Bool == true, value is NSNull { return true }
+    if let branches = schema["oneOf"] as? [[String: Any]] {
+      var count = 0
+      for branch in branches { if try matches(value, schema: branch) { count += 1 } }
+      return count == 1
+    }
     if let ref = schema["ref"] as? String {
       guard let target = definitions[ref] as? [String: Any] else {
         throw ProviderRPCError.protocolViolation
@@ -266,6 +294,13 @@ private struct Contract {
         for (key, rule) in fields {
           guard let child = object[key], let childSchema = rule as? [String: Any],
             try matches(child, schema: childSchema)
+          else { return false }
+        }
+      }
+      if schema["cleanProof"] as? Bool == true, object["state"] as? String == "clean" {
+        for key in ["stopped", "closed", "absent"] {
+          guard let proof = object[key] as? NSNumber,
+            CFGetTypeID(proof) == CFBooleanGetTypeID(), proof.boolValue
           else { return false }
         }
       }
@@ -322,7 +357,18 @@ private struct Contract {
         return false
       }
     case "string":
-      guard value is String else { return false }
+      guard let string = value as? String else { return false }
+      let ordinaryMaximum = try limit("maxStringBytes")
+      let maximum =
+        schema["maxBytes"] as? Int
+        ?? (schema["maxBytesLimit"] as? String).flatMap { limits[$0] }
+        ?? ordinaryMaximum
+      guard string.utf8.count >= (schema["minBytes"] as? Int ?? 0),
+        string.utf8.count <= maximum
+      else { return false }
+      if schema["httpsUrl"] as? Bool == true, !httpsURL(string) { return false }
+    case "null":
+      guard value is NSNull else { return false }
     case "uuid":
       guard let string = value as? String, let uuid = UUID(uuidString: string),
         uuid.uuidString.lowercased() == string
@@ -337,6 +383,37 @@ private struct Contract {
     if let constant = schema["const"], !equalJSON(value, constant) { return false }
     if let values = schema["enum"] as? [Any], !values.contains(where: { equalJSON(value, $0) }) {
       return false
+    }
+    return true
+  }
+
+  private func httpsURL(_ string: String) -> Bool {
+    guard
+      !string.unicodeScalars.contains(where: {
+        $0.value < 32 || (127...159).contains($0.value)
+          || CharacterSet.whitespacesAndNewlines.contains($0) || $0.value == 92
+      }), let components = URLComponents(string: string),
+      components.scheme?.lowercased() == "https", let host = components.host, !host.isEmpty,
+      components.user == nil, components.password == nil,
+      let schemeEnd = string.range(of: "://")
+    else { return false }
+    let authority = string[schemeEnd.upperBound...].utf8.prefix {
+      $0 != 47 && $0 != 63 && $0 != 35
+    }
+    guard !authority.contains(64) else { return false }
+    var suffix = authority.dropFirst(authority.count)
+    if authority.first == 91 {
+      guard let end = authority.firstIndex(of: 93) else { return false }
+      suffix = authority[authority.index(after: end)...]
+    } else if let colon = authority.firstIndex(of: 58) {
+      suffix = authority[colon...]
+    }
+    if !suffix.isEmpty {
+      guard suffix.first == 58, suffix.count > 1,
+        suffix.dropFirst().allSatisfy({ (48...57).contains($0) }),
+        let port = Int(String(decoding: suffix.dropFirst(), as: UTF8.self)),
+        (0...65535).contains(port)
+      else { return false }
     }
     return true
   }
@@ -391,6 +468,7 @@ private struct JSONParser {
     guard offset == bytes.count, let object = value as? [String: Any] else {
       throw ProviderRPCError.protocolViolation
     }
+    try contract.checkStructure(object)
     return object
   }
 
@@ -416,7 +494,7 @@ private struct JSONParser {
       if consume(125) { return object }
       while true {
         skipWhitespace()
-        let key = try parseString()
+        let key = try parseString(isKey: true)
         guard object[key] == nil, try object.count < contract.limit("maxObjectKeys") else {
           throw ProviderRPCError.protocolViolation
         }
@@ -469,7 +547,7 @@ private struct JSONParser {
     offset += literal.count
   }
 
-  private mutating func parseString() throws -> String {
+  private mutating func parseString(isKey: Bool = false) throws -> String {
     let start = offset
     guard consume(34) else { throw ProviderRPCError.protocolViolation }
     while offset < bytes.count {
@@ -480,7 +558,9 @@ private struct JSONParser {
           let value = try JSONSerialization.jsonObject(
             with: Data(bytes[start..<offset]), options: .fragmentsAllowed)
           guard let string = value as? String else { throw ProviderRPCError.protocolViolation }
-          try contract.checkString(string)
+          // Bounded lexical retention only; parse() validates the exact root/path before export.
+          try contract.checkString(
+            string, maximum: contract.limit(isKey ? "maxStringBytes" : "maxAuthURLBytes"))
           return string
         } catch { throw ProviderRPCError.protocolViolation }
       }

@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import plistlib
+import platform
 import posixpath
 import re
 import shutil
@@ -26,7 +27,7 @@ SANDBOX = "com.apple.security.app-sandbox"
 INHERIT = "com.apple.security.inherit"
 NETWORK = "com.apple.security.network.client"
 CHILD_RIGHTS = {SANDBOX: True, INHERIT: True}
-ARCHES = ("arm64", "x86_64")
+ARCHES = ("arm64",)
 PREPARED_ACQUISITION = "full-acquisition-arm64-ae7a27c9-e584-40ef-a164-e9631d68d11a"
 PREPARED_RUNTIME = "runtime-assets-only-b022b900-7e64-4981-9d56-370201c7954a"
 PREPARED_LOCK_HASH = "32be141a78f7ef2480892023d94a9a617f77bdd475bd19611500a3dab4530fb8"
@@ -205,8 +206,11 @@ def frozen(text):
 
 
 def validate_prepared_inputs(root, arch, acquisition_work, runtime_work):
+    require(arch in ARCHES, "native_build_host_not_proven")
     acquire = load_acquire(root)
     try:
+        require(acquire.platform.machine() == "arm64", "native_build_host_not_proven")
+        require(acquire.run(["/usr/sbin/sysctl", "-in", "sysctl.proc_translated"]) == "0", "rosetta_or_unknown_host_forbidden")
         parent = Path(acquire.git(root, "rev-parse", "--path-format=absolute", "--git-common-dir")).parent
         topology = acquire.safe_path(parent, ".build/topology")
         require(root != parent and root.is_relative_to(topology) and (root / ".git").is_file(), "isolated_project_required")
@@ -218,8 +222,6 @@ def validate_prepared_inputs(root, arch, acquisition_work, runtime_work):
         require(acquisition_work.is_dir() and runtime_work.is_dir() and cache.is_dir(), "prepared_input_missing")
         acquire.check_hash(acquire.LOCK_PATH, PREPARED_LOCK_HASH)
         lock = acquire.load_lock()
-        require(arch == "arm64" and acquire.platform.machine() == "arm64", "native_build_host_not_proven")
-        require(acquire.run(["/usr/sbin/sysctl", "-in", "sysctl.proc_translated"]) == "0", "rosetta_or_unknown_host_forbidden")
         acquire.toolchain(lock)
         acquire.git(root, "merge-base", "--is-ancestor", lock["approvalCommit"], "HEAD")
         intent_path = "bmad-docs/implementation-artifacts/spec-1-1-isolated-app-topology.md"
@@ -237,6 +239,7 @@ def validate_prepared_inputs(root, arch, acquisition_work, runtime_work):
 
 
 def validate_receipts(acquisition_work, root, arch, *, runtime_work, prepared):
+    require(arch in ARCHES, "unsupported_arch")
     if prepared:
         validate_prepared_inputs(root, arch, acquisition_work, runtime_work)
     lock_path = root / "scripts/topology/dependencies.json"
@@ -330,6 +333,7 @@ def check_relative_load(name, path, kind, app):
 
 
 def inspect_macho(path, arch, app=None):
+    require(arch in ARCHES, "unsupported_arch")
     output, _ = command(["/usr/bin/lipo", "-archs", path])
     require(output.decode().strip().split() == [arch], "binary_architecture_mismatch")
     output, _ = command(["/usr/bin/otool", "-hv", path])
@@ -466,6 +470,7 @@ def safe_manifest(manifest):
 
 def package(root, arch, products, *, prepared_acquisition=None, prepared_runtime=None):
     require(sys.platform == "darwin" and arch in ARCHES, "macos_arch_required")
+    require(platform.machine() == "arm64", "native_build_host_not_proven")
     root = root.resolve()
     work = root / ".build/topology" / arch
     require(work.is_dir() and work.resolve().is_relative_to(root), "work_directory_missing")
@@ -473,6 +478,8 @@ def package(root, arch, products, *, prepared_acquisition=None, prepared_runtime
     manifest_path = work / "manifest.json"
     require(not destination.exists() and not destination.is_symlink() and not manifest_path.exists() and not manifest_path.is_symlink(), "output_already_exists")
     require((prepared_acquisition is None) == (prepared_runtime is None), "prepared_inputs_required_together")
+    translated, _ = command(["/usr/sbin/sysctl", "-in", "sysctl.proc_translated"])
+    require(translated.strip() == b"0", "rosetta_or_unknown_host_forbidden")
     prepared = prepared_acquisition is not None
     acquisition_work = Path(prepared_acquisition).absolute() if prepared else work
     runtime_work = Path(prepared_runtime).absolute() if prepared else work

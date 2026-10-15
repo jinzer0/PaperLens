@@ -5,6 +5,7 @@ import math
 from pathlib import Path
 import re
 import struct
+from urllib.parse import urlsplit
 
 
 with Path(__file__).with_name("contract.json").open(encoding="utf-8") as _file:
@@ -39,15 +40,15 @@ def _pairs(pairs):
     return result
 
 
-def _check_string(value):
+def _check_string(value, maximum=None):
     try:
-        if len(value.encode("utf-8", errors="strict")) > _LIMITS["maxStringBytes"]:
+        if len(value.encode("utf-8", errors="strict")) > (maximum if maximum is not None else _LIMITS["maxStringBytes"]):
             _violation()
     except UnicodeError:
         _violation()
 
 
-def _check_structure(value, depth=0):
+def _check_structure(value, depth=0, path=(), browser=False):
     if type(value) is dict:
         depth += 1
         if depth > _LIMITS["maxDepth"] or len(value) > _LIMITS["maxObjectKeys"]:
@@ -56,15 +57,16 @@ def _check_structure(value, depth=0):
             if type(key) is not str:
                 _violation()
             _check_string(key)
-            _check_structure(item, depth)
+            _check_structure(item, depth, path + (key,), browser)
     elif type(value) is list:
         depth += 1
         if depth > _LIMITS["maxDepth"] or len(value) > _LIMITS["maxArrayItems"]:
             _violation()
         for item in value:
-            _check_structure(item, depth)
+            _check_structure(item, depth, path + (None,), browser)
     elif type(value) is str:
-        _check_string(value)
+        maximum = _LIMITS["maxAuthURLBytes"] if browser and path == ("result", "instructions", "authUrl") else None
+        _check_string(value, maximum)
     elif type(value) is float:
         if not math.isfinite(value):
             _violation()
@@ -75,7 +77,12 @@ def _check_structure(value, depth=0):
 def _check_root(value):
     if type(value) is not dict:
         _violation()
-    _check_structure(value)
+    browser = (
+        _matches(value, CONTRACT["envelopes"]["result"])
+        and _matches(value["result"], CONTRACT["methods"]["product.loginStart"]["result"])
+        and value["result"]["instructions"]["mode"] == "browser"
+    )
+    _check_structure(value, browser=browser)
 
 
 def _check_raw_depth(text):
@@ -185,6 +192,10 @@ def decode_frame(frame: bytes) -> dict:
 
 
 def _matches(value, schema):
+    if schema.get("nullable") and value is None:
+        return True
+    if "oneOf" in schema:
+        return sum(_matches(value, branch) for branch in schema["oneOf"]) == 1
     if "ref" in schema:
         return _matches(value, CONTRACT["definitions"][schema["ref"]])
     kind = schema["type"]
@@ -196,6 +207,8 @@ def _matches(value, schema):
             value.keys() != fields.keys()
             or any(not _matches(value[key], rule) for key, rule in fields.items())
         ):
+            return False
+        if schema.get("cleanProof") and value["state"] == "clean" and not all(value[key] is True for key in ("stopped", "closed", "absent")):
             return False
         observation = schema.get("syscallObservation")
         if observation is not None:
@@ -223,6 +236,18 @@ def _matches(value, schema):
     elif kind == "string":
         if type(value) is not str:
             return False
+        try:
+            size = len(value.encode("utf-8", errors="strict"))
+        except UnicodeError:
+            return False
+        maximum = schema.get("maxBytes", _LIMITS.get(schema.get("maxBytesLimit"), _LIMITS["maxStringBytes"]))
+        if size < schema.get("minBytes", 0) or size > maximum:
+            return False
+        if schema.get("httpsUrl") and not _https_url(value):
+            return False
+    elif kind == "null":
+        if value is not None:
+            return False
     elif kind == "uuid":
         if type(value) is not str or _UUID.fullmatch(value) is None:
             return False
@@ -233,6 +258,22 @@ def _matches(value, schema):
     if "enum" in schema and value not in schema["enum"]:
         return False
     return True
+
+
+def _https_url(value):
+    if any(character.isspace() or ord(character) < 32 or 127 <= ord(character) <= 159 or character == "\\" for character in value):
+        return False
+    try:
+        parts = urlsplit(value)
+        if parts.scheme.lower() != "https" or not parts.hostname or "@" in parts.netloc:
+            return False
+        authority = parts.netloc
+        suffix = authority[authority.find("]") + 1:] if authority.startswith("[") else authority[authority.find(":"):] if ":" in authority else ""
+        if suffix and re.fullmatch(r":[0-9]+", suffix) is None:
+            return False
+        return parts.port is None or 0 <= parts.port <= 65535
+    except ValueError:
+        return False
 
 
 def validate_request(object: dict) -> None:

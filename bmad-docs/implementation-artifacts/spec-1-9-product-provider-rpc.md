@@ -1,5 +1,80 @@
 # Story 1.9 Build Spec — Product ProviderRPC
 
+## Current human-approved product admission
+
+Actual instruction: “1,2 제안 승인, intel 빌드 계획 자체를 완전히 폐끼”.
+Baseline51e2603; this approves the proposed product-only protocol and Agent-only
+private-state policy, and cancels Intel building outright. No generated approval
+SHA/token, actual authentication, paid call, remote operation, release or exhausted
+trial renewal follows. Earlier NOT ADMITTED shared-policy labels below are
+historical and superseded for these two decisions, not SDK runtime proof.
+
+One contract.json owns both diagnostic and product schemas. Product endpoints use
+product.hello with exact major2/minor0/capabilities[product-v1]; topology hello is
+diagnostic-only and never a product downgrade. Frame/body/depth/keys/arrays/queues,
+max10s requests and zero streams stay fixed. Add maxAuthURLBytes4096 solely for
+the browser authUrl in an exact product.loginStart result; ordinary strings and
+keys stay256 bytes, including device verificationUrl and userCode. No truncation,
+alternate transport or globally enlarged string allowance. Wrong-path/malformed
+large URL is rejected before delivery. URLs require HTTPS, nonempty host, no
+credentials/control/whitespace/backslash; actual trusted SDK provenance remains
+an owner obligation, not URL parsing proof.
+
+Closed minimum methods and fields (all objects reject unknown/missing keys):
+- product.hello: exact version/capabilities above in params and result.
+- product.loginStart params: stageID, intentID (fresh UUIDv4), expectedSelector,
+  mode(browser|device), model(nonempty ordinary string). Result echoes stageID/
+  intentID plus instructions: browser {mode:browser,authUrl}; device
+  {mode:device,userCode,verificationUrl}. SDK loginId stays Agent-private.
+- product.loginObserve params: stageID,intentID. Result echoes both and state
+  pending|authenticated|failed|cancelled|timeout|exited. This bounded wait is not
+  a stream or usable connection. Renew only the observation for the current
+  intent, never replay login/probe/model generation; no new poll interval/expiry.
+- product.connectionTest params: stageID,intentID,expectedSelector. Result echoes
+  those plus state:usable,text:PAPERLENS_OK. Only real authenticated fixed inner
+  ProviderRequest probe can produce that result; schema validation alone cannot.
+- product.loginCancel params: stageID,intentID. Result echoes both plus accepted
+  boolean. Acceptance selects cancel, not producer/FD closure or cleanup.
+- product.stageRetire params: stageID,intentID,cleanupID. Result echoes all plus
+  state:clean|unknown,stopped,closed,absent; clean requires every proof boolean true.
+- product.startupCleanup params: cleanupID,expectedSelector. Result echoes both
+  plus state:clean|unknown,stopped,closed,absent; clean requires all three true.
+- product.paperPurge params: cleanupID,paperID,generation,correlationID. Result
+  echoes all plus state:clean|unknown,stopped,closed,absent; clean requires all true.
+
+expectedSelector is the exact durable kind/slotID/generation/model snapshot, not
+a second store: null kind and slotID together, or known provider kind with UUIDv4
+slotID; generation0..Int64.max (selected requires>=1); model null or ordinary
+nonempty string. Connection generation remains distinct from Paper generation,
+which keeps the existing positive bounded definition. Native current-intent/CAS
+and real owner correlation are required even for structurally valid wire data.
+
+Agent owns app-defined stages/<UUID>,configs/<UUID>,attempts/<UUID>,quarantine/<UUID>
+under its sandbox application-support Provider/v1 root; Main never mounts it.
+This prescribes app namespaces, not guessed SDK filenames/auth export or copied
+CODEX_HOME. Protected creation0700/0600, descendant backup exclusion, immutable
+ownership, startup validation/no abandoned promotion and no permission repair
+remain. Persistent auth/config metadata excludes Paper bytes. SDK-created state
+requires public supported containment proof; unsupported controls fail closed.
+Unknown retirement stays quarantined with retained ownership, not moved/deleted
+while producers remain; old active/leased configs survive failed candidates.
+
+First implementation union: contract.json, Python and Swift ProviderRPC validators,
+paired existing Python/Swift topology contract tests. This establishes callable
+typed wire and narrowly scoped URL bounds; not SDK dispatch/auth/purge success.
+No production fake auth, store, sentinel echo or cleanup ACK may be synthesized.
+
+Parent verification: shared exact eight-method schemas and Python/Swift validation
+are implemented; 549 offline union, 32 native ProviderRequest, 24 native RPC and
+496 fresh-process Product cases PASS. Actual unsigned arm64 Main/nested-XPC build
+PASS. This is wire/source/fixture proof only, not producer dispatch, authenticated
+probe, Agent private-root enforcement, CAS activation or actual purge/closure.
+Live/cost/credential/protected-trial/signed/privacy acceptance remains unproven.
+Scoped independent review's combining-mark authority parity defect was reproduced
+by a failing native regression, corrected with UTF-8 syntax scanning and verified
+in paired browser/device cases. Final follow-up CLEAR/APPROVE, no remaining scoped
+findings; this does not substitute for the final executor QA/acceptance cohort.
+
 ## Current minimal SDK/product decision — NOT ADMITTED, 2026-10-14
 
 Whole-Epic continuation is at integration source5f08cc2. This existing Spec, not

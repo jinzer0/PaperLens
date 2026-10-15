@@ -1,5 +1,17 @@
 # Build Spec — Story 1.5: Packaged DB / FTS5 matrix
 
+## Current explicit human cancellation — Apple Silicon only
+
+User instruction “1,2 제안 승인, intel 빌드 계획 자체를 완전히 폐끼” cancels
+Intel/x86_64 build/package/cross-preparation and physical Intel cells, including
+the proposed VM alternative. Baseline51e2603. Current required matrix is exactly
+minimum/arm64 and current/arm64: two actual independently bound executions, one
+arm64 artifact, ten Agent lifecycle rows across the existing five events. All
+other DB/isolation/privacy/owner/signature/runtime requirements remain unchanged.
+Following four-cell/two-CPU historical wording and Intel continuation/failure
+remain audit evidence, not active work or passing results. No retry, temporary
+write grant, SDK/authentication, cost, remote/release or protected trial permission.
+
 Issue #8 · own branch `issue/8-story-1-5`.
 Approval: https://github.com/jinzer0/PaperLens/issues/3#issuecomment-6049004229 covers in-scope local Spec→implementation→parent tests/review→evidence commits without repeated SHA approval. Commit this Spec on its own branch before implementation. Product `5eac3bb9424ad893eca7d63bc319b71f580838ed`; architecture `1195c92227cc628e325f5ff24d70cc93639bf7a9`. No remote/distribution/environment gate authorization implied.
 

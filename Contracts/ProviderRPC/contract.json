@@ -6,6 +6,7 @@
     "maxObjectKeys": 16,
     "maxArrayItems": 32,
     "maxStringBytes": 256,
+    "maxAuthURLBytes": 4096,
     "minTimeoutMs": 1,
     "maxTimeoutMs": 10000,
     "handshakeTimeoutMs": 5000,
@@ -18,6 +19,15 @@
     "maxStreams": 0
   },
   "definitions": {
+    "model": {"type": "string", "minBytes": 1},
+    "expectedSelector": {"oneOf": [
+      {"type": "object", "fields": {"kind": {"type": "null"}, "slotID": {"type": "null"}, "generation": {"type": "integer", "minimum": 0, "maximum": 9223372036854775807}, "model": {"ref": "model", "nullable": true}}},
+      {"type": "object", "fields": {"kind": {"type": "string", "enum": ["openAIAPIKey", "codexChatGPT"]}, "slotID": {"ref": "uuid"}, "generation": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807}, "model": {"ref": "model", "nullable": true}}}
+    ]},
+    "loginInstructions": {"oneOf": [
+      {"type": "object", "fields": {"mode": {"type": "string", "const": "browser"}, "authUrl": {"type": "string", "minBytes": 1, "maxBytesLimit": "maxAuthURLBytes", "httpsUrl": true}}},
+      {"type": "object", "fields": {"mode": {"type": "string", "const": "device"}, "userCode": {"type": "string", "minBytes": 1}, "verificationUrl": {"type": "string", "minBytes": 1, "maxBytes": 256, "httpsUrl": true}}}
+    ]},
     "uuid": {"type": "uuid"},
     "generation": {"type": "integer", "minimum": 1, "maximum": 2147483647},
     "attemptOutcome": {"type": "string", "enum": ["success", "failure", "cancelled"]},
@@ -60,6 +70,38 @@
     }
   },
   "methods": {
+    "product.hello": {
+      "params": {"type": "object", "fields": {"major": {"type": "integer", "const": 2}, "minor": {"type": "integer", "const": 0}, "capabilities": {"type": "array", "items": {"type": "string"}, "const": ["product-v1"]}}},
+      "result": {"type": "object", "fields": {"major": {"type": "integer", "const": 2}, "minor": {"type": "integer", "const": 0}, "capabilities": {"type": "array", "items": {"type": "string"}, "const": ["product-v1"]}}}
+    },
+    "product.loginStart": {
+      "params": {"type": "object", "fields": {"stageID": {"ref": "uuid"}, "intentID": {"ref": "uuid"}, "expectedSelector": {"ref": "expectedSelector"}, "mode": {"type": "string", "enum": ["browser", "device"]}, "model": {"ref": "model"}}},
+      "result": {"type": "object", "fields": {"stageID": {"ref": "uuid"}, "intentID": {"ref": "uuid"}, "instructions": {"ref": "loginInstructions"}}}
+    },
+    "product.loginObserve": {
+      "params": {"type": "object", "fields": {"stageID": {"ref": "uuid"}, "intentID": {"ref": "uuid"}}},
+      "result": {"type": "object", "fields": {"stageID": {"ref": "uuid"}, "intentID": {"ref": "uuid"}, "state": {"type": "string", "enum": ["pending", "authenticated", "failed", "cancelled", "timeout", "exited"]}}}
+    },
+    "product.connectionTest": {
+      "params": {"type": "object", "fields": {"stageID": {"ref": "uuid"}, "intentID": {"ref": "uuid"}, "expectedSelector": {"ref": "expectedSelector"}}},
+      "result": {"type": "object", "fields": {"stageID": {"ref": "uuid"}, "intentID": {"ref": "uuid"}, "expectedSelector": {"ref": "expectedSelector"}, "state": {"type": "string", "const": "usable"}, "text": {"type": "string", "const": "PAPERLENS_OK"}}}
+    },
+    "product.loginCancel": {
+      "params": {"type": "object", "fields": {"stageID": {"ref": "uuid"}, "intentID": {"ref": "uuid"}}},
+      "result": {"type": "object", "fields": {"stageID": {"ref": "uuid"}, "intentID": {"ref": "uuid"}, "accepted": {"type": "boolean"}}}
+    },
+    "product.stageRetire": {
+      "params": {"type": "object", "fields": {"stageID": {"ref": "uuid"}, "intentID": {"ref": "uuid"}, "cleanupID": {"ref": "uuid"}}},
+      "result": {"type": "object", "fields": {"stageID": {"ref": "uuid"}, "intentID": {"ref": "uuid"}, "cleanupID": {"ref": "uuid"}, "state": {"type": "string", "enum": ["clean", "unknown"]}, "stopped": {"type": "boolean"}, "closed": {"type": "boolean"}, "absent": {"type": "boolean"}}, "cleanProof": true}
+    },
+    "product.startupCleanup": {
+      "params": {"type": "object", "fields": {"cleanupID": {"ref": "uuid"}, "expectedSelector": {"ref": "expectedSelector"}}},
+      "result": {"type": "object", "fields": {"cleanupID": {"ref": "uuid"}, "expectedSelector": {"ref": "expectedSelector"}, "state": {"type": "string", "enum": ["clean", "unknown"]}, "stopped": {"type": "boolean"}, "closed": {"type": "boolean"}, "absent": {"type": "boolean"}}, "cleanProof": true}
+    },
+    "product.paperPurge": {
+      "params": {"type": "object", "fields": {"cleanupID": {"ref": "uuid"}, "paperID": {"ref": "uuid"}, "generation": {"ref": "generation"}, "correlationID": {"ref": "uuid"}}},
+      "result": {"type": "object", "fields": {"cleanupID": {"ref": "uuid"}, "paperID": {"ref": "uuid"}, "generation": {"ref": "generation"}, "correlationID": {"ref": "uuid"}, "state": {"type": "string", "enum": ["clean", "unknown"]}, "stopped": {"type": "boolean"}, "closed": {"type": "boolean"}, "absent": {"type": "boolean"}}, "cleanProof": true}
+    },
     "hello": {
       "params": {"type": "object", "fields": {"major": {"type": "integer"}, "minor": {"type": "integer"}, "capabilities": {"ref": "capabilities"}}},
       "result": {"type": "object", "fields": {"major": {"type": "integer", "const": 1}, "minor": {"type": "integer", "const": 1}, "capabilities": {"ref": "capabilities"}}}

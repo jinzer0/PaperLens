@@ -67,10 +67,8 @@ def base_evidence(arch, actual="unknown"):
         "processTranslated": None,
         "automated": [],
         "manual": [result("currentProfile", "blocked", "human_synthetic_only_consent_required"), result("cleanProfile", "blocked", "current_account_not_clean_machine_evidence"), result("sandboxDenialAttribution", "blocked", "per_actor_os_denial_and_posix_tcc_controls_required")],
-        "remote": [result("notarization", "blocked", "separate_submission_authorization_required"), result("staple", "blocked", "notarization_not_performed"), result("gatekeeperCleanGUI", "blocked", "separate_clean_machine_evidence_required"), result("actualTwoCPU", "blocked", "independent_native_arm64_and_intel_receipts_required")],
+        "remote": [result("notarization", "blocked", "separate_submission_authorization_required"), result("staple", "blocked", "notarization_not_performed"), result("gatekeeperCleanGUI", "blocked", "separate_clean_machine_evidence_required")],
         "groupOwner": {"executionStatus": "unexecuted", "runID": None, "fixtureID": "G", "ownerPre": None, "ownerPost": None, "absent": None, "posixACLControl": "unverified"},
-        "intelDynamic": result("intelDynamic", "blocked", "approved_prototype_waiver_support_unverified"),
-        "actualTwoCPU": False,
         "actorBindings": [], "controls": [], "intervals": [], "denials": [],
         "osCollection": collection_state("unavailable", "collector-not-started"),
         "manualObservations": [],
@@ -79,17 +77,14 @@ def base_evidence(arch, actual="unknown"):
 
 
 def native_cpu():
-    if sys.platform != "darwin":
-        return platform.machine(), None
+    if sys.platform != "darwin" or platform.machine() != "arm64":
+        return "unknown", None
     status, translated, _ = command(["/usr/sbin/sysctl", "-in", "sysctl.proc_translated"])
     if status == 0:
         require(translated.strip() in (b"0", b"1"), "invalid_rosetta_observation")
         is_translated = translated.strip() == b"1"
-        return "arm64" if is_translated else platform.machine(), is_translated
-    status, hardware, _ = command(["/usr/sbin/sysctl", "-n", "hw.optional.arm64"])
-    if status == 0 and hardware.strip() == b"0" and platform.machine() == "x86_64":
-        return "x86_64", False
-    return platform.machine(), None
+        return "arm64", is_translated
+    return "unknown", None
 
 
 def decode_json(data):
@@ -1739,9 +1734,7 @@ def main(argv=None, manual_observer=None):
         native = actual == args.arch and translated is False
         evidence["automated"].append(result("actualCPU", "pass" if native else "blocked", "native_not_rosetta" if native else "native_cpu_not_proven", executed=True))
         inspect_bundle(args.bundle.absolute(), args.arch, evidence)
-        if args.arch != "arm64":
-            evidence["automated"].append(result("guiLaunch", "blocked", "intel_dynamic_waived_support_unverified"))
-        elif not native:
+        if not native:
             evidence["automated"].append(result("guiLaunch", "blocked", "native_cpu_required"))
         elif not args.confirm_current_profile:
             evidence["automated"].append(result("guiLaunch", "blocked", "explicit_current_profile_consent_required"))
@@ -1758,7 +1751,7 @@ def main(argv=None, manual_observer=None):
         evidence["verdict"] = "failed"
     print(json.dumps(evidence, sort_keys=True, indent=2))
     # The unattended verifier never claims Story/P-1 completion. A correctly
-    # prepared local bundle still has remote/manual/second-host gates blocked.
+    # prepared local bundle still has remote/manual gates blocked.
     return 1 if evidence["verdict"] == "failed" else 2
 
 

@@ -1,5 +1,19 @@
 # Story 1.11 Build Spec — ChatGPT Browser-Login Connection
 
+## Current explicit product-policy approval
+
+User approved proposals1/2 and cancelled the entire Intel build plan at source
+baseline51e2603. Story1.9 current admission now pins product-v1 handshake, bounded
+login observation, stage/intent/selector correlation and cleanup proof separately
+from cancellation; browser authUrl4KiB is the sole approved limit increase.
+Agent-only stages/configs/attempts/quarantine app namespaces, protected creation,
+backup exclusion, no permission repair and no persistent Paper metadata are
+approved. SDK filenames/auth export/home layouts are not guessed. Old missing
+policy/source-admission labels below are superseded for these named decisions,
+not public SDK support or genuine authentication. Implementation follows the
+existing whole-Epic authority; no extra per-edit approval, live login/cost/user
+credential/CODEX_HOME/protected-trial renewal/remote permission is inferred.
+
 ## Current whole-Epic source continuation — 2026-10-14
 
 The Story1.1–1.26 execution request resumes this existing work unit on integration

@@ -11,9 +11,28 @@ rpc = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(rpc)
 
 ID = "01234567-89ab-4cde-8123-456789abcdef"
+STAGE = "11234567-89ab-4cde-8123-456789abcdef"
+INTENT = "21234567-89ab-4cde-8123-456789abcdef"
+CLEANUP = "31234567-89ab-4cde-8123-456789abcdef"
+SELECTOR = {"kind": None, "slotID": None, "generation": 0, "model": None}
+LOGIN = {"stageID": STAGE, "intentID": INTENT}
+CLEAN = {"state": "clean", "stopped": True, "closed": True, "absent": True}
 PROBE = {"outcome": "denied", "reason": "permissionDenied", "syscallObserved": True,
          "syscallResult": -1, "errno": 13, "beganAtNs": 1, "endedAtNs": 2}
 CASES = [
+    ("product.hello", {"major": 2, "minor": 0, "capabilities": ["product-v1"]},
+     {"major": 2, "minor": 0, "capabilities": ["product-v1"]}),
+    ("product.loginStart", {**LOGIN, "expectedSelector": SELECTOR, "mode": "browser", "model": "gpt-5"},
+     {**LOGIN, "instructions": {"mode": "browser", "authUrl": "https://example.test/login"}}),
+    ("product.loginObserve", LOGIN, {**LOGIN, "state": "pending"}),
+    ("product.connectionTest", {**LOGIN, "expectedSelector": SELECTOR},
+     {**LOGIN, "expectedSelector": SELECTOR, "state": "usable", "text": "PAPERLENS_OK"}),
+    ("product.loginCancel", LOGIN, {**LOGIN, "accepted": False}),
+    ("product.stageRetire", {**LOGIN, "cleanupID": CLEANUP}, {**LOGIN, "cleanupID": CLEANUP, **CLEAN}),
+    ("product.startupCleanup", {"cleanupID": CLEANUP, "expectedSelector": SELECTOR},
+     {"cleanupID": CLEANUP, "expectedSelector": SELECTOR, **CLEAN}),
+    ("product.paperPurge", {"cleanupID": CLEANUP, "paperID": ID, "generation": 1, "correlationID": INTENT},
+     {"cleanupID": CLEANUP, "paperID": ID, "generation": 1, "correlationID": INTENT, **CLEAN}),
     ("hello", {"major": 1, "minor": 1, "capabilities": ["topology-v1"]},
      {"major": 1, "minor": 1, "capabilities": ["topology-v1"]}),
     ("topology.runtime", {}, {"sdkImported": True, "cliInitialized": False, "architecture": "arm64"}),
@@ -44,6 +63,143 @@ def raw(body):
 
 
 class ProviderRPCTests(unittest.TestCase):
+    # Typed wire fixtures only: none represents an SDK call or cleanup observation.
+    def product_terminal(self, result):
+        return {"kind": "result", "id": ID, "result": result}
+
+    def test_product_selectors_correlations_and_generations(self):
+        for method, params, result in CASES[:8]:
+            for key in ("stageID", "intentID", "cleanupID", "paperID", "correlationID"):
+                if key not in params:
+                    continue
+                for invalid in (ID.upper(), ID.replace("4cde", "1cde"), True, 1, None):
+                    self.rejects(lambda: rpc.validate_request(request(method, {**params, key: invalid})), "invalidParams")
+                    self.rejects(lambda: rpc.validate_terminal(self.product_terminal({**result, key: invalid}), method))
+        for kind in (None, "openAIAPIKey", "codexChatGPT"):
+            for generation in ((0, 1, 9223372036854775807) if kind is None else (1, 9223372036854775807)):
+                for model in (None, "gpt-5"):
+                    selector = {"kind": kind, "slotID": None if kind is None else ID, "generation": generation, "model": model}
+                    rpc.validate_request(request("product.connectionTest", {**LOGIN, "expectedSelector": selector}))
+        invalid_selectors = [
+            {**SELECTOR, "slotID": ID}, {**SELECTOR, "kind": "codexChatGPT"},
+            {**SELECTOR, "kind": "unknown", "slotID": ID, "generation": 1},
+            {**SELECTOR, "kind": "openAIAPIKey", "slotID": ID},
+            {**SELECTOR, "kind": "codexChatGPT", "slotID": ID.upper(), "generation": 1},
+            {**SELECTOR, "extra": 1}, {key: value for key, value in SELECTOR.items() if key != "model"},
+        ]
+        invalid_selectors += [{**SELECTOR, "generation": value} for value in (-1, 9223372036854775808, True, False, 1.0, "1", None)]
+        invalid_selectors += [{**SELECTOR, "model": value} for value in ("", True, 1, [])]
+        for selector in invalid_selectors:
+            self.rejects(lambda: rpc.validate_request(request("product.connectionTest", {**LOGIN, "expectedSelector": selector})), "invalidParams")
+            self.rejects(lambda: rpc.validate_terminal(self.product_terminal({**CASES[3][2], "expectedSelector": selector}), "product.connectionTest"))
+        for generation in (0, 2147483648, True, 1.0, None):
+            params = CASES[7][1]
+            self.rejects(lambda: rpc.validate_request(request("product.paperPurge", {**params, "generation": generation})), "invalidParams")
+
+    def test_product_states_proofs_and_method_separation(self):
+        for state in ("pending", "authenticated", "failed", "cancelled", "timeout", "exited"):
+            rpc.validate_terminal(self.product_terminal({**LOGIN, "state": state}), "product.loginObserve")
+        for state in ("usable", "clean", "unknown", True, None):
+            self.rejects(lambda: rpc.validate_terminal(self.product_terminal({**LOGIN, "state": state}), "product.loginObserve"))
+        for method, _, result in CASES[5:8]:
+            for key in ("stopped", "closed", "absent"):
+                self.rejects(lambda: rpc.validate_terminal(self.product_terminal({**result, key: False}), method))
+                rpc.validate_terminal(self.product_terminal({**result, "state": "unknown", key: False}), method)
+                for invalid in (0, 1, "true", None):
+                    self.rejects(lambda: rpc.validate_terminal(self.product_terminal({**result, "state": "unknown", key: invalid}), method))
+            rpc.validate_terminal(self.product_terminal({**result, "state": "unknown"}), method)
+        for accepted in (True, False):
+            cancel = self.product_terminal({**LOGIN, "accepted": accepted})
+            rpc.validate_terminal(cancel, "product.loginCancel")
+            self.rejects(lambda: rpc.validate_terminal(cancel, "product.stageRetire"))
+        for invalid in (0, 1, "true", None):
+            self.rejects(lambda: rpc.validate_terminal(self.product_terminal({**LOGIN, "accepted": invalid}), "product.loginCancel"))
+        for changes in ({"state": "authenticated"}, {"text": "OK"}, {"text": "PAPERLENS_OK\n"}):
+            self.rejects(lambda: rpc.validate_terminal(self.product_terminal({**CASES[3][2], **changes}), "product.connectionTest"))
+        for method in ("product.hello",):
+            for hello in ({"major": 1, "minor": 1, "capabilities": ["topology-v1"]},
+                          {"major": 2, "minor": 0, "capabilities": ["topology-v1"]}):
+                self.rejects(lambda: rpc.validate_request(request(method, hello)), "invalidParams")
+                self.rejects(lambda: rpc.validate_terminal(self.product_terminal(hello), method))
+        for method, _, result in CASES[:8]:
+            self.rejects(lambda: rpc.validate_terminal(self.product_terminal(result), "topology.runtime"))
+
+    def test_product_url_authority_delimiter_uses_utf8_boundaries(self):
+        for url in ("https://example.test:443/́login", "https://example.test:443?́login", "https://example.test:443#́login"):
+            for instructions in ({"mode": "browser", "authUrl": url},
+                                 {"mode": "device", "userCode": "CODE", "verificationUrl": url}):
+                with self.subTest(url=url, mode=instructions["mode"]):
+                    value = self.product_terminal({**LOGIN, "instructions": instructions})
+                    rpc.validate_terminal(value, "product.loginStart")
+                    rpc.validate_terminal(rpc.decode_frame(rpc.encode_frame(value)), "product.loginStart")
+
+    def test_product_login_instructions_and_narrow_url_exception(self):
+        def browser(url):
+            return self.product_terminal({**LOGIN, "instructions": {"mode": "browser", "authUrl": url}})
+
+        def reject_wire(value):
+            self.rejects(lambda: rpc.encode_frame(value))
+            self.rejects(lambda: rpc.decode_frame(raw(json.dumps(value, ensure_ascii=False))))
+
+        prefix = "https://example.test/"
+        for size in (256, 257, 4096):
+            url = prefix + "a" * (size - len(prefix))
+            value = browser(url)
+            self.assertEqual(rpc.decode_frame(rpc.encode_frame(value)), value)
+            rpc.validate_terminal(value, "product.loginStart")
+            self.rejects(lambda: rpc.validate_terminal(value, "product.loginObserve"))
+            escaped = json.dumps(value).replace("a", "\\u0061")
+            self.assertEqual(rpc.decode_frame(raw(escaped)), value)
+        for size in (256, 257, 4096, 4097):
+            remaining = size - len(prefix)
+            url = prefix + "é" * (remaining // 2) + "x" * (remaining % 2)
+            self.assertEqual(len(url.encode("utf-8")), size)
+            if size <= 4096:
+                self.assertEqual(rpc.decode_frame(rpc.encode_frame(browser(url))), browser(url))
+            else:
+                reject_wire(browser(url))
+        reject_wire(browser(prefix + "a" * (4097 - len(prefix))))
+        long_url = prefix + "a" * 257
+        for value in ({"authUrl": long_url}, {"result": {"instructions": {"mode": "browser", "authUrl": long_url}}},
+                      {**browser(long_url), "extra": 1}, {**browser(long_url), "id": "invalid"},
+                      self.product_terminal({**LOGIN, "instructions": {"mode": "device", "authUrl": long_url}}),
+                      {"x": {"authUrl": long_url}}, {"k" * 257: "x"}):
+            reject_wire(value)
+        for url in ("http://example.test", "https://", "https:///path", "https://user@example.test", "https://u:p@example.test",
+                    "https://example.test:", "https://example.test:abc", "https://example.test:65536", "https://example.test:-1",
+                    "https://example.test/a b", "https://example.test/\n", "https://example.test/\x00", "https://example.test/\x7f",
+                    "https://example.test/\\x", "https://example.test/\u00a0"):
+            self.rejects(lambda: rpc.validate_terminal(browser(url), "product.loginStart"))
+            if url != "https://":
+                reject_wire(browser(url + "a" * 257))
+        for mode in ("browser", "device"):
+            rpc.validate_request(request("product.loginStart", {**CASES[1][1], "mode": mode}))
+        for key, invalids in (("mode", ("unknown", True, None)), ("model", ("", None, True, 1))):
+            for invalid in invalids:
+                self.rejects(lambda: rpc.validate_request(request("product.loginStart", {**CASES[1][1], key: invalid})), "invalidParams")
+        for size in (256, 257):
+            instructions = {"mode": "device", "userCode": "CODE", "verificationUrl": prefix + "a" * (size - len(prefix))}
+            value = self.product_terminal({**LOGIN, "instructions": instructions})
+            if size == 256:
+                rpc.validate_terminal(rpc.decode_frame(rpc.encode_frame(value)), "product.loginStart")
+            else:
+                reject_wire(value)
+        for size in (256, 257):
+            value = self.product_terminal({**LOGIN, "instructions": {"mode": "device", "userCode": "a" * size, "verificationUrl": prefix}})
+            if size == 256:
+                rpc.validate_terminal(rpc.decode_frame(rpc.encode_frame(value)), "product.loginStart")
+            else:
+                reject_wire(value)
+        for instructions in ({"mode": "device", "userCode": "", "verificationUrl": prefix},
+                             {"mode": "device", "userCode": "CODE", "verificationUrl": "http://example.test"},
+                             {"mode": "browser", "authUrl": prefix, "userCode": "CODE"},
+                             {"mode": "browser"}, {"mode": "unknown", "authUrl": prefix},
+                             {"mode": "device", "userCode": "CODE", "verificationUrl": prefix, "authUrl": prefix}):
+            self.rejects(lambda: rpc.validate_terminal(self.product_terminal({**LOGIN, "instructions": instructions}), "product.loginStart"))
+        self.rejects(lambda: rpc.decode_frame(raw(json.dumps(browser(long_url)).replace("example", "exam\\ud800ple"))))
+        invalid_utf8 = json.dumps(browser(long_url)).encode("utf-8").replace(b"example", b"exam\xffple")
+        self.rejects(lambda: rpc.decode_frame(raw(invalid_utf8)))
+
     def rejects(self, action, code="protocolViolation"):
         with self.assertRaises(rpc.ProtocolError) as caught:
             action()

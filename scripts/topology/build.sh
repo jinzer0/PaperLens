@@ -1,8 +1,8 @@
 #!/bin/bash
 set -euo pipefail
-if ! { [[ "$#" == 2 && "$1" == --arch && ( "$2" == arm64 || "$2" == x86_64 ) ]] ||
+if ! { [[ "$#" == 2 && "$1" == --arch && "$2" == arm64 ]] ||
        [[ "$#" == 7 && "$1" == --unsigned-only && "$2" == --arch && "$3" == arm64 && "$4" == --input-work && "$6" == --cache ]]; }; then
-  printf '%s\n' 'Usage: scripts/topology/build.sh --arch arm64|x86_64 OR --unsigned-only --arch arm64 --input-work PATH --cache PATH' >&2
+  printf '%s\n' 'Usage: scripts/topology/build.sh --arch arm64 OR --unsigned-only --arch arm64 --input-work PATH --cache PATH' >&2
   exit 2
 fi
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)"
@@ -124,11 +124,11 @@ try:
         acquire.require(unsigned_input(lock, sdk)[4] == receipt, "unsigned_input_changed")
         acquire.check_hash(destination, digest)
         print(json.dumps({"arch": arch, "verdict": "pass", "scope": "unsigned_compile_only",
-                          "products": str(products.relative_to(root)), "actualTwoCPU": "blocked"}))
+                          "products": str(products.relative_to(root))}))
         raise SystemExit(0)
     acquire.run([sys.executable, "-I", "-B", root / "scripts/topology/package.py", "--arch", arch, "--products", products], cwd=root)
     acquire.require((work / "PaperLens.app").is_dir(), "packaged_bundle_missing")
-    print(json.dumps({"arch": arch, "verdict": "pass", "scope": "local_build_only", "bundle": ".build/topology/" + arch + "/PaperLens.app", "notarization": "blocked", "actualTwoCPU": "blocked"}))
+    print(json.dumps({"arch": arch, "verdict": "pass", "scope": "local_build_only", "bundle": ".build/topology/" + arch + "/PaperLens.app", "notarization": "blocked"}))
 except acquire.Failure as error:
     print(json.dumps({"arch": arch, "verdict": "blocked", "reason": str(error)}))
     raise SystemExit(2)

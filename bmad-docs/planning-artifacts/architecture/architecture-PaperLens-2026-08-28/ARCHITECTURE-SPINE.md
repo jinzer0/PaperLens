@@ -26,6 +26,18 @@ companions:
 
 # Architecture Spine — PaperLens v1
 
+## Current explicit human decision — source51e2603
+
+User: “1,2 제안 승인, intel 빌드 계획 자체를 완전히 폐끼”. Product-v1 RPC
+and Agent-only private-state proposals are approved as pinned in current Story1.9.
+Intel acquisition/build/package/VM preparation and Intel acceptance cells are
+cancelled, not accepted by fixtures. Current product target is arm64 Apple Silicon,
+one artifact, minimum/current macOS two physical cells and ten Agent event rows.
+These explicit scope decisions supersede earlier two-CPU/four-cell/twenty-row
+requirements only; preserve historical approval hashes/proof and all remaining
+privacy, native ownership, signed isolation, P3/P6 and actual runtime obligations.
+This is recorded human provenance, not a fabricated commit-bound approval token.
+
 ## Design Paradigm
 
 **[ADOPTED] Native Swift modular monolith with local-first hexagonal boundaries.** `Features → Application → Domain`이 안쪽으로 의존하고 PDF·SQLite·Provider는 port adapter다. Composition Root만 concrete adapter를 조립한다. Local-first는 ownership pattern이며 privacy claim이 아니다.

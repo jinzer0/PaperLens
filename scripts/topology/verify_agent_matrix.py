@@ -10,6 +10,7 @@ from dataclasses import dataclass
 import verify_packaged_db as db
 
 SCHEMA = "packaged-agent-matrix-evidence-v1"
+# Immutable probe-intent provenance, not approval of active matrix membership.
 SPEC_COMMIT = "f3c35000a75b04fd239fcc8820ffba90fd881951"
 POINTS = db.POINTS
 EVENTS = ("success", "failure", "restart", "replacement", "delete")
@@ -229,20 +230,21 @@ def validate_row(record_bytes: bytes, expected: OwnerExpectedBindings,
 
 def validate_matrix(records: tuple[bytes, ...], expected: tuple[OwnerExpectedBindings, ...],
                     supplied: tuple[SuppliedBytes, ...], db_inputs: tuple[DBInput, ...]) -> tuple[int, dict]:
-    """Exactly twenty ordered rows and four DB executions; no runtime PASS."""
+    """Exactly ten ordered event rows and two arm64 DB executions; no runtime PASS."""
     try:
         db.require(all(type(x) is tuple for x in (records, expected, supplied, db_inputs)))
-        db.require(len(records) == len(expected) == len(supplied) == 20,
-                   "row_missing" if min(len(records), len(expected), len(supplied)) < 20 else "event_mismatch")
-        db.require(len(db_inputs) == 4)
-        db.require(all(type(r) is bytes for r in records) and sum(map(len, records)) <= 327680)
+        row_count = len(POINTS) * len(EVENTS)
+        db.require(len(records) == len(expected) == len(supplied) == row_count,
+                   "row_missing" if min(len(records), len(expected), len(supplied)) < row_count else "event_mismatch")
+        db.require(len(db_inputs) == len(POINTS))
+        db.require(all(type(r) is bytes for r in records) and sum(map(len, records)) <= 163840)
         db.require(all(type(e) is OwnerExpectedBindings for e in expected))
         db.require(all(type(d) is DBInput for d in db_inputs))
         code, _ = db.validate_matrix(tuple(d.record for d in db_inputs),
                                      tuple(d.expected for d in db_inputs), tuple(d.supplied for d in db_inputs))
         db.require(code == 2)
         cells = tuple((e.db.expected.point, e.event) for e in expected)
-        db.require(len(set(cells)) == 20, "row_duplicate")
+        db.require(len(set(cells)) == row_count, "row_duplicate")
         db.require(cells ==
                    tuple((p, event) for p in POINTS for event in EVENTS), "event_mismatch")
         replacements = [e.replacement for e in expected if e.event == "replacement"]
@@ -257,7 +259,7 @@ def validate_matrix(records: tuple[bytes, ...], expected: tuple[OwnerExpectedBin
         receipts += [r.postDB.expected.receipt for r in replacements]
         db.require(len(set(receipts)) == len(receipts))
         for index, e in enumerate(expected):
-            db.require(db.exact(e.db, db_inputs[index // 5]))
+            db.require(db.exact(e.db, db_inputs[index // len(EVENTS)]))
         db.require(len({e.spec for e in expected}) == 1)
         results = [validate_row(r, e, s) for r, e, s in zip(records, expected, supplied)]
         conformant = all(code == 2 for code, _ in results)

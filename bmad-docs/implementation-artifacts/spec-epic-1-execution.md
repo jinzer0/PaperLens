@@ -10,6 +10,60 @@ approval: explicit-human-story-range-execution
 
 # 전체 실행 계약
 
+## Current human scope amendment — product policy approved, Intel cancelled
+
+Actual user instruction: “1,2 제안 승인, intel 빌드 계획 자체를 완전히 폐끼”.
+Baseline51e2603 on the integration branch below. Product-v1 RPC and Agent-private
+state policy proposed in Story1.9 are approved for bounded local implementation;
+browser authUrl alone receives the approved4KiB limit. Existing ordinary256-byte
+strings, queues, deadlines, actual300ms cleanup, one selector/CAS and privacy remain.
+No actual login, paid probe, credentials, CODEX_HOME, consumed trial, signing,
+remote publication or release permission follows from this design approval.
+
+Intel build planning, x86_64 acquisition/build/packaging, Intel GRDB cross-build,
+the proposed VM build alternative and required Intel CPU matrix cells are cancelled
+entirely, not paused or counted as passing. Current target is Apple Silicon arm64.
+Minimum/current macOS still require two independent arm64 DB executions and five
+Agent events each (ten rows), with actual signed isolation/P3/P6 proof unchanged.
+Old two-artifact/four-cell/twenty-row wording below or in approved historical
+baseline artifacts is superseded only for this explicitly cancelled CPU scope.
+Retain historical manifests/receipts/failures and generated artifacts; no deletion
+of user work, synthetic matrix results or claim that failed Intel preparation passed.
+Existing Story/Issue links remain; remote synchronization is pending authorization.
+
+### Approved-policy / Intel-cancellation verification
+
+- Parent final offline union: 549 Python tests PASS across acquisition, Agent, both
+  matrices, dependency lock, packaging, PDFium recipe, RPC, account presentation,
+  isolated verifier and GRDB preparation. Async slow-fixture diagnostics retained.
+- Native contracts: 32 ProviderRequest and 24 ProviderRPC tests PASS; no renderer
+  or protected collector trial executed. Typed results are fixtures, not SDK auth.
+- Full fresh-process product union: 496 PASS, zero failures/errors, preserving
+  production unknown-closure debt. No shared-process quota reset or guard weakening.
+- Actual unsigned Release arm64 Main/nested XPC build PASS at
+  .build/approved-policy-arm-only. Intel shell CLI rejects before environment/tool
+  execution; shell syntax, project plist and diff whitespace checks PASS. Existing
+  unnecessary-await/deprecated-onChange, AppIntents metadata and PDFium dSYM
+  duplicate/debug-symbol warnings remain visible; not signed execution/P1/P3/P6.
+- Current runtime-matrix.json was regenerated from actual pinned lock/validator
+  bytes using candidate_matrix, not fabricated hashes. Two arm64 cells remain
+  blocked/not_run with missing artifacts/runtime/SQLite proof and not_promoted.
+  Original four-cell source-bound candidate remains in Git51e2603 and is not
+  rebadged as current proof. Pinned historical x86 dependency records are unused,
+  not downloads or active Intel deliverables.
+- Independent scoped wire review found Swift Character-based authority scanning
+  rejected an allowed URL whose delimiter precedes a combining mark. The paired
+  native regression failed before correction (one failure). All ASCII authority
+  syntax now scans UTF-8 bytes; identical browser/device slash/query/fragment
+  vectors pass in both languages. Follow-up review CLEAR/APPROVE, no findings;
+  final Python/native/Product/unsigned-build union reverified after the correction.
+  This advisory review is not the required final native QA/acceptance cohort.
+- Actual lipo checks of Main, ProviderAgent/PDFium nested XPC, FixtureGroupOwner
+  and embedded GRDB binaries each report only arm64; not runtime/physical proof.
+- This slice delivers exact typed product wire and cancels active Intel tooling;
+  actual SDK dispatch/private filesystem enforcement/login/reconnection/purge
+  integration remain engineering work. No goal or Story is completed by this slice.
+
 ## Current execution entry point — 2026-10-14
 
 - Objective: Epic 1 Stories 1.1–1.26; 1.27 remains undefined. This is product work,

@@ -24,6 +24,18 @@ sources:
 
 # PaperLens v1 Solution Design
 
+## Current explicit human scope amendment
+
+At baseline51e2603, user approved product-v1 RPC/Agent-private-state proposals and
+cancelled the Intel build plan in full: “1,2 제안 승인, intel 빌드 계획 자체를
+완전히 폐끼”. Current Story1.9 defines the approved policy and sole4KiB browser
+URL exception; no guessed SDK support or real credential/cost/trial authorization.
+Current builds/packages target arm64 only. P2 now requires minimum/current macOS
+two independent arm64 DB executions and ten existing Agent-event rows, not Intel
+builds, cross-build/VM preparation or four CPU cells. Retain old wording/evidence
+as historical, never relabel cancelled or failed Intel work as PASS. All other
+source/runtime isolation/privacy/P3/P6 and acceptance requirements remain binding.
+
 ## 1. Purpose And Authority
 
 이 문서는 `ARCHITECTURE-SPINE.md`를 개발자와 리뷰어가 같은 topology, ownership, lifecycle로 해석하게 하는 companion이다. Full schema, algorithms, exact method payload fields, prompts, numeric budgets를 정하지 않는다.

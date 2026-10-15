@@ -548,6 +548,61 @@ class PinTests(IsolatedTest):
         with self.assertRaisesRegex(acquire.Failure, "unsupported_arch"):
             acquire.select_asset(entry, "universal")
 
+    def test_cancelled_architectures_reject_at_cli_without_effects(self):
+        for arch in ("x86_64", "x64", "amd64", "i386", "universal"):
+            with self.subTest(arch=arch), mock.patch.object(acquire, "load_lock") as lock, mock.patch.object(acquire, "ensure_root") as output, mock.patch.object(acquire.subprocess, "run") as process, contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as error:
+                    acquire.main(["--arch", arch, "--stage", "fetch"])
+                self.assertEqual(error.exception.code, 2)
+                lock.assert_not_called()
+                output.assert_not_called()
+                process.assert_not_called()
+
+    def test_intel_host_rejects_before_lock_tools_or_output(self):
+        with mock.patch.object(acquire.platform, "machine", return_value="x86_64"), mock.patch.object(acquire, "load_lock") as lock, mock.patch.object(acquire, "ensure_root") as output, mock.patch.object(acquire.subprocess, "run") as process, contextlib.redirect_stdout(io.StringIO()) as result:
+            self.assertEqual(acquire.main(["--arch", "arm64", "--stage", "fetch"]), 2)
+        self.assertEqual(json.loads(result.getvalue())["reason"], "unsupported_host_cpu")
+        lock.assert_not_called()
+        output.assert_not_called()
+        process.assert_not_called()
+
+    def test_translated_or_unproven_arm_host_rejects_without_fallback(self):
+        for status, translated in ((0, b"1"), (0, b""), (1, b"")):
+            result = subprocess.CompletedProcess([], status, stdout=translated, stderr=b"")
+            with self.subTest(status=status, translated=translated), mock.patch.object(acquire.platform, "machine", return_value="arm64"), mock.patch.object(acquire.subprocess, "run", return_value=result) as process, mock.patch.object(acquire, "load_lock") as lock, mock.patch.object(acquire, "ensure_root") as output, contextlib.redirect_stdout(io.StringIO()) as response:
+                self.assertEqual(acquire.main(["--arch", "arm64", "--stage", "fetch"]), 2)
+                self.assertEqual(json.loads(response.getvalue())["reason"], "rosetta_or_unknown_host_forbidden")
+                self.assertEqual(process.call_count, 1)
+                lock.assert_not_called()
+                output.assert_not_called()
+
+    def test_cancelled_architectures_reject_at_apis_before_effects(self):
+        before = acquire.tree_inventory(self.root)
+        with mock.patch.object(acquire, "download") as download, mock.patch.object(acquire, "run") as run, mock.patch.object(acquire, "toolchain") as toolchain, mock.patch.object(acquire, "ensure_root") as output:
+            for host, arch, reason in (("arm64", "x86_64", "unsupported_arch"), ("x86_64", "arm64", "unsupported_host_cpu")):
+                for owner in (acquire.fetch, acquire.validate_receipt):
+                    with self.subTest(owner=owner.__name__, host=host, arch=arch), self.assertRaisesRegex(acquire.Failure, reason):
+                        owner({}, self.root, host, arch, self.root / "cache")
+            with self.assertRaisesRegex(acquire.Failure, "unsupported_host_cpu"):
+                acquire.source_graph({}, self.root, "x86_64", self.root / "cache")
+            with self.assertRaisesRegex(acquire.Failure, "unsupported_host_cpu"):
+                acquire.DepsReader("deps = {}", "x86_64", {})
+            with self.assertRaisesRegex(acquire.Failure, "unsupported_arch"):
+                acquire.select_asset({"any": {"filename": "pure.whl", "sha256": "0" * 64}}, "x86_64")
+            with self.assertRaisesRegex(acquire.Failure, "unsupported_arch"):
+                acquire.runtime_stage({}, self.root, {"arch": "x86_64"}, self.root / "cache")
+            with mock.patch.object(acquire.sys, "version_info", (3, 13, 0)):
+                for host, arch, reason in (("arm64", "x86_64", "unsupported_arch"), ("x86_64", "arm64", "unsupported_host_cpu")):
+                    with self.assertRaisesRegex(acquire.Failure, reason):
+                        acquire.pdfium_stage({}, self.root, {"host": host, "arch": arch}, self.root / "cache")
+            with self.assertRaisesRegex(acquire.Failure, "asset_arch_mismatch"):
+                acquire.install_wheel(self.root / "missing.whl", self.root / "runtime", "package-macosx_10_9_x86_64.whl")
+            download.assert_not_called()
+            run.assert_not_called()
+            toolchain.assert_not_called()
+            output.assert_not_called()
+        self.assertEqual(acquire.tree_inventory(self.root), before)
+
     def test_receipt_wrong_arch_fails_before_source_or_network(self):
         lock = acquire.load_lock()
         receipt = {"lockHash": acquire.sha256(acquire.LOCK_PATH), "arch": "x86_64", "host": "arm64"}
@@ -564,7 +619,7 @@ class PinTests(IsolatedTest):
             with self.assertRaisesRegex(acquire.Failure, "cipd_pin_mismatch"):
                 acquire.resolve_cipd(lock, pin["package"], lock["pdfium"]["gnVersion"], pin)
 
-    def test_both_target_builds_reuse_same_immutable_tool_resolution(self):
+    def test_repeated_arm_builds_reuse_same_immutable_tool_resolution(self):
         lock = acquire.load_lock()
         pin = lock["cipd"]["arm64"]["gn"]
         response = {"status": "SUCCESS", "instance_id": pin["instance"]}
@@ -1072,7 +1127,7 @@ class WheelTests(IsolatedTest):
             "codex_cli_bin/codex-resources/zsh/bin/zsh",
         )
         payloads = {path: ("synthetic, never executed: " + path).encode() for path in paths}
-        for arch, tag in (("arm64", "macosx_11_0_arm64"), ("x86_64", "macosx_10_9_x86_64")):
+        for arch, tag in (("arm64", "macosx_11_0_arm64"),):
             with self.subTest(arch=arch):
                 filename = f"openai_codex_cli_bin-0.160.0-py3-none-{tag}.whl"
                 archive = self.wheel(payloads, distribution="openai_codex_cli_bin", version="0.160.0", filename=filename, executable_paths=paths)
@@ -1331,7 +1386,7 @@ class EvidenceTests(IsolatedTest):
         gui.assert_not_called()
         self.assertTrue(any(row["reason"] == "explicit_current_profile_consent_required" for row in evidence["automated"]))
 
-    def test_current_consent_is_not_clean_profile_or_two_cpu_proof(self):
+    def test_current_consent_preserves_manual_remote_and_p1_blocks(self):
         status, evidence, inspect, home, gui = self.invoke(consent=True)
         self.assertEqual(status, 2)
         inspect.assert_called_once()
@@ -1340,19 +1395,41 @@ class EvidenceTests(IsolatedTest):
         manual = {row["caseID"]: row for row in evidence["manual"]}
         self.assertEqual(manual["currentProfile"]["verdict"], "inconclusive")
         self.assertEqual(manual["cleanProfile"]["verdict"], "blocked")
-        self.assertFalse(evidence["actualTwoCPU"])
+        self.assertNotIn("actualTwoCPU", evidence)
+        self.assertNotIn("intelDynamic", evidence)
+        self.assertEqual(evidence["requestedCPU"], "arm64")
+        self.assertEqual({row["caseID"] for row in evidence["remote"]}, {"notarization", "staple", "gatekeeperCleanGUI"})
         self.assertFalse(evidence["storyDone"])
         self.assertEqual(evidence["p1"], "unverified")
         self.assertEqual(evidence["verdict"], "blocked")
         self.assertTrue(all(row["verdict"] == "blocked" for row in evidence["remote"]))
 
-    def test_native_intel_remains_static_only_even_with_consent(self):
-        _, evidence, inspect, home, gui = self.invoke("x86_64", consent=True)
-        inspect.assert_called_once()
-        home.assert_not_called()
-        gui.assert_not_called()
-        self.assertEqual(evidence["intelDynamic"]["executionStatus"], "unexecuted")
-        self.assertTrue(any(row["reason"] == "intel_dynamic_waived_support_unverified" for row in evidence["automated"]))
+    def test_intel_cli_rejects_before_native_inspection_home_or_gui(self):
+        with mock.patch.object(verify, "native_cpu") as native, mock.patch.object(verify, "command") as command, mock.patch.object(verify, "inspect_bundle") as inspect, mock.patch.object(verify, "current_home") as home, mock.patch.object(verify, "gui_run") as gui, contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit) as error:
+                verify.main(["--arch", "x86_64", "--bundle", str(self.root), "--confirm-current-profile"])
+            self.assertEqual(error.exception.code, 2)
+            native.assert_not_called()
+            command.assert_not_called()
+            inspect.assert_not_called()
+            home.assert_not_called()
+            gui.assert_not_called()
+
+    def test_native_cpu_rejects_intel_and_non_darwin_without_processes(self):
+        for system, cpu in (("darwin", "x86_64"), ("linux", "arm64")):
+            with self.subTest(system=system, cpu=cpu), mock.patch.object(verify.sys, "platform", system), mock.patch.object(verify.platform, "machine", return_value=cpu), mock.patch.object(verify, "command") as command:
+                self.assertEqual(verify.native_cpu(), ("unknown", None))
+                command.assert_not_called()
+
+    def test_native_arm_cpu_requires_translation_proof_without_fallback(self):
+        for status, output, expected in ((0, b"0\n", ("arm64", False)), (0, b"1\n", ("arm64", True)), (1, b"", ("unknown", None))):
+            with self.subTest(status=status, output=output), mock.patch.object(verify.sys, "platform", "darwin"), mock.patch.object(verify.platform, "machine", return_value="arm64"), mock.patch.object(verify, "command", return_value=(status, output, b"")) as command:
+                self.assertEqual(verify.native_cpu(), expected)
+                command.assert_called_once_with(["/usr/sbin/sysctl", "-in", "sysctl.proc_translated"])
+        with mock.patch.object(verify.sys, "platform", "darwin"), mock.patch.object(verify.platform, "machine", return_value="arm64"), mock.patch.object(verify, "command", return_value=(0, b"unknown", b"")) as command:
+            with self.assertRaisesRegex(acquire.Failure, "invalid_rosetta_observation"):
+                verify.native_cpu()
+            self.assertEqual(command.call_count, 1)
 
     def test_rosetta_never_enables_synthetic_launch(self):
         output = io.StringIO()

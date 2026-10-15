@@ -349,39 +349,43 @@ class PackagedDBTests(unittest.TestCase):
         foreign, _, _ = fixture()
         self.check_result(self.validate(foreign))
 
-    def test_four_cell_aggregate_exact_bounds_distinct_attempts_and_nonpromotion(self):
+    def test_two_arm64_cells_exact_bounds_distinct_attempts_and_nonpromotion(self):
+        self.assertEqual(db.POINTS, ("minimum/arm64", "current/arm64"))
         run, owner = str(uuid4()), str(uuid4())
         fixtures = [fixture(point, run, owner) for point in db.POINTS]
         records = tuple(db.json_bytes(f[0]) for f in fixtures)
         expected = tuple(f[1] for f in fixtures)
         supplied = tuple(f[2] for f in fixtures)
-        self.assertEqual(len({e.artifact for e in expected}), 2)
+        self.assertEqual(len({e.artifact for e in expected}), 1)
+        self.assertEqual(len({e.attempt for e in expected}), 2)
         self.check_result(db.validate_matrix(records, expected, supplied), True)
+        self.assertEqual(len(db.validate_matrix(records, expected, supplied)[1]["cells"]), 2)
         padded = tuple(r + b" " * (16384 - len(r)) for r in records)
-        self.assertEqual(sum(map(len, padded)), 65536)
+        self.assertEqual(sum(map(len, padded)), 32768)
         self.check_result(db.validate_matrix(padded, expected, supplied), True)
         self.check_result(db.validate_matrix((padded[0] + b" ",) + padded[1:], expected, supplied))
-        for size in (3, 5):
+        for size in (0, 1, 3, 4):
             self.check_result(db.validate_matrix((records * 2)[:size], (expected * 2)[:size], (supplied * 2)[:size]))
+        self.check_result(db.validate_matrix(records[1:], expected[1:], supplied[1:]))
         self.check_result(db.validate_matrix(records[::-1], expected, supplied))
         self.check_result(db.validate_matrix(records, expected[::-1], supplied))
-        for name in ("attempt", "lineage", "artifact", "receipt"):
+        for name in ("attempt", "lineage", "receipt", "point"):
             changed = (expected[0], replace(expected[1], **{name: getattr(expected[0], name)}), *expected[2:])
             self.check_result(db.validate_matrix(records, changed, supplied))
         self.check_result(db.validate_matrix(list(records), expected, supplied))
 
-    def test_artifact_pairing_rejects_rebound_four_artifacts_and_cross_cpu_alias(self):
-        for variant in ("four-artifacts", "cross-cpu-alias", "current/arm64", "current/x86_64"):
+    def test_rebound_arm64_artifact_pairing_requires_same_bytes_on_both_os_cells(self):
+        for variant in ("distinct-artifacts", "shared-artifact", "minimum/arm64", "current/arm64"):
             with self.subTest(variant=variant):
                 run, owner = str(uuid4()), str(uuid4())
                 fixtures = []
                 for point in db.POINTS:
                     record, expected, supplied = fixture(point, run, owner)
                     artifact = supplied.artifact
-                    if variant == "four-artifacts" or variant == point:
+                    if variant == "distinct-artifacts" or variant == point:
                         artifact = ("approved " + point).encode()
-                    elif variant == "cross-cpu-alias":
-                        artifact = b"same artifact"
+                    elif variant == "shared-artifact":
+                        artifact = b"PRIVATE independently supplied arm64 artifact"
                     expected = replace(expected, artifact=db.digest(artifact))
                     bindings = db.expected_bindings(expected)
                     del bindings["receipt"]
@@ -393,7 +397,25 @@ class PackagedDBTests(unittest.TestCase):
                     fixtures.append((db.json_bytes(record), expected, supplied))
                 self.check_result(db.validate_matrix(
                     tuple(f[0] for f in fixtures), tuple(f[1] for f in fixtures),
-                    tuple(f[2] for f in fixtures)))
+                    tuple(f[2] for f in fixtures)), variant == "shared-artifact")
+
+    def test_intel_extra_and_legacy_four_point_matrices_are_rejected(self):
+        legacy = ("minimum/arm64", "minimum/x86_64", "current/arm64", "current/x86_64")
+        for points in (legacy, ("minimum/x86_64", "current/x86_64"),
+                       ("minimum/arm64", "current/x86_64"),
+                       ("minimum/x86_64", "current/arm64"),
+                       db.POINTS + ("current/x86_64",),
+                       ("minimum/arm64", "minimum/arm64"),
+                       ("current/arm64", "current/arm64")):
+            with self.subTest(points=points):
+                run, owner = str(uuid4()), str(uuid4())
+                fixtures = [fixture(point, run, owner) for point in points]
+                self.check_result(db.validate_matrix(
+                    tuple(db.json_bytes(f[0]) for f in fixtures),
+                    tuple(f[1] for f in fixtures), tuple(f[2] for f in fixtures)))
+        for point in ("minimum/x86_64", "current/x86_64", "current/unknown"):
+            record, expected, supplied = fixture(point)
+            self.check_result(db.validate_cell(db.json_bytes(record), expected, supplied))
 
     def test_no_input_or_exception_echo(self):
         for value in (None, 4, "PRIVATE/path", b'{"PRIVATE_key":"PRIVATE/path"}'):

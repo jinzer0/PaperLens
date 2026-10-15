@@ -24,6 +24,9 @@ class PackagingTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name).resolve()
+        host = patch.object(package.platform, "machine", return_value="arm64")
+        host.start()
+        self.addCleanup(host.stop)
 
     def file(self, relative, data=b"data", executable=False):
         path = self.root / relative
@@ -86,6 +89,55 @@ class PackagingTests(unittest.TestCase):
             with self.assertRaises(package.Failure):
                 package.validate_runtime(self.root / "missing-python")
             command.assert_not_called()
+
+    def test_cancelled_architectures_reject_at_cli_before_owner(self):
+        for arch in ("x86_64", "x64", "amd64", "i386", "universal"):
+            with self.subTest(arch=arch), patch.object(package, "package") as owner, patch("sys.stderr"):
+                with self.assertRaises(SystemExit) as error:
+                    package.main(["--arch", arch, "--products", str(self.root)])
+                self.assertEqual(error.exception.code, 2)
+                owner.assert_not_called()
+
+    def test_intel_apis_reject_before_tools_inputs_or_outputs(self):
+        before = package.tree_inventory(self.root)
+        with patch.object(package.sys, "platform", "darwin"), patch.object(package, "command") as command, patch.object(package, "load_acquire") as acquire, patch.object(package, "digest") as digest:
+            with self.assertRaisesRegex(package.Failure, "macos_arch_required"):
+                package.package(self.root, "x86_64", self.root)
+            with self.assertRaisesRegex(package.Failure, "native_build_host_not_proven"):
+                package.validate_prepared_inputs(self.root, "x86_64", self.root, self.root)
+            with self.assertRaisesRegex(package.Failure, "unsupported_arch"):
+                package.validate_receipts(self.root, self.root, "x86_64", runtime_work=self.root, prepared=True)
+            with self.assertRaisesRegex(package.Failure, "unsupported_arch"):
+                package.inspect_macho(self.root / "binary", "x86_64")
+            with patch.object(package.platform, "machine", return_value="x86_64"):
+                with self.assertRaisesRegex(package.Failure, "native_build_host_not_proven"):
+                    package.package(self.root, "arm64", self.root)
+            command.assert_not_called()
+            acquire.assert_not_called()
+            digest.assert_not_called()
+        self.assertEqual(package.tree_inventory(self.root), before)
+
+    def test_intel_manifest_rejected_without_effects(self):
+        manifest = self.manifest()
+        manifest["arch"] = "x86_64"
+        original = copy.deepcopy(manifest)
+        with patch.object(package, "command") as command:
+            with self.assertRaisesRegex(package.Failure, "manifest_schema_mismatch"):
+                package.safe_manifest(manifest)
+            command.assert_not_called()
+        self.assertEqual(manifest, original)
+
+    def test_translated_or_unknown_host_rejected_before_inputs_or_staging(self):
+        (self.root / ".build/topology/arm64").mkdir(parents=True)
+        before = package.tree_inventory(self.root)
+        for translated in (b"1", b"", b"unknown"):
+            with self.subTest(translated=translated), patch.object(package.sys, "platform", "darwin"), patch.object(package, "command", return_value=(translated, b"")) as command, patch.object(package, "validate_bundles") as bundles, patch.object(package, "signing_identity") as identity:
+                with self.assertRaisesRegex(package.Failure, "rosetta_or_unknown_host_forbidden"):
+                    package.package(self.root, "arm64", self.root)
+                command.assert_called_once_with(["/usr/sbin/sysctl", "-in", "sysctl.proc_translated"])
+                bundles.assert_not_called()
+                identity.assert_not_called()
+            self.assertEqual(package.tree_inventory(self.root), before)
 
     def test_both_real_xpc_executables_required(self):
         app = self.app()
@@ -472,8 +524,9 @@ class PackagingTests(unittest.TestCase):
         def inspect(path, arch, app=None):
             return "library" if path.suffix in (".so", ".dylib") or path.name == "PythonRuntime" else "executable"
 
-        with patch.object(package.sys, "platform", "darwin"), patch.object(package, "validate_receipts", return_value=("a" * 64, "b" * 64)) as receipts, patch.object(package, "source_provenance", return_value={"sourceBaseCommit": "c" * 40, "sourceDirty": True, "sourceTreeHash": "d" * 64}), patch.object(package, "signing_identity", return_value="A" * 40), patch.object(package, "inspect_macho", side_effect=inspect), patch.object(package, "sign", side_effect=sign), patch.object(package, "verify_signature"):
+        with patch.object(package.sys, "platform", "darwin"), patch.object(package, "command", return_value=(b"0\n", b"")) as command, patch.object(package, "validate_receipts", return_value=("a" * 64, "b" * 64)) as receipts, patch.object(package, "source_provenance", return_value={"sourceBaseCommit": "c" * 40, "sourceDirty": True, "sourceTreeHash": "d" * 64}), patch.object(package, "signing_identity", return_value="A" * 40), patch.object(package, "inspect_macho", side_effect=inspect), patch.object(package, "sign", side_effect=sign), patch.object(package, "verify_signature"):
             manifest = package.package(self.root, "arm64", app.parent, **keywords)
+            command.assert_called_once_with(["/usr/sbin/sysctl", "-in", "sysctl.proc_translated"])
             receipts.assert_called_once_with(acquisition_work, self.root, "arm64", runtime_work=runtime_work, prepared=prepared)
         ids = [item[1] for item in order]
         self.assertLess(ids.index(package.IDENTITY + ".ProviderAgent.Python"), len(ids) - 3)

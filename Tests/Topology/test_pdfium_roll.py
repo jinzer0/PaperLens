@@ -68,6 +68,12 @@ class CommandTests(unittest.TestCase):
                 roll.link_command(self.transform(self.argv), Path("/fixture/Test.o"), Path("/fixture/lib.a"), Path("/fixture/Test"), arch, sdk, deployment)
 
 
+    def test_intel_recipe_is_rejected_even_with_matching_target(self):
+        argv = [arg.replace("arm64-apple-macos", "x86_64-apple-macos") for arg in self.argv]
+        with self.assertRaisesRegex(acquire.Failure, "unsupported_target_cpu"):
+            roll.link_command(self.transform(argv), Path("/fixture/Test.o"), Path("/fixture/lib.a"), Path("/fixture/Test"), "x86_64", "sdk/xcode_links/MacOSX27.0.sdk", "15.0")
+
+
 class EvidenceTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
@@ -92,7 +98,7 @@ class EvidenceTests(unittest.TestCase):
         self.argv = ["../src/" + compiler_dir + "/bin/clang++", '-DCR_CLANG_REVISION="pinned-clang"', "-DNDEBUG", "-I../src", "-std=c++20", "--target=arm64-apple-macos", "-isysroot", "sdk/xcode_links/MacOSX27.0.sdk", "-mmacos-version-min=15.0", "-c", "../src/" + roll.ENGINE, "-o", "engine.o"]
         self.database = [{"directory": str(self.output), "file": "../src/" + roll.ENGINE, "arguments": self.argv}]
         self.calls = []
-        for patch in (mock.patch.object(roll, "ROOT", self.root), mock.patch.object(acquire, "LOCK_PATH", self.root / "lock.json"), mock.patch.object(acquire, "load_lock", return_value=self.lock), mock.patch.object(roll, "PATCHED_SHA256", acquire.sha256(self.source / roll.ENGINE)), mock.patch.object(acquire, "tree_inventory", return_value={}), mock.patch.object(acquire, "request", side_effect=AssertionError("network forbidden")), mock.patch.object(acquire, "run", side_effect=self.mocked_process), mock.patch.object(roll, "native_execution", return_value=False)):
+        for patch in (mock.patch.object(roll, "ROOT", self.root), mock.patch.object(acquire, "LOCK_PATH", self.root / "lock.json"), mock.patch.object(acquire, "load_lock", return_value=self.lock), mock.patch.object(roll, "PATCHED_SHA256", acquire.sha256(self.source / roll.ENGINE)), mock.patch.object(acquire, "tree_inventory", return_value={}), mock.patch.object(acquire, "request", side_effect=AssertionError("network forbidden")), mock.patch.object(acquire, "run", side_effect=self.mocked_process), mock.patch.object(roll, "native_execution", return_value=True)):
             patch.start()
             self.addCleanup(patch.stop)
         self.fail = None
@@ -112,11 +118,11 @@ class EvidenceTests(unittest.TestCase):
             return ""
         return "pdfium-roll: pass"
 
-    def test_cross_build_records_no_execution_and_repeats(self):
+    def test_native_build_records_actual_execution_and_repeats(self):
         result = roll.verify("arm64")
-        self.assertEqual(result["verdict"], "compiled_execution_blocked")
-        self.assertEqual(result["execution"], "blocked_cross_cpu")
-        self.assertEqual(len(self.calls), 3)
+        self.assertEqual(result["verdict"], "pass")
+        self.assertEqual(result["execution"], "native_pass")
+        self.assertEqual(len(self.calls), 4)
         self.assertEqual(roll.verify("arm64"), result)
         self.assertEqual(json.loads((self.work / "pdfium-roll.json").read_text()), result)
 
@@ -158,10 +164,20 @@ class EvidenceTests(unittest.TestCase):
             roll.verify("arm64")
         self.assertEqual(len(self.calls), count + 1)  # Compdb only, no compiler.
 
-    def test_cross_cli_success_is_not_native_pass(self):
+    def test_lost_native_proof_prevents_probe_execution(self):
+        with mock.patch.object(roll, "native_execution", side_effect=[True, acquire.Failure("rosetta_forbidden")]):
+            with self.assertRaisesRegex(acquire.Failure, "rosetta_forbidden"):
+                roll.verify("arm64")
+        self.assertEqual(len(self.calls), 3)  # Compdb, compile and link only.
+        result = json.loads((self.work / "pdfium-roll.json").read_text())
+        self.assertEqual(result["verdict"], "blocked")
+        self.assertEqual(result["execution"], "failed")
+
+    def test_native_cli_success_requires_execution(self):
         with contextlib.redirect_stdout(io.StringIO()) as stream:
             self.assertEqual(roll.main(["--arch", "arm64"]), 0)
-        self.assertEqual(json.loads(stream.getvalue())["verdict"], "compiled_execution_blocked")
+        self.assertEqual(json.loads(stream.getvalue())["verdict"], "pass")
+        self.assertEqual(json.loads(stream.getvalue())["execution"], "native_pass")
 
     def test_main_failure_is_safe_json_and_exit_two(self):
         with mock.patch.object(roll, "verify", side_effect=acquire.Failure("fixture_blocked")), contextlib.redirect_stdout(io.StringIO()) as stream:
@@ -170,20 +186,75 @@ class EvidenceTests(unittest.TestCase):
 
 
 class NativeTests(unittest.TestCase):
-    def test_cross_cpu_never_queries_or_executes(self):
+    def test_intel_target_never_queries_or_executes(self):
         with mock.patch.object(roll.sys, "platform", "darwin"), mock.patch.object(roll.platform, "machine", return_value="arm64"), mock.patch.object(acquire, "run") as run:
-            self.assertFalse(roll.native_execution("x86_64"))
+            with self.assertRaisesRegex(acquire.Failure, "unsupported_target_cpu"):
+                roll.native_execution("x86_64")
             run.assert_not_called()
 
     def test_rosetta_is_rejected(self):
-        with mock.patch.object(roll.sys, "platform", "darwin"), mock.patch.object(roll.platform, "machine", return_value="x86_64"), mock.patch.object(acquire, "run", return_value="1"):
+        with mock.patch.object(roll.sys, "platform", "darwin"), mock.patch.object(roll.platform, "machine", return_value="arm64"), mock.patch.object(acquire, "run", return_value="1"):
             with self.assertRaisesRegex(acquire.Failure, "rosetta_forbidden"):
-                roll.native_execution("x86_64")
+                roll.native_execution("arm64")
 
-    def test_intel_requires_hardware_proof_when_translation_key_absent(self):
-        with mock.patch.object(roll.sys, "platform", "darwin"), mock.patch.object(roll.platform, "machine", return_value="x86_64"), mock.patch.object(acquire, "run", side_effect=[acquire.Failure("subprocess_failed"), "0"]) as run:
-            self.assertTrue(roll.native_execution("x86_64"))
-            self.assertEqual(run.call_args.args[0][-1], "hw.optional.arm64")
+    def test_arm64_requires_untranslated_proof_without_hardware_fallback(self):
+        for translated in ("1", "", "unknown", acquire.Failure("subprocess_failed")):
+            with self.subTest(translated=translated):
+                failure = isinstance(translated, acquire.Failure)
+                with mock.patch.object(roll.sys, "platform", "darwin"), mock.patch.object(roll.platform, "machine", return_value="arm64"), mock.patch.object(acquire, "run", return_value=translated, side_effect=translated if failure else None) as run:
+                    with self.assertRaisesRegex(acquire.Failure, "native_host_not_proven" if failure else "rosetta_forbidden"):
+                        roll.native_execution("arm64")
+                    self.assertEqual(run.call_count, 1)
+                    self.assertEqual(run.call_args.args[0], ["/usr/sbin/sysctl", "-in", "sysctl.proc_translated"])
+
+    def test_native_arm64_queries_translation_offline(self):
+        with mock.patch.object(roll.sys, "platform", "darwin"), mock.patch.object(roll.platform, "machine", return_value="arm64"), mock.patch.object(acquire, "run", return_value="0") as run:
+            self.assertTrue(roll.native_execution("arm64"))
+            run.assert_called_once_with(["/usr/sbin/sysctl", "-in", "sysctl.proc_translated"], env=acquire.clean_env(), offline=True)
+
+    def test_unsupported_host_is_rejected_before_any_input_or_build_work(self):
+        for host, system in (("x86_64", "darwin"), ("i386", "darwin"), ("unknown", "darwin"), ("arm64", "linux")):
+            with self.subTest(host=host, system=system):
+                with mock.patch.object(roll.sys, "platform", system), mock.patch.object(roll.platform, "machine", return_value=host), mock.patch.object(acquire, "run") as run, mock.patch.object(acquire, "load_lock") as load, mock.patch.object(acquire, "ensure_root") as ensure, mock.patch.object(Path, "read_text") as read, mock.patch.object(roll, "save_result") as save:
+                    with self.assertRaisesRegex(acquire.Failure, "unsupported_host_cpu"):
+                        roll.verify("arm64")
+                    run.assert_not_called()
+                    load.assert_not_called()
+                    ensure.assert_not_called()
+                    read.assert_not_called()
+                    save.assert_not_called()
+
+    def test_cli_intel_target_is_rejected_before_verification(self):
+        with mock.patch.object(roll, "verify") as verify, contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit) as raised:
+                roll.main(["--arch", "x86_64"])
+            self.assertEqual(raised.exception.code, 2)
+            verify.assert_not_called()
+
+    def test_intel_target_verify_is_rejected_before_input_or_build_work(self):
+        with mock.patch.object(acquire, "run") as run, mock.patch.object(acquire, "load_lock") as load, mock.patch.object(acquire, "ensure_root") as ensure:
+            with self.assertRaisesRegex(acquire.Failure, "unsupported_target_cpu"):
+                roll.verify("x86_64")
+            run.assert_not_called()
+            load.assert_not_called()
+            ensure.assert_not_called()
+
+    def test_translation_failure_is_rejected_before_input_or_build_work(self):
+        with mock.patch.object(roll.sys, "platform", "darwin"), mock.patch.object(roll.platform, "machine", return_value="arm64"), mock.patch.object(acquire, "run", return_value="1") as run, mock.patch.object(acquire, "load_lock") as load, mock.patch.object(acquire, "ensure_root") as ensure, mock.patch.object(Path, "read_text") as read, mock.patch.object(roll, "save_result") as save:
+            with self.assertRaisesRegex(acquire.Failure, "rosetta_forbidden"):
+                roll.verify("arm64")
+            self.assertEqual(run.call_count, 1)
+            load.assert_not_called()
+            ensure.assert_not_called()
+            read.assert_not_called()
+            save.assert_not_called()
+
+    def test_cli_intel_host_returns_blocked_without_build_work(self):
+        with mock.patch.object(roll.sys, "platform", "darwin"), mock.patch.object(roll.platform, "machine", return_value="x86_64"), mock.patch.object(acquire, "run") as run, mock.patch.object(acquire, "load_lock") as load, contextlib.redirect_stdout(io.StringIO()) as stream:
+            self.assertEqual(roll.main(["--arch", "arm64"]), 2)
+        self.assertEqual(json.loads(stream.getvalue()), {"arch": "arm64", "verdict": "blocked", "reason": "unsupported_host_cpu"})
+        run.assert_not_called()
+        load.assert_not_called()
 
 
 if __name__ == "__main__":

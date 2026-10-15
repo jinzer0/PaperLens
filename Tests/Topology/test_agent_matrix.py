@@ -64,9 +64,9 @@ def row(value, event):
     return seal(expected, supplied)
 
 
-def matrix():
+def matrix(points=db.POINTS):
     run, owner = str(uuid4()), str(uuid4())
-    inputs = tuple(db_input(p, run, owner) for p in db.POINTS)
+    inputs = tuple(db_input(p, run, owner) for p in points)
     rows = [row(d, event) for d in inputs for event in agent.EVENTS]
     return tuple(r[0] for r in rows), tuple(r[1] for r in rows), tuple(r[2] for r in rows), inputs
 
@@ -99,16 +99,19 @@ class AgentMatrixTests(unittest.TestCase):
                                      self.supplied if supplied is None else supplied,
                                      self.inputs if inputs is None else inputs)
 
-    def test_twenty_individual_rows_then_matrix_never_authenticate(self):
+    def test_ten_individual_rows_two_arm64_executions_never_authenticate(self):
+        self.assertEqual(agent.POINTS, ("minimum/arm64", "current/arm64"))
+        self.assertEqual(tuple((e.db.expected.point, e.event) for e in self.expected),
+                         tuple((point, event) for point in agent.POINTS for event in agent.EVENTS))
         for r, e, s in zip(self.records, self.expected, self.supplied):
             output = self.check(agent.validate_row(r, e, s), True, True)
             self.assertTrue(output["coverage"])
         output = self.check(self.validate(), True, True)
         self.assertTrue(output["coverage"])
-        self.assertEqual(len(output["rows"]), 20)
-        self.assertEqual(self.inputs[0].expected.artifact, self.inputs[2].expected.artifact)
-        self.assertEqual(self.inputs[1].expected.artifact, self.inputs[3].expected.artifact)
-        self.assertNotEqual(self.inputs[0].expected.artifact, self.inputs[1].expected.artifact)
+        self.assertEqual(len(output["rows"]), 10)
+        self.assertEqual(len(self.inputs), 2)
+        self.assertNotEqual(self.inputs[0].expected.attempt, self.inputs[1].expected.attempt)
+        self.assertEqual(self.inputs[0].expected.artifact, self.inputs[1].expected.artifact)
         self.assertEqual(self.validate(), self.validate())
 
     def test_frozen_authority_and_exact_input_types(self):
@@ -127,8 +130,9 @@ class AgentMatrixTests(unittest.TestCase):
             self.check(agent.validate_row(r, e, s))
 
     def test_missing_extra_reordered_duplicate_unknown_rows_and_db_inputs(self):
-        for indices in (tuple(range(19)), tuple(range(20)) + (0,),
-                        (1, 0) + tuple(range(2, 20)), (0, 0) + tuple(range(2, 20))):
+        for indices in (tuple(range(9)), tuple(range(10)) + (0,),
+                        tuple(range(5)), tuple(range(5, 10)),
+                        (1, 0) + tuple(range(2, 10)), (0, 0) + tuple(range(2, 10))):
             self.check(self.validate(tuple(self.records[i] for i in indices),
                                      tuple(self.expected[i] for i in indices),
                                      tuple(self.supplied[i] for i in indices)))
@@ -140,6 +144,21 @@ class AgentMatrixTests(unittest.TestCase):
             record = db.bounded_json(self.records[0])
             record[name] = value
             self.check(agent.validate_row(db.json_bytes(record), self.expected[0], self.supplied[0]))
+
+    def test_intel_extra_and_legacy_twenty_row_matrices_are_rejected(self):
+        legacy = ("minimum/arm64", "minimum/x86_64", "current/arm64", "current/x86_64")
+        for points in (legacy, ("minimum/x86_64", "current/x86_64"),
+                       ("minimum/arm64", "current/x86_64"),
+                       ("minimum/x86_64", "current/arm64"),
+                       agent.POINTS + ("current/x86_64",),
+                       ("minimum/arm64", "minimum/arm64"),
+                       ("current/arm64", "current/arm64")):
+            with self.subTest(points=points):
+                records, expected, supplied, inputs = matrix(points)
+                self.check(agent.validate_matrix(records, expected, supplied, inputs))
+                for r, e, s in zip(records, expected, supplied):
+                    if e.db.expected.point.endswith("/x86_64"):
+                        self.check(agent.validate_row(r, e, s))
 
     def test_unavailable_failed_and_positive_coverage_are_distinct(self):
         for index, (r, e, s) in enumerate(zip(self.records, self.expected, self.supplied)):
@@ -173,7 +192,7 @@ class AgentMatrixTests(unittest.TestCase):
         record["phases"] = [{"phase": "unavailable", "reason": "grdb_unavailable", "sqliteCode": None}]
         value = replace(value, record=db.json_bytes(record))
         self.assertEqual(db.validate_cell(value.record, value.expected, value.supplied)[0], 2)
-        rows = [row(value if i < 5 else self.inputs[i // 5], agent.EVENTS[i % 5]) for i in range(20)]
+        rows = [row(value if i < 5 else self.inputs[i // 5], agent.EVENTS[i % 5]) for i in range(10)]
         for r, e, s in rows:
             self.check(agent.validate_row(r, e, s), True, e.db != value)
         inputs = (value,) + self.inputs[1:]
@@ -258,14 +277,15 @@ class AgentMatrixTests(unittest.TestCase):
             self.check(agent.validate_row(r, e, s), True, True)
             self.check(self.validate((r,) + self.records[1:], (e,) + self.expected[1:],
                                      (s,) + self.supplied[1:]))
-        for mode in ("four-artifacts", "cross-cpu-alias"):
-            inputs = tuple(rebound_db(d, artifact=(d.expected.point.encode() if mode == "four-artifacts"
-                                                   else b"one foreign artifact")) for d in self.inputs)
+        for mode in ("distinct-artifacts", "shared-artifact"):
+            inputs = tuple(rebound_db(d, artifact=(d.expected.point.encode() if mode == "distinct-artifacts"
+                                                   else b"PRIVATE independently supplied arm64 artifact")) for d in self.inputs)
             rows = [row(d, event) for d in inputs for event in agent.EVENTS]
             for r, e, s in rows:
                 self.check(agent.validate_row(r, e, s), True, True)
             self.check(agent.validate_matrix(tuple(r[0] for r in rows), tuple(r[1] for r in rows),
-                                             tuple(r[2] for r in rows), inputs))
+                                             tuple(r[2] for r in rows), inputs),
+                       mode == "shared-artifact", mode == "shared-artifact")
         lock = db.bounded_json(self.inputs[0].supplied.lock)
         lock["unapproved"] = True
         invalid = rebound_db(self.inputs[0], lock=db.json_bytes(lock))
@@ -350,12 +370,12 @@ class AgentMatrixTests(unittest.TestCase):
             self.check(agent.validate_row(db.json_bytes(record), e2, s2))
             self.check(agent.validate_row(r + b"{}", e, s))
         padded_rows = tuple(r + b" " * (16384 - len(r)) for r in self.records)
-        self.assertEqual(sum(map(len, padded_rows)), 327680)
+        self.assertEqual(sum(map(len, padded_rows)), 163840)
         self.check(self.validate(padded_rows), True, True)
         self.check(self.validate((padded_rows[0] + b" ",) + padded_rows[1:]))
         padded_db = tuple(replace(d, record=d.record + b" " * (16384 - len(d.record))) for d in self.inputs)
         rows = [row(d, event) for d in padded_db for event in agent.EVENTS]
-        self.assertEqual(sum(len(d.record) for d in padded_db), 65536)
+        self.assertEqual(sum(len(d.record) for d in padded_db), 32768)
         self.check(agent.validate_matrix(tuple(r[0] for r in rows), tuple(r[1] for r in rows),
                                          tuple(r[2] for r in rows), padded_db), True, True)
         self.check(self.validate(inputs=(replace(padded_db[0], record=padded_db[0].record + b" "),) + padded_db[1:]))

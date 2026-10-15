@@ -71,6 +71,7 @@ def transform_command(argv, source, output, test, obj):
 
 
 def link_command(compile_argv, obj, archive, executable, arch, sdk, deployment):
+    acquire.require(arch == "arm64", "unsupported_target_cpu")
     # Only driver/ABI options from the actual compile recipe belong at link time.
     flags = []
     index = 1
@@ -91,14 +92,13 @@ def link_command(compile_argv, obj, archive, executable, arch, sdk, deployment):
 
 
 def native_execution(arch):
+    acquire.require(arch == "arm64", "unsupported_target_cpu")
     host = platform.machine()
-    acquire.require(host in acquire.ARCHES and sys.platform == "darwin", "unsupported_host_cpu")
-    if host != arch:
-        return False
+    acquire.require(host == "arm64" and sys.platform == "darwin", "unsupported_host_cpu")
     try:
         translated = acquire.run(["/usr/sbin/sysctl", "-in", "sysctl.proc_translated"], env=acquire.clean_env(), offline=True)
     except acquire.Failure:
-        acquire.require(host == "x86_64" and acquire.run(["/usr/sbin/sysctl", "-n", "hw.optional.arm64"], env=acquire.clean_env(), offline=True) == "0", "native_host_not_proven")
+        raise acquire.Failure("native_host_not_proven") from None
     else:
         acquire.require(translated == "0", "rosetta_forbidden")
     return True
@@ -112,6 +112,7 @@ def save_result(path, result):
 
 
 def verify(arch):
+    native_execution(arch)
     lock = acquire.load_lock()
     work = acquire.ensure_root(ROOT / ".build/topology" / arch)
     source = acquire.safe_path(work, "pdfium/src")
@@ -161,12 +162,10 @@ def verify(arch):
         acquire.check_hash(source / ENGINE, inputs["engineSha256"])
         acquire.check_hash(source / "core/fpdfapi/page/cpdf_psengine.h", inputs["headerSha256"])
         acquire.check_hash(test, inputs["testSha256"])
-        if native_execution(arch):
-            acquire.require(acquire.run([executable], cwd=directory, env=env, offline=True) == "pdfium-roll: pass", "roll_output_mismatch")
-            result["execution"] = "native_pass"
-        else:
-            result["execution"] = "blocked_cross_cpu"
-        result["verdict"] = "pass" if result["execution"] == "native_pass" else "compiled_execution_blocked"
+        native_execution(arch)
+        acquire.require(acquire.run([executable], cwd=directory, env=env, offline=True) == "pdfium-roll: pass", "roll_output_mismatch")
+        result["execution"] = "native_pass"
+        result["verdict"] = "pass"
     except (acquire.Failure, OSError) as error:
         result[phase] = "failed"
         result.update(verdict="blocked", reason=str(error) if isinstance(error, acquire.Failure) else "roll_io_failed")
@@ -178,7 +177,7 @@ def verify(arch):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--arch", required=True, choices=acquire.ARCHES)
+    parser.add_argument("--arch", required=True, choices=("arm64",))
     args = parser.parse_args(argv)
     try:
         result = verify(args.arch)

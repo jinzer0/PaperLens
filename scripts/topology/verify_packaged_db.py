@@ -15,10 +15,11 @@ import json
 import re
 from uuid import UUID
 
+# Immutable probe-intent provenance, not approval of active matrix membership.
 SPEC_COMMIT = "7b489572bdee826e4a14101ca0961e10d705e570"
 GRDB_COMMIT = "b83108d10f42680d78f23fe4d4d80fc88dab3212"
 SCHEMA = "packaged-db-fts5-evidence-v1"
-POINTS = ("minimum/arm64", "minimum/x86_64", "current/arm64", "current/x86_64")
+POINTS = ("minimum/arm64", "current/arm64")
 SCOPES = ("local_contract_only", "local_grdb_probe", "packaged_db_fts5")
 MIGRATIONS = ("probe-baseline-v1", "probe-fts5-v2")
 REASONS = ("grdb_unavailable", "binding_mismatch", "db_open_failed",
@@ -329,18 +330,16 @@ def validate_cell(record_bytes: bytes, expected: OwnerExpectedBindings,
 
 def validate_matrix(records: tuple[bytes, ...], expected: tuple[OwnerExpectedBindings, ...],
                     supplied: tuple[SuppliedBytes, ...]) -> tuple[int, dict]:
-    """Exactly four distinct cells; no aggregate runtime PASS or promotion."""
+    """Exactly minimum/current arm64 executions; no runtime PASS or promotion."""
     try:
         require(type(records) is tuple and type(expected) is tuple and type(supplied) is tuple)
-        require(len(records) == len(expected) == len(supplied) == 4)
-        require(all(type(r) is bytes for r in records) and sum(map(len, records)) <= 65536)
+        require(len(records) == len(expected) == len(supplied) == len(POINTS))
+        require(all(type(r) is bytes for r in records) and sum(map(len, records)) <= 32768)
         require(all(type(e) is OwnerExpectedBindings for e in expected))
         require(tuple(e.point for e in expected) == POINTS)
         for name in ("attempt", "lineage", "receipt"):
-            require(len({getattr(e, name) for e in expected}) == 4)
-        require(expected[0].artifact == expected[2].artifact)
-        require(expected[1].artifact == expected[3].artifact)
-        require(expected[0].artifact != expected[1].artifact)
+            require(len({getattr(e, name) for e in expected}) == len(POINTS))
+        require(expected[0].artifact == expected[1].artifact)
         for name in ("run", "owner", "codeCommit", "code", "lock", "spec", "grdbSource", "acquisition", "package"):
             require(len({getattr(e, name) for e in expected}) == 1)
         results = [validate_cell(r, e, s) for r, e, s in zip(records, expected, supplied)]

@@ -16,7 +16,7 @@ import sys
 
 SPEC_COMMIT = "33dcd8db20a122d13a6ce0a16b92077f278facb6"
 MINIMUM_OS_BUILD = "24A335"
-POINTS = ("minimum/arm64", "minimum/x86_64", "current/arm64", "current/x86_64")
+POINTS = ("minimum/arm64", "current/arm64")
 # Approved semantic identity; whitespace and object order are not pin identity.
 APPROVED_CANONICAL_SHA256 = "46ea50208ad8e8a95e2273c35c8613ee8d437b81ca6139ef0f24524475413d1e"
 
@@ -132,7 +132,7 @@ def candidate_matrix(lock_bytes, source_bytes):
     for point in POINTS:
         role, cpu = point.split("/")
         blockers = []
-        if role == "minimum" or cpu == "x86_64":
+        if role == "minimum":
             blockers.append("NATIVE_EXEC_UNAVAILABLE")
         blockers.append("PACKAGED_PROOF_NOT_RUN")
         blockers.extend(("ARTIFACT_MISSING", "ARTIFACT_UNVERIFIED",
@@ -206,7 +206,7 @@ def validate_matrix(value, lock_bytes, source_bytes, artifacts=None, evidence=No
     for cell in cells:
         keys(cell, ("cpu", "osRole", "osVersion", "osBuild", "status", "blockers",
                     "artifact", "evidence", "sqlite"), "/matrix")
-        require(type(cell["cpu"]) is str and cell["cpu"] in ("arm64", "x86_64") and
+        require(type(cell["cpu"]) is str and cell["cpu"] == "arm64" and
                 type(cell["osRole"]) is str and cell["osRole"] in ("minimum", "current"),
                 "IDENTITY_MISMATCH", "/matrix")
         point = cell["osRole"] + "/" + cell["cpu"]
@@ -227,12 +227,12 @@ def validate_matrix(value, lock_bytes, source_bytes, artifacts=None, evidence=No
         require(type(blockers) is list and all(type(item) is str and item in CODES
                 for item in blockers), "IDENTITY_MISMATCH", point)
         require(len(blockers) == len(set(blockers)), "IDENTITY_MISMATCH", point)
-        require(not (minimum or cell["cpu"] == "x86_64") or cell["evidence"] is not None or
+        require(not minimum or cell["evidence"] is not None or
                 status == "blocked", "IDENTITY_MISMATCH", point)
         require(cell["evidence"] is None or status == "verified",
                 "ARTIFACT_UNVERIFIED", point)
         expected = []
-        if (minimum or cell["cpu"] == "x86_64") and cell["evidence"] is None:
+        if minimum and cell["evidence"] is None:
             expected.append("NATIVE_EXEC_UNAVAILABLE")
         if status in ("not_run", "blocked"):
             expected.append("PACKAGED_PROOF_NOT_RUN")

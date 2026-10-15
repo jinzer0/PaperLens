@@ -225,7 +225,7 @@ def validate_toolchain(lock, env, output):
 
 
 def build_arguments(source, output, lock, arch):
-    require(arch in ("arm64", "x86_64"), "INVALID_ARCHITECTURE")
+    require(arch == "arm64", "INVALID_ARCHITECTURE")
     return [
         "/usr/bin/xcodebuild", "-project", source / "GRDB.xcodeproj", "-target", "GRDB",
         "-configuration", "Release", "-sdk", "macosx", "build",
@@ -242,7 +242,7 @@ def build_arguments(source, output, lock, arch):
 
 
 def validate_output(output, lock, env, arch):
-    require(arch in ("arm64", "x86_64"), "INVALID_ARCHITECTURE")
+    require(arch == "arm64", "INVALID_ARCHITECTURE")
     require(not (output / "products").is_symlink(), "OUTPUT_INVALID")
     framework = output / "products/GRDB.framework"
     require(framework.is_dir() and not framework.is_symlink(), "OUTPUT_INVALID")
@@ -281,7 +281,7 @@ def validate_output(output, lock, env, arch):
 
 
 def prepare(receipt_path, output, arch, manifest_path=MANIFEST):
-    require(arch in ("arm64", "x86_64"), "INVALID_ARCHITECTURE")
+    require(arch == "arm64", "INVALID_ARCHITECTURE")
     output = checked_path(output)
     require(not output.exists(), "OUTPUT_OCCUPIED")
     require(output.parent.is_dir(), "OUTPUT_PARENT_MISSING")
@@ -332,7 +332,7 @@ def main():
     parser.add_argument("--source-receipt", type=Path, required=True)
     parser.add_argument("--manifest", type=Path, default=MANIFEST)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--arch", choices=("arm64", "x86_64"), required=True)
+    parser.add_argument("--arch", choices=("arm64",), required=True)
     args = parser.parse_args()
     try:
         result = prepare(args.source_receipt, args.output, args.arch, args.manifest)

@@ -20,23 +20,6 @@
     {
       "artifact": null,
       "blockers": [
-        "NATIVE_EXEC_UNAVAILABLE",
-        "PACKAGED_PROOF_NOT_RUN",
-        "ARTIFACT_MISSING",
-        "ARTIFACT_UNVERIFIED",
-        "SQLITE_PROVENANCE_MISSING"
-      ],
-      "cpu": "x86_64",
-      "evidence": null,
-      "osBuild": "24A335",
-      "osRole": "minimum",
-      "osVersion": "15.0",
-      "sqlite": null,
-      "status": "blocked"
-    },
-    {
-      "artifact": null,
-      "blockers": [
         "PACKAGED_PROOF_NOT_RUN",
         "ARTIFACT_MISSING",
         "ARTIFACT_UNVERIFIED",
@@ -49,28 +32,11 @@
       "osVersion": "26.7.1",
       "sqlite": null,
       "status": "not_run"
-    },
-    {
-      "artifact": null,
-      "blockers": [
-        "NATIVE_EXEC_UNAVAILABLE",
-        "PACKAGED_PROOF_NOT_RUN",
-        "ARTIFACT_MISSING",
-        "ARTIFACT_UNVERIFIED",
-        "SQLITE_PROVENANCE_MISSING"
-      ],
-      "cpu": "x86_64",
-      "evidence": null,
-      "osBuild": "25G241",
-      "osRole": "current",
-      "osVersion": "26.7.1",
-      "sqlite": null,
-      "status": "blocked"
     }
   ],
   "lockSha256": "32be141a78f7ef2480892023d94a9a617f77bdd475bd19611500a3dab4530fb8",
   "promotion": "not_promoted",
   "schemaRevision": "runtime-matrix-v1",
-  "sourceSha256": "b59c97ebccc0301244eea3fe0a1308f208022576733e7e1c117ddfba51c12651",
+  "sourceSha256": "789f28bd0736f4654510a3223a84d6c9d480599aac2c724f9a715c0f73b161da",
   "specCommit": "33dcd8db20a122d13a6ce0a16b92077f278facb6"
 }

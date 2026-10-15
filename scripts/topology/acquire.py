@@ -25,7 +25,7 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
 LOCK_PATH = Path(__file__).with_name("dependencies.json")
-ARCHES = ("arm64", "x86_64")
+ARCHES = ("arm64",)
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 COMMIT = re.compile(r"[0-9a-f]{40}\Z")
 GIT_HOSTS = {"pdfium.googlesource.com", "chromium.googlesource.com", "skia.googlesource.com"}
@@ -243,8 +243,7 @@ def select_asset(entry, arch):
     asset = entry.get("any", entry.get(arch))
     require(isinstance(asset, dict), "missing_arch_pin")
     name = asset.get("filename", "")
-    other = "x86_64" if arch == "arm64" else "arm64"
-    require(other not in name and not (arch == "x86_64" and "aarch64" in name), "asset_arch_mismatch")
+    require("x86_64" not in name, "asset_arch_mismatch")
     require(SHA256.fullmatch(asset.get("sha256", "")), "invalid_sha256_pin")
     return asset
 
@@ -463,7 +462,8 @@ def pdfium_checkout(lock, source):
 class DepsReader:
     """Interpret only data expressions; never exec a fetched DEPS file."""
     def __init__(self, source, host, overrides):
-        self.values = {"host_os": "mac", "host_cpu": "arm64" if host == "arm64" else "x64", "checkout_mac": True, "checkout_linux": False, "checkout_win": False, "checkout_android": False, "checkout_ios": False}
+        require(host in ARCHES, "unsupported_host_cpu")
+        self.values = {"host_os": "mac", "host_cpu": "arm64", "checkout_mac": True, "checkout_linux": False, "checkout_win": False, "checkout_android": False, "checkout_ios": False}
         self.variables = dict(overrides)
         self.overrides = overrides
         for statement in ast.parse(source).body:
@@ -560,6 +560,7 @@ def gcs_object(lock, item, bucket):
 
 
 def source_graph(lock, work, host, cache, prior=None):
+    require(host in ARCHES, "unsupported_host_cpu")
     source = work / "pdfium" / "src"
     if prior is not None:
         require(source.is_dir(), "prepared_source_missing")
@@ -591,8 +592,7 @@ def source_graph(lock, work, host, cache, prior=None):
                 repositories.append({"path": relative, "url": url, "commit": revision})
             elif kind == "cipd":
                 for package in item["packages"]:
-                    cpu = "arm64" if host == "arm64" else "amd64"
-                    name = package["package"].replace("${{platform}}", "mac-" + cpu).replace("${{arch}}", cpu)
+                    name = package["package"].replace("${{platform}}", "mac-arm64").replace("${{arch}}", "arm64")
                     known = next((pin for pin in lock["cipd"][host].values() if pin["package"] == name), None)
                     if relative == "buildtools/mac":
                         require(package["version"] == lock["pdfium"]["gnVersion"], "gn_version_mismatch")
@@ -660,6 +660,8 @@ def source_graph(lock, work, host, cache, prior=None):
 
 
 def fetch(lock, work, host, arch, cache):
+    require(arch in ARCHES, "unsupported_arch")
+    require(host in ARCHES, "unsupported_host_cpu")
     receipt_path = safe_path(work, "acquisition.json")
     if receipt_path.exists():
         return validate_receipt(lock, work, host, arch, cache)
@@ -684,6 +686,8 @@ def fetch(lock, work, host, arch, cache):
 
 
 def validate_receipt(lock, work, host, arch, cache):
+    require(arch in ARCHES, "unsupported_arch")
+    require(host in ARCHES, "unsupported_host_cpu")
     path = safe_path(work, "acquisition.json")
     require(path.is_file(), "fetch_required")
     receipt = json.loads(path.read_text())
@@ -705,6 +709,7 @@ def validate_receipt(lock, work, host, arch, cache):
 
 def install_wheel(archive, runtime, filename):
     """PEP 427 spread; preserve licenses and update installed RECORD paths."""
+    require("x86_64" not in filename, "asset_arch_mismatch")
     site = runtime / "lib/python3.13/site-packages"
     ensure_root(site)
     with zipfile.ZipFile(archive) as wheel:
@@ -772,6 +777,7 @@ def install_wheel(archive, runtime, filename):
 
 
 def runtime_stage(lock, work, receipt, cache):
+    require(receipt["arch"] in ARCHES, "unsupported_arch")
     destination = safe_path(work, "runtime")
     receipt_path = safe_path(work, "runtime.json")
     if destination.exists():
@@ -793,6 +799,8 @@ def runtime_stage(lock, work, receipt, cache):
 
 def pdfium_stage(lock, work, receipt, cache):
     require(sys.version_info[:2] == (3, 13), "build_python_version_mismatch")
+    require(receipt["arch"] in ARCHES, "unsupported_arch")
+    require(receipt["host"] in ARCHES, "unsupported_host_cpu")
     sdk = toolchain(lock)
     linker = system_linker(lock)
     source = work / "pdfium/src"
@@ -829,7 +837,7 @@ def pdfium_stage(lock, work, receipt, cache):
     sdk_alias = output / "sdk/xcode_links" / f"MacOSX{lock['toolchain']['sdk']}.sdk"
     if sdk_alias.exists() or sdk_alias.is_symlink():
         require(sdk_alias.resolve() == Path(sdk).resolve(), "sdk_alias_mismatch")
-    arguments = dict(lock["pdfium"]["gnArgs"], target_cpu="arm64" if receipt["arch"] == "arm64" else "x64", mac_sdk_path=str(sdk_alias))
+    arguments = dict(lock["pdfium"]["gnArgs"], target_cpu="arm64", mac_sdk_path=str(sdk_alias))
     gn_args = "\n".join(f"{key} = {json.dumps(value)}" for key, value in arguments.items()) + "\n"
     args_file = safe_path(output, "args.gn")
     if args_file.exists():
@@ -884,15 +892,12 @@ def main(argv=None):
     parser.add_argument("--stage", required=True, choices=("fetch", "pdfium", "runtime"))
     args = parser.parse_args(argv)
     try:
-        lock = load_lock()
-        toolchain(lock)
         host = platform.machine()
         require(host in ARCHES, "unsupported_host_cpu")
         translated = subprocess.run(["/usr/sbin/sysctl", "-in", "sysctl.proc_translated"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=clean_env())
-        if translated.returncode == 0:
-            require(translated.stdout.strip() == b"0", "rosetta_or_unknown_host_forbidden")
-        else:
-            require(host == "x86_64" and run(["/usr/sbin/sysctl", "-n", "hw.optional.arm64"]) == "0", "native_build_host_not_proven")
+        require(translated.returncode == 0 and translated.stdout.strip() == b"0", "rosetta_or_unknown_host_forbidden")
+        lock = load_lock()
+        toolchain(lock)
         work = ensure_root(ROOT / ".build/topology" / args.arch)
         cache = ensure_root(ROOT / ".build/topology/downloads")
         receipt = fetch(lock, work, host, args.arch, cache) if args.stage == "fetch" else validate_receipt(lock, work, host, args.arch, cache)

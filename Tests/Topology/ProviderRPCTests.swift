@@ -4,6 +4,19 @@ import XCTest
 
 final class ProviderRPCTests: XCTestCase {
   private let id = "01234567-89ab-4cde-8123-456789abcdef"
+  private let stage = "11234567-89ab-4cde-8123-456789abcdef"
+  private let intent = "21234567-89ab-4cde-8123-456789abcdef"
+  private let cleanup = "31234567-89ab-4cde-8123-456789abcdef"
+  private var selector: [String: Any] {
+    ["kind": NSNull(), "slotID": NSNull(), "generation": 0, "model": NSNull()]
+  }
+  private var login: [String: Any] { ["stageID": stage, "intentID": intent] }
+  private var clean: [String: Any] {
+    ["state": "clean", "stopped": true, "closed": true, "absent": true]
+  }
+  private func merging(_ base: [String: Any], _ changes: [String: Any]) -> [String: Any] {
+    base.merging(changes) { _, new in new }
+  }
 
   override func setUpWithError() throws {
     #if SWIFT_PACKAGE
@@ -62,7 +75,7 @@ final class ProviderRPCTests: XCTestCase {
   }
 
   private var cases: [(String, [String: Any], [String: Any])] {
-    [
+    productCases + [
       (
         "hello", ["major": 1, "minor": 1, "capabilities": ["topology-v1"]],
         ["major": 1, "minor": 1, "capabilities": ["topology-v1"]]
@@ -97,6 +110,300 @@ final class ProviderRPCTests: XCTestCase {
       ),
       ("cancel", ["targetID": id], ["accepted": false]),
     ]
+  }
+
+  // Validator fixtures only, never SDK success or cleanup evidence.
+  private var productCases: [(String, [String: Any], [String: Any])] {
+    let hello: [String: Any] = ["major": 2, "minor": 0, "capabilities": ["product-v1"]]
+    let retire = merging(login, ["cleanupID": cleanup])
+    let startup: [String: Any] = ["cleanupID": cleanup, "expectedSelector": selector]
+    let paper: [String: Any] = [
+      "cleanupID": cleanup, "paperID": id, "generation": 1, "correlationID": intent,
+    ]
+    return [
+      ("product.hello", hello, hello),
+      (
+        "product.loginStart",
+        merging(login, ["expectedSelector": selector, "mode": "browser", "model": "gpt-5"]),
+        merging(
+          login, ["instructions": ["mode": "browser", "authUrl": "https://example.test/login"]])
+      ),
+      ("product.loginObserve", login, merging(login, ["state": "pending"])),
+      (
+        "product.connectionTest", merging(login, ["expectedSelector": selector]),
+        merging(login, ["expectedSelector": selector, "state": "usable", "text": "PAPERLENS_OK"])
+      ),
+      ("product.loginCancel", login, merging(login, ["accepted": false])),
+      ("product.stageRetire", retire, merging(retire, clean)),
+      ("product.startupCleanup", startup, merging(startup, clean)),
+      ("product.paperPurge", paper, merging(paper, clean)),
+    ]
+  }
+
+  func testProductSelectorsCorrelationsAndGenerations() throws {
+    for (method, params, result) in productCases {
+      for key in ["stageID", "intentID", "cleanupID", "paperID", "correlationID"]
+      where params[key] != nil {
+        for invalid in [
+          id.uppercased(), id.replacingOccurrences(of: "4cde", with: "1cde"), true, 1, NSNull(),
+        ] as [Any] {
+          rejects(.invalidParams) {
+            try ProviderRPC.validateRequest(
+              request(method, params: merging(params, [key: invalid])))
+          }
+          rejects {
+            try ProviderRPC.validateTerminal(
+              terminal(merging(result, [key: invalid])), method: method)
+          }
+        }
+      }
+    }
+    for kind in [NSNull(), "openAIAPIKey", "codexChatGPT"] as [Any] {
+      let selected = !(kind is NSNull)
+      for generation in (selected ? [Int64(1), Int64.max] : [Int64(0), 1, Int64.max]) {
+        for model in [NSNull(), "gpt-5"] as [Any] {
+          let snapshot: [String: Any] = [
+            "kind": kind, "slotID": selected ? id as Any : NSNull(), "generation": generation,
+            "model": model,
+          ]
+          try ProviderRPC.validateRequest(
+            request(
+              "product.connectionTest", params: merging(login, ["expectedSelector": snapshot])))
+        }
+      }
+    }
+    var invalidSelectors: [[String: Any]] = [
+      merging(selector, ["slotID": id]), merging(selector, ["kind": "codexChatGPT"]),
+      merging(selector, ["kind": "unknown", "slotID": id, "generation": 1]),
+      merging(selector, ["kind": "openAIAPIKey", "slotID": id]),
+      merging(selector, ["kind": "codexChatGPT", "slotID": id.uppercased(), "generation": 1]),
+      merging(selector, ["extra": 1]), selector.filter { $0.key != "model" },
+    ]
+    for value in [-1, UInt64(Int64.max) + 1, true, false, 1.0, "1", NSNull()] as [Any] {
+      invalidSelectors.append(merging(selector, ["generation": value]))
+    }
+    for value in ["", true, 1, []] as [Any] {
+      invalidSelectors.append(merging(selector, ["model": value]))
+    }
+    for snapshot in invalidSelectors {
+      rejects(.invalidParams) {
+        try ProviderRPC.validateRequest(
+          request("product.connectionTest", params: merging(login, ["expectedSelector": snapshot])))
+      }
+      rejects {
+        try ProviderRPC.validateTerminal(
+          terminal(merging(productCases[3].2, ["expectedSelector": snapshot])),
+          method: "product.connectionTest")
+      }
+    }
+    for generation in [0, 2_147_483_648, true, 1.0, NSNull()] as [Any] {
+      rejects(.invalidParams) {
+        try ProviderRPC.validateRequest(
+          request(
+            "product.paperPurge", params: merging(productCases[7].1, ["generation": generation])))
+      }
+    }
+  }
+
+  func testProductStatesProofsAndMethodSeparation() throws {
+    for state in ["pending", "authenticated", "failed", "cancelled", "timeout", "exited"] {
+      try ProviderRPC.validateTerminal(
+        terminal(merging(login, ["state": state])), method: "product.loginObserve")
+    }
+    for state in ["usable", "clean", "unknown", true, NSNull()] as [Any] {
+      rejects {
+        try ProviderRPC.validateTerminal(
+          terminal(merging(login, ["state": state])), method: "product.loginObserve")
+      }
+    }
+    for (method, _, result) in productCases[5...7] {
+      for key in ["stopped", "closed", "absent"] {
+        rejects {
+          try ProviderRPC.validateTerminal(terminal(merging(result, [key: false])), method: method)
+        }
+        try ProviderRPC.validateTerminal(
+          terminal(merging(result, ["state": "unknown", key: false])), method: method)
+        for invalid in [0, 1, "true", NSNull()] as [Any] {
+          rejects {
+            try ProviderRPC.validateTerminal(
+              terminal(merging(result, ["state": "unknown", key: invalid])), method: method)
+          }
+        }
+      }
+      try ProviderRPC.validateTerminal(
+        terminal(merging(result, ["state": "unknown"])), method: method)
+    }
+    for accepted in [true, false] {
+      let cancel = terminal(merging(login, ["accepted": accepted]))
+      try ProviderRPC.validateTerminal(cancel, method: "product.loginCancel")
+      rejects { try ProviderRPC.validateTerminal(cancel, method: "product.stageRetire") }
+    }
+    for invalid in [0, 1, "true", NSNull()] as [Any] {
+      rejects {
+        try ProviderRPC.validateTerminal(
+          terminal(merging(login, ["accepted": invalid])), method: "product.loginCancel")
+      }
+    }
+    for changes in [["state": "authenticated"], ["text": "OK"], ["text": "PAPERLENS_OK\n"]] {
+      rejects {
+        try ProviderRPC.validateTerminal(
+          terminal(merging(productCases[3].2, changes)), method: "product.connectionTest")
+      }
+    }
+    let invalidHellos: [[String: Any]] = [
+      ["major": 1, "minor": 1, "capabilities": ["topology-v1"]],
+      ["major": 2, "minor": 0, "capabilities": ["topology-v1"]],
+    ]
+    for hello in invalidHellos {
+      rejects(.invalidParams) {
+        try ProviderRPC.validateRequest(request("product.hello", params: hello))
+      }
+      rejects { try ProviderRPC.validateTerminal(terminal(hello), method: "product.hello") }
+    }
+    for (_, _, result) in productCases {
+      rejects { try ProviderRPC.validateTerminal(terminal(result), method: "topology.runtime") }
+    }
+  }
+
+  func testProductURLAuthorityDelimiterUsesUTF8Boundaries() throws {
+    for url in [
+      "https://example.test:443/́login", "https://example.test:443?́login",
+      "https://example.test:443#́login",
+    ] {
+      for instructions in [
+        ["mode": "browser", "authUrl": url],
+        ["mode": "device", "userCode": "CODE", "verificationUrl": url],
+      ] {
+        let value = terminal(merging(login, ["instructions": instructions]))
+        try ProviderRPC.validateTerminal(value, method: "product.loginStart")
+        try ProviderRPC.validateTerminal(
+          ProviderRPC.decode(ProviderRPC.encode(value)), method: "product.loginStart")
+      }
+    }
+  }
+
+  func testProductLoginInstructionsAndNarrowURLException() throws {
+    func browser(_ url: String) -> [String: Any] {
+      terminal(merging(login, ["instructions": ["mode": "browser", "authUrl": url]]))
+    }
+    func rejectWire(_ value: [String: Any]) throws {
+      rejects { try ProviderRPC.encode(value) }
+      let body = try JSONSerialization.data(withJSONObject: value, options: .withoutEscapingSlashes)
+      rejects { try ProviderRPC.decode(raw(body)) }
+    }
+    let prefix = "https://example.test/"
+    for size in [256, 257, 4096] {
+      let url = prefix + String(repeating: "a", count: size - prefix.utf8.count)
+      let value = browser(url)
+      XCTAssertTrue(
+        NSDictionary(dictionary: value).isEqual(
+          to: try ProviderRPC.decode(ProviderRPC.encode(value))))
+      try ProviderRPC.validateTerminal(value, method: "product.loginStart")
+      rejects { try ProviderRPC.validateTerminal(value, method: "product.loginObserve") }
+      let body = String(decoding: try ProviderRPC.encode(value).dropFirst(4), as: UTF8.self)
+        .replacingOccurrences(of: "a", with: "\\u0061")
+      XCTAssertTrue(NSDictionary(dictionary: value).isEqual(to: try ProviderRPC.decode(raw(body))))
+    }
+    for size in [256, 257, 4096, 4097] {
+      let remaining = size - prefix.utf8.count
+      let url =
+        prefix + String(repeating: "é", count: remaining / 2)
+        + String(repeating: "x", count: remaining % 2)
+      XCTAssertEqual(url.utf8.count, size)
+      if size <= 4096 {
+        _ = try ProviderRPC.decode(ProviderRPC.encode(browser(url)))
+      } else {
+        try rejectWire(browser(url))
+      }
+    }
+    try rejectWire(browser(prefix + String(repeating: "a", count: 4097 - prefix.utf8.count)))
+    let longURL = prefix + String(repeating: "a", count: 257)
+    let wrongPaths: [[String: Any]] = [
+      ["authUrl": longURL], ["result": ["instructions": ["mode": "browser", "authUrl": longURL]]],
+      merging(browser(longURL), ["extra": 1]), merging(browser(longURL), ["id": "invalid"]),
+      terminal(merging(login, ["instructions": ["mode": "device", "authUrl": longURL]])),
+      ["x": ["authUrl": longURL]], [String(repeating: "k", count: 257): "x"],
+    ]
+    for value in wrongPaths { try rejectWire(value) }
+    for url in [
+      "http://example.test", "https://", "https:///path", "https://user@example.test",
+      "https://u:p@example.test",
+      "https://example.test:", "https://example.test:abc", "https://example.test:65536",
+      "https://example.test:-1",
+      "https://example.test/a b", "https://example.test/\n", "https://example.test/\u{0000}",
+      "https://example.test/\u{007f}", "https://example.test/\\x", "https://example.test/\u{00a0}",
+    ] {
+      rejects { try ProviderRPC.validateTerminal(browser(url), method: "product.loginStart") }
+      if url != "https://" { try rejectWire(browser(url + String(repeating: "a", count: 257))) }
+    }
+    for mode in ["browser", "device"] {
+      try ProviderRPC.validateRequest(
+        request("product.loginStart", params: merging(productCases[1].1, ["mode": mode])))
+    }
+    let invalidLoginFields: [(String, [Any])] = [
+      ("mode", ["unknown", true, NSNull()]), ("model", ["", NSNull(), true, 1]),
+    ]
+    for (key, invalids) in invalidLoginFields {
+      for invalid in invalids {
+        rejects(.invalidParams) {
+          try ProviderRPC.validateRequest(
+            request("product.loginStart", params: merging(productCases[1].1, [key: invalid])))
+        }
+      }
+    }
+    for size in [256, 257] {
+      let instructions = [
+        "mode": "device", "userCode": "CODE",
+        "verificationUrl": prefix + String(repeating: "a", count: size - prefix.utf8.count),
+      ]
+      let value = terminal(merging(login, ["instructions": instructions]))
+      if size == 256 {
+        try ProviderRPC.validateTerminal(
+          ProviderRPC.decode(ProviderRPC.encode(value)), method: "product.loginStart")
+      } else {
+        try rejectWire(value)
+      }
+    }
+    for size in [256, 257] {
+      let value = terminal(
+        merging(
+          login,
+          [
+            "instructions": [
+              "mode": "device", "userCode": String(repeating: "a", count: size),
+              "verificationUrl": prefix,
+            ]
+          ]))
+      if size == 256 {
+        try ProviderRPC.validateTerminal(
+          ProviderRPC.decode(ProviderRPC.encode(value)), method: "product.loginStart")
+      } else {
+        try rejectWire(value)
+      }
+    }
+    for instructions in [
+      ["mode": "device", "userCode": "", "verificationUrl": prefix],
+      ["mode": "device", "userCode": "CODE", "verificationUrl": "http://example.test"],
+      ["mode": "browser", "authUrl": prefix, "userCode": "CODE"], ["mode": "browser"],
+      ["mode": "unknown", "authUrl": prefix],
+      ["mode": "device", "userCode": "CODE", "verificationUrl": prefix, "authUrl": prefix],
+    ] {
+      rejects {
+        try ProviderRPC.validateTerminal(
+          terminal(merging(login, ["instructions": instructions])), method: "product.loginStart")
+      }
+    }
+    let malformed = String(
+      decoding: try ProviderRPC.encode(browser(longURL)).dropFirst(4), as: UTF8.self
+    )
+    .replacingOccurrences(of: "example", with: "exam\\ud800ple")
+    rejects { try ProviderRPC.decode(raw(malformed)) }
+    let invalidUTF8 =
+      Data(
+        "{\"kind\":\"result\",\"id\":\"\(id)\",\"result\":{\"stageID\":\"\(stage)\",\"intentID\":\"\(intent)\",\"instructions\":{\"mode\":\"browser\",\"authUrl\":\"https://exam"
+          .utf8)
+      + Data([255]) + Data("ple.test/\(String(repeating: "a", count: 257))\"}}}".utf8)
+    rejects { try ProviderRPC.decode(raw(invalidUTF8)) }
   }
 
   func testExplicitContractURLAndFailedReconfiguration() throws {
