@@ -77,6 +77,15 @@ dispatch/retirement semantics and follow-up CLEAR review.
 
 ### Preservation and cleanup evidence
 
+Verified product integration was committed locally as `a8604f5`. Cleanup then
+removed **46** unchanged, archived historical worktrees and pruned **2** broken
+registrations. `git worktree list --porcelain` now contains exactly **2** valid
+worktrees: the original root and the product integration target. No branch refs,
+unrelated root changes, active integration files or preserved archive were deleted.
+`cleanup-receipt.json` records every removed path, original HEAD and archive digest.
+All requested consolidation/cleanup actions are complete; the older product goals
+and external acceptance limits above remain explicitly unfinished.
+
 Preservation lives outside removed checkouts, under the original root's
 `.build/worktree-consolidation/` (owner-only directory). `manifest.json` maps all
 50 original registrations to HEAD, durable `refs/archive/worktree-consolidation-20261105/`
