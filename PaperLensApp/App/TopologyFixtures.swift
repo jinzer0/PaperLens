@@ -1751,6 +1751,7 @@ final class TopologyOwnedFixtures: @unchecked Sendable {
 
   let runID: String
   let descriptor: Int32
+  let directoryURL: URL
   private let parent: Int32
   private let directoryInode: ino_t
   private let directoryDevice: dev_t
@@ -1759,6 +1760,13 @@ final class TopologyOwnedFixtures: @unchecked Sendable {
   private var backupAttempted = false
   private var backupPrepared = false
   private var metadataLease: UUID?
+  private struct OwnedDirectory {
+    let name: String
+    var descriptor: Int32 = -1
+    var identity: stat?
+  }
+  private var ownedDirectories: [OwnedDirectory] = []
+  private var directoryACLs: [acl_t] = []
   var metadataParentDescriptor: Int32 { parent }
 
   var permitsNamespaceMutation: Bool { backupAdmission.withLock { metadataLease == nil } }
@@ -1809,6 +1817,7 @@ final class TopologyOwnedFixtures: @unchecked Sendable {
     directoryDevice = info.st_dev
     descriptor = fd
     self.runID = runID
+    directoryURL = root.appendingPathComponent(runID, isDirectory: true)
     directoryReference = hooks.captureReference(
       root.appendingPathComponent(runID, isDirectory: true))
   }
@@ -1816,18 +1825,94 @@ final class TopologyOwnedFixtures: @unchecked Sendable {
   // Caller serializes namespace mutation/cleanup. Only the admission flag is
   // locked; Foundation/filesystem operations never run while holding that lock.
   func prepareBackupExclusion() -> Bool {
+    guard Bundle.main.bundleIdentifier == TopologyIdentity.agent else { return false }
+    return prepareBackupExclusion(providerBundle: Bundle.main.bundleURL)
+  }
+
+  // Main supplies the genuine embedded bundle explicitly; no host interpreter fallback.
+  func prepareBackupExclusion(providerBundle: URL) -> Bool {
     prepareBackupExclusion { reference in
-      guard Bundle.main.bundleIdentifier == TopologyIdentity.agent else { return nil }
-      let bundle = Bundle.main.bundleURL
-      let interpreter = bundle.appendingPathComponent("Contents/MacOS/python3")
-      let script = bundle.appendingPathComponent("Contents/Resources/agent.py")
-      guard interpreter.resolvingSymlinksInPath().path.hasPrefix(bundle.path + "/Contents/"),
-        FileManager.default.isExecutableFile(atPath: interpreter.path),
-        FileManager.default.fileExists(atPath: script.path)
+      guard
+        let (interpreter, script) =
+          OwnedChildRetirement.WorkerLaunch.validatedProviderBundle(providerBundle)
       else { return nil }
       return OwnedChildRetirement.BackupLaunch(
         namespace: self, interpreter: interpreter, script: script, reference: reference)
     }
+  }
+
+  func prepareBundledWorker(mainBundle: URL) -> OwnedChildRetirement.WorkerLaunch? {
+    guard
+      let launch = OwnedChildRetirement.WorkerLaunch.bundled(
+        namespace: self, mainBundle: mainBundle),
+      prepareBackupExclusion(
+        providerBundle: mainBundle.appendingPathComponent("Contents/XPCServices/ProviderAgent.xpc"))
+    else { return nil }
+    return launch
+  }
+
+  // Same tracked operation is used by the existing metadata caller and the leased worker Core.
+  func prepareRuntimeDirectories() -> Bool {
+    guard permitsNamespaceMutation else { return false }
+    return prepareDirectories(permit: { self.permitsNamespaceMutation })
+  }
+
+  func prepareWorkerDirectories(owner: UUID, permit: () -> Bool) -> Bool {
+    guard backupAdmission.withLock({ metadataLease == owner }) else { return false }
+    return prepareDirectories(permit: permit)
+  }
+
+  private func prepareDirectories(permit: () -> Bool) -> Bool {
+    guard permit(), hasBackupExclusion(permit: permit), matchesOwnedNamespace(permit: permit)
+    else { return false }
+    for name in ["codex", "tmp", "work"] {
+      if let record = ownedDirectories.first(where: { $0.name == name }) {
+        guard permit(), let expected = record.identity else { return false }
+        var current = stat()
+        guard privateOwnedDirectory(record.descriptor, info: &current, permit: permit),
+          current.st_dev == expected.st_dev, current.st_ino == expected.st_ino,
+          permit(),
+          TopologyFixtures.matches(directory: descriptor, name: name, info: expected)
+        else { return false }
+        continue
+      }
+      guard permit() else { return false }
+      let made = mkdirat(descriptor, name, 0o700)
+      // Record the actual acquired entry even when the independent timer won during mkdir.
+      if made == 0 { ownedDirectories.append(OwnedDirectory(name: name)) }
+      guard permit(), made == 0 else { return false }
+      let fd = openat(descriptor, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+      if fd >= 0 { ownedDirectories[ownedDirectories.count - 1].descriptor = fd }
+      guard permit(), fd >= 0 else { return false }
+      var info = stat()
+      guard privateOwnedDirectory(fd, info: &info, permit: permit), permit(),
+        TopologyFixtures.matches(directory: descriptor, name: name, info: info)
+      else { return false }
+      ownedDirectories[ownedDirectories.count - 1].identity = info
+    }
+    return permit() && matchesOwnedNamespace(permit: permit)
+  }
+
+  private func privateOwnedDirectory(
+    _ fd: Int32, info: inout stat, permit: () -> Bool
+  ) -> Bool {
+    guard permit(), fstat(fd, &info) == 0, info.st_uid == getuid(),
+      info.st_mode & S_IFMT == S_IFDIR, info.st_mode & 0o7777 == 0o700,
+      info.st_nlink >= 2, permit()
+    else { return false }
+    let acl = acl_get_fd_np(fd, ACL_TYPE_EXTENDED)
+    let code = errno
+    if let acl { directoryACLs.append(acl) }
+    guard permit() else { return false }
+    guard let acl else { return code == ENOENT }
+    var entry: acl_entry_t?
+    errno = 0
+    let result = acl_get_entry(acl, Int32(ACL_FIRST_ENTRY.rawValue), &entry)
+    let entryCode = errno
+    guard permit() else { return false }
+    let freed = acl_free(UnsafeMutableRawPointer(acl))
+    if freed == 0 { directoryACLs.removeLast() }
+    return permit() && freed == 0 && result == -1 && entryCode == EINVAL
   }
 
   // Explicit controlled metadata fixture, never a production host-Python fallback.
@@ -1871,50 +1956,67 @@ final class TopologyOwnedFixtures: @unchecked Sendable {
     return true
   }
 
-  func hasBackupExclusion() -> Bool {
+  func hasBackupExclusion(permit: () -> Bool = { true }) -> Bool {
     backupAdmission.withLock { backupPrepared }
-      && matchesOwnedNamespace() && referenceMatchesDescriptor()
-      && referenceHasBackupExclusion() && matchesOwnedNamespace()
+      && matchesOwnedNamespace(permit: permit) && referenceMatchesDescriptor(permit: permit)
+      && referenceHasBackupExclusion(permit: permit) && matchesOwnedNamespace(permit: permit)
   }
 
-  private func matchesOwnedNamespace() -> Bool {
+  private func matchesOwnedNamespace(permit: () -> Bool = { true }) -> Bool {
     var info = stat()
-    return !cleaned && TopologyFixtures.privateDirectory(descriptor, info: &info)
+    var named = stat()
+    return !cleaned && privateOwnedDirectory(descriptor, info: &info, permit: permit)
       && info.st_ino == directoryInode && info.st_dev == directoryDevice
+      && permit()
       && TopologyFixtures.matches(directory: parent, name: runID, info: info)
+      && permit()
+      && lstat(directoryURL.path, &named) == 0 && named.st_mode & S_IFMT == S_IFDIR
+      && named.st_ino == directoryInode && named.st_dev == directoryDevice
+      && permit()
   }
 
-  private func referenceMatchesDescriptor() -> Bool {
+  private func referenceMatchesDescriptor(permit: () -> Bool = { true }) -> Bool {
     guard let reference = directoryReference, CFURLIsFileReferenceURL(reference) else {
       return false
     }
     let descriptorURL = URL(fileURLWithPath: "/dev/fd/\(descriptor)", isDirectory: true) as CFURL
-    guard (resourceProperty(reference, kCFURLIsDirectoryKey) as? NSNumber)?.boolValue == true,
-      (resourceProperty(descriptorURL, kCFURLIsDirectoryKey) as? NSNumber)?.boolValue == true,
-      let observedFile = resourceProperty(reference, kCFURLFileResourceIdentifierKey),
-      let ownedFile = resourceProperty(descriptorURL, kCFURLFileResourceIdentifierKey),
-      let observedVolume = resourceProperty(reference, kCFURLVolumeIdentifierKey),
-      let ownedVolume = resourceProperty(descriptorURL, kCFURLVolumeIdentifierKey)
+    guard
+      (resourceProperty(reference, kCFURLIsDirectoryKey, permit: permit) as? NSNumber)?.boolValue
+        == true,
+      (resourceProperty(descriptorURL, kCFURLIsDirectoryKey, permit: permit) as? NSNumber)?
+        .boolValue == true,
+      let observedFile = resourceProperty(
+        reference, kCFURLFileResourceIdentifierKey, permit: permit),
+      let ownedFile = resourceProperty(
+        descriptorURL, kCFURLFileResourceIdentifierKey, permit: permit),
+      let observedVolume = resourceProperty(reference, kCFURLVolumeIdentifierKey, permit: permit),
+      let ownedVolume = resourceProperty(descriptorURL, kCFURLVolumeIdentifierKey, permit: permit)
     else { return false }
     // Public opaque equality only: never decode or guess identifier layouts.
     // /dev/fd is used for identity reads, not the unsupported metadata setter.
     return CFEqual(observedFile, ownedFile) && CFEqual(observedVolume, ownedVolume)
   }
 
-  private func referenceHasBackupExclusion() -> Bool {
+  private func referenceHasBackupExclusion(permit: () -> Bool = { true }) -> Bool {
     guard let reference = directoryReference else { return false }
-    return (resourceProperty(reference, kCFURLIsExcludedFromBackupKey) as? NSNumber)?.boolValue
+    return
+      (resourceProperty(reference, kCFURLIsExcludedFromBackupKey, permit: permit) as? NSNumber)?
+      .boolValue
       == true
   }
 
-  private func resourceProperty(_ url: CFURL, _ key: CFString) -> AnyObject? {
+  private func resourceProperty(
+    _ url: CFURL, _ key: CFString, permit: () -> Bool = { true }
+  ) -> AnyObject? {
+    guard permit() else { return nil }
     guard let fresh = CFURLCreateWithString(nil, CFURLGetString(url), nil) else { return nil }
     guard CFURLIsFileReferenceURL(fresh) == CFURLIsFileReferenceURL(url) else { return nil }
     CFURLClearResourcePropertyCache(fresh)
     var value: Unmanaged<AnyObject>?
+    guard permit() else { return nil }
     let copied = CFURLCopyResourcePropertyForKey(fresh, key, &value, nil)
     let owned = value?.takeRetainedValue()
-    return copied ? owned : nil
+    return permit() && copied ? owned : nil
   }
 
   func prepareLinks(_ aliases: [String]) -> Bool {
@@ -2012,6 +2114,15 @@ final class TopologyOwnedFixtures: @unchecked Sendable {
     guard permitsNamespaceMutation else { return false }
     guard !cleaned else { return true }
     var success = true
+    for record in ownedDirectories {
+      guard let expected = record.identity,
+        TopologyFixtures.matches(directory: descriptor, name: record.name, info: expected)
+      else {
+        success = false
+        continue
+      }
+      if unlinkat(descriptor, record.name, AT_REMOVEDIR) != 0 { success = false }
+    }
     for link in ownedLinks {
       var info = stat()
       let name = link.alias + ".link"
@@ -2049,6 +2160,8 @@ final class TopologyOwnedFixtures: @unchecked Sendable {
 
   deinit {
     cleanup()
+    for acl in directoryACLs { acl_free(UnsafeMutableRawPointer(acl)) }
+    for record in ownedDirectories where record.descriptor >= 0 { close(record.descriptor) }
     close(descriptor)
     close(parent)
   }

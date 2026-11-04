@@ -385,6 +385,9 @@ def signing_identity():
 
 
 def code_policy(relative, kind):
+    if relative == "Contents/Frameworks/GRDB.framework/Versions/A/GRDB":
+        require(kind == "library", "grdb_not_library")
+        return IDENTITY + ".GRDB", {}
     for bundle, identifier, executable, rights, _ in BUNDLES:
         path = "/".join(part for part in (bundle, "Contents/MacOS/" + executable) if part)
         if relative == path:
@@ -531,6 +534,9 @@ def package(root, arch, products, *, prepared_acquisition=None, prepared_runtime
         _, identifier, rights = policies[relative]
         sign(app / relative, identity, identifier, rights, scratch)
     sign(framework, identity, IDENTITY + ".ProviderAgent.PythonRuntime", {}, scratch)
+    grdb = app / "Contents/Frameworks/GRDB.framework"
+    if grdb.exists():
+        sign(grdb, identity, IDENTITY + ".GRDB", {}, scratch)
     for relative, identifier, _, rights, entitlement_source in reversed(BUNDLES):
         actual_rights = plistlib.loads((root / entitlement_source).read_bytes())
         require(actual_rights == rights, "source_entitlements_mismatch")
@@ -540,6 +546,8 @@ def package(root, arch, products, *, prepared_acquisition=None, prepared_runtime
         inspect_macho(app / relative, arch, app)
         verify_signature(app / relative, identifier, rights)
     verify_signature(framework, IDENTITY + ".ProviderAgent.PythonRuntime", {})
+    if grdb.exists():
+        verify_signature(grdb, IDENTITY + ".GRDB", {})
     for relative, identifier, _, rights, _ in BUNDLES:
         verify_signature(app / relative, identifier, rights)
     after = tree_inventory(app)

@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import PDFKit
 import ProviderRequest
@@ -7,6 +8,59 @@ import XCTest
 
 @MainActor
 final class PDFReadinessTests: XCTestCase {
+  func testBitmapGraphicsContextPreflightRejectsUnsupportedStraightAlphaAtBothBackings() {
+    for backing in ReadinessBacking.allCases {
+      autoreleasepool {
+        let width = 300 * backing.rawValue
+        let height = 240 * backing.rawValue
+        let representation = NSBitmapImageRep(
+          bitmapDataPlanes: nil, pixelsWide: width, pixelsHigh: height,
+          bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+          colorSpaceName: .deviceRGB, bitmapFormat: [.alphaNonpremultiplied],
+          bytesPerRow: width * 4, bitsPerPixel: 32)
+        XCTAssertTrue(representation != nil, "Bitmap representation unavailable")
+        guard let bitmap = representation else { return }
+        bitmap.size = CGSize(width: 300, height: 240)
+        let assertRequestedRepresentation = {
+          XCTAssertTrue(
+            bitmap.pixelsWide == width && bitmap.pixelsHigh == height
+              && bitmap.bytesPerRow == width * 4 && bitmap.bitsPerSample == 8
+              && bitmap.samplesPerPixel == 4 && bitmap.bitsPerPixel == 32
+              && bitmap.hasAlpha && !bitmap.isPlanar
+              && bitmap.colorSpaceName == .deviceRGB
+              && bitmap.bitmapFormat == [.alphaNonpremultiplied]
+              && bitmap.size == CGSize(width: 300, height: 240)
+              && bitmap.bitmapData != nil,
+            "Requested bitmap representation metadata changed")
+        }
+        assertRequestedRepresentation()
+        rejects(.unsupportedCapture) {
+          try PDFKitReadinessProbe.requireBitmapGraphicsContext(for: bitmap)
+        }
+        assertRequestedRepresentation()
+      }
+    }
+  }
+
+  func testAllocateCaptureBitmapAcceptsProductionTupleAtBothBackings() throws {
+    for backing in ReadinessBacking.allCases {
+      try autoreleasepool {
+        let bitmap = try PDFKitReadinessProbe.allocateCaptureBitmap(backing: backing)
+        let width = 300 * backing.rawValue
+        let height = 240 * backing.rawValue
+        XCTAssertTrue(
+          bitmap.pixelsWide == width && bitmap.pixelsHigh == height
+            && bitmap.bytesPerRow == width * 4 && bitmap.bitsPerSample == 8
+            && bitmap.samplesPerPixel == 4 && bitmap.bitsPerPixel == 32
+            && bitmap.hasAlpha && !bitmap.isPlanar
+            && bitmap.colorSpaceName == .deviceRGB && bitmap.bitmapFormat == []
+            && bitmap.size == CGSize(width: 300, height: 240)
+            && bitmap.bitmapData != nil,
+          "Production bitmap representation metadata changed")
+      }
+    }
+  }
+
   private struct Fixture {
     let id = UUID()
     let start = ContinuousClock().now
@@ -360,6 +414,59 @@ final class PDFReadinessTests: XCTestCase {
       rejects(.wrongUpdate) { try ReadinessPixels.verifyZoom(baseline: before, zoomed: before) }
       rejects(.wrongUpdate) {
         _ = try scan(image(scale: 1, backing: backing), scale: 1.25, backing: backing)
+      }
+    }
+  }
+
+  func testCanonicalScannerAlphaBoundariesAndMalformedBuffers() throws {
+    for alpha in UInt8(250)...UInt8(254) {
+      let rgba: [UInt8] = [220, 35, 35, 255, 220, 35, 35, alpha]
+      let original = rgba
+      rejects(.unsupportedCapture) {
+        try PDFKitReadinessProbe.requireCanonicalScannerAlpha(rgba)
+      }
+      XCTAssertEqual(rgba, original)
+    }
+    for alpha in [UInt8(0), 249, 255] {
+      let rgba: [UInt8] = [220, 35, 35, alpha]
+      let original = rgba
+      try PDFKitReadinessProbe.requireCanonicalScannerAlpha(rgba)
+      XCTAssertEqual(rgba, original)
+    }
+    let malformed: [[UInt8]] = [
+      [], [220, 35, 35], [220, 35, 35, 255, 0],
+      Array(repeating: UInt8(255), count: ReadinessPixels.maximumBytes + 4),
+    ]
+    for rgba in malformed {
+      rejects(.unsupportedCapture) {
+        try PDFKitReadinessProbe.requireCanonicalScannerAlpha(rgba)
+      }
+    }
+  }
+
+  func testCanonicalScannerAlphaPreservesOpaqueGeometryAndIgnoredBlankCapture() throws {
+    for backing in ReadinessBacking.allCases {
+      let baseline = image(scale: 1, backing: backing)
+      let zoomed = image(scale: 1.25, backing: backing)
+      let originalBaseline = baseline.pixels
+      let originalZoomed = zoomed.pixels
+      try PDFKitReadinessProbe.requireCanonicalScannerAlpha(baseline.pixels)
+      try PDFKitReadinessProbe.requireCanonicalScannerAlpha(zoomed.pixels)
+      XCTAssertEqual(baseline.pixels, originalBaseline)
+      XCTAssertEqual(zoomed.pixels, originalZoomed)
+      let before = try scan(baseline, scale: 1, backing: backing)
+      let after = try scan(zoomed, scale: 1.25, backing: backing)
+      try ReadinessPixels.verifyZoom(baseline: before, zoomed: after)
+      rejects(.wrongUpdate) { try ReadinessPixels.verifyZoom(baseline: before, zoomed: before) }
+      for alpha in [UInt8(0), 249] {
+        var ignored = baseline
+        for index in stride(from: 3, to: ignored.pixels.count, by: 4) {
+          ignored.pixels[index] = alpha
+        }
+        let original = ignored.pixels
+        try PDFKitReadinessProbe.requireCanonicalScannerAlpha(ignored.pixels)
+        XCTAssertEqual(ignored.pixels, original)
+        rejects(.blankCapture) { _ = try scan(ignored, scale: 1, backing: backing) }
       }
     }
   }

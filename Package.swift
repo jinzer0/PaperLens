@@ -11,15 +11,21 @@ let package = Package(
     .library(name: "PaperLensProduct", targets: ["PaperLensProduct"]),
   ],
   dependencies: [
-    .package(url: "https://github.com/groue/GRDB.swift.git", revision: "b83108d10f42680d78f23fe4d4d80fc88dab3212"),
+    .package(
+      url: "https://github.com/groue/GRDB.swift.git",
+      revision: "b83108d10f42680d78f23fe4d4d80fc88dab3212")
   ],
   targets: [
     .target(
       name: "PaperLensProduct",
-      dependencies: ["ProviderRequest", "ProviderRPC", .product(name: "GRDB", package: "GRDB.swift")],
+      dependencies: [
+        "ProviderRequest", "ProviderRPC", .product(name: "GRDB", package: "GRDB.swift"),
+      ],
       path: "PaperLensApp",
-      exclude: ["App/PaperLensApp.swift", "App/PackagedDBProbe.swift",
-        "App/PaperLens.entitlements", "App/Info.plist"],
+      exclude: [
+        "App/PaperLensApp.swift", "App/PackagedDBProbe.swift",
+        "App/PaperLens.entitlements", "App/Info.plist",
+      ],
       sources: [
         "App/ProductAppComposition.swift",
         "App/TopologyFixtures.swift",
@@ -27,6 +33,7 @@ let package = Package(
         "Application/ProductJobRecovery.swift",
         "Application/AgentConnectionLifecycle.swift",
         "Application/OwnedChildRetirement.swift",
+        "Application/NativeBrokerABI.swift",
         "Application/LocalLibraryLifecycle.swift",
         "Application/ImportRecoveryJournal.swift",
         "Infrastructure/ProductDatabase+ImportRecovery.swift",
@@ -76,26 +83,34 @@ let package = Package(
         "Features/Library/URLImportView.swift",
         "Features/Library/LibraryBrowserView.swift",
         "Features/Library/ProductWorkspaceView.swift",
-      ]
+      ],
+      linkerSettings: [.linkedLibrary("bsm")]
     ),
     .testTarget(
       name: "ProductTests",
       dependencies: ["PaperLensProduct", .product(name: "GRDB", package: "GRDB.swift")],
       path: "Tests/Product",
-      sources: ["LocalLibraryLifecycleTests.swift", "APIKeyConnectionTests.swift", "ProductCompositionTests.swift",
+      sources: [
+        "LocalLibraryLifecycleTests.swift", "APIKeyConnectionTests.swift",
+        "ProductCompositionTests.swift",
         "ProviderSettingsTests.swift", "ReaderSessionTests.swift", "AnnotationServiceTests.swift",
         "FolderImportTests.swift", "URLImportTests.swift", "PDFGeometryTests.swift",
-        "ExtractionRevisionTests.swift", "ReaderMetadataTests.swift", "LibraryOrganizationTests.swift",
-        "LibraryReadLeaseTests.swift", "ProductWorkspaceTests.swift", "LibraryURLImportWriterTests.swift",
+        "ExtractionRevisionTests.swift", "ReaderMetadataTests.swift",
+        "LibraryOrganizationTests.swift",
+        "LibraryReadLeaseTests.swift", "ProductWorkspaceTests.swift",
+        "LibraryURLImportWriterTests.swift",
         "ReaderAnnotationBindingTests.swift", "AgentRPCConnectionTests.swift",
         "ProductJobRecoveryTests.swift", "CanonicalExtractionGeometryTests.swift",
         "ParsingRecoveryCoordinatorTests.swift", "ReaderMetadataBindingTests.swift",
         "LibrarySummaryServiceTests.swift", "PDFiumExtractionProducerTests.swift",
         "ExtractionFixtureBudget.swift", "LibraryExtractionReadPinTests.swift",
         "PDFiumExtractionResourceOwnerTests.swift", "LibraryPDFiumInputAcquirerTests.swift",
-        "OwnedPipeAgentRPCChannelTests.swift", "OwnedChildRetirementTests.swift", "AgentPrivateBackupTests.swift", "MainPDFiumParsingCompositionTests.swift",
+        "OwnedPipeAgentRPCChannelTests.swift", "OwnedChildRetirementTests.swift",
+        "NativeBrokerABITests.swift", "AgentPrivateBackupTests.swift",
+        "MainPDFiumParsingCompositionTests.swift",
         "ImportRecoveryJournalTests.swift", "ImportRecoveryPersistenceTests.swift",
-        "LegacyImportFixture.swift"]
+        "LegacyImportFixture.swift",
+      ]
     ),
     .target(
       name: "PDFReadiness",

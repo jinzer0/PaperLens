@@ -7,6 +7,7 @@ func providerSettingsKeyBinding(
   Binding(
     get: { entry.wrappedValue },
     set: { value in
+      guard !service.candidatesBlocked else { return }
       if value != entry.wrappedValue {
         service.candidateEdited()
       }
@@ -29,9 +30,9 @@ public struct ProviderSettingsView: View {
     ScrollView {
       VStack(alignment: .leading, spacing: 16) {
         Text("Provider 설정").font(.title2).accessibilityAddTraits(.isHeader)
-        Text("현재 Provider: \(service.activeSelection == nil ? "없음" : "OpenAI API")")
+        Text("현재 Provider: \(service.currentProviderLabel)")
         Text(service.availabilityMessage)
-        if let selected = service.activeSelection {
+        if service.currentProviderLabel == "OpenAI API", let selected = service.activeSelection {
           Text("연결 버전: \(selected.configGeneration)")
             .font(.caption).foregroundStyle(.secondary)
         }
@@ -44,10 +45,11 @@ public struct ProviderSettingsView: View {
           .textFieldStyle(.roundedBorder)
           .focused($keyFocused)
           .accessibilityLabel("재연결할 OpenAI API 키")
+          .disabled(service.candidatesBlocked)
           .onSubmit { submit() }
         HStack {
           Button(actionTitle) { submit() }
-            .disabled(key.isEmpty || service.isTesting)
+            .disabled(key.isEmpty || service.isTesting || service.candidatesBlocked)
             .keyboardShortcut(.defaultAction)
           if service.isTesting {
             ProgressView().controlSize(.small).accessibilityLabel("새 연결 확인 중")
@@ -59,10 +61,14 @@ public struct ProviderSettingsView: View {
           }
         }
         candidateStatus
+        if service.candidatesBlocked {
+          Text("ChatGPT SDK 범위의 실제 정리가 입증되지 않아 새 API 키와 Provider 교체가 차단됩니다. 기존 유효한 선택은 유지됩니다.")
+            .foregroundStyle(.secondary)
+        }
         Divider()
-        Text("ChatGPT 연결").font(.headline)
-        Text("이 Settings에서는 공식 ChatGPT 재로그인과 device-code 연결을 아직 제공하지 않습니다.")
-          .foregroundStyle(.secondary)
+        if let codex = service.codex {
+          NativeCodexConnectionView(connection: codex)
+        }
       }
       .padding(24)
       .frame(maxWidth: 640, alignment: .leading)
@@ -81,7 +87,7 @@ public struct ProviderSettingsView: View {
   }
 
   private func submit() {
-    guard !key.isEmpty, !service.isTesting else { return }
+    guard !key.isEmpty, !service.isTesting, !service.candidatesBlocked else { return }
     service.reconnect(key: key)
   }
 
@@ -92,13 +98,82 @@ public struct ProviderSettingsView: View {
     case .probing:
       Text("진행 중: 새 키의 인증된 생성 응답을 확인하고 있습니다.")
     case .connected:
-      Text(service.eligibleForEntry ? "연결 확인과 저장이 완료되었습니다." : "연결을 사용할 수 없습니다.")
+      Text(
+        service.currentProviderLabel == "OpenAI API" && service.eligibleForEntry
+          ? "API 연결 확인과 저장이 완료되었습니다." : "현재 API 연결을 사용할 수 없습니다.")
     case .failed(let error):
       Label(error.koreanMessage, systemImage: "exclamationmark.triangle")
         .foregroundStyle(.red)
       if service.eligibleForEntry {
         Text("새 연결은 적용하지 않았으며 기존 연결을 유지합니다.")
       }
+    }
+  }
+}
+
+/// Shared by entry and Settings; the retained coordinator owns every login effect.
+@MainActor
+public struct NativeCodexConnectionView: View {
+  @ObservedObject private var connection: NativeCodexConnection
+
+  public init(connection: NativeCodexConnection) {
+    self.connection = connection
+  }
+
+  public var body: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      Text("ChatGPT 연결").font(.headline)
+      Text("공식 로그인 후 실제 생성 응답을 검사합니다. 사용량이 발생할 수 있습니다. 일반 논문 추론과 Agent 삭제는 제공하지 않습니다.")
+        .font(.callout)
+      HStack {
+        Button("브라우저로 로그인") { connection.connect(mode: "browser") }
+        Button("기기 코드로 로그인") { connection.connect(mode: "device") }
+      }
+      .disabled(!connection.canStart)
+      if let instructions = connection.instructions,
+        connection.phase == .signingIn || connection.phase == .observing
+      {
+        if let code = instructions.userCode {
+          Text("기기 코드: \(code)")
+            .font(.title3.monospaced()).textSelection(.enabled)
+        }
+        if instructions.url.scheme == "https", instructions.url.host != nil {
+          Text(instructions.url.absoluteString)
+            .font(.caption).textSelection(.enabled)
+          Link("로그인 페이지 열기", destination: instructions.url)
+        }
+        Button("로그인 완료 확인") { connection.checkLogin() }
+          .disabled(connection.phase != .signingIn)
+        Text("직접 선택할 때만 완료를 확인합니다. 확인 중에는 다시 요청하지 않으며 공통 세션 한도와 요청 제한 시간이 적용됩니다.")
+          .font(.caption).foregroundStyle(.secondary)
+      }
+      if busy {
+        HStack {
+          ProgressView().controlSize(.small).accessibilityLabel("ChatGPT 연결 진행 중")
+          Button("ChatGPT 연결 취소") { connection.cancel() }
+        }
+      } else if connection.phase == .retiring {
+        ProgressView("실제 종료 및 정리 확인 중")
+      }
+      if connection.phase == .blocked {
+        Label(connection.message, systemImage: "exclamationmark.triangle")
+          .foregroundStyle(.red)
+      } else {
+        Text(connection.message)
+      }
+      if connection.blocksReplacement {
+        Text(
+          "SDK 종료와 비공개 저장소 정리가 입증되기 전에는 재연결 및 Provider 교체를 할 수 없습니다. 로그인 취소 수락만으로 정리가 완료되지는 않습니다."
+        )
+        .font(.caption).foregroundStyle(.secondary)
+      }
+    }
+  }
+
+  private var busy: Bool {
+    switch connection.phase {
+    case .starting, .signingIn, .observing, .probing: return true
+    case .idle, .connected, .retiring, .blocked: return false
     }
   }
 }

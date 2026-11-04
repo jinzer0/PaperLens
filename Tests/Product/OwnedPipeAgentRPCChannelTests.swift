@@ -40,13 +40,51 @@ final class OwnedPipeAgentRPCChannelTests: XCTestCase {
     return done
   }
 
+  func testNotificationQuiescenceRetainsPendingReadAndActualDescriptors() async throws {
+    let fixture = Fixture()
+    let channel = try fixture.channel()
+    var readCompleted = false
+    let pending = Task {
+      defer { readCompleted = true }
+      return try await channel.read()
+    }
+    for _ in 0..<1000 {
+      if channel.testingReadinessSourceCount == 1 { break }
+      try await Task.sleep(nanoseconds: 1_000_000)
+    }
+    XCTAssertEqual(channel.testingReadinessSourceCount, 1)
+    channel.quiesceNotifications()
+    channel.quiesceNotifications()
+    XCTAssertEqual(channel.testingReadinessSourceCount, 0)
+    XCTAssertEqual(channel.closureOutcome.read, .pending)
+    XCTAssertEqual(channel.closureOutcome.write, .pending)
+    XCTAssertGreaterThanOrEqual(
+      fcntl(fixture.stdout.fileHandleForReading.fileDescriptor, F_GETFD), 0)
+    XCTAssertGreaterThanOrEqual(
+      fcntl(fixture.stdin.fileHandleForWriting.fileDescriptor, F_GETFD), 0)
+    // Let cancellation handlers and any erroneously resumed read run before close.
+    try await Task.sleep(nanoseconds: 50_000_000)
+    XCTAssertFalse(readCompleted)
+    let done = closed(channel)
+    channel.requestClose()
+    do {
+      _ = try await pending.value
+      XCTFail("Pending read must not report EOF from notification cancellation")
+    } catch {
+      XCTAssertEqual(error as? OwnedPipeAgentRPCChannel.Failure, .closed)
+    }
+    await fulfillment(of: [done], timeout: 3)
+    try fixture.closePeers()
+  }
+
   func testExistingChannelLifecycleBindingClosesThatSameActualOwner() async throws {
     let fixture = Fixture()
     let channel = try fixture.channel()
     let readFD = fixture.stdout.fileHandleForReading.fileDescriptor
     let writeFD = fixture.stdin.fileHandleForWriting.fileDescriptor
-    let lifecycle = try AgentConnectionLifecycle(ownedPipe: channel)
-    XCTAssertThrowsError(try AgentConnectionLifecycle(ownedPipe: channel)) { error in
+    let lifecycle = try AgentConnectionLifecycle(ownedPipe: channel, mode: .topology)
+    XCTAssertThrowsError(try AgentConnectionLifecycle(ownedPipe: channel, mode: .topology)) {
+      error in
       XCTAssertEqual(error as? OwnedPipeAgentRPCChannel.Failure, .busy)
     }
     XCTAssertFalse(channel.closureOutcome.bothClosed)
@@ -376,11 +414,14 @@ final class OwnedPipeAgentRPCChannelTests: XCTestCase {
   }
 
   func testLifecycleExplicitHandshakeAndEOFDecoderClosureIncludingTruncation() async throws {
-    for truncated in [false, true] {
+    let cases: [(AgentRPCConnection.Mode, Bool)] = [
+      (.topology, false), (.topology, true), (.product, false), (.product, true),
+    ]
+    for (mode, truncated) in cases {
       let fixture = Fixture()
       let lifecycle = try AgentConnectionLifecycle.ownedPipe(
         readStdout: fixture.stdout.fileHandleForReading,
-        writeStdin: fixture.stdin.fileHandleForWriting)
+        writeStdin: fixture.stdin.fileHandleForWriting, mode: mode)
       let peer = try fixture.peer()
       XCTAssertEqual(lifecycle.connection.state, .handshaking)
       XCTAssertFalse(lifecycle.connection.transportClosureObserved)
@@ -399,9 +440,14 @@ final class OwnedPipeAgentRPCChannelTests: XCTestCase {
             if let frame = try decoder.feed(bytes).first { hello = try ProviderRPC.decode(frame) }
           }
           let id = try XCTUnwrap(hello?["id"] as? String)
+          XCTAssertEqual(hello?["method"] as? String, mode == .product ? "product.hello" : "hello")
+          try ProviderRPC.validateRequest(try XCTUnwrap(hello))
           let reply = try ProviderRPC.encode([
             "kind": "result", "id": id,
-            "result": ["major": 1, "minor": 1, "capabilities": ["topology-v1"]],
+            "result": [
+              "major": mode == .product ? 2 : 1, "minor": mode == .product ? 0 : 1,
+              "capabilities": [mode == .product ? "product-v1" : "topology-v1"],
+            ],
           ])
           try await peer.write(truncated ? Data(reply.prefix(3)) : reply)
           peer.requestClose()

@@ -1245,17 +1245,21 @@ class OSCollector:
             if data:
                 self.failure = ("unavailable", "collector-access-or-source-error")
             return
-        self.pending.extend(data)
+        try:
+            self.pending.extend(data)
+        except (RecursionError, MemoryError):
+            self.failure = self.failure or ("invalid", "parser-input-invalid")
+            return
         while b"\n" in self.pending:
             end = self.pending.index(b"\n")
             if end > self.record_maximum:
                 self.failure = ("truncated", "record-limit")
                 return
-            record = bytes(self.pending[:end])
-            del self.pending[:end + 1]
-            if record == b"":
-                continue
             try:
+                record = bytes(self.pending[:end])
+                del self.pending[:end + 1]
+                if record == b"":
+                    continue
                 if owned_filter_header(record, self.expected_predicate):
                     require(not self.header_seen and not self.events, "collector-header-invalid")
                     self.header_seen = True
@@ -1266,8 +1270,8 @@ class OSCollector:
                     self.failure = ("truncated", "candidate-limit")
                     return
                 self.events.append(event)
-            except (Failure, ValueError, TypeError, UnicodeError):
-                self.failure = ("invalid", "parser-input-invalid")
+            except (Failure, ValueError, TypeError, UnicodeError, RecursionError, MemoryError):
+                self.failure = self.failure or ("invalid", "parser-input-invalid")
                 return
         if len(self.pending) > self.record_maximum:
             self.failure = ("truncated", "record-limit")
@@ -1307,6 +1311,8 @@ class OSCollector:
                     self.failure = ("timed-out", "collector-timeout")
                 else:
                     self.eof_observed = True
+        except (RecursionError, MemoryError):
+            self.failure = self.failure or ("invalid", "parser-input-invalid")
         except OSError:
             self.failure = ("unavailable", "collector-read-failed")
 
@@ -1317,8 +1323,8 @@ class OSCollector:
         deadline = self.observer_deadline if deadline is None else min(deadline, self.observer_deadline)
         def wait_budget():
             return max(0, min(0.1, deadline - time.monotonic()))
-        self.drain()
         try:
+            self.drain()
             if self.process is not None:
                 forced = self.process.poll() is None
                 if forced:
@@ -1345,6 +1351,8 @@ class OSCollector:
                         self.state = collection_state("complete-nonempty" if self.events else "complete-empty",
                                                       "normal-eof-clock-unproven" if self.events else "normal-eof-empty-coverage-unproven")
             self.rows = safe_denial_projection(self.events, self.bindings, self.paths, intervals)
+        except (RecursionError, MemoryError):
+            self.failure = self.failure or ("invalid", "parser-input-invalid")
         except OSError:
             self.failure = ("unavailable", "collector-read-failed")
         finally:

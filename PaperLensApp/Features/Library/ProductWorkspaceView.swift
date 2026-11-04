@@ -2,15 +2,17 @@ import AppKit
 import Combine
 import SwiftUI
 import UniformTypeIdentifiers
+
 #if SWIFT_PACKAGE
-import ProviderRequest
+  import ProviderRequest
 #endif
 
 /// Retained by the app composition, not recreated when a sheet or Reader is presented.
 @MainActor
 public final class ProductWorkspace: ObservableObject {
   public enum Sheet: Identifiable {
-    case confirmation(LocalImportConfirmation), folders, settings
+    case confirmation(LocalImportConfirmation)
+    case folders, settings
     public var id: String {
       switch self {
       case .confirmation(let value): return value.id.uuidString
@@ -25,7 +27,8 @@ public final class ProductWorkspace: ObservableObject {
     public let annotationIdentity: AnnotationPaperIdentity
     public let metadataIdentity: ReaderMetadataIdentity?
     public var mountIdentity: ReaderMountIdentity {
-      ReaderMountIdentity(paperID: id, generation: annotationIdentity.generation,
+      ReaderMountIdentity(
+        paperID: id, generation: annotationIdentity.generation,
         session: ObjectIdentifier(session))
     }
   }
@@ -46,7 +49,8 @@ public final class ProductWorkspace: ObservableObject {
   private var pendingConfirmation: UUID?
   private var confirmationCancellation: (id: UUID, task: Task<UUID, Never>)?
   private var importPreparation: UUID?
-  internal var beforeImportConfirmationInstallForOwnedFixtures: (@MainActor (LocalImportConfirmation) -> Void)?
+  internal var beforeImportConfirmationInstallForOwnedFixtures:
+    (@MainActor (LocalImportConfirmation) -> Void)?
   private var metadataReadRequest: UUID?
   private var installingSheet = false
   private var cleaningSheet = false
@@ -56,7 +60,9 @@ public final class ProductWorkspace: ObservableObject {
     get { activeSheet }
     set {
       if let newValue {
-        guard activeSheet == nil, !sheetCleanupPending, !installingSheet, !cleaningSheet else { return }
+        guard activeSheet == nil, !sheetCleanupPending, !installingSheet, !cleaningSheet else {
+          return
+        }
         switch newValue {
         case .confirmation(let confirmation):
           guard preparing, pendingConfirmation == confirmation.id else { return }
@@ -80,17 +86,21 @@ public final class ProductWorkspace: ObservableObject {
   @Published public private(set) var opening = false
   @Published public private(set) var failure: String?
 
-  public init(database: ProductDatabase, lifecycle: LocalLibraryLifecycle,
-    connection: NativeAPIKeyConnection) throws {
+  public init(
+    database: ProductDatabase, lifecycle: LocalLibraryLifecycle,
+    connection: NativeAPIKeyConnection, codex: NativeCodexConnection? = nil
+  ) throws {
     self.database = database
     annotations = AnnotationService(database: database)
     metadata = ReaderMetadataService(database: database)
     organization = LibraryOrganizationService(database: database, lifecycle: lifecycle)
     imports = FolderImportService(database: database, lifecycle: lifecycle)
-    settings = ProviderSettingsService(connection: connection)
-    urls = URLImportService(authority: try ProviderRequest(), grantWriter: {
-      try await lifecycle.grantURLImportWriter(for: $0)
-    })
+    settings = ProviderSettingsService(connection: connection, codex: codex)
+    urls = URLImportService(
+      authority: try ProviderRequest(),
+      grantWriter: {
+        try await lifecycle.grantURLImportWriter(for: $0)
+      })
     readLeases = LibraryReadLeaseProvider(lifecycle: lifecycle)
   }
 
@@ -100,7 +110,9 @@ public final class ProductWorkspace: ObservableObject {
   }
 
   @discardableResult public func prepareImport(source: URL) async throws -> UUID {
-    guard !preparing, !opening, !sheetCleanupPending, sheet == nil, reader == nil else { throw ProductWorkspaceError.busy }
+    guard !preparing, !opening, !sheetCleanupPending, sheet == nil, reader == nil else {
+      throw ProductWorkspaceError.busy
+    }
     confirmationCancellation = nil
     let destinationFolderID: UUID?
     switch libraryFilter.folder {
@@ -110,16 +122,24 @@ public final class ProductWorkspace: ObservableObject {
     let request = UUID()
     importPreparation = request
     preparing = true
-    defer { if importPreparation == request { importPreparation = nil; preparing = false } }
+    defer {
+      if importPreparation == request {
+        importPreparation = nil
+        preparing = false
+      }
+    }
     let scoped = source.startAccessingSecurityScopedResource()
     var returnedConfirmation: UUID?
     do {
-      let confirmation = try await imports.prepare(source: source,
+      let confirmation = try await imports.prepare(
+        source: source,
         destinationFolderID: destinationFolderID)
       returnedConfirmation = confirmation.id
       beforeImportConfirmationInstallForOwnedFixtures?(confirmation)
       try Task.checkCancellation()
-      guard importPreparation == request, !opening, !sheetCleanupPending, sheet == nil, reader == nil else { throw CancellationError() }
+      guard importPreparation == request, !opening, !sheetCleanupPending, sheet == nil,
+        reader == nil
+      else { throw CancellationError() }
       if scoped { scopedSource = source }
       pendingConfirmation = confirmation.id
       sheet = .confirmation(confirmation)
@@ -133,7 +153,9 @@ public final class ProductWorkspace: ObservableObject {
   }
 
   @discardableResult public func pickPDF() -> Task<UUID?, Never>? {
-    guard !preparing, !opening, !sheetCleanupPending, sheet == nil, reader == nil else { return nil }
+    guard !preparing, !opening, !sheetCleanupPending, sheet == nil, reader == nil else {
+      return nil
+    }
     confirmationCancellation = nil
     let picker = NSOpenPanel()
     picker.allowedContentTypes = [.pdf]
@@ -141,8 +163,7 @@ public final class ProductWorkspace: ObservableObject {
     picker.allowsMultipleSelection = false
     guard picker.runModal() == .OK, let source = picker.url else { return nil }
     return Task {
-      do { return try await prepareImport(source: source) }
-      catch {
+      do { return try await prepareImport(source: source) } catch {
         failure = "PDF 가져오기를 준비하지 못했습니다. 원본 PDF를 다시 선택하세요."
         return nil
       }
@@ -150,21 +171,31 @@ public final class ProductWorkspace: ObservableObject {
   }
 
   public func prepareRetry(source: URL, paperID: UUID, generation: UUID) async throws {
-    guard !preparing, !opening, !sheetCleanupPending, sheet == nil, reader == nil else { throw ProductWorkspaceError.busy }
+    guard !preparing, !opening, !sheetCleanupPending, sheet == nil, reader == nil else {
+      throw ProductWorkspaceError.busy
+    }
     confirmationCancellation = nil
     let request = UUID()
     importPreparation = request
     preparing = true
-    defer { if importPreparation == request { importPreparation = nil; preparing = false } }
+    defer {
+      if importPreparation == request {
+        importPreparation = nil
+        preparing = false
+      }
+    }
     let scoped = source.startAccessingSecurityScopedResource()
     var returnedConfirmation: UUID?
     do {
-      let confirmation = try await imports.prepareRetry(source: source,
+      let confirmation = try await imports.prepareRetry(
+        source: source,
         paperID: paperID, generation: generation)
       returnedConfirmation = confirmation.id
       beforeImportConfirmationInstallForOwnedFixtures?(confirmation)
       try Task.checkCancellation()
-      guard importPreparation == request, !opening, !sheetCleanupPending, sheet == nil, reader == nil else { throw CancellationError() }
+      guard importPreparation == request, !opening, !sheetCleanupPending, sheet == nil,
+        reader == nil
+      else { throw CancellationError() }
       if scoped { scopedSource = source }
       pendingConfirmation = confirmation.id
       sheet = .confirmation(confirmation)
@@ -185,14 +216,15 @@ public final class ProductWorkspace: ObservableObject {
     picker.allowsMultipleSelection = false
     guard picker.runModal() == .OK, let source = picker.url else { return }
     Task {
-      do { try await prepareRetry(source: source, paperID: paperID, generation: generation) }
-      catch { failure = "PDF 재시도를 준비하지 못했습니다. 작업 상태를 확인하고 PDF를 다시 선택하세요." }
+      do { try await prepareRetry(source: source, paperID: paperID, generation: generation) } catch
+      { failure = "PDF 재시도를 준비하지 못했습니다. 작업 상태를 확인하고 PDF를 다시 선택하세요." }
     }
   }
 
   @discardableResult public func dismissSheet() -> Task<UUID, Never>? {
     if !installingSheet, !preparing, importPreparation == nil, activeSheet == nil,
-      let confirmationCancellation {
+      let confirmationCancellation
+    {
       return confirmationCancellation.task
     }
     guard !cleaningSheet else { return nil }
@@ -226,8 +258,12 @@ public final class ProductWorkspace: ObservableObject {
     return nil
   }
 
-  @discardableResult public func presentationDidDismiss(confirmationID: UUID? = nil) -> Task<UUID, Never>? {
-    guard activeSheet == nil, !installingSheet, !preparing, importPreparation == nil else { return nil }
+  @discardableResult public func presentationDidDismiss(confirmationID: UUID? = nil) -> Task<
+    UUID, Never
+  >? {
+    guard activeSheet == nil, !installingSheet, !preparing, importPreparation == nil else {
+      return nil
+    }
     if let confirmationID {
       if let confirmationCancellation {
         guard confirmationCancellation.id == confirmationID else { return nil }
@@ -243,8 +279,9 @@ public final class ProductWorkspace: ObservableObject {
 
   public func acceptDroppedPDF(_ source: URL) {
     Task {
-      do { _ = try await prepareImport(source: source) }
-      catch { failure = "PDF 가져오기를 준비하지 못했습니다. 원본 PDF를 다시 선택하세요." }
+      do { _ = try await prepareImport(source: source) } catch {
+        failure = "PDF 가져오기를 준비하지 못했습니다. 원본 PDF를 다시 선택하세요."
+      }
     }
   }
 
@@ -274,7 +311,9 @@ public final class ProductWorkspace: ObservableObject {
   }
 
   public func open(_ paper: OrganizedPaper) async throws {
-    guard reader == nil, sheet == nil, !sheetCleanupPending, !preparing, !opening else { throw ProductWorkspaceError.busy }
+    guard reader == nil, sheet == nil, !sheetCleanupPending, !preparing, !opening else {
+      throw ProductWorkspaceError.busy
+    }
     confirmationCancellation = nil
     opening = true
     defer { opening = false }
@@ -286,17 +325,19 @@ public final class ProductWorkspace: ObservableObject {
     let metadataIdentity = try database.publishedMetadataPaperIdentity(paperID: paper.id)
     if let metadataIdentity {
       guard metadataIdentity.generation == identity.generation,
-        metadataIdentity.pdfSHA256 == identity.pdfSHA256 else { throw ReaderMetadataError.staleIdentity }
+        metadataIdentity.pdfSHA256 == identity.pdfSHA256
+      else { throw ReaderMetadataError.staleIdentity }
     }
     metadataReadRequest = nil
-    reader = OpenReader(id: paper.id, session: ReaderSession(database: database, leaseProvider: provider),
+    reader = OpenReader(
+      id: paper.id, session: ReaderSession(database: database, leaseProvider: provider),
       annotationIdentity: identity, metadataIdentity: metadataIdentity)
     failure = nil
   }
 
   public func returnToLibrary() {
     metadataReadRequest = nil
-    reader?.session.close() // Synchronously discards PDF/search/selection before closing the lease.
+    reader?.session.close()  // Synchronously discards PDF/search/selection before closing the lease.
     reader = nil
     revision += 1
   }
@@ -312,10 +353,11 @@ public final class ProductWorkspace: ObservableObject {
     switch outcome {
     case .failure(let failed): return applyPublishedMetadataFailure(failed)
     case .success(let refresh):
-      do { return try applyPublishedMetadata(refresh) }
-      catch {
-        return applyPublishedMetadataFailure(.init(observed: observed, admission: refresh.admission,
-          request: refresh.request, error: error))
+      do { return try applyPublishedMetadata(refresh) } catch {
+        return applyPublishedMetadataFailure(
+          .init(
+            observed: observed, admission: refresh.admission,
+            request: refresh.request, error: error))
       }
     }
   }
@@ -336,27 +378,36 @@ public final class ProductWorkspace: ObservableObject {
   }
 
   enum PublishedMetadataOutcome {
-    case success(PublishedMetadataRefresh), failure(PublishedMetadataFailure)
+    case success(PublishedMetadataRefresh)
+    case failure(PublishedMetadataFailure)
   }
 
   func readPublishedMetadataOutcome(for observed: OpenReader) async -> PublishedMetadataOutcome {
     let admission = observed.session.admissionState
     let request = beginMetadataRead()
-    do { return .success(try await readPublishedMetadata(for: observed, admission: admission, request: request)) }
-    catch { return .failure(.init(observed: observed, admission: admission, request: request, error: error)) }
+    do {
+      return .success(
+        try await readPublishedMetadata(for: observed, admission: admission, request: request))
+    } catch {
+      return .failure(
+        .init(observed: observed, admission: admission, request: request, error: error))
+    }
   }
 
   func applyPublishedMetadataFailure(_ failed: PublishedMetadataFailure) -> Bool {
     let observed = failed.observed
     guard isCurrentReader(observed), !Task.isCancelled else { return true }
     guard metadataReadRequest == failed.request else { return false }
-    guard observed.session.admissionState == failed.admission || observed.session.admissionState == .closed
+    guard
+      observed.session.admissionState == failed.admission
+        || observed.session.admissionState == .closed
     else { return false }
     if observed.session.currentPaper == nil {
       observed.session.close()
       reader = nil
     } else {
-      reader = OpenReader(id: observed.id, session: observed.session,
+      reader = OpenReader(
+        id: observed.id, session: observed.session,
         annotationIdentity: observed.annotationIdentity, metadataIdentity: nil)
     }
     failure = "논문 정보를 확인하지 못했습니다. 라이브러리에서 논문을 다시 열어 확인하세요."
@@ -375,23 +426,28 @@ public final class ProductWorkspace: ObservableObject {
     return request
   }
 
-  private func readPublishedMetadata(for observed: OpenReader,
-    admission: ReaderSessionAdmissionState, request: UUID) async throws -> PublishedMetadataRefresh {
+  private func readPublishedMetadata(
+    for observed: OpenReader,
+    admission: ReaderSessionAdmissionState, request: UUID
+  ) async throws -> PublishedMetadataRefresh {
     let database = database
     let paperID = observed.id
     let identity = try await Task.detached {
       try database.publishedMetadataPaperIdentity(paperID: paperID)
     }.value
-    return PublishedMetadataRefresh(observed: observed, admission: admission, request: request, identity: identity)
+    return PublishedMetadataRefresh(
+      observed: observed, admission: admission, request: request, identity: identity)
   }
 
-  @discardableResult func applyPublishedMetadata(_ refresh: PublishedMetadataRefresh) throws -> Bool {
+  @discardableResult func applyPublishedMetadata(_ refresh: PublishedMetadataRefresh) throws -> Bool
+  {
     let observed = refresh.observed
     guard !Task.isCancelled, isCurrentReader(observed) else { return true }
     guard metadataReadRequest == refresh.request else { return false }
     if observed.session.admissionState == .closed { throw ReaderError.notOpen }
     guard observed.session.admissionState == refresh.admission,
-      refresh.admission != .pending else { return false }
+      refresh.admission != .pending
+    else { return false }
     do {
       try observed.session.withReadAccess {
         guard let paper = observed.session.currentPaper,
@@ -411,8 +467,10 @@ public final class ProductWorkspace: ObservableObject {
         guard isCurrentReader(observed), !Task.isCancelled, let reader,
           metadataReadRequest == refresh.request,
           observed.session.admissionState == refresh.admission,
-          reader.metadataIdentity != identity else { return }
-        self.reader = OpenReader(id: reader.id, session: reader.session,
+          reader.metadataIdentity != identity
+        else { return }
+        self.reader = OpenReader(
+          id: reader.id, session: reader.session,
           annotationIdentity: reader.annotationIdentity, metadataIdentity: identity)
       }
     } catch {
@@ -427,7 +485,8 @@ public final class ProductWorkspace: ObservableObject {
 
   private func isCurrentReader(_ observed: OpenReader) -> Bool {
     guard let reader else { return false }
-    return reader.id == observed.id && reader.annotationIdentity.generation == observed.annotationIdentity.generation
+    return reader.id == observed.id
+      && reader.annotationIdentity.generation == observed.annotationIdentity.generation
       && reader.session === observed.session
   }
 
@@ -441,9 +500,14 @@ public enum ProductWorkspaceError: Error { case busy }
 @MainActor private final class SelectedPaperReadLeases: ReaderLeaseProvider {
   private let base: LibraryReadLeaseProvider
   private let paper: OrganizedPaper
-  init(base: LibraryReadLeaseProvider, paper: OrganizedPaper) { self.base = base; self.paper = paper }
-  func acquireReadLease(for snapshot: ReaderPaperSnapshot,
-    onRevoked: @escaping @MainActor () -> Void) throws -> any ReaderReadLease {
+  init(base: LibraryReadLeaseProvider, paper: OrganizedPaper) {
+    self.base = base
+    self.paper = paper
+  }
+  func acquireReadLease(
+    for snapshot: ReaderPaperSnapshot,
+    onRevoked: @escaping @MainActor () -> Void
+  ) throws -> any ReaderReadLease {
     guard snapshot.paperID == paper.id, snapshot.generation == paper.generation else {
       throw ReaderError.revoked
     }
@@ -515,18 +579,24 @@ public struct ProductWorkspaceView: View {
     var appeared = false
   }
 
-  public init(workspace: ProductWorkspace) { self.workspace = workspace; urls = workspace.urls }
+  public init(workspace: ProductWorkspace) {
+    self.workspace = workspace
+    urls = workspace.urls
+  }
   public var body: some View {
     let slot = nativeSlot
     VStack(spacing: 0) {
       if let reader = workspace.reader {
-        NativeReaderView(paperID: reader.id, session: reader.session,
+        NativeReaderView(
+          paperID: reader.id, session: reader.session,
           annotationIdentity: reader.annotationIdentity, annotationService: workspace.annotations,
           metadataService: workspace.metadata, metadataIdentity: reader.metadataIdentity,
-          parsingStatus: ParsingStatusView(database: workspace.database, paperID: reader.id,
+          parsingStatus: ParsingStatusView(
+            database: workspace.database, paperID: reader.id,
             onUsableRevisionChange: { await workspace.refreshPublishedMetadata(for: reader) }),
           onReturn: { workspace.returnToLibrary() },
-          onSaveFailure: { workspace.reportSaveFailure($0) })
+          onSaveFailure: { workspace.reportSaveFailure($0) }
+        )
         .id(reader.mountIdentity)
       } else {
         HStack {
@@ -534,37 +604,56 @@ public struct ProductWorkspaceView: View {
           Button("Settings") { openToolbar(.settings) }.focused($settingsOpenerFocused)
           if workspace.preparing { ProgressView("PDF 확인 중") }
           Spacer()
-        }.padding().disabled(workspace.preparing || workspace.opening || workspace.sheetCleanupPending)
-        URLImportView(service: urls, folderService: workspace.imports,
+        }.padding().disabled(
+          workspace.preparing || workspace.opening || workspace.sheetCleanupPending)
+        URLImportView(
+          service: urls, folderService: workspace.imports,
           possibleDuplicate: { _ in true },
           openReader: { workspace.openImportedURL($0) },
           localPDFFocused: $localPDFFocused,
-          localIntentInvalidation: Binding(get: {
-            directIntent?.invalidated == true ? directIntent?.id : nil
-          }, set: { id in
-            guard let id, directIntent?.id == id else { return }
-            directIntent?.invalidated = true
-          }),
+          localIntentInvalidation: Binding(
+            get: {
+              directIntent?.invalidated == true ? directIntent?.id : nil
+            },
+            set: { id in
+              guard let id, directIntent?.id == id else { return }
+              directIntent?.invalidated = true
+            }),
           chooseLocalPDF: { chooseLocalPDF($0) },
-          confirmLocalPDF: { invalidateDirectIntent(); workspace.acceptDroppedPDF($0) }) {
-            LibraryBrowserView(service: workspace.organization, folderService: workspace.imports,
-              filter: $workspace.libraryFilter, refreshRevision: workspace.revision,
-              sortFacts: { try await workspace.sortFacts() },
-              readReadingRecords: { [annotations = workspace.annotations] paperID, generation in
-                try await Task.detached {
-                  try annotations.libraryReadingRecords(paperID: paperID, generation: generation)
-                }.value
-              },
-              openPaper: { invalidateDirectIntent(); try await workspace.open($0) },
-              importPDF: { invalidateDirectIntent(); _ = workspace.pickPDF() },
-              retryImportPDF: {
-                invalidateDirectIntent(); workspace.pickRetryPDF(paperID: $0, generation: $1)
-              },
-              manageFolders: { invalidateDirectIntent(); workspace.sheet = .folders })
+          confirmLocalPDF: {
+            invalidateDirectIntent()
+            workspace.acceptDroppedPDF($0)
           }
-          .onChange(of: urls.state) {
-            if case .ready(let paper) = urls.state { workspace.imported(paper) }
-          }
+        ) {
+          LibraryBrowserView(
+            service: workspace.organization, folderService: workspace.imports,
+            filter: $workspace.libraryFilter, refreshRevision: workspace.revision,
+            sortFacts: { try await workspace.sortFacts() },
+            readReadingRecords: { [annotations = workspace.annotations] paperID, generation in
+              try await Task.detached {
+                try annotations.libraryReadingRecords(paperID: paperID, generation: generation)
+              }.value
+            },
+            openPaper: {
+              invalidateDirectIntent()
+              try await workspace.open($0)
+            },
+            importPDF: {
+              invalidateDirectIntent()
+              _ = workspace.pickPDF()
+            },
+            retryImportPDF: {
+              invalidateDirectIntent()
+              workspace.pickRetryPDF(paperID: $0, generation: $1)
+            },
+            manageFolders: {
+              invalidateDirectIntent()
+              workspace.sheet = .folders
+            })
+        }
+        .onChange(of: urls.state) {
+          if case .ready(let paper) = urls.state { workspace.imported(paper) }
+        }
       }
       if let failure = workspace.failure {
         Label(failure, systemImage: "exclamationmark.triangle")
@@ -573,25 +662,41 @@ public struct ProductWorkspaceView: View {
       Text("Codex 연결은 아직 연결되지 않았습니다. Agent 삭제 연결이 없어 삭제는 미완료 상태로 남습니다.")
         .font(.caption).foregroundStyle(.secondary).padding(8)
     }
-    .onAppear { mount = UUID(); latchNativeSlot() }
-    .onDisappear { invalidateDirectIntent(); mount = nil; toolbarPresentation = nil }
+    .onAppear {
+      mount = UUID()
+      latchNativeSlot()
+    }
+    .onDisappear {
+      invalidateDirectIntent()
+      mount = nil
+      toolbarPresentation = nil
+    }
     .onChange(of: workspace.reader?.mountIdentity) { _, reader in
-      if reader != nil { invalidateDirectIntent(); toolbarPresentation = nil }
+      if reader != nil {
+        invalidateDirectIntent()
+        toolbarPresentation = nil
+      }
     }
     .onChange(of: workspace.sheet?.id) { _, _ in latchNativeSlot() }
-    .sheet(isPresented: Binding(get: {
-      guard let slot else { return false }
-      return nativeSlot?.id == slot.id && workspace.sheet?.id == slot.sheet.id
-    }, set: { visible in
-      guard !visible, let slot, nativeSlot?.id == slot.id,
-        workspace.sheet?.id == slot.sheet.id else { return }
-      if interactiveCancelAllowed(slot) {
-        recordAction(slot, confirmationID: slot.confirmationID, continued: false)
+    .sheet(
+      isPresented: Binding(
+        get: {
+          guard let slot else { return false }
+          return nativeSlot?.id == slot.id && workspace.sheet?.id == slot.sheet.id
+        },
+        set: { visible in
+          guard !visible, let slot, nativeSlot?.id == slot.id,
+            workspace.sheet?.id == slot.sheet.id
+          else { return }
+          if interactiveCancelAllowed(slot) {
+            recordAction(slot, confirmationID: slot.confirmationID, continued: false)
+          }
+          workspace.sheet = nil
+        }),
+      onDismiss: {
+        if let slot { nativeDidDismiss(slot) }
       }
-      workspace.sheet = nil
-    }), onDismiss: {
-      if let slot { nativeDidDismiss(slot) }
-    }) {
+    ) {
       if let slot {
         sheetContent(slot)
           .onAppear { nativeDidAppear(slot) }
@@ -600,24 +705,25 @@ public struct ProductWorkspaceView: View {
   }
 
   @ViewBuilder private func sheetContent(_ slot: NativeSlot) -> some View {
-      switch slot.sheet {
-      case .confirmation(let confirmation):
-        ImportConfirmationView(confirmation: confirmation, service: workspace.imports,
-          cancelledConfirmation: actionBinding(slot, continued: false),
-          continuedConfirmation: actionBinding(slot, continued: true),
-          allowsInteractiveCancel: interactiveCancelAllowed(slot),
-          imported: { workspace.imported($0) })
-      case .folders:
-        VStack {
-          FolderManagementView(service: workspace.imports)
-          Button("닫기") { closeNativeSlot(slot) }
-        }.padding().frame(minWidth: 420)
-      case .settings:
-        VStack {
-          ProviderSettingsView(service: workspace.settings)
-          Button("닫기") { closeNativeSlot(slot) }
-        }.padding()
-      }
+    switch slot.sheet {
+    case .confirmation(let confirmation):
+      ImportConfirmationView(
+        confirmation: confirmation, service: workspace.imports,
+        cancelledConfirmation: actionBinding(slot, continued: false),
+        continuedConfirmation: actionBinding(slot, continued: true),
+        allowsInteractiveCancel: interactiveCancelAllowed(slot),
+        imported: { workspace.imported($0) })
+    case .folders:
+      VStack {
+        FolderManagementView(service: workspace.imports)
+        Button("닫기") { closeNativeSlot(slot) }
+      }.padding().frame(minWidth: 420)
+    case .settings:
+      VStack {
+        ProviderSettingsView(service: workspace.settings)
+        Button("닫기") { closeNativeSlot(slot) }
+      }.padding()
+    }
   }
 
   private func invalidateDirectIntent() { directIntent?.invalidated = true }
@@ -625,13 +731,17 @@ public struct ProductWorkspaceView: View {
   private func openToolbar(_ kind: ToolbarPresentation.Kind) {
     guard let mount, nativeSlot == nil, toolbarPresentation == nil, workspace.sheet == nil,
       !workspace.sheetCleanupPending, !workspace.preparing, !workspace.opening,
-      workspace.reader == nil else { return }
+      workspace.reader == nil
+    else { return }
     let presentation = ToolbarPresentation(mount: mount, kind: kind)
     toolbarPresentation = presentation
     invalidateDirectIntent()
     workspace.sheet = kind.sheet
     if workspace.sheet.map({ kind.matches($0) }) != true,
-      toolbarPresentation?.id == presentation.id { toolbarPresentation = nil }
+      toolbarPresentation?.id == presentation.id
+    {
+      toolbarPresentation = nil
+    }
   }
 
   private func closeNativeSlot(_ slot: NativeSlot) {
@@ -642,7 +752,8 @@ public struct ProductWorkspaceView: View {
   private func chooseLocalPDF(_ id: UUID) {
     guard let mount, nativeSlot == nil, workspace.reader == nil,
       workspace.sheet == nil, !workspace.preparing, !workspace.opening,
-      !workspace.sheetCleanupPending else { return }
+      !workspace.sheetCleanupPending
+    else { return }
     directIntent = DirectIntent(id: id, mount: mount)
     guard let preparation = workspace.pickPDF() else {
       if directIntent?.id == id { directIntent = nil }
@@ -662,20 +773,27 @@ public struct ProductWorkspaceView: View {
   private func latchNativeSlot() {
     if let presentation = toolbarPresentation,
       let sheet = workspace.sheet,
-      presentation.mount != mount || !presentation.kind.matches(sheet) {
+      presentation.mount != mount || !presentation.kind.matches(sheet)
+    {
       if toolbarPresentation?.id == presentation.id { toolbarPresentation = nil }
     }
     guard nativeSlot == nil, let mount, let sheet = workspace.sheet else { return }
     let confirmationID: UUID?
-    if case .confirmation(let confirmation) = sheet { confirmationID = confirmation.id }
-    else { confirmationID = nil }
-    let origin = confirmationID != nil && directIntent?.mount == mount
-      && directIntent?.invalidated == false && directIntent?.slotID == nil
+    if case .confirmation(let confirmation) = sheet {
+      confirmationID = confirmation.id
+    } else {
+      confirmationID = nil
+    }
+    let origin =
+      confirmationID != nil && directIntent?.mount == mount
+        && directIntent?.invalidated == false && directIntent?.slotID == nil
       ? directIntent?.id : nil
     if origin == nil { invalidateDirectIntent() }
-    let toolbarID = toolbarPresentation?.mount == mount
-      && toolbarPresentation?.kind.matches(sheet) == true ? toolbarPresentation?.id : nil
-    let slot = NativeSlot(mount: mount, sheet: sheet,
+    let toolbarID =
+      toolbarPresentation?.mount == mount
+        && toolbarPresentation?.kind.matches(sheet) == true ? toolbarPresentation?.id : nil
+    let slot = NativeSlot(
+      mount: mount, sheet: sheet,
       confirmationID: confirmationID, directIntentID: origin,
       toolbarPresentationID: toolbarID)
     nativeSlot = slot
@@ -687,15 +805,20 @@ public struct ProductWorkspaceView: View {
 
   private func nativeDidAppear(_ slot: NativeSlot) {
     guard nativeSlot?.id == slot.id, mount == slot.mount,
-      workspace.sheet?.id == slot.sheet.id else { return }
+      workspace.sheet?.id == slot.sheet.id
+    else { return }
     nativeSlot?.appeared = true
     if let id = slot.toolbarPresentationID, toolbarPresentation?.id == id,
       toolbarPresentation?.mount == slot.mount,
-      toolbarPresentation?.kind.matches(slot.sheet) == true {
+      toolbarPresentation?.kind.matches(slot.sheet) == true
+    {
       toolbarPresentation?.appeared = true
     }
     if let id = slot.directIntentID, directIntent?.id == id,
-      directIntent?.slotID == slot.id { directIntent?.appeared = true }
+      directIntent?.slotID == slot.id
+    {
+      directIntent?.appeared = true
+    }
   }
 
   private func interactiveCancelAllowed(_ slot: NativeSlot) -> Bool {
@@ -703,27 +826,37 @@ public struct ProductWorkspaceView: View {
       nativeSlot?.continued == nil, let id = slot.directIntentID,
       directIntent?.id == id, directIntent?.slotID == slot.id,
       directIntent?.invalidated == false, directIntent?.continued == nil,
-      mount == slot.mount, workspace.sheet?.id == slot.sheet.id else { return false }
+      mount == slot.mount, workspace.sheet?.id == slot.sheet.id
+    else { return false }
     return true
   }
 
   private func actionBinding(_ slot: NativeSlot, continued: Bool) -> Binding<UUID?> {
-    Binding(get: {
-      guard nativeSlot?.id == slot.id else { return nil }
-      return continued ? nativeSlot?.continued : nativeSlot?.cancelled
-    }, set: { id in recordAction(slot, confirmationID: id, continued: continued) })
+    Binding(
+      get: {
+        guard nativeSlot?.id == slot.id else { return nil }
+        return continued ? nativeSlot?.continued : nativeSlot?.cancelled
+      }, set: { id in recordAction(slot, confirmationID: id, continued: continued) })
   }
 
   private func recordAction(_ slot: NativeSlot, confirmationID: UUID?, continued: Bool) {
     guard nativeSlot?.id == slot.id, let confirmationID,
       slot.confirmationID == confirmationID, mount == slot.mount,
-      workspace.sheet?.id == slot.sheet.id else { return }
-    if continued { nativeSlot?.continued = confirmationID }
-    else { nativeSlot?.cancelled = confirmationID }
+      workspace.sheet?.id == slot.sheet.id
+    else { return }
+    if continued {
+      nativeSlot?.continued = confirmationID
+    } else {
+      nativeSlot?.cancelled = confirmationID
+    }
     guard let id = slot.directIntentID, directIntent?.id == id,
-      directIntent?.slotID == slot.id else { return }
-    if continued { directIntent?.continued = confirmationID }
-    else { directIntent?.cancelled = confirmationID }
+      directIntent?.slotID == slot.id
+    else { return }
+    if continued {
+      directIntent?.continued = confirmationID
+    } else {
+      directIntent?.cancelled = confirmationID
+    }
   }
 
   private func nativeDidDismiss(_ slot: NativeSlot) {
@@ -733,13 +866,15 @@ public struct ProductWorkspaceView: View {
     let appeared = nativeSlot?.appeared == true
     nativeSlot = nil
     if let id = slot.directIntentID, directIntent?.id == id,
-      directIntent?.slotID == slot.id {
+      directIntent?.slotID == slot.id
+    {
       directIntent?.dismissed = true
       if let cleanup {
         Task { @MainActor in
           let cancelledID = await cleanup.value
           guard !Task.isCancelled, directIntent?.id == id,
-            directIntent?.slotID == slot.id else { return }
+            directIntent?.slotID == slot.id
+          else { return }
           directIntent?.cancellationReturned = cancelledID
           reconcileDirectIntent(id)
         }
@@ -748,11 +883,13 @@ public struct ProductWorkspaceView: View {
     }
     if let id = slot.toolbarPresentationID, let presentation = toolbarPresentation,
       presentation.id == id, presentation.mount == slot.mount,
-      presentation.kind.matches(slot.sheet) {
+      presentation.kind.matches(slot.sheet)
+    {
       toolbarPresentation = nil
       if appeared, presentation.appeared, mount == slot.mount,
         workspace.reader == nil, workspace.sheet == nil, nativeSlot == nil,
-        !workspace.sheetCleanupPending, !workspace.preparing, !workspace.opening {
+        !workspace.sheetCleanupPending, !workspace.preparing, !workspace.opening
+      {
         switch presentation.kind {
         case .folders: folderOpenerFocused = true
         case .settings: settingsOpenerFocused = true
@@ -770,7 +907,8 @@ public struct ProductWorkspaceView: View {
       intent.continued == nil, intent.cancellationReturned == confirmationID,
       mount == intent.mount, workspace.reader == nil, nativeSlot == nil,
       workspace.sheet == nil, !workspace.sheetCleanupPending,
-      !workspace.preparing, !workspace.opening else { return }
+      !workspace.preparing, !workspace.opening
+    else { return }
     directIntent = nil
     localPDFFocused = true
   }

@@ -5,10 +5,12 @@ import SwiftUI
 @MainActor
 public struct APIKeyConnectionView: View {
   @ObservedObject private var connection: NativeAPIKeyConnection
+  @ObservedObject private var provider: ProviderSettingsService
   @State private var key = ""
 
-  public init(connection: NativeAPIKeyConnection) {
+  public init(connection: NativeAPIKeyConnection, codex: NativeCodexConnection? = nil) {
     self.connection = connection
+    self.provider = ProviderSettingsService(connection: connection, codex: codex)
   }
 
   public var body: some View {
@@ -23,9 +25,10 @@ public struct APIKeyConnectionView: View {
         .textFieldStyle(.roundedBorder)
         .onSubmit { submit() }
         .accessibilityLabel("OpenAI API 키")
+        .disabled(provider.candidatesBlocked)
       HStack {
         Button(buttonTitle) { submit() }
-          .disabled(key.isEmpty || connection.phase == .probing)
+          .disabled(key.isEmpty || connection.phase == .probing || provider.candidatesBlocked)
           .keyboardShortcut(.defaultAction)
         if connection.phase == .probing {
           ProgressView().controlSize(.small)
@@ -33,6 +36,10 @@ public struct APIKeyConnectionView: View {
         }
       }
       status
+      if provider.candidatesBlocked {
+        Text("ChatGPT SDK 정리가 입증되지 않아 새 키 입력과 Provider 교체가 차단됩니다. 기존 유효한 연결 선택은 유지됩니다.")
+          .foregroundStyle(.secondary)
+      }
       if connection.activeSelection != nil && !connection.eligibleForEntry {
         Text("저장된 연결이 있지만 현재 안전한 사용 조건을 확인할 수 없습니다.")
           .foregroundStyle(.red)
@@ -50,11 +57,14 @@ public struct APIKeyConnectionView: View {
   }
 
   private var keyBinding: Binding<String> {
-    Binding(get: { key }, set: { value in
-      guard value != key else { return }
-      connection.invalidateCandidate()
-      key = value
-    })
+    Binding(
+      get: { key },
+      set: { value in
+        guard !provider.candidatesBlocked else { return }
+        guard value != key else { return }
+        connection.invalidateCandidate()
+        key = value
+      })
   }
 
   private var buttonTitle: String {
@@ -62,7 +72,7 @@ public struct APIKeyConnectionView: View {
     return connection.activeSelection == nil ? "연결 확인 및 저장" : "새 키 확인 및 교체"
   }
   private func submit() {
-    guard !key.isEmpty, connection.phase != .probing else { return }
+    guard !key.isEmpty, connection.phase != .probing, !provider.candidatesBlocked else { return }
     connection.connect(key: key)
   }
   @ViewBuilder private var status: some View {

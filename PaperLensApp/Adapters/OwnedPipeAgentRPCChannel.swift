@@ -8,10 +8,43 @@ import Foundation
 
 extension OwnedChildRetirement {
   @MainActor
+  public func startProduct(
+    startDeadlineUptimeNanoseconds: UInt64,
+    ready: @escaping @MainActor @Sendable (Result<AgentConnectionLifecycle, Failure>) -> Void
+  ) {
+    guard core.isWorker else {
+      ready(.failure(.setup))
+      return
+    }
+    core.begin(
+      startDeadlineUptimeNanoseconds,
+      consume: { core in
+        do {
+          let channel = try OwnedPipeAgentRPCChannel.consumePipes(from: core)
+          guard core.allowsIO else { return }
+          let lifecycle = try AgentConnectionLifecycle(ownedPipe: channel, mode: .product)
+          channel.retainSession(lifecycle)
+          lifecycle.bindOwner(
+            permit: { core.allowsIO },
+            handshake: { [weak lifecycle] in
+              guard let lifecycle, core.markRunning() else { return }
+              ready(.success(lifecycle))
+            }, failure: { core.revoke() })
+          guard core.allowsIO else { return }
+          try lifecycle.start()
+        } catch { core.failed(.setup) }
+      }, failure: { ready(.failure($0)) })
+  }
+
+  @MainActor
   internal func start(
     startDeadlineUptimeNanoseconds: UInt64,
     ready: @escaping @MainActor @Sendable (Result<OwnedPipeAgentRPCChannel, Failure>) -> Void
   ) {
+    guard !core.isWorker else {
+      ready(.failure(.control))
+      return
+    }
     core.begin(
       startDeadlineUptimeNanoseconds,
       consume: { core in
@@ -46,6 +79,11 @@ public final class OwnedPipeAgentRPCChannel: AgentRPCChannel, OwnedChildTranspor
   }
 
   private let owner: Owner
+  private var retainedSession: (any OwnedChildSession)?
+  internal func retainSession(_ session: any OwnedChildSession) {
+    precondition(retainedSession == nil)
+    retainedSession = session
+  }
   public var closureOutcome: ClosureOutcome { owner.outcome }
   internal var checkedEndpointsClosed: Bool { owner.outcome.bothClosed }
 
@@ -89,14 +127,10 @@ public final class OwnedPipeAgentRPCChannel: AgentRPCChannel, OwnedChildTranspor
     let endpoints = try core.reservedEndpoints()
     let read = FileHandle(fileDescriptor: endpoints.0, closeOnDealloc: false)
     let write = FileHandle(fileDescriptor: endpoints.1, closeOnDealloc: false)
-    var preflightFailure: Error?
-    if core.allowsIO {
-      do { try validate(read, write, permit: { core.allowsIO }) } catch { preflightFailure = error }
-    }
     let channel = OwnedPipeAgentRPCChannel(read: read, write: write, core: core)
     core.capture(channel)
     guard core.allowsIO else { throw Failure.closed }
-    if let preflightFailure { throw preflightFailure }
+    try validate(read, write, permit: { core.allowsIO })
     core.hooks.beforeChannelSetup()
     guard core.allowsIO else { throw Failure.closed }
     try channel.owner.setup()
@@ -113,7 +147,8 @@ public final class OwnedPipeAgentRPCChannel: AgentRPCChannel, OwnedChildTranspor
         }
         try handle.close()
         core?.hooks.afterClose()
-      }, internalClosure: { [weak core] identity in core?.channelClosed(ownerIdentity: identity) })
+      }, internalClosure: { [weak core] identity in core?.channelClosed(ownerIdentity: identity) },
+      standaloneRetention: false)
     owner.core = core
   }
 
@@ -135,6 +170,12 @@ public final class OwnedPipeAgentRPCChannel: AgentRPCChannel, OwnedChildTranspor
     if owner.outcome.read != .closed { try? owner.readHandle.close() }
     if owner.outcome.write != .closed { try? owner.writeHandle.close() }
   }
+
+  internal func quiesceNotifications() {
+    owner.quiesceNotifications()
+  }
+
+  internal var testingReadinessSourceCount: Int { owner.readinessSourceCount }
 
   private static func validate(
     _ read: FileHandle, _ write: FileHandle,
@@ -203,6 +244,7 @@ public final class OwnedPipeAgentRPCChannel: AgentRPCChannel, OwnedChildTranspor
     private var writeToken: UInt64 = 0
     private var cancellingSources = 0
     private var activeIO = 0
+    var readinessSourceCount: Int { (readSource == nil ? 0 : 1) + (writeSource == nil ? 0 : 1) }
 
     func releaseCleanRoot() {
       core = nil
@@ -212,13 +254,14 @@ public final class OwnedPipeAgentRPCChannel: AgentRPCChannel, OwnedChildTranspor
     init(
       readStdout: FileHandle, writeStdin: FileHandle,
       close: @escaping (FileHandle) throws -> Void,
-      internalClosure: ((UUID) -> Void)? = nil
+      internalClosure: ((UUID) -> Void)? = nil,
+      standaloneRetention: Bool = true
     ) {
       readHandle = readStdout
       writeHandle = writeStdin
       closeHandle = close
       self.internalClosure = internalClosure
-      Self.retained[id] = self
+      if standaloneRetention { Self.retained[id] = self }
     }
 
     func setup() throws {
@@ -361,8 +404,10 @@ public final class OwnedPipeAgentRPCChannel: AgentRPCChannel, OwnedChildTranspor
         activeIO -= 1
         if count > 0 {
           offset += count
+          guard ioPermitted else { return }
           continue
         }
+        guard ioPermitted else { return }
         if count < 0, code == EINTR { continue }
         if count < 0, code == EAGAIN {
           armWrite()
@@ -380,7 +425,7 @@ public final class OwnedPipeAgentRPCChannel: AgentRPCChannel, OwnedChildTranspor
     }
 
     private func armRead() {
-      guard readSource == nil, !revoked else { return }
+      guard readSource == nil, !revoked, ioPermitted else { return }
       readToken &+= 1
       let token = readToken
       let turn = generation
@@ -390,11 +435,12 @@ public final class OwnedPipeAgentRPCChannel: AgentRPCChannel, OwnedChildTranspor
       cancellingSources += 1
       source.setEventHandler {
         Task { @MainActor in
-          guard !self.revoked, self.generation == turn, self.readToken == token,
+          guard self.generation == turn, self.readToken == token,
             let source = self.readSource
           else { return }
           self.readSource = nil
           source.cancel()
+          guard !self.revoked, self.ioPermitted else { return }
           self.pumpRead()
         }
       }
@@ -403,7 +449,7 @@ public final class OwnedPipeAgentRPCChannel: AgentRPCChannel, OwnedChildTranspor
     }
 
     private func armWrite() {
-      guard writeSource == nil, !revoked else { return }
+      guard writeSource == nil, !revoked, ioPermitted else { return }
       writeToken &+= 1
       let token = writeToken
       let turn = generation
@@ -413,11 +459,12 @@ public final class OwnedPipeAgentRPCChannel: AgentRPCChannel, OwnedChildTranspor
       cancellingSources += 1
       source.setEventHandler {
         Task { @MainActor in
-          guard !self.revoked, self.generation == turn, self.writeToken == token,
+          guard self.generation == turn, self.writeToken == token,
             let source = self.writeSource
           else { return }
           self.writeSource = nil
           source.cancel()
+          guard !self.revoked, self.ioPermitted else { return }
           self.pumpWrite()
         }
       }
@@ -430,8 +477,23 @@ public final class OwnedPipeAgentRPCChannel: AgentRPCChannel, OwnedChildTranspor
       finishClose()
     }
 
+    func quiesceNotifications() {
+      readToken &+= 1
+      writeToken &+= 1
+      readSource?.cancel()
+      writeSource?.cancel()
+      readSource = nil
+      writeSource = nil
+    }
+
     func shutdown(error: Error = Failure.closed) {
       core?.revoke()
+      // Worker SDK closure is unproved. Keep its actual endpoint/session state;
+      // only the independent Core control lane may attempt bounded retirement.
+      if core?.isWorker == true {
+        quiesceNotifications()
+        return
+      }
       guard core?.withinDeadline() ?? true else { return }
       guard !revoked else { return }
       revoked = true

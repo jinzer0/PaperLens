@@ -2279,6 +2279,311 @@ class OSCollectionTests(IsolatedTest):
         self.assertEqual(collector.events, [])
         self.assertEqual(collector.pending, bytearray())
 
+    def framing_buffer(self, stage, error=MemoryError):
+        class FailedBytes:
+            def __bytes__(self):
+                raise error("synthetic")
+
+        class Buffer(bytearray):
+            failed = False
+
+            def extend(self, data):
+                if stage == "extend" and not self.failed:
+                    self.failed = True
+                    raise error("synthetic")
+                return super().extend(data)
+
+            def __getitem__(self, key):
+                if isinstance(key, slice) and not self.failed:
+                    self.failed = True
+                    if stage == "slice":
+                        raise error("synthetic")
+                    if stage == "bytes":
+                        return FailedBytes()
+                return super().__getitem__(key)
+
+        return Buffer()
+
+    def test_feed_framing_resource_failures_preserve_existing_failure(self):
+        for stage in ("extend", "slice", "bytes"):
+            for error in (RecursionError, MemoryError):
+                with self.subTest(stage=stage, error=error.__name__):
+                    collector = self.collector()
+                    collector.pending = self.framing_buffer(stage, error)
+                    collector.failure = ("truncated", "raw-limit")
+                    with mock.patch.object(verify, "decode_json") as decode:
+                        collector.feed(b"{}\n")
+                    decode.assert_not_called()
+                    self.assertTrue(collector.pending.failed)
+                    self.assertEqual(collector.total, 3)
+                    self.assertEqual(collector.failure, ("truncated", "raw-limit"))
+                    self.ended_process(collector)
+                    _, state = collector.finish({})
+                    self.assertEqual((state["status"], state["reason"]), ("truncated", "raw-limit"))
+                    self.assertFalse(state["queryCompleted"])
+
+    def test_consumed_tail_framing_failure_cannot_complete_after_natural_two_pipe_eof(self):
+        for stage in ("extend", "slice", "bytes"):
+            with self.subTest(stage=stage):
+                collector = self.collector()
+                collector.deadline, collector.observer_deadline = 325.0, 330.0
+                collector.pending = self.framing_buffer(stage)
+                process = self.ended_process(collector, None)
+                selector = collector.selector
+                entries = {1: process.stdout, 2: process.stderr}
+                selector.get_map.side_effect = lambda: entries
+                selector.unregister.side_effect = lambda pipe: entries.pop(1 if pipe is process.stdout else 2)
+                output = mock.Mock(fileobj=process.stdout, data=True)
+                errors = mock.Mock(fileobj=process.stderr, data=False)
+                selector.select.return_value = [(output, 1)]
+                with mock.patch.object(verify.time, "monotonic", return_value=324.9), \
+                        mock.patch.object(verify.os, "read", return_value=b"{}\n") as read, \
+                        mock.patch.object(verify, "decode_json") as decode:
+                    collector.drain()
+                read.assert_called_once()
+                decode.assert_not_called()
+                self.assertTrue(collector.pending.failed)
+                self.assertEqual(collector.total, 3)
+                self.assertEqual(collector.failure, ("invalid", "parser-input-invalid"))
+                # Both mocked read-zero EOFs follow the consumed record failure.
+                # Frozen ingestion must not consume them or turn them into proof.
+                process.poll.return_value = 0
+                process.wait.return_value = 0
+                selector.select.return_value = [(output, 1), (errors, 1)]
+                with mock.patch.object(verify.time, "monotonic", return_value=324.9), \
+                        mock.patch.object(verify.os, "read", return_value=b"") as eof_read:
+                    rows, state = collector.finish({})
+                eof_read.assert_not_called()
+                self.assertEqual(rows, [])
+                self.assertEqual((state["status"], state["reason"]), ("invalid", "parser-input-invalid"))
+                self.assertFalse(state["queryCompleted"] or state["scopeVerified"])
+                self.assertTrue(collector.closed and collector.reaped)
+                process.terminate.assert_not_called()
+                process.kill.assert_not_called()
+                process.wait.assert_called_once()
+                process.stdout.close.assert_called_once()
+                process.stderr.close.assert_called_once()
+                selector.close.assert_called_once()
+                self.assertEqual(collector.finish({}), (rows, state))
+                process.wait.assert_called_once()
+
+    def test_direct_initial_drain_resource_exception_is_invalid_after_owned_cleanup(self):
+        for error in (RecursionError, MemoryError):
+            for prior in (None, ("invalid", "collector-early-eof")):
+                with self.subTest(error=error.__name__, prior=prior):
+                    collector = self.collector()
+                    collector.deadline, collector.observer_deadline = 325.0, 330.0
+                    collector.failure = prior
+                    process = self.ended_process(collector, None)
+                    selector = collector.selector
+                    def wait(timeout):
+                        process.poll.return_value = -9
+                        return -9
+                    process.wait.side_effect = wait
+                    with mock.patch.object(verify.time, "monotonic", return_value=324.9), \
+                            mock.patch.object(collector, "drain", side_effect=error), \
+                            mock.patch.object(verify.subprocess, "Popen") as launch, \
+                            mock.patch.object(verify.os, "kill") as unrelated_stop:
+                        rows, state = collector.finish({}, deadline=1000.0)
+                    self.assertEqual(rows, [])
+                    self.assertEqual((state["status"], state["reason"]), prior or ("invalid", "parser-input-invalid"))
+                    self.assertFalse(state["queryCompleted"] or state["scopeVerified"])
+                    self.assertTrue(collector.closed and collector.reaped)
+                    process.terminate.assert_not_called()
+                    process.kill.assert_called_once()
+                    process.wait.assert_called_once_with(timeout=0.1)
+                    process.stdout.close.assert_called_once()
+                    process.stderr.close.assert_called_once()
+                    selector.close.assert_called_once()
+                    launch.assert_not_called()
+                    unrelated_stop.assert_not_called()
+                    self.assertEqual(collector.finish({}), (rows, state))
+                    process.wait.assert_called_once()
+
+    def test_bounded_deep_record_is_invalid_not_accepted(self):
+        collector = self.collector()
+        record = b"[" * 2048 + b"0" + b"]" * 2048 + b"\n"
+        self.assertLess(len(record), collector.record_maximum)
+        self.assertLess(len(record), collector.maximum)
+        collector.feed(record)
+        self.assertEqual(collector.total, len(record))
+        self.assertEqual(collector.failure, ("invalid", "parser-input-invalid"))
+        self.assertEqual(collector.events, [])
+        self.ended_process(collector)
+        rows, state = collector.finish({})
+        self.assertEqual(rows, [])
+        self.assertEqual((state["status"], state["reason"]), ("invalid", "parser-input-invalid"))
+        self.assertFalse(state["queryCompleted"] or state["scopeVerified"])
+        self.assertTrue(collector.closed)
+
+    def test_initial_finish_drain_parser_resources_fail_closed_and_reap_owned_child(self):
+        for stage, error in ((stage, error) for stage in ("decode", "extend", "slice", "bytes")
+                             for error in (RecursionError, MemoryError)):
+            with self.subTest(stage=stage, error=error.__name__):
+                collector = self.collector()
+                if stage != "decode":
+                    collector.pending = self.framing_buffer(stage, error)
+                collector.deadline, collector.observer_deadline = 325.0, 330.0
+                process = self.ended_process(collector, None)
+                selector = collector.selector
+                output = mock.Mock(fileobj=process.stdout, data=True)
+                selector.select.return_value = [(output, 1)]
+                record = b"{}\n"
+                def wait(timeout):
+                    if process.wait.call_count == 1:
+                        raise subprocess.TimeoutExpired("owned", timeout)
+                    process.poll.return_value = -9
+                    return -9
+                process.wait.side_effect = wait
+                with mock.patch.object(verify.time, "monotonic", return_value=324.9), \
+                        mock.patch.object(verify.os, "read", return_value=record) as read, \
+                        mock.patch.object(verify, "decode_json", side_effect=error if stage == "decode" else None) as decode, \
+                        mock.patch.object(verify.subprocess, "Popen") as launch, \
+                        mock.patch.object(verify.os, "kill") as unrelated_stop:
+                    rows, state = collector.finish({}, deadline=1000.0)
+                if stage == "decode":
+                    decode.assert_called_once_with(record[:-1])
+                else:
+                    decode.assert_not_called()
+                    self.assertTrue(collector.pending.failed)
+                self.assertEqual(read.call_count, 1)
+                self.assertEqual(collector.total, len(record))
+                self.assertEqual(rows, [])
+                self.assertEqual((state["status"], state["reason"]), ("invalid", "parser-input-invalid"))
+                self.assertFalse(state["queryCompleted"] or state["scopeVerified"])
+                self.assertTrue(collector.closed and collector.reaped)
+                self.assertIs(collector.process, process)
+                self.assertEqual(process.poll.return_value, -9)
+                process.terminate.assert_called_once()
+                process.kill.assert_called_once()
+                self.assertEqual(process.wait.call_count, 2)
+                self.assertTrue(all(call.kwargs["timeout"] == 0.1 for call in process.wait.call_args_list))
+                process.stdout.close.assert_called_once()
+                process.stderr.close.assert_called_once()
+                selector.close.assert_called_once()
+                self.assertEqual(collector.pending, bytearray())
+                self.assertEqual(collector.events, [])
+                self.assertEqual(collector.bindings, {})
+                self.assertEqual(collector.paths, {})
+                self.assertEqual((collector.deadline, collector.observer_deadline), (325.0, 330.0))
+                launch.assert_not_called()
+                unrelated_stop.assert_not_called()
+                self.assertEqual(collector.finish({}), (rows, state))
+                self.assertEqual(process.wait.call_count, 2)
+                process.stdout.close.assert_called_once()
+                process.stderr.close.assert_called_once()
+                selector.close.assert_called_once()
+
+    def test_initial_finish_drain_resource_failure_reap_timeout_freezes_evidence_and_budget(self):
+        for stage, error in ((stage, error) for stage in ("decode", "extend", "slice", "bytes")
+                             for error in (RecursionError, MemoryError)):
+            with self.subTest(stage=stage, error=error.__name__):
+                collector = self.collector()
+                if stage != "decode":
+                    collector.pending = self.framing_buffer(stage, error)
+                collector.deadline, collector.observer_deadline = 325.0, 330.0
+                process = self.ended_process(collector, None)
+                selector = collector.selector
+                selector.select.return_value = [(mock.Mock(fileobj=process.stdout, data=True), 1)]
+                clock = [324.9]
+                def wait(timeout):
+                    clock[0] = 330.0
+                    raise subprocess.TimeoutExpired("owned", timeout)
+                process.wait.side_effect = wait
+                with mock.patch.object(verify.time, "monotonic", side_effect=lambda: clock[0]), \
+                        mock.patch.object(verify.os, "read", return_value=b"{}\n") as read, \
+                        mock.patch.object(verify, "decode_json", side_effect=error if stage == "decode" else None) as decode:
+                    rows, state = collector.finish({}, deadline=1000.0)
+                if stage == "decode":
+                    decode.assert_called_once_with(b"{}")
+                else:
+                    decode.assert_not_called()
+                    self.assertTrue(collector.pending.failed)
+                self.assertEqual(read.call_count, 1)
+                self.assertEqual(collector.total, 3)
+                self.assertEqual(rows, [])
+                self.assertEqual((state["status"], state["reason"]), ("timed-out", "collector-reap-timeout"))
+                self.assertFalse(state["queryCompleted"] or state["scopeVerified"])
+                self.assertTrue(collector.closed)
+                self.assertFalse(collector.reaped)
+                self.assertIs(collector.process, process)
+                process.terminate.assert_called_once()
+                self.assertEqual(process.kill.call_count, 2)
+                self.assertEqual([call.kwargs["timeout"] for call in process.wait.call_args_list], [0.1, 0, 0])
+                self.assertEqual((collector.deadline, collector.observer_deadline), (325.0, 330.0))
+                process.stdout.close.assert_called_once()
+                process.stderr.close.assert_called_once()
+                selector.close.assert_called_once()
+                self.assertEqual(collector.events, [])
+                self.assertEqual(collector.pending, bytearray())
+                process.poll.return_value = -9
+                process.wait.side_effect = None
+                process.wait.return_value = -9
+                with mock.patch.object(verify.time, "monotonic", return_value=331.0):
+                    self.assertEqual(collector.finish({}, deadline=1000.0), (rows, state))
+                self.assertTrue(collector.reaped)
+                self.assertEqual(process.wait.call_args.kwargs["timeout"], 0)
+                self.assertEqual(process.kill.call_count, 2)
+                process.stdout.close.assert_called_once()
+                process.stderr.close.assert_called_once()
+                selector.close.assert_called_once()
+                self.assertEqual(collector.finish({}), (rows, state))
+                self.assertEqual(process.wait.call_count, 4)
+
+    def test_initial_finish_drain_unexpected_exception_propagates_after_owned_cleanup(self):
+        collector = self.collector()
+        collector.deadline, collector.observer_deadline = 325.0, 330.0
+        process = self.ended_process(collector, None)
+        selector = collector.selector
+        selector.select.return_value = [(mock.Mock(fileobj=process.stdout, data=True), 1)]
+        def wait(timeout):
+            process.poll.return_value = -9
+            return -9
+        process.wait.side_effect = wait
+        with mock.patch.object(verify.time, "monotonic", return_value=324.9), \
+                mock.patch.object(verify.os, "read", return_value=b"{}\n"), \
+                mock.patch.object(verify, "decode_json", side_effect=RuntimeError("synthetic")), \
+                self.assertRaisesRegex(RuntimeError, "synthetic"):
+            collector.finish({})
+        process.terminate.assert_not_called()
+        process.kill.assert_called_once()
+        process.wait.assert_called_once()
+        self.assertTrue(collector.closed and collector.reaped)
+        process.stdout.close.assert_called_once()
+        process.stderr.close.assert_called_once()
+        selector.close.assert_called_once()
+        self.assertEqual(collector.events, [])
+        self.assertEqual(collector.pending, bytearray())
+        self.assertFalse(collector.state["queryCompleted"] or collector.state["scopeVerified"])
+
+    def test_initial_finish_drain_natural_two_pipe_eof_keeps_normal_completion(self):
+        collector = self.collector()
+        collector.deadline, collector.observer_deadline = 325.0, 330.0
+        process = self.ended_process(collector)
+        selector = collector.selector
+        output = mock.Mock(fileobj=process.stdout, data=True)
+        errors = mock.Mock(fileobj=process.stderr, data=False)
+        record = json.dumps(self.event(collector)).encode() + b"\n"
+        selector.select.side_effect = [[(output, 1), (errors, 1)], [(output, 1)], [], []]
+        with mock.patch.object(verify.time, "monotonic", return_value=324.9), \
+                mock.patch.object(verify.os, "read", side_effect=[record, b"", b""]) as read:
+            rows, state = collector.finish({})
+        self.assertEqual(read.call_count, 3)
+        self.assertEqual(selector.unregister.call_count, 2)
+        self.assertEqual(collector.total, len(record))
+        self.assertTrue(collector.eof_observed and collector.closed and collector.reaped)
+        self.assertEqual((state["status"], state["reason"]), ("complete-nonempty", "normal-eof-clock-unproven"))
+        self.assertTrue(state["queryCompleted"])
+        self.assertFalse(state["scopeVerified"])
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["alias"], "M")
+        process.terminate.assert_not_called()
+        process.kill.assert_not_called()
+        process.wait.assert_called_once()
+        process.stdout.close.assert_called_once()
+        process.stderr.close.assert_called_once()
+        selector.close.assert_called_once()
+
     def test_nonblocking_drain_consumes_both_eofs_and_keeps_only_safe_projection(self):
         collector = self.collector()
         process = self.ended_process(collector)

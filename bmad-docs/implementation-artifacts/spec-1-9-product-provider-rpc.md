@@ -1,5 +1,63 @@
 # Story 1.9 Build Spec — Product ProviderRPC
 
+## Consolidation cancellation correction — 2026-11-05
+
+Review of the existing uncommitted integration found that `cancel()` queued
+`product.loginCancel` then synchronously revoked the owner before its writer could
+run. The integrated correction fences local intent immediately, admits only the
+final cancellation frame and starts the existing absolute 300ms retirement budget.
+Dispatch completion revokes immediately; an independent terminal-lane 50ms allowance
+revokes even when the writer or MainActor stalls, without restarting that budget.
+Unsent unrelated frames are discarded without refunding lifetime admission.
+Already-started writes cannot be undone. Handoff remains bounded best-effort, never
+remote cancellation acceptance, SDK cleanup or permission to replace the provider.
+
+Isolated native RPC lifecycle tests passed 25/25 and owner tests passed 31/31.
+Regressions observe actual cancellation receipt in the scripted native-channel peer,
+exclude a queued observation, fence late usable responses, and retain the original
+deadline with a stalled writer/MainActor. Final isolated product union: 558/558.
+Independent scoped re-review: CLEAR, no remaining finding in this correction.
+Real authentication, SDK-scope cleanup, reconnect and signed acceptance remain open.
+
+## Current successor source checkpoint — 2026-11-04
+
+The current integration worktree includes the real same-Core Native WorkerLaunch,
+SCM_RIGHTS/kernel identity/control path and NativeCodexConnection browser/device
+presentation and SQLite CAS. Historical statements below that Native dispatch is
+absent describe their original snapshots, not this source state. No genuine SDK
+authentication, reconnect, Paper purge or signed isolation is proved by this update.
+
+Current-session corrections preserve the approved contracts: `markRunning` cannot
+discharge startup before transport capture; terminal unknown quiesces readiness
+notifications without closing descriptors or releasing retained scope debt.
+Real local worker/broker fixtures now exercise both orderings of brokerOffered and
+dispatching, plus running-before-hello rejection, using actual private AF_UNIX,
+SCM_RIGHTS and kernel image/birth/ancestry observations. Their protocol peers are
+explicitly scripted, with no SDK, product hello, authentication or Provider probe.
+The Xcode framework interpreter launcher has a different kernel image; fixtures
+launch the independently observed actual image rather than weakening production
+path authentication. Physical fixture teardown is never runtime cleanup proof.
+Focused fresh-process OwnedChildRetirement tests: 30 passed.
+
+Native login observation no longer adds a one-second interval or 100-check expiry,
+which were absent from the approved contract. Explicit checks retain current-intent
+and single-in-flight fencing and shared RPC/session limits; they never replay login
+or generation. Settings copy now describes those real limits. Existing Settings
+tests passed 7/7. A new actual native-channel NativeCodex regression uses scripted
+pending-only product replies and real private process/control identity: duplicate
+same-turn checks coalesce, 102 immediate explicit observations succeed below the
+existing 256-request limit, only one login starts, no connectionTest/API probe runs,
+and the real SQLite selector remains unchanged. Public construction still selects
+only the validated embedded worker; internal injection supplies the same actual
+namespace/process owner for offline tests, not a production fallback. Fresh isolated
+product union passed 556/556. This is not genuine SDK login/usable-session evidence.
+The current Settings view already explains blocked replacement and unsupported
+ordinary Paper inference/purge; no parallel capability store was introduced.
+
+The permanently retained SDK scope is not cleared to enable reconnection. Required
+SDK resource/content retirement and actual Paper scope ownership remain incomplete;
+Native descriptor retirement or scripted success cannot substitute for those proofs.
+
 ## Current human-approved product admission
 
 Actual instruction: “1,2 제안 승인, intel 빌드 계획 자체를 완전히 폐끼”.

@@ -97,8 +97,7 @@ final class AgentPrivateBackupTests: XCTestCase {
     XCTAssertTrue(prepare(owner))
     XCTAssertTrue(try excluded(directory))
     XCTAssertTrue(owner.hasBackupExclusion())
-    XCTAssertEqual(mkdirat(owner.descriptor, "codex", 0o700), 0)
-    defer { XCTAssertEqual(unlinkat(owner.descriptor, "codex", AT_REMOVEDIR), 0) }
+    XCTAssertTrue(owner.prepareRuntimeDirectories())
     var info = stat()
     XCTAssertEqual(fstatat(owner.descriptor, "codex", &info, AT_SYMLINK_NOFOLLOW), 0)
     XCTAssertEqual(info.st_uid, getuid())
@@ -108,6 +107,111 @@ final class AgentPrivateBackupTests: XCTestCase {
     XCTAssertTrue(owner.check())
     XCTAssertFalse(prepare(owner))
     XCTAssertTrue(try excluded(directory))
+  }
+
+  private func embeddedBundle(interpreterSymlink: URL? = nil) throws -> (URL, URL) {
+    let main = fixture.appendingPathComponent(UUID().uuidString).resolvingSymlinksInPath()
+    let bundle = main.appendingPathComponent("Contents/XPCServices/ProviderAgent.xpc")
+    let contents = bundle.appendingPathComponent("Contents")
+    try FileManager.default.createDirectory(
+      at: contents.appendingPathComponent("MacOS"), withIntermediateDirectories: true)
+    try makeDirectory(contents.appendingPathComponent("Resources"))
+    let plist = try PropertyListSerialization.data(
+      fromPropertyList: [
+        "CFBundleIdentifier": TopologyIdentity.agent, "CFBundlePackageType": "XPC!",
+      ],
+      format: .xml, options: 0)
+    try plist.write(to: contents.appendingPathComponent("Info.plist"))
+    let interpreter = contents.appendingPathComponent("MacOS/python3")
+    if let interpreterSymlink {
+      try FileManager.default.createSymbolicLink(
+        at: interpreter, withDestinationURL: interpreterSymlink)
+    } else {
+      let framework = contents.appendingPathComponent("Frameworks")
+      try makeDirectory(framework)
+      let executable = framework.appendingPathComponent("python3")
+      try FileManager.default.copyItem(at: URL(fileURLWithPath: "/usr/bin/true"), to: executable)
+      try FileManager.default.createSymbolicLink(at: interpreter, withDestinationURL: executable)
+    }
+    for name in ["agent.py", "sdk_worker.py", "broker_control.py"] {
+      try Data("# synthetic nonexecuted bundle resource\n".utf8)
+        .write(to: contents.appendingPathComponent("Resources/" + name))
+    }
+    return (main, bundle)
+  }
+
+  func testBundledWorkerRejectsExternalInterpreterSymlink() throws {
+    let (owner, _) = try newOwner()
+    let (main, _) = try embeddedBundle(interpreterSymlink: URL(fileURLWithPath: "/usr/bin/python3"))
+    XCTAssertNil(OwnedChildRetirement.WorkerLaunch.bundled(namespace: owner, mainBundle: main))
+    XCTAssertTrue(owner.permitsNamespaceMutation)
+  }
+
+  func testBundledWorkerRejectsMissingInterpreterAndWrongBundleIdentity() throws {
+    let (owner, _) = try newOwner()
+    XCTAssertNil(OwnedChildRetirement.WorkerLaunch.bundled(namespace: owner, mainBundle: fixture))
+    let (main, bundle) = try embeddedBundle()
+    try FileManager.default.removeItem(at: bundle.appendingPathComponent("Contents/MacOS/python3"))
+    XCTAssertNil(OwnedChildRetirement.WorkerLaunch.bundled(namespace: owner, mainBundle: main))
+    let (wrongMain, wrongBundle) = try embeddedBundle()
+    let plist = try PropertyListSerialization.data(
+      fromPropertyList: ["CFBundleIdentifier": "invalid.synthetic.bundle"], format: .xml, options: 0
+    )
+    try plist.write(to: wrongBundle.appendingPathComponent("Contents/Info.plist"))
+    XCTAssertNil(OwnedChildRetirement.WorkerLaunch.bundled(namespace: owner, mainBundle: wrongMain))
+  }
+
+  func testBundledWorkerAllowsOnlyCompleteInternalInterpreterBundle() throws {
+    let (owner, _) = try newOwner()
+    let (main, bundle) = try embeddedBundle()
+    let launch = try XCTUnwrap(
+      OwnedChildRetirement.WorkerLaunch.bundled(namespace: owner, mainBundle: main))
+    XCTAssertTrue(launch.namespace === owner)
+    XCTAssertEqual(launch.script, bundle.appendingPathComponent("Contents/Resources/agent.py"))
+    for name in ["sdk_worker.py", "broker_control.py", "agent.py"] {
+      let path = bundle.appendingPathComponent("Contents/Resources/" + name)
+      let saved = try Data(contentsOf: path)
+      try FileManager.default.removeItem(at: path)
+      XCTAssertNil(OwnedChildRetirement.WorkerLaunch.bundled(namespace: owner, mainBundle: main))
+      try saved.write(to: path)
+    }
+    let resource = bundle.appendingPathComponent("Contents/Resources/sdk_worker.py")
+    try FileManager.default.removeItem(at: resource)
+    try FileManager.default.createSymbolicLink(at: resource, withDestinationURL: agentScript)
+    XCTAssertNil(OwnedChildRetirement.WorkerLaunch.bundled(namespace: owner, mainBundle: main))
+  }
+
+  func testRuntimeDirectoriesNeverAdoptExistingEntryAndLeaseBlocksMutation() throws {
+    let (owner, _) = try newOwner()
+    XCTAssertTrue(prepare(owner))
+    XCTAssertEqual(mkdirat(owner.descriptor, "codex", 0o700), 0)
+    XCTAssertFalse(owner.prepareRuntimeDirectories())
+    XCTAssertEqual(unlinkat(owner.descriptor, "codex", AT_REMOVEDIR), 0)
+    XCTAssertTrue(owner.prepareRuntimeDirectories())
+    let lease = UUID()
+    XCTAssertTrue(owner.beginMetadataMutation(owner: lease))
+    XCTAssertFalse(owner.prepareRuntimeDirectories())
+    XCTAssertFalse(owner.cleanup())
+    XCTAssertTrue(owner.prepareWorkerDirectories(owner: lease, permit: { true }))
+    XCTAssertFalse(owner.prepareWorkerDirectories(owner: UUID(), permit: { true }))
+    owner.endMetadataMutation(owner: lease)
+    XCTAssertTrue(owner.cleanup())
+  }
+
+  func testRuntimeDirectoryReplacementIsNotAdoptedOrDeleted() throws {
+    let (owner, directory) = try newOwner()
+    XCTAssertTrue(prepare(owner))
+    XCTAssertTrue(owner.prepareRuntimeDirectories())
+    let codex = directory.appendingPathComponent("codex")
+    try FileManager.default.moveItem(
+      at: codex, to: fixture.appendingPathComponent("original-codex"))
+    try makeDirectory(codex)
+    let marker = codex.appendingPathComponent("unrelated")
+    let bytes = Data("never adopt replacement".utf8)
+    try bytes.write(to: marker)
+    XCTAssertFalse(owner.prepareRuntimeDirectories())
+    XCTAssertFalse(owner.cleanup())
+    XCTAssertEqual(try Data(contentsOf: marker), bytes)
   }
 
   func testReadOnlyValidationDoesNotRepairRemovedBackupExclusion() throws {

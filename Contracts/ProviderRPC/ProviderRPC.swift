@@ -55,6 +55,16 @@ public enum ProviderRPC {
     return try parser.parse()
   }
 
+  /// Exact unsigned control metadata; booleans, real numbers and overflow are rejected.
+  public static func exactUInt64(_ value: Any?) -> UInt64? {
+    if let integer = value as? JSONInteger { return UInt64(integer.literal) }
+    guard let number = value as? NSNumber,
+      CFGetTypeID(number) != CFBooleanGetTypeID(),
+      !["f", "d"].contains(String(cString: number.objCType))
+    else { return nil }
+    return UInt64(number.stringValue)
+  }
+
   public static func validateRequest(_ object: [String: Any]) throws {
     let contract = try store.load()
     try contract.checkStructure(object)

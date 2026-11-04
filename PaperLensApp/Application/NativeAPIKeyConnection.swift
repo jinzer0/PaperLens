@@ -1,7 +1,8 @@
-import Foundation
 import Combine
+import Foundation
+
 #if SWIFT_PACKAGE
-import ProviderRequest
+  import ProviderRequest
 #endif
 
 public enum APIKeyConnectionError: Error, Equatable, Sendable {
@@ -55,8 +56,10 @@ public struct NativeOpenAIConfiguration: Equatable, Sendable {
   public let model: String
   public init(model: String, endpoint: URL = NativeOpenAIConfiguration.endpoint) throws {
     guard endpoint == Self.endpoint, !model.isEmpty, model.utf8.count <= 128,
-      model.utf8.allSatisfy({ (65...90).contains($0) || (97...122).contains($0)
-        || (48...57).contains($0) || $0 == 45 || $0 == 46 || $0 == 95 })
+      model.utf8.allSatisfy({
+        (65...90).contains($0) || (97...122).contains($0)
+          || (48...57).contains($0) || $0 == 45 || $0 == 46 || $0 == 95
+      })
     else { throw APIKeyConnectionError.invalidConfiguration }
     self.model = model
   }
@@ -81,14 +84,18 @@ public struct NativeProbeResponse: Sendable {
 }
 @MainActor
 public protocol NativeConnectionTestTransport {
-  func probe(key: String, configuration: NativeOpenAIConfiguration,
-    request: AuthorizedProviderRequest, authority: ProviderRequest) async throws -> NativeProbeResponse
+  func probe(
+    key: String, configuration: NativeOpenAIConfiguration,
+    request: AuthorizedProviderRequest, authority: ProviderRequest
+  ) async throws -> NativeProbeResponse
 }
 
 private final class NativeRedirectRefusal: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
-  func urlSession(_ session: URLSession, task: URLSessionTask,
+  func urlSession(
+    _ session: URLSession, task: URLSessionTask,
     willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
-    completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
+    completionHandler: @escaping @Sendable (URLRequest?) -> Void
+  ) {
     completionHandler(nil)
   }
 }
@@ -107,16 +114,22 @@ public final class URLSessionOpenAIConnectionTransport: NativeConnectionTestTran
     config.urlCredentialStorage = nil
     config.timeoutIntervalForRequest = 10
     config.timeoutIntervalForResource = 10
-    session = URLSession(configuration: config, delegate: NativeRedirectRefusal(), delegateQueue: nil)
+    session = URLSession(
+      configuration: config, delegate: NativeRedirectRefusal(), delegateQueue: nil)
   }
   deinit { session.invalidateAndCancel() }
 
-  public func probe(key: String, configuration: NativeOpenAIConfiguration,
-    request: AuthorizedProviderRequest, authority: ProviderRequest) async throws -> NativeProbeResponse {
+  public func probe(
+    key: String, configuration: NativeOpenAIConfiguration,
+    request: AuthorizedProviderRequest, authority: ProviderRequest
+  ) async throws -> NativeProbeResponse {
     guard !Task.isCancelled else { throw APIKeyConnectionError.cancelled }
-    guard request.wire.operation == .connectionTest else { throw APIKeyConnectionError.invalidConfiguration }
-    do { _ = try authority.encodeRequest(request) }
-    catch { throw APIKeyConnectionError.invalidConfiguration }
+    guard request.wire.operation == .connectionTest else {
+      throw APIKeyConnectionError.invalidConfiguration
+    }
+    do { _ = try authority.encodeRequest(request) } catch {
+      throw APIKeyConnectionError.invalidConfiguration
+    }
     guard !key.isEmpty, key.utf8.count <= 4096,
       key.utf8.allSatisfy({ $0 >= 0x21 && $0 <= 0x7e })
     else { throw APIKeyConnectionError.invalidKey }
@@ -128,17 +141,20 @@ public final class URLSessionOpenAIConnectionTransport: NativeConnectionTestTran
     wire.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
     wire.setValue("application/json", forHTTPHeaderField: "Content-Type")
     wire.setValue(request.wire.requestID, forHTTPHeaderField: "X-Client-Request-Id")
-    wire.httpBody = try ProviderRequest.canonicalBytes(.object([
-      "model": .string(configuration.model),
-      "messages": .array(messages.map { .object(["role": .string($0.role), "content": .string($0.content)]) }),
-      "max_completion_tokens": policy["outputTokens"], "stream": .bool(false), "n": .int(1),
-      "store": .bool(false),
-    ]))
+    wire.httpBody = try ProviderRequest.canonicalBytes(
+      .object([
+        "model": .string(configuration.model),
+        "messages": .array(
+          messages.map { .object(["role": .string($0.role), "content": .string($0.content)]) }),
+        "max_completion_tokens": policy["outputTokens"], "stream": .bool(false), "n": .int(1),
+        "store": .bool(false),
+      ]))
     do {
       let start = ContinuousClock.now
       let (bytes, response) = try await session.bytes(for: wire)
       defer { bytes.task.cancel() }
-      guard let http = response as? HTTPURLResponse, http.url == NativeOpenAIConfiguration.endpoint else {
+      guard let http = response as? HTTPURLResponse, http.url == NativeOpenAIConfiguration.endpoint
+      else {
         throw APIKeyConnectionError.invalidResponse
       }
       switch http.statusCode {
@@ -153,7 +169,9 @@ public final class URLSessionOpenAIConnectionTransport: NativeConnectionTestTran
       }
       // Bound the provider envelope separately from the 12-byte model output.
       let bodyCap = min(16_384, authority.limit("bodyBytes"))
-      guard response.expectedContentLength <= Int64(bodyCap) else { throw APIKeyConnectionError.invalidResponse }
+      guard response.expectedContentLength <= Int64(bodyCap) else {
+        throw APIKeyConnectionError.invalidResponse
+      }
       var body = Data()
       for try await byte in bytes {
         try Task.checkCancellation()
@@ -171,7 +189,8 @@ public final class URLSessionOpenAIConnectionTransport: NativeConnectionTestTran
         object["object"] as? String == "chat.completion",
         let responseID = object["id"] as? String, !responseID.isEmpty,
         object["model"] as? String == configuration.model,
-        let usage = object["usage"] as? [String: Any], let reportedTokens = usage["completion_tokens"],
+        let usage = object["usage"] as? [String: Any],
+        let reportedTokens = usage["completion_tokens"],
         let tokens = try RequestValue(foundation: reportedTokens).integer,
         tokens > 0, tokens <= policy["outputTokens"].integer!,
         let choices = object["choices"] as? [[String: Any]], choices.count == 1,
@@ -187,16 +206,18 @@ public final class URLSessionOpenAIConnectionTransport: NativeConnectionTestTran
       else { throw APIKeyConnectionError.invalidResponse }
       // Correlation comes from the response to this task, never an invented provider echo.
       // Shared authority creates/validates the closed schemaVersion/ID/operation result.
-      return NativeProbeResponse(result: try authority.wrapModelResult(Data(text.utf8), request: request),
+      return NativeProbeResponse(
+        result: try authority.wrapModelResult(Data(text.utf8), request: request),
         evidence: .authenticatedGenerationResponse)
-    } catch let error as APIKeyConnectionError { throw error }
-    catch is CancellationError { throw APIKeyConnectionError.cancelled }
-    catch let error as URLError {
+    } catch let error as APIKeyConnectionError { throw error } catch is CancellationError {
+      throw APIKeyConnectionError.cancelled
+    } catch let error as URLError {
       if error.code == .timedOut { throw APIKeyConnectionError.deadline }
       if error.code == .cancelled { throw APIKeyConnectionError.cancelled }
       throw APIKeyConnectionError.transport
-    } catch is RequestContractError { throw APIKeyConnectionError.invalidResponse }
-    catch { throw APIKeyConnectionError.invalidResponse }
+    } catch is RequestContractError { throw APIKeyConnectionError.invalidResponse } catch {
+      throw APIKeyConnectionError.invalidResponse
+    }
   }
 }
 
@@ -235,7 +256,8 @@ private func rejectDuplicateJSONKeys(_ data: Data, maxDepth: Int) throws {
       while next < bytes.count && [9, 10, 13, 32].contains(bytes[next]) { next += 1 }
       if next < bytes.count && bytes[next] == 58 {
         guard !objects.isEmpty,
-          let key = try JSONSerialization.jsonObject(with: Data(bytes[start...index]), options: [.fragmentsAllowed]) as? String,
+          let key = try JSONSerialization.jsonObject(
+            with: Data(bytes[start...index]), options: [.fragmentsAllowed]) as? String,
           objects[objects.count - 1].insert(key).inserted
         else { throw APIKeyConnectionError.invalidResponse }
       }
@@ -251,7 +273,9 @@ public struct APIKeyConnectionLease: Equatable, Sendable {
   public let selection: APIKeySelection
 }
 public enum APIKeyConnectionPhase: Equatable, Sendable {
-  case idle, probing, connected(APIKeySelection), failed(APIKeyConnectionError)
+  case idle, probing
+  case connected(APIKeySelection)
+  case failed(APIKeyConnectionError)
 }
 
 @MainActor
@@ -288,9 +312,11 @@ public final class NativeAPIKeyConnection: ObservableObject {
     phase = .failed(.staleCandidate)
   }
 
-  public init(configuration: NativeOpenAIConfiguration, slots: APIKeySlotStore,
+  public init(
+    configuration: NativeOpenAIConfiguration, slots: APIKeySlotStore,
     persistence: (any APIKeySelectorPersistence)?,
-    transport: any NativeConnectionTestTransport, authority: ProviderRequest) {
+    transport: any NativeConnectionTestTransport, authority: ProviderRequest
+  ) {
     self.configuration = configuration
     self.slots = slots
     self.persistence = persistence
@@ -324,6 +350,25 @@ public final class NativeAPIKeyConnection: ObservableObject {
     }
   }
 
+  /// Retire only a selection actually superseded in the sole durable selector.
+  /// Existing consumers retain their key until their real termination releases the lease.
+  public func retireSupersededSelection() throws {
+    guard let persistence else { throw APIKeyConnectionError.persistenceUnavailable }
+    guard let previous = activeSelection else { return }
+    guard try persistence.currentSelection() != previous else {
+      throw APIKeyConnectionError.selectorConflict
+    }
+    retired.insert(previous.slotID)
+    activeSelection = nil
+    eligibleForEntry = false
+    phase = .idle
+    do { try drainRetired() } catch {
+      storageBlocked = true
+      phase = .failed(.cleanupBlocked)
+      throw APIKeyConnectionError.cleanupBlocked
+    }
+  }
+
   /// Edits invalidate intent immediately, even when the user has not pressed Retry.
   public func invalidateCandidate() {
     guard !ownerRetired else { return }
@@ -337,7 +382,10 @@ public final class NativeAPIKeyConnection: ObservableObject {
     phase = .failed(.cancelled)
   }
   public func connect(key: String) {
-    guard !ownerRetired else { fail(APIKeyConnectionError.staleCandidate); return }
+    guard !ownerRetired else {
+      fail(APIKeyConnectionError.staleCandidate)
+      return
+    }
     invalidateCandidate()
     let attempt = intent
     phase = .probing
@@ -360,11 +408,13 @@ public final class NativeAPIKeyConnection: ObservableObject {
       probes.insert(slot)
       phase = .probing
       let context = try TrustedRequestContext(authority: authority, sources: .connectionTest)
-      let request = try authority.buildRequest(sources: .connectionTest, context: context,
+      let request = try authority.buildRequest(
+        sources: .connectionTest, context: context,
         requestID: UUID().uuidString.lowercased())
       let stagedKey = try slots.read(slot)
       guard stagedKey == key else { throw APIKeyConnectionError.unsafeStorage }
-      let response = try await transport.probe(key: stagedKey, configuration: configuration,
+      let response = try await transport.probe(
+        key: stagedKey, configuration: configuration,
         request: request, authority: authority)
       try Task.checkCancellation()
       guard intent == attempt else { throw APIKeyConnectionError.staleCandidate }
@@ -385,7 +435,8 @@ public final class NativeAPIKeyConnection: ObservableObject {
       // CAS returning a malformed receipt is ambiguous: keep the staged secret and block.
       guard winner.slotID == slot, winner.configGeneration > (expected?.configGeneration ?? 0),
         try persistence.currentSelection() == winner,
-        try persistence.selectionMatchesConfiguration(configuration) else {
+        try persistence.selectionMatchesConfiguration(configuration)
+      else {
         staged = nil
         storageBlocked = true
         throw APIKeyConnectionError.persistenceFailure
@@ -422,10 +473,15 @@ public final class NativeAPIKeyConnection: ObservableObject {
 
   private func fail(_ error: Error) {
     let safe: APIKeyConnectionError
-    if let typed = error as? APIKeyConnectionError { safe = typed }
-    else if error is CancellationError { safe = .cancelled }
-    else if error is RequestContractError { safe = .invalidResponse }
-    else { safe = .persistenceFailure }
+    if let typed = error as? APIKeyConnectionError {
+      safe = typed
+    } else if error is CancellationError {
+      safe = .cancelled
+    } else if error is RequestContractError {
+      safe = .invalidResponse
+    } else {
+      safe = .persistenceFailure
+    }
     if safe == .unsafeStorage || safe == .cleanupBlocked || storageBlocked {
       storageBlocked = true
       eligibleForEntry = false
@@ -436,11 +492,14 @@ public final class NativeAPIKeyConnection: ObservableObject {
   public func acquireLease() throws -> APIKeyConnectionLease {
     guard !ownerRetired, !storageBlocked, eligibleForEntry, let persistence,
       let selection = try persistence.currentSelection(), selection == activeSelection,
-      try persistence.selectionMatchesConfiguration(configuration) else {
+      try persistence.selectionMatchesConfiguration(configuration)
+    else {
       throw APIKeyConnectionError.persistenceUnavailable
     }
-    do { _ = try slots.read(selection.slotID) }
-    catch { fail(error); throw error }
+    do { _ = try slots.read(selection.slotID) } catch {
+      fail(error)
+      throw error
+    }
     let lease = APIKeyConnectionLease(id: UUID(), selection: selection)
     leases[lease.id] = selection
     return lease
@@ -448,13 +507,17 @@ public final class NativeAPIKeyConnection: ObservableObject {
   public func key(for lease: APIKeyConnectionLease) throws -> String {
     guard !storageBlocked else { throw APIKeyConnectionError.cleanupBlocked }
     guard leases[lease.id] == lease.selection else { throw APIKeyConnectionError.staleCandidate }
-    do { return try slots.read(lease.selection.slotID) }
-    catch { fail(error); throw error }
+    do { return try slots.read(lease.selection.slotID) } catch {
+      fail(error)
+      throw error
+    }
   }
   public func mayPublish(_ lease: APIKeyConnectionLease) throws -> Bool {
     guard !ownerRetired, !storageBlocked, let persistence else { return false }
-    do { try slots.validate() }
-    catch { fail(error); throw error }
+    do { try slots.validate() } catch {
+      fail(error)
+      throw error
+    }
     let selected = try persistence.currentSelection()
     let modelMatches = try persistence.selectionMatchesConfiguration(configuration)
     return leases[lease.id] == lease.selection && selected == lease.selection
@@ -474,8 +537,10 @@ public final class NativeAPIKeyConnection: ObservableObject {
   private func drainRetired() throws {
     guard let persistence else { throw APIKeyConnectionError.persistenceUnavailable }
     let selected = try persistence.currentSelection()?.slotID
-    for id in Array(retired) where id != selected && !probes.contains(id)
-      && !leases.values.contains(where: { $0.slotID == id }) {
+    for id in Array(retired)
+    where id != selected && !probes.contains(id)
+      && !leases.values.contains(where: { $0.slotID == id })
+    {
       try slots.remove(id)
       retired.remove(id)
     }

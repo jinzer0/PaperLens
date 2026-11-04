@@ -16,6 +16,19 @@ context:
   - '{project-root}/bmad-docs/planning-artifacts/architecture/architecture-PaperLens-2026-08-28/SOLUTION-DESIGN.md'
 ---
 
+## Existing-work consolidation — 2026-11-05
+
+The explicit policy/integration/worktree-cleanup instruction restores the omitted
+collector correction from historical commit `33e96f57` into the current product
+integration branch. `OSCollector.feed` and `drain` preserve prior failures and reject
+bounded framing/parser resource failures. `finish` places its initial drain inside
+the cleanup-protected region, so unexpected exceptions still propagate after owned
+cleanup. Later arm64-only policy and acquisition work remain intact.
+
+The eight historical regression cases were recovered without replacing later tests.
+Current offline `OSCollectionTests`: 28 passed. No real collector, signed isolation,
+renderer or consumed trial was run; this result does not close Story acceptance.
+
 ## Whole-Epic topology source correction — 2026-10-14
 
 G003 runs under the current Epic1 range execution on integration branch

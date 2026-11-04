@@ -10,6 +10,94 @@ approval: explicit-human-story-range-execution
 
 # 전체 실행 계약
 
+## Current consolidation instruction and result — 2026-11-05
+
+Actual instruction: “1 2 3 4 5 진행해 정책 수정부터 해서 기존 작업 통합후
+워크트리 정리까지 진행해 goal이든 뭐든 해서 완료해”.
+This authorizes local policy consolidation, adoption of existing implementations,
+affected verification/corrections, local commits and preservation-first worktree
+cleanup. It does not grant new product acceptance, remote writes, real credentials,
+paid requests, protected trial retries, PR merge or release.
+
+Integration target remains `issue/epic-1-product-vertical-integration-20261010` in
+the original-root-relative `.build/topology/product-vertical-integration-20261009`.
+Source baseline was `acefd56fae91ae977954ebcdecf5e31e0f5e8d7d` plus its existing dirty
+native ABI/worker/connection/UI/test changes. The parent owns shared DB/RPC/app
+composition. Root policy commit `92211ff` supplies consolidated guidance; canonical
+policy is `docs/ai-governance.md`, with short AGENTS/Build references instead of
+parallel approval checklists. Existing implementation is completed/integrated before
+expanding concurrent work. Independent lanes need an explicit integration destination.
+
+### Source-to-integration disposition
+
+| Existing sources | Disposition |
+| --- | --- |
+| Original Story 1.10, 1.14–1.18 dirty product lanes | Aggregated at `ab00379`; original Reader/annotation/folder sources match that checkpoint. Differences in API key/import/DB paths are later owner, configuration, cancellation, folder and read-lease integration, not missing features. |
+| Functional 1.19, 1.20, 1.22, 1.24, 1.26 | Aggregated at `ab00379`, with later geometry, parsing, metadata and Settings extensions retained. |
+| Functional 1.25 | Concurrent organization CAS/query fencing adopted at `ca3c301`; no duplicate cherry-pick. |
+| Session 1.11, 1.14 | `45acff8` already in integration ancestry. |
+| Session 1.4, 1.9, 1.12, 1.13, 1.19, 1.21–1.23 | Adopted/extended at `5e15c4a`; preserve newer contracts and tests, not obsolete whole-file copies. |
+| Session 1.20 | Typed PDFium producer adopted at `e06ae42`; specs at `497db66`/`fb3fa60`, followed by actual Library input/resource ownership. |
+| Parallel Agent / Story 1.2 | Exclusive producer callback latch already in `e3f4a93`. |
+| Parallel RPC / Story 1.9 | EOF sealing and invalid-input poisoning already in `abf6aed`. |
+| Story 1.7 / dirty parallel 1.8 | MIME UTF-8 bound already in `1b6d0f8`; retry epoch guard already in `ab00379`. |
+| Historical Story 1.1 collector | Missing `33e96f57` cleanup/framing correction recovered surgically; later arm64-only policy preserved. |
+| Root Story 1.8 readiness | Missing bitmap preflight/production allocation/alpha guards and tests recovered from root source and existing Spec. No protected allocation/renderer trial rerun. |
+| Other historical planning/evidence, local sessions and generated artifacts | Preserved in original Git refs plus verified archives. Preservation is not a claim of implemented or accepted product behavior. |
+
+Independent source comparisons confirmed product and contract adoption rather than
+inferring it from commit subjects. Review of the dirty integration found and fixed
+the deterministic loginCancel enqueue/revoke race; Story 1.9 records its bounded
+dispatch/retirement semantics and follow-up CLEAR review.
+
+### Verified integrated behavior and limits
+
+- SwiftPM build/test discovery passed without executing readiness trials.
+- Final isolated product union: **558 passed, zero failures/errors**:
+  `.build/consolidation-final-product-tests.json`. Includes actual local SQLite,
+  import/delete/read/annotation/organization/recovery flows and scripted native
+  worker/channel cases; no genuine SDK authentication or paid Provider proof.
+- Affected cancellation suites separately passed RPC lifecycle 25 and owner 31,
+  including actual cancel-frame receipt, late-response fencing and stalled-writer
+  deadline protection.
+- Final offline topology/tooling union: **631 passed**; Python request contract:
+  **35 passed**. Recovered collector suite separately passed **28**.
+- Native ProviderRequest **32** and ProviderRPC **24** passed. Pure readiness alpha
+  invariants **2** passed with exact selectors. No renderer or allocation trial ran.
+- Changed Swift files formatted once; Xcode project plist, Build override TOML and
+  diff whitespace checks passed. Existing SwiftPM unhandled pycache, compiler
+  deprecated/unused-await and asyncio slow-fixture diagnostics were not hidden.
+- The previously recorded unsigned-app build blocker remains: the retained pinned
+  GRDB framework is incompatible with the installed SDK. It was not overwritten,
+  its toolchain lock was not changed, and the unchanged failing build was not retried.
+  SwiftPM product verification is not packaged-app or signed-isolation proof.
+- Intel remains cancelled, Story 1.27 undefined. SDK scope cleanup/reconnection,
+  remaining product activation and actual minimum/current-arm64/P1/P3/P6 acceptance
+  remain as recorded below; this consolidation does not complete those older goals.
+
+### Preservation and cleanup evidence
+
+Preservation lives outside removed checkouts, under the original root's
+`.build/worktree-consolidation/` (owner-only directory). `manifest.json` maps all
+50 original registrations to HEAD, durable `refs/archive/worktree-consolidation-20261105/`
+refs, status and snapshot. `all-refs.bundle` passed `git bundle verify`.
+All 48 valid checkouts have SHA-256-verified archive entries; snapshots preserve
+file bytes/modes, symlinks, ignored artifacts and local session records. Only the
+retained root/integration omit their `.build`/`.gjc` contents, which remain in place.
+Original index copies and staged/unstaged binary patches are retained too.
+
+Cleanup requires unchanged source/HEAD/status, archive digest, preserved ref and no
+live process cwd in each candidate. The machine-readable `cleanup-receipt.json`
+records actual removals and final registrations; no historical branch refs are
+deleted. The retained root preserves unrelated user/planning work and the archives;
+the retained integration checkout is the sole product execution target. Machine-local
+SwiftPM mirror/resolution files stay uncommitted rather than publishing local paths.
+
+To recover a removed checkout, create a new worktree at its archived HEAD/ref,
+extract its matching archive into that new checkout, and restore staged state using
+the saved staged binary patch against that HEAD. Use the verified bundle if Git
+objects need recovery. Do not overwrite either retained dirty checkout to restore.
+
 ## Current human scope amendment — product policy approved, Intel cancelled
 
 Actual user instruction: “1,2 제안 승인, intel 빌드 계획 자체를 완전히 폐끼”.
@@ -64,7 +152,88 @@ Existing Story/Issue links remain; remote synchronization is pending authorizati
   actual SDK dispatch/private filesystem enforcement/login/reconnection/purge
   integration remain engineering work. No goal or Story is completed by this slice.
 
-## Current execution entry point — 2026-10-14
+## Successor execution checkpoint — 2026-11-04
+
+- The current user explicitly authorized adoption of all five unfinished Ultragoal
+  goals into this existing integration worktree, not the historical root.
+  Target session: `.gjc/_session-01a1a52a-4297-750a-84f0-a33c830de875/ultragoal/`.
+  Succession operation:
+  `4b1f0b279c54cbef5278bda4a0f83530b3c0e7697d250bcafbba6aad1279d457`.
+  Actual integration HEAD at adoption: `acefd56fae91ae977954ebcdecf5e31e0f5e8d7d`;
+  branch remains `issue/epic-1-product-vertical-integration-20261010`.
+  Existing dirty Provider/ABI/pipe/UI work is preserved. No new plan, source-root
+  execution, historical receipt reuse, remote write, merge or protected trial.
+- Fresh shared-process lifecycle verification failed because intentionally retained
+  unknown resource debt affects later tests; the failure remains recorded. The
+  repository's fresh-process runner then verified real SQLite/import/job ownership:
+  Library lifecycle 53/53, Job recovery 24/24 and persistence/journal suites passed.
+  G001 has a targeted-verification deferred checkpoint, not final boundary approval.
+- The first isolated product union passed 539/550. Eleven worker tests failed before
+  launch because Foundation retained the `/var` symlink in their temporary roots.
+  Fixtures now follow the existing repository-owned `.build` namespace convention,
+  resolve the actual Python interpreter rather than the Xcode shim, and leave the
+  control socket to its sole production reader. Exact spawn environment assertions
+  remain; observed CoreFoundation locale metadata is distinguished from inheritance.
+- A real startup defect was exposed: `markRunning` could discharge its timer before
+  transport handoff. `OwnedChildRetirement` now rejects missing transport ownership.
+  Scoped independent review also identified armed readiness sources after terminal
+  unknown. Notification cancellation now runs on the owning operation/MainActor lanes
+  without closing descriptors, releasing debt or reporting clean. New regressions
+  cover EOF before broker offer and notification-only cancellation of a pending read.
+- Exact edited source/tests in this successor slice:
+  `PaperLensApp/Application/OwnedChildRetirement.swift`,
+  `PaperLensApp/Adapters/OwnedPipeAgentRPCChannel.swift`,
+  `Tests/Product/OwnedChildRetirementTests.swift`,
+  `Tests/Product/OwnedPipeAgentRPCChannelTests.swift`.
+  Final current isolated union: 552/552 passed, zero failures/errors, report
+  `.build/succession-product-union-quiescence.json`. Offline worker/broker/Agent/
+  wire/account suite: 230 passed. These are private fixtures/scripted contracts,
+  not genuine SDK authentication or signed acceptance. Existing compiler and asyncio
+  diagnostics were not suppressed. Scoped re-review returned CLEAR with no remaining
+  implementation blocker. Its advisory request to assert that the read stays pending
+  before explicit closure was implemented and the focused regression passed again.
+  This scoped review is not the final workflow cohort or external acceptance.
+- Current unsigned arm64 Release build was attempted with signing disabled and
+  automatic package resolution disabled. It failed because the existing
+  `.build/product-dependencies/GRDB.framework` Swift module is incompatible with
+  the installed macOS 27.2 SDK. The old framework was not overwritten and the
+  approved dependency/toolchain lock was not changed. This narrowly blocks that
+  native build, not the passing SwiftPM product build/tests or independent work.
+- Verification-scope violation: a combined native Request/RPC/Readiness filter
+  inadvertently executed the protected
+  `testRealGeneratedPDFKitZoomCacheDisplayPixels` again despite the retained
+  exhausted-trial restriction. It failed `blankCapture`. This was disclosed to
+  the user and recorded in the target ledger; it is not approved proof, a new
+  allowance or acceptance. No renderer/protected trial retry is authorized.
+  Future commands must inspect exact test execution boundaries and exclude these
+  trials. Separate offline infrastructure/request tests passed 428; native Request
+  32 and RPC 24 passed. The Readiness execution remains failed/unapproved history.
+- G002–G005 remain unfinished. Actual SDK resource/content closure, safe reconnect/
+  purge integration and activation of remaining parsing/summary flows must not be
+  inferred from test totals. Signed P1/P3/P6 and the minimum/current arm64 matrix,
+  actual authenticated paid probes and consumed protected trials remain unproven or
+  operation-blocked. Intel remains cancelled and Story 1.27 undefined. The aggregate
+  remains active; no final completion or human-only pause has been claimed.
+- Additional G002 corrections removed the unapproved one-second/100-observation
+  login policy. Actual private native broker/control tests cover both handshake
+  orderings and wrong-order rejection. A scripted pending-login test exercises the
+  real NativeCodex owner and channel for 102 immediate observations, same-turn
+  coalescing, one loginStart, zero authentication/probe/selector changes. Final
+  current private Product union: 556/556 passed. Scoped source review CLEAR/APPROVE;
+  not SDK authentication, complete reconnect/purge, or final boundary approval.
+  Additional modified files: `ProviderSettingsService.swift`,
+  `ProviderSettingsView.swift`, and existing `spec-1-9-product-provider-rpc.md`.
+- All original remaining goals are preserved as blocked, not completed. G003's
+  real deletion needs the absent genuine Agent Paper-scope purge binding; G004's
+  production geometry activation needs the owning precision/zoom profile and
+  specifically admitted independent calibration, while real Summary dispatch
+  needs certified model enforcement (`requireCertifiedEnforcement` currently
+  rejects every unverified profile). G005 also lacks the pinned build toolchain:
+  dependencies require Xcode 27.0/27A266a/SDK 27.0, but the only installed Xcode
+  candidate reports 27.2/27B52/SDK 27.2. No pin, closure or calibration guard was
+  weakened to bypass these prerequisites.
+
+## Prior execution entry point — 2026-10-14
 
 - Objective: Epic 1 Stories 1.1–1.26; 1.27 remains undefined. This is product work,
   not the historical policy-refactoring G001. Native receipts in other sessions

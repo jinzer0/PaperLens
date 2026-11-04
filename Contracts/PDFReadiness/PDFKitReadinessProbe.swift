@@ -16,6 +16,56 @@ public enum PDFKitReadinessProbe {
   nonisolated public static let maximumPDFBytes = 65_536
   private static let observationLimit = 16
 
+  internal static func requireBitmapGraphicsContext(for bitmap: NSBitmapImageRep) throws {
+    try autoreleasepool {
+      guard NSGraphicsContext(bitmapImageRep: bitmap) != nil else {
+        throw ReadinessFailure.unsupportedCapture
+      }
+    }
+  }
+
+  internal static func allocateCaptureBitmap(backing: ReadinessBacking) throws -> NSBitmapImageRep {
+    let width = 300 * backing.rawValue
+    let height = 240 * backing.rawValue
+    guard width * height * 4 <= ReadinessPixels.maximumBytes,
+      let bitmap = NSBitmapImageRep(
+        bitmapDataPlanes: nil, pixelsWide: width,
+        pixelsHigh: height, bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+        isPlanar: false, colorSpaceName: .deviceRGB,
+        bitmapFormat: [], bytesPerRow: width * 4, bitsPerPixel: 32)
+    else { throw ReadinessFailure.unsupportedCapture }
+    bitmap.size = CGSize(width: 300, height: 240)
+    try requireCaptureBitmapLayout(bitmap, backing: backing)
+    try requireBitmapGraphicsContext(for: bitmap)
+    try requireCaptureBitmapLayout(bitmap, backing: backing)
+    return bitmap
+  }
+
+  private static func requireCaptureBitmapLayout(
+    _ bitmap: NSBitmapImageRep, backing: ReadinessBacking
+  ) throws {
+    let width = 300 * backing.rawValue
+    let height = 240 * backing.rawValue
+    guard bitmap.pixelsWide == width, bitmap.pixelsHigh == height,
+      bitmap.bitsPerSample == 8, bitmap.samplesPerPixel == 4,
+      bitmap.bytesPerRow == width * 4, bitmap.bitsPerPixel == 32,
+      bitmap.hasAlpha, !bitmap.isPlanar, bitmap.colorSpaceName == .deviceRGB,
+      bitmap.bitmapFormat == [], bitmap.size == CGSize(width: 300, height: 240),
+      bitmap.bitmapData != nil
+    else { throw ReadinessFailure.unsupportedCapture }
+  }
+
+  internal static func requireCanonicalScannerAlpha(_ rgba: [UInt8]) throws {
+    guard !rgba.isEmpty, rgba.count % 4 == 0, rgba.count <= ReadinessPixels.maximumBytes else {
+      throw ReadinessFailure.unsupportedCapture
+    }
+    for index in stride(from: 3, to: rgba.count, by: 4) {
+      guard !(250...254).contains(rgba[index]) else {
+        throw ReadinessFailure.unsupportedCapture
+      }
+    }
+  }
+
   public static func generatedPDF() throws -> Data {
     let buffer = BoundedPDFBuffer()
     var callbacks = CGDataConsumerCallbacks(
@@ -175,22 +225,15 @@ public enum PDFKitReadinessProbe {
       view.bounds.size == CGSize(width: 300, height: 240),
       let natural = view.bitmapImageRepForCachingDisplay(in: view.bounds),
       natural.bytesPerRow > 0, natural.pixelsHigh > 0,
-      natural.bytesPerRow <= (ReadinessPixels.maximumBytes - 2 * bytes) / natural.pixelsHigh,
-      let bitmap = NSBitmapImageRep(
-        bitmapDataPlanes: nil, pixelsWide: width,
-        pixelsHigh: height, bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
-        isPlanar: false, colorSpaceName: .deviceRGB,
-        bitmapFormat: [.alphaNonpremultiplied], bytesPerRow: width * 4, bitsPerPixel: 32),
-      let pixels = bitmap.bitmapData
+      natural.bytesPerRow <= (ReadinessPixels.maximumBytes - 2 * bytes) / natural.pixelsHigh
     else { throw ReadinessFailure.unsupportedCapture }
     // Explicit public backing-specific cache target, not an alternate renderer/fallback.
-    bitmap.size = view.bounds.size
+    let bitmap = try allocateCaptureBitmap(backing: backing)
+    guard let pixels = bitmap.bitmapData else { throw ReadinessFailure.unsupportedCapture }
     pixels.initialize(repeating: 0, count: bytes)
     view.cacheDisplay(in: view.bounds, to: bitmap)
-    guard bitmap.pixelsWide == width, bitmap.pixelsHigh == height,
-      bitmap.bitsPerSample == 8, bitmap.samplesPerPixel == 4,
-      bitmap.bytesPerRow == width * 4, bitmap.bitsPerPixel == 32, !bitmap.isPlanar
-    else { throw ReadinessFailure.unsupportedCapture }
+    try requireCaptureBitmapLayout(bitmap, backing: backing)
+    guard let capturedPixels = bitmap.bitmapData else { throw ReadinessFailure.unsupportedCapture }
     var centers: [(Double, Double)] = []
     for x in [84.0, 154.0, 224.0] {
       let point = view.convert(CGPoint(x: x, y: 104), from: page)
@@ -199,8 +242,10 @@ public enum PDFKitReadinessProbe {
       centers.append((pixelX, pointY * Double(b) - 0.5))
     }
     // Only the bytes written by PDFView.cacheDisplay are scanned as evidence.
+    let rgba = Array(UnsafeBufferPointer(start: capturedPixels, count: bytes))
+    try requireCanonicalScannerAlpha(rgba)
     return try ReadinessPixels.scan(
-      rgba: Array(UnsafeBufferPointer(start: pixels, count: bytes)),
+      rgba: rgba,
       width: width, height: height, backing: backing, scale: scale, expectedCenters: centers)
   }
 }
