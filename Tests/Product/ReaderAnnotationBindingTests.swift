@@ -201,6 +201,7 @@ private final class AnnotationPageDelegate: NSObject, PDFDocumentDelegate {
     reader.search()
     await settleSearch(reader)
     XCTAssertEqual(reader.searchState, .noResults)
+    XCTAssertEqual(reader.currentMatchNumber, 0)
     XCTAssertNil(reader.pdfView.currentSelection)
     reader.query = "alpha"
     reader.search()
@@ -208,11 +209,71 @@ private final class AnnotationPageDelegate: NSObject, PDFDocumentDelegate {
     reader.search()
     await settleSearch(reader)
     XCTAssertEqual(reader.searchState, .noResults)
+    XCTAssertEqual(reader.currentMatchNumber, 0)
     XCTAssertNil(reader.pdfView.currentSelection)
     reader.query = ""
     reader.search()
     XCTAssertEqual(reader.searchState, .idle)
+    XCTAssertEqual(reader.currentMatchNumber, 0)
     XCTAssertTrue(reader.opened)
+    XCTAssertEqual(try Data(contentsOf: db.root.appendingPathComponent(reference)), original)
+  }
+
+  func testSearchPositionTracksActualPagesAndWrapsInBothDirections() async throws {
+    let (_, db, lifecycle, id, _) = try await fixture()
+    let reader = try presentation(database: db, lifecycle: lifecycle, paperID: id)
+    defer { reader.session.close() }
+    reader.query = "alpha"
+    reader.search()
+    XCTAssertEqual(reader.currentMatchNumber, 0)
+    await settleSearch(reader)
+    let document = try XCTUnwrap(reader.pdfView.document)
+    XCTAssertEqual(reader.searchState, .matches(2))
+    XCTAssertEqual(reader.currentMatchNumber, 1)
+    XCTAssertEqual(document.index(for: try XCTUnwrap(reader.pdfView.currentPage)), 0)
+
+    for (delta, number, page) in [(1, 2, 1), (1, 1, 0), (-1, 2, 1), (-1, 1, 0)] {
+      reader.showMatch(delta: delta)
+      XCTAssertEqual(reader.currentMatchNumber, number)
+      XCTAssertEqual(document.index(for: try XCTUnwrap(reader.pdfView.currentPage)), page)
+      XCTAssertEqual(reader.pdfView.currentSelection?.string, "alpha")
+    }
+    reader.session.close()
+    XCTAssertEqual(reader.currentMatchNumber, 0)
+  }
+
+  func testClearSearchRemovesResultsCancelsPendingSearchAndAllowsSearchingAgain() async throws {
+    let (_, db, lifecycle, id, _) = try await fixture()
+    let reader = try presentation(database: db, lifecycle: lifecycle, paperID: id)
+    defer { reader.session.close() }
+    let reference = try db.readerSnapshot(paperID: id).pdfReference
+    let original = try Data(contentsOf: db.root.appendingPathComponent(reference))
+    reader.query = "alpha"
+    reader.search()
+    await settleSearch(reader)
+    reader.showMatch(delta: 1)
+    let page = reader.pdfView.currentPage
+    reader.clearSearch()
+    XCTAssertEqual(reader.query, "")
+    XCTAssertEqual(reader.searchState, .idle)
+    XCTAssertEqual(reader.currentMatchNumber, 0)
+    XCTAssertNil(reader.pdfView.currentSelection)
+    reader.showMatch(delta: 1)
+    XCTAssertTrue(reader.pdfView.currentPage === page)
+
+    reader.query = "alpha"
+    reader.search()
+    reader.clearSearch()
+    for _ in 0..<20 { await Task.yield() }
+    XCTAssertEqual(reader.searchState, .idle)
+    XCTAssertEqual(reader.currentMatchNumber, 0)
+    XCTAssertNil(reader.pdfView.currentSelection)
+    reader.query = "original"
+    reader.search()
+    await settleSearch(reader)
+    XCTAssertEqual(reader.searchState, .matches(2))
+    XCTAssertEqual(reader.currentMatchNumber, 1)
+    XCTAssertEqual(reader.pdfView.currentSelection?.string, "original")
     XCTAssertEqual(try Data(contentsOf: db.root.appendingPathComponent(reference)), original)
   }
 
@@ -239,10 +300,12 @@ private final class AnnotationPageDelegate: NSObject, PDFDocumentDelegate {
     XCTAssertFalse(reader.opened)
     XCTAssertNil(reader.pdfView.document)
     XCTAssertEqual(reader.searchState, .idle)
+    XCTAssertEqual(reader.currentMatchNumber, 0)
     let discardFailure = reader.failure
     XCTAssertNotNil(discardFailure)
     for _ in 0..<20 { await Task.yield() }
     XCTAssertEqual(reader.searchState, .idle)
+    XCTAssertEqual(reader.currentMatchNumber, 0)
     XCTAssertEqual(reader.failure, discardFailure)
     XCTAssertNil(reader.pdfView.currentSelection)
   }
@@ -260,6 +323,7 @@ private final class AnnotationPageDelegate: NSObject, PDFDocumentDelegate {
     XCTAssertFalse(reader.opened)
     XCTAssertNil(reader.pdfView.document)
     XCTAssertEqual(reader.searchState, .idle)
+    XCTAssertEqual(reader.currentMatchNumber, 0)
     XCTAssertEqual(reader.failure, discardFailure)
     XCTAssertNil(reader.pdfView.currentSelection)
   }
@@ -293,6 +357,7 @@ private final class AnnotationPageDelegate: NSObject, PDFDocumentDelegate {
     XCTAssertNil(reader.pdfView.currentSelection)
     await settleSearch(reader)
     XCTAssertEqual(reader.searchState, .noResults)
+    XCTAssertEqual(reader.currentMatchNumber, 0)
     XCTAssertTrue(reader.pdfView.currentPage === priorPage)
     XCTAssertTrue(reader.pdfView.document === document)
     XCTAssertTrue(reader.opened)
@@ -322,11 +387,13 @@ private final class AnnotationPageDelegate: NSObject, PDFDocumentDelegate {
     XCTAssertNil(reader.pdfView.document)
     XCTAssertNil(reader.pdfView.currentSelection)
     XCTAssertEqual(reader.searchState, .idle)
+    XCTAssertEqual(reader.currentMatchNumber, 0)
     let discardFailure = reader.failure
     XCTAssertNotNil(discardFailure)
     for _ in 0..<20 { await Task.yield() }
     XCTAssertEqual(reader.failure, discardFailure)
     XCTAssertEqual(reader.searchState, .idle)
+    XCTAssertEqual(reader.currentMatchNumber, 0)
     XCTAssertNil(reader.pdfView.document)
     XCTAssertNil(reader.pdfView.currentSelection)
   }

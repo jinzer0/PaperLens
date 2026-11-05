@@ -11,6 +11,7 @@ import SwiftUI
   @Published var zoom: Double = 1
   @Published var query = ""
   @Published var searchState: SearchState = .idle
+  @Published private(set) var currentMatchNumber = 0
   @Published var failure: String?
   @Published var title = "Reader"
   @Published var opened = false
@@ -132,6 +133,7 @@ import SwiftUI
     searchGeneration = UUID()
     searchTask?.cancel()
     searchTask = nil
+    query = ""
     // Drain autoreleased PDFKit detach work before the real read lease is released.
     autoreleasepool {
       closeMetadata()
@@ -143,6 +145,7 @@ import SwiftUI
       pdfView.document = nil
     }
     searchState = .idle
+    currentMatchNumber = 0
     pageCount = 0
     failure = "Reader access ended. The Paper may have been deleted or replaced."
   }
@@ -307,6 +310,7 @@ import SwiftUI
     searchGeneration = generation
     matches.removeAll()
     matchIndex = 0
+    currentMatchNumber = 0
     do { try session.withReadAccess { pdfView.clearSelection() } }
     catch {
       guard opened, searchGeneration == generation else { return }
@@ -335,6 +339,11 @@ import SwiftUI
     }
   }
 
+  func clearSearch() {
+    query = ""
+    search()
+  }
+
   func showMatch(delta: Int) {
     guard !matches.isEmpty else { return }
     let generation = searchGeneration
@@ -350,6 +359,8 @@ import SwiftUI
         try session.withReadAccess {
           guard opened, searchGeneration == generation, pdfView.document === document else { return }
           pdfView.go(to: selection)
+          guard opened, searchGeneration == generation, pdfView.document === document else { return }
+          currentMatchNumber = matchIndex + 1
         }
       }
     } catch {
@@ -448,6 +459,12 @@ import SwiftUI
             .keyboardShortcut("f", modifiers: [.command])
             .accessibilityHint("검색어를 변경하거나 검색을 실행하지 않고 원본 PDF 검색 입력에 초점을 맞춥니다")
           Button("검색") { presentation.search() }.disabled(!presentation.opened)
+          Button("검색 지우기") {
+            presentation.clearSearch()
+            annotationFocus = .search
+          }
+          .disabled(presentation.query.isEmpty && presentation.searchState == .idle)
+          .accessibilityHint("검색어와 검색 결과 선택을 지우고 검색 입력으로 돌아갑니다")
         }
         HStack {
           switch presentation.searchState {
@@ -455,9 +472,13 @@ import SwiftUI
           case .searching: ProgressView("PDF 검색 중")
           case .noResults: Text("검색 결과 없음").accessibilityLabel("원본 PDF 텍스트 검색 결과 없음")
           case .matches(let count):
-            Text("검색 결과 \(count)개")
+            Text("\(presentation.currentMatchNumber) / \(count)")
+              .accessibilityLabel("검색 결과 위치")
+              .accessibilityValue("전체 \(count)개 중 \(presentation.currentMatchNumber)번째 결과")
             Button("이전 결과") { presentation.showMatch(delta: -1) }
+              .keyboardShortcut("g", modifiers: [.command, .shift])
             Button("다음 결과") { presentation.showMatch(delta: 1) }
+              .keyboardShortcut("g", modifiers: [.command])
           }
         }
       }.disabled(!presentation.opened)
