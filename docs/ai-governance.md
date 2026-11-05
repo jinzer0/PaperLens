@@ -1,304 +1,47 @@
-# AI Development Governance
+# PaperLens 실행 및 안전 정책
 
-## Purpose and precedence
+## 직접 구현
 
-PaperLens uses BMAD Method with selected Hyper-Waterfall principles.
-BMAD owns requirements, scope, architecture/design and acceptance criteria;
-Hyper-Waterfall contributes execution state, durable context handoffs and
-verification Evidence. These principles do not establish a separate runtime engine.
-Use existing canonical artifacts rather than duplicate plans or approval procedures.
+명확한 구현 요청은 해당 범위의 조사, 구현, 관련 테스트, 수정, 로컬 통합과 커밋을 허용한다. 계획·분석만 요청했거나 no-test/no-commit 등 제한이 있으면 그 범위를 지킨다. 상위 플랫폼·도구 제한은 그대로 적용된다.
 
-`docs/ai-governance.md` is the canonical repository approval policy. AGENTS,
-repository Build overrides and Issue/PR templates apply it without adding routine
-implementation or Stage approvals. Higher-priority system/developer instructions,
-platform Tool Permissions and explicit task restrictions remain binding. Repository
-policy cannot bypass an incompatible global/bundled workflow or grant unavailable
-access; report that limitation rather than claim it was overridden.
+기존 요구사항과 코드로 결정 가능한 세부사항은 에이전트가 결정한다. 일반 구현에 재승인, 승인 문자열, Spec SHA 확인, 단계별 승인을 요구하지 않는다. 작업 트리 변경, 파일 수, 명세 길이, 세션 전환은 승인 사유가 아니다.
 
-## Core principles
+BMAD 및 Hyper-Waterfall 실행 절차는 사용하지 않는다. 과거 문서의 단계·명세 동결·스프린트·강제 리뷰·승인 토큰은 일반 작업의 선행 조건이 아니다. 기존 제품 요구사항, 실제 승인된 기술·안전 경계, 수용 기준과 검증 결과는 보존한다. 완료나 승인 기록을 만들어내지 않는다.
 
-1. Humans decide product direction and actual risky decisions; agents execute within scope.
-2. A clear execution request grants scoped routine authority, not unlimited permission.
-3. Risk depends on impact, reversibility, security, data integrity and external effects,
-   not file count, code volume, Stage labels or ordinary Spec SHA changes.
-4. Checkpoints record state and Evidence; approval gates require a specific human decision.
-5. Silence, ambiguous comments, agent-generated text and unrelated previous approvals
-   never supply approval. Record actual human instructions without inventing approvals.
-6. GitHub Issues and Git artifacts are durable memory. Distill intent and Evidence;
-   chat history alone is not the source of truth.
-7. Preserve approved product/architecture/acceptance baselines, scope and explicit limits.
+요청 범위에서 다음으로 가능한 사용자 흐름 또는 구체적 결함을 선택해 코드 수정 → 영향 검증 → 통합을 진행한다. 목표와 계약이 정해졌다면 새 명세·계획·감사 문서를 만들지 않는다. 필요한 설계 메모와 결과는 기존 관련 기록 또는 커밋에 짧게 남긴다. 완료된 통합·워크트리 정리를 상시 선행 작업으로 반복하지 않는다.
 
-## Risk-based execution authority
+## 질문이 필요한 경계
 
-Classify each decision/action before crossing its boundary. A LOW-labelled task can
-contain a HIGH action; harmless work across many files is not automatically HIGH.
+다음 결정이나 행동 직전에만 필요한 내용을 묻는다. 이미 승인된 동일 대상·범위는 다시 묻지 않는다.
 
-### LOW — Autonomous execution
+- 기존 정보로 해소되지 않고 결과를 실질적으로 바꾸는 요구사항 충돌이나 범위 확대.
+- 중대한 아키텍처 변경, 보안·인증·권한 정책 변경, 호환성을 깨는 계약 변경.
+- 파괴적 데이터 작업·마이그레이션, 사용자 작업의 손실 가능성이 있는 제거·덮어쓰기.
+- 명시적으로 허용되지 않은 원격 쓰기, 배포·배포물 공개, 실제 비용이나 보호 데이터 접근.
 
-Examples: typos/documentation, harmless UI styling/layout, localized refactoring,
-ordinary bugs, tests and code analysis within the requested scope.
+해당 작업의 최소 변경안·영향·대상과 검토 가능한 결과를 먼저 준비한다. 필요한 결정만 질문하고 독립적인 허용 작업은 계속한다. 침묵이나 에이전트의 판단은 새로운 보호 작업의 승인이 아니다. 기존 계약대로 인증 기능을 구현하는 것과 실제 인증정보 접근·인증 정책 변경은 구분한다.
 
-Execute immediately with proportionate permitted verification and report the result.
-No separate plan, implementation or Stage approval is required. This is not permission
-for unsolicited unrelated cleanup. An informational or analysis-only request remains
-read-only; a plan-only/review-only request does not authorize implementation.
+## 검증과 리뷰
 
-### MEDIUM — Scope-based delegation
+- 검증 단위는 실제 동작 변경이다. 버그에는 재현 가능한 회귀 검사, 기능에는 관련 동작 검사를 사용한다. 기존 검사가 충분하면 형식적인 테스트를 추가하지 않는다.
+- 변경에 해당하는 lint·타입 검사·빌드·통합 검사를 선택한다. 정책·문서 변경에는 링크·설정 문법·규칙 충돌 확인으로 충분하며 제품 전체 검사를 의무 실행하지 않는다.
+- 코드·의존성·설정·환경이 같으면 통과 결과를 재사용한다. 실패나 관련 입력 변경이 있을 때만 영향 검사를 다시 실행한다. 통과를 위해 검사를 약화하거나 경고를 숨기지 않는다.
+- 일반 변경은 구현자의 diff 리뷰로 충분하다. 중요한 공유 계약·동시성·데이터 무결성·보안 변경 또는 명시적 요청에만 독립 리뷰를 사용한다. 여러 변경을 함께 검토할 수 있다.
+- 리뷰에 최소 발견 개수를 요구하지 않는다. 구체적 결함과 영향을 기준으로 해당 부분을 수정한다. 문서 표현이나 추측만으로 코드 전체를 되돌리거나 명세→구현→리뷰를 재시작하지 않는다.
+- 로그인·서명·유료 요청·특정 하드웨어 검증은 해당 검증만 보류한다. synthetic 통과를 실제 환경 검증으로 표시하지 않으며 차단된 검증을 대신할 증거 문서를 계속 만들지 않는다.
+- 통과했으면 작업을 종료하거나 요청 범위의 다음 구현으로 이동한다. 상태 문구 수정은 새 리뷰·검증 주기의 이유가 아니다.
 
-Examples: normal feature additions/extensions, modules and multi-file refactoring
-within the existing approved architecture and contracts.
+## 유지되는 안전 제한
 
-A clear implementation request itself authorizes in-scope investigation, planning,
-implementation, permitted tests/static analysis, review, corrective fixes, Evidence
-and safe Stage transitions. Do not ask to approve the same scope or each Spec SHA
-again. Clarify only consequential missing requirements that cannot be resolved from
-existing facts. Record the real request and boundaries, not a fabricated
-`APPROVED: IMPLEMENTATION` token. Explicit no-test/no-commit/no-remote limits still apply.
+- 실제 사용자 문서·인증정보·기존 CODEX_HOME에는 접근하지 않는다. 무승인 유료 요청, 소진된 trial 재실행, 안전·권한 완화는 하지 않는다. 새 세션이나 코드 수정은 단일 실행 허용을 갱신하지 않는다.
+- push, Issue/PR 작성·수정, 원격 브랜치 정리에는 해당 작업을 허용하는 명시적 사용자 지시와 접근 권한이 필요하다. 로컬 완료를 위해 원격 작업을 강제하지 않는다.
+- PR merge는 현재 PR HEAD에 대한 명시적 승인이 필요하다. 승인 문자열 형식은 강제하지 않지만 대상 HEAD가 바뀌면 승인을 다시 확인한다. 배포·릴리스는 실제 revision·대상·환경에 대한 별도 권한이 필요하다.
+- 지정한 로컬 브랜치로 통합하라는 요청은 해당 로컬 통합을 허용하며 push·PR merge·배포를 허용하지 않는다.
+- 무관한 변경을 함께 stage하거나 revert·stash·삭제하지 않는다. 워크트리 정리가 요청되면 고유 변경을 복구 가능한 형태로 보존하고 활성 작업 위치를 제거하지 않는다.
+- 의존성 해시·데이터 격리·허용 횟수 등 실제 빌드와 실행의 안전 검사는 유지한다. 워크플로 제거는 이 검사를 우회하거나 제품 수용 기준을 낮추는 허가가 아니다.
 
-### HIGH — Explicit human decision
+## 기록과 완료
 
-Examples: material architecture changes, security/authentication/authorization policy,
-breaking API/contracts, destructive data operations or migrations, production deploys,
-major external effects, significant cost/security risk, and material scope expansion.
+기존 작업 ID와 관련 요구사항을 필요한 만큼 연결한다. 새 Issue, branch, Spec, 사전 문서 커밋, 스프린트 갱신은 일반 구현의 필수 조건이 아니다. 원격 동기화가 불가능하면 로컬 작업을 계속한다.
 
-Before the affected risky decision/action, present its minimum proposal, impact,
-target/environment and relevant artifact/diff; obtain explicit approval for that
-boundary and permitted operations. Stop only that action. Continue independently safe,
-authorized analysis, planning, tests and other work. A refusal means do not execute it.
-An unchanged already-approved decision does not require another approval at every
-follow-up Stage; a new risk or target cannot inherit unrelated consent.
-
-## Checkpoints, workflow sizing and escalation
-
-Choose only useful Stages based on complexity, dependencies and risk. No fixed minimum
-Stage count and no formal Planning/Reviewing/Reporting ritual for a typo. BMAD planning
-and review remain proportional; both methods reference one task/spec and Evidence trail.
-Context Persistence does not require approval gates.
-
-Within scope, execute ready implementation directly; use investigation and planning
-only for unresolved decisions. Apply necessary verification, review and corrections,
-record results, and proceed to the next ready change without a fixed serial ritual.
-Plan completion, readiness, Stage start/end/transition, tests, ordinary code edits,
-verification records and status/documentation updates are non-blocking checkpoints.
-Record the next slice, result, remaining risks/permissions and blockers; do not wait
-for a human response just because a checkpoint was reached.
-
-### Change-based execution and review
-
-The unit of verification and review is the actual change and its risk, not each
-Stage, command, evidence sentence or status update.
-
-- Reuse established approvals, constraints and findings while their scope, authority
-  and relevant inputs remain unchanged. Reassess only the changed boundary or a new
-  concrete defect; do not restart a whole safety/admission audit.
-- Finish and integrate existing work before expanding concurrent implementation.
-  The parent executor owns one explicit integration branch/worktree, shared DB/RPC
-  contracts and app composition. Use an existing integration target where possible.
-  Parallelize only bounded independent changes whose ownership, integration target
-  and affected verification are known; do not create another lane for the same
-  unfinished Story. Preserve each Story's work unit and acceptance attribution.
-- Batch related changes for parent verification. Routine LOW/MEDIUM changes use
-  focused tests and the implementing agent's diff review; a separate reviewer is
-  not a mandatory lifecycle step. Use independent review for HIGH decisions,
-  load-bearing shared-contract/concurrency/data-integrity changes, or an explicit
-  task requirement. One review may cover multiple Stories with per-Story findings.
-  After a fix, rerun affected checks, including relevant integration checks when
-  shared behavior changes, not unrelated passed gates.
-- Record evidence with actual results. Editorial corrections and status updates do
-  not require a separate review cycle; changed authority, safety meaning or acceptance
-  claims require assessment of that specific change.
-- Apply a blocker only to the action and dependents it actually prevents. Signing,
-  authentication or external-environment gates do not stop independent permitted
-  implementation. Never turn partial verification into Story completion.
-
-Do not schedule an investigation, delegation, review or rerun without a concrete
-unresolved question, changed relevant input, demonstrated failure or required gate.
-State that trigger and a bounded exit condition; otherwise execute the next ready
-change using existing findings. Stage/session changes, elapsed time and editorial
-updates alone are not triggers. Reuse test evidence for unchanged code, dependencies,
-configuration and environment; invalidate only evidence affected by a real change.
-Do not create new checklists, audits or evidence-only work to occupy a blocked lane.
-
-These execution defaults do not weaken acceptance criteria, required independent review,
-privacy, Tool Permissions, exhausted trial limits, or HIGH/remote/Merge/Release gates.
-
-### Integration, progress and worktree closure
-
-Use the existing Epic execution Spec and actual integration HEAD as the cross-session
-entry point, not an old root checkout or another session's goal receipt. Never copy
-or forge runtime state, receipts or source hashes. Historical phase plans do not add
-perpetual precommit or serial-review gates; protected acceptance restrictions remain.
-
-Progress means observable behavior integrated and verified at the integration target,
-not the number of branches, plans, reviews or evidence edits. Report local implementation,
-synthetic checks, packaged checks and external acceptance separately. Preserve existing
-results unless relevant inputs changed; do not label a Story done from source presence.
-
-When worktree cleanup is explicitly requested, first inventory committed and uncommitted
-changes, including untracked source and local records. Preserve unique commits with
-durable local refs and unique uncommitted work with a verified recoverable snapshot before
-removing any worktree. Integrate useful changes and resolve duplicates by behavior and
-tests, not timestamps. A preservation archive is not proof that a feature was integrated.
-Do not delete a live worker's checkout or remove the active integration target. Keep a
-source-to-integration disposition and verification result in the existing Epic record.
-Remote refs and unrelated user work remain outside local cleanup authority.
-
-A failed permitted test leads to bounded diagnosis, correction and reverification
-without separate approval. Never weaken acceptance tests or suppress warnings to pass.
-Escalate repeated failures without a viable in-scope remedy, real dependencies/access
-blockers, requirements conflicts, new protected decisions or material scope changes.
-Human silence must not stop independent safe work, but is never approval for a blocked
-risky action. No fixed retry budget is invented here: actual per-run limits govern.
-
-## Safety and operation boundaries
-
-- Preserve data/privacy/security, platform Tool Permissions and explicit task prohibitions.
-  Workflow authority and Codex/Claude Code/GJC tool permissions are separate layers.
-- Do not access actual user documents, credentials or existing CODEX_HOME, make
-  unapproved paid requests, relax safety/permissions or blindly repeat exhausted trials.
-  A fix, Spec update, Stage or new session never renews a consumed single-run allowance;
-  renewal requires separate specific human authorization.
-- Local analysis, edits, branches/worktrees, commits, tests and review require the
-  applicable task/tool authority. A planning-only or no-commit task stays limited.
-- Push, GitHub writes (Issues, Milestones, labels, PRs, approval records, closure and
-  remote cleanup) require explicit applicable human instruction and access. Local
-  authority, task completion and a passing test do not imply remote permission.
-- Merge requires approval for the current PR HEAD. Release/distribution/production
-  and other protected external/cost/data operations have their own target-specific
-  permissions; Merge does not authorize them.
-- Preserve unrelated user work; never broadly stage, revert, stash, delete or switch
-  branches in a way that damages it. Report local pending synchronization honestly
-  when remote operations are not authorized or possible.
-
-## Work units and context
-
-For non-trivial source changes retain traceability to the existing BMAD Story,
-Issue, branch and planned PR, and use the existing Build Spec. Routine in-scope fixes
-and follow-ups do not require a new Spec, separate pre-implementation Spec commit,
-Issue, branch or PR. Record necessary Spec deltas and results with the implementation
-commit. Establish a Spec before new substantive work lacking a usable contract;
-material acceptance/architecture changes still follow their HIGH approval boundary.
-Link existing task artifacts; remote synchronization is not a local execution gate.
-A trivial LOW correction needs only proportionate intent/diff/verification Evidence,
-not a new Epic/Story or mandatory full workflow. An unavailable remote Issue is a
-synchronization prerequisite, not permission to create it remotely.
-
-Branch conventions: `planning/<release>`, `chore/<slug>` for governance/maintenance,
-`issue/<issue-number>-<slug>` for Stories. Choose a safe task branch/worktree under
-actual authority; naming conventions alone do not justify switching a dirty worktree.
-A fresh session can help, but session boundaries are not project memory or new authority.
-
-## Decision records
-
-Distinguish an **Execution Authority Record** from an **Approval Record**.
-For non-trivial work, record task/Story/range and Issue or local artifact reference,
-actual human request/reference, impact-based risk rationale, scope/acceptance and
-permitted operations, baseline Spec/current commit, retained limits/trial status,
-necessary HIGH decisions and actual verification/limitations. Keep trivial records
-small; no extra human confirmation or supplied SHA is needed for routine authority.
-Do not store raw chat, secrets or documents just for provenance. Publish to GitHub
-only when remote publication is authorized; otherwise preserve a local pending record.
-
-For an actual human decision use the relevant existing format:
-
-- `APPROVED: PRODUCT @ <commit-sha>` — identified product baseline.
-- `APPROVED: SCOPE @ <commit-sha>` — protected scope decision/BMAD SPEC.
-- `APPROVED: ARCHITECTURE @ <commit-sha>` — identified architecture decision.
-- `APPROVED: IMPLEMENTATION @ <commit-sha>` — a specifically approved risky
-  implementation decision/plan; not a mandatory LOW/MEDIUM token.
-- `APPROVED: MERGE @ <pull-request-head-sha>` — current PR HEAD only.
-
-Product/architecture/commit-bound decisions reference immutable artifacts. The approved
-document does not contain its own approval SHA. Whole-Story/range provenance below
-can identify routine scope authority without a human-supplied SHA.
-
-Approval records contain type, decision, artifact/target, immutable reference when
-applicable, permitted operations, actual human instruction/reference, retained limits
-and superseded decision if any. The agent may record a real approval but never originate
-one. A risk dropdown, completed form, vague “continue” or reviewer verdict is not
-permission for a HIGH action. Clear scoped execution requests are routine authority,
-not silence-based inference. Changed approved targets invalidate target-bound approval;
-ordinary in-scope evidence/Spec edits do not invalidate routine scope authority.
-
-### Whole-Story Approval
-
-An explicit human instruction for an identified whole Story grants routine local
-lifecycle authority within its existing acceptance criteria. This is an application
-of the common policy, not an exception requiring every later Spec SHA approval.
-Record Story ID, governing Issue, baseline Spec/current commit, actual instruction
-and retained limits; the baseline commit is an audit reference. Routine in-scope Spec
-updates may accompany the implementation commit, without a separate precommit or
-Scope/Implementation approval. Passing Evidence and truthful limitations remain necessary.
-
-It does not authorize another Story, changed acceptance criteria, material architecture
-changes, privacy/safety relaxation, remote operations or exhausted allowance renewal.
-Seek specific approval for the changed boundary, not for all safe remaining work.
-
-### Explicit Story-Range Execution
-
-An explicit instruction to plan, implement and verify an identified Story range
-applies scoped authority to every existing Story in that range. Record the instruction
-and range on the governing Epic and link each Story Issue when remote writes are
-permitted; otherwise record pending synchronization locally. Preserve per-Story
-traceability, reuse existing Specs/work units, and apply change-based verification
-and risk-triggered independent review. Do not require a new pre-implementation Spec
-commit for routine follow-ups. Do not reduce the instruction
-to the active Story or repeatedly ask for in-scope approval.
-
-Continue dependency-ready Stories despite an environment-only blocker elsewhere.
-Missing Story definitions are requirements gaps, not permission to invent acceptance
-criteria. Track local, synthetic, packaged and external verification separately.
-Bounded verification follows each committed Spec and actual remaining allowances.
-User-assisted login, paid real requests and unavailable hardware remain blocked until
-necessary inputs/permissions exist; no blind historical retry, data/credential access,
-permission relaxation, product/architecture scope change, remote action or distribution
-is implied by the range instruction.
-
-## Scope changes
-
-In-scope implementation details, fixes, Spec and Evidence updates continue under the
-same authority. Stage changes and SHA churn are not standalone reapproval triggers.
-For material changes to scope/acceptance/product/architecture/security/auth/contracts
-or protected privacy/permission boundaries:
-
-1. stop the affected action before crossing the new boundary
-2. explain the finding and minimum proposal, target, impact and tradeoffs
-3. update the relevant existing artifact and commit it when permitted
-4. present the meaningful diff and immutable reference when applicable
-5. obtain the specific human decision and record its actual provenance
-6. resume only the approved action; keep independent safe work moving
-
-Do not use a routine feature request to rewrite an approved baseline silently.
-
-## Merge, Release and completion
-
-`APPROVED: MERGE @ <pull-request-head-sha>` authorizes that actual Merge.
-Recheck HEAD immediately before Merge; any HEAD change makes that approval stale.
-Tests, implementation approval and review are Evidence, not Merge permission.
-
-Explicit instructions to integrate into a named local branch authorize that local
-integration after verification and source/target HEAD and worktree checks, not a PR
-merge, push or release. Record the actual instruction; never invent approval tokens.
-
-Release/deploy approval identifies the current revision/artifact/version, destination,
-environment and permitted operations. A changed target invalidates it. Merge alone
-is not Release, production, destructive-data, paid-request or remote-cleanup authority.
-After an authorized Merge, confirm success and close/update Issues, sprint/Epic status
-and merged branches only within applicable operation authority. Never touch unrelated
-work. Local completion can be reported without forcing a PR, Merge or Release stage.
-
-## Verification and project memory
-
-Retain proportionate required tests, BMAD review and independent review where applicable.
-Evidence distinguishes automated, manual/scenario, CI/remote, skipped/blocked/not-applicable
-checks, limitations and remaining risks. Do not report a source-only/text walkthrough
-as runtime, product, external or hardware proof. Policy/config changes need relevant
-syntax and semantic checks, not unrelated product suites or unsafe trials to fill a form.
-
-Persist product intent in PRD, scope in SPEC, technical decisions in Architecture,
-task intent/authority in Issue or linked local artifacts, implementation in permitted
-commits, verification in existing Evidence/PR records, lessons in retrospective/context.
-Use the `APPROVED: PRODUCT` record to select the canonical final PRD/addendum, not
-filename dates. Product Brief remains discovery/history and does not overwrite the
-approved final PRD or itself grant implementation authority. Record concise decisions
-and next work rather than duplicate documents or raw conversation.
+기록은 변경된 동작, 실제 검증 결과, 남은 차단, 다음 작업으로 충분하다. 원시 대화나 개인정보를 증빙 목적으로 저장하지 않는다. 로컬 구현·synthetic 검사·packaged 실행·외부 acceptance를 구분하며 소스 존재나 테스트 수만으로 제품 완료를 주장하지 않는다.

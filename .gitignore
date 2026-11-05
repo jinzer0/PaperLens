@@ -8,10 +8,6 @@
 /.omx/
 /.opencode/
 /.codegraph/
-/_bmad/*
-!/_bmad/custom/
-/_bmad/custom/*
-!/_bmad/custom/bmad-build.toml
 /docs/*
 !/docs/ai-governance.md
 

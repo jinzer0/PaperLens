@@ -1,22 +1,27 @@
-<!-- bmad:context -->
-## PaperLens
+# PaperLens
 
-PaperLens는 macOS용 오픈소스 AI 논문 워크스페이스다. BMAD Story와 Git artifact를 durable project memory로 사용한다.
+macOS용 오픈소스 AI 논문 워크스페이스. 제품 작업 위치는 저장소 루트다.
 
-## Canonical references
+## 실행 원칙
 
-- 실행·승인·검증·안전 정책: `docs/ai-governance.md`. 이 파일과 workflow override는 별도의 gate를 추가하지 않는다. 상위 플랫폼·도구 제한은 유지한다.
-- 제품 baseline: 명시적 `APPROVED: PRODUCT @ <commit-sha>` 기록이 가리키는 `bmad-docs/planning-artifacts/prds/`의 final PRD와 부록. 날짜로 baseline을 추론하지 않는다.
-- Story 및 기존 Spec·결과: `bmad-docs/implementation-artifacts/`
-- BMAD Build override: `_bmad/custom/bmad-build.toml`
-- Product Brief는 discovery/history이며 구현 승인이나 final PRD의 대체물이 아니다.
-<!-- /bmad:context -->
+- 기본은 직접 구현이다. 명확한 요청을 받으면 관련 코드와 요구사항만 확인하고 사용자 동작 하나를 구현 → 영향 검증 → 통합한다. 요청 범위의 다음 준비된 작업을 계속 진행한다.
+- 실행·안전 정책은 `docs/ai-governance.md` 한 곳에서 관리한다. 일반 작업에 명세 승인, 단계 승인, 승인 토큰, 선행 문서 커밋을 요구하지 않는다.
+- BMAD는 제거했다. 스킬·명령·렌더러·스프린트 상태 머신을 실행하거나 복원하지 않는다. 과거 문서의 승인 대기·강제 리뷰·되돌리기 절차는 현재 실행 규칙이 아니다.
+- 정리·리팩터링도 규모에 맞게 직접 수행한다. 인터뷰 → 합의 계획 → 팀 실행 같은 고정 절차를 요구하지 않는다. 필요한 계획은 작업 중 짧게 설명하고 별도 계획 문서를 만들지 않는다.
+- 기존 변경을 보존한다. 수정된 작업 트리만으로 멈추지 않고 내 변경과 구분한다. 실제 같은 파일의 충돌이나 소유권 문제가 있을 때만 조정한다.
+- 독립 작업이 실제로 도움이 될 때만 서브에이전트를 사용한다. 주 에이전트가 공유 계약과 통합을 책임진다. 에이전트 수나 필수 리뷰 단계를 정하지 않는다.
+- 변경에 필요한 테스트·빌드·정적 검사만 실행한다. 동일 입력에 대한 통과 검증을 반복하지 않는다. 문서 표현 부족만으로 정상 코드를 되돌리지 않는다.
+- 결과는 실제로 가능해진 사용자 동작, 수행한 검증, 남은 차단으로 보고한다. 문서·테스트·커밋 개수를 기능 진척으로 계산하지 않는다.
 
-## Current execution context
+## 커밋 규칙
 
-- 기존 Story 1.1~1.27 범위 지시는 실제 존재하는 Story 정의 안에서 적용한다. 없는 Story를 만들지 않는다. Story 1.1 prototype non-goal을 다른 Story에 확대하지 않는다.
-- 현재 지시는 정책 중복 축소 → 기존 구현 통합·검증 → 고유 작업을 보존한 워크트리 정리다. 기존 Spec·Issue·branch 추적성을 유지한다.
-- 통합 책임은 상위 실행 agent에 있다. 제품과 detached checkout의 고유 기록을 로컬 `main`에 통합했으며 제품 작업 위치는 저장소 루트다. 과거 제품 checkout의 로컬 빌드·세션 자료는 `.build/archive/product-integration-20261009`에 보존했다. 기존 Epic 실행 Spec에 통합·정리와 복구 참조를 기록했다.
-- 새 작업 확대보다 진행 중인 변경의 통합·영향 테스트·로컬 commit을 우선한다. 공유 DB/RPC/앱 조립은 통합 기준에서 다룬다. 병렬 작업은 독립성과 수용 가능한 통합 경로가 확인된 경우에만 제한적으로 수행한다.
-- 실제 사용자 문서·인증정보·기존 CODEX_HOME 접근, 무승인 유료 요청, 소진된 trial 재실행은 하지 않는다. 이번 지시는 로컬 main 통합·브랜치 정리만 승인하며 push/PR/원격/배포/PR merge는 승인하지 않는다.
-- 완료는 검증된 동작으로 보고한다. 로컬 구현·synthetic·packaged·외부 acceptance를 구분하고 미검증 상태를 완료로 표시하지 않는다.
+- 커밋은 GPG 서명(`git commit -S`)을 필수로 한다. 서명 실패 시 unsigned 커밋으로 우회하지 않는다.
+- 메시지는 `feat: 한글 설명`처럼 종류와 한국어 설명으로 작성하고, 마지막에 `Co-Authored-By: codex <codex@openai.com>`을 추가한다.
+- 요청한 변경만 분리해서 커밋하며 기존 무관한 변경을 포함하지 않는다.
+
+## 기존 제품 근거
+
+- `bmad-docs/planning-artifacts/`: 기존 제품 요구사항·아키텍처·수용 기준. 실제 승인 기록이 식별하는 기준을 유지하며 날짜나 draft 표지만으로 새 기준을 추정하지 않는다.
+- `bmad-docs/implementation-artifacts/`: 기존 작업 ID·Spec·구현 결과·안전 제한. 관련 항목만 재사용하며 새 Story/Spec이나 상태 갱신을 구현 전제조건으로 만들지 않는다.
+- 경로는 기존 링크와 빌드 입력의 호환성을 위해 보존한다. 과거 실행 절차보다 현재 사용자 지시와 이 정책을 따른다. 제품 기준·안전 제한을 폐기하는 의미는 아니다.
+- 로컬 구현, synthetic 검사, packaged 실행, 외부 서비스 검증을 구분한다. 환경 때문에 막힌 검증을 독립적인 구현 전체의 차단으로 확대하지 않는다.

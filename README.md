@@ -1,10 +1,12 @@
 # PaperLens
 
-PaperLens is a planned macOS open-source AI paper workspace for reading papers, checking claims against source evidence, organizing research notes, and returning to a personal paper library.
+PaperLens is a macOS open-source AI paper workspace for reading papers, checking claims against source evidence, organizing research notes, and returning to a personal paper library.
 
 ## Current Status
 
-This repository is currently in the planning stage. There is no runnable application, build, installation flow, release artifact, screenshot set, or contribution process in this repository yet.
+Implementation is in progress, with application source, build tooling, and tests in this repository. Source and local test results do not establish packaged-app or external-service acceptance.
+
+Development follows [AGENTS.md](AGENTS.md) and the [execution and safety policy](docs/ai-governance.md). BMAD tooling has been removed; the existing `bmad-docs/` paths retain product requirements and historical evidence for compatibility, not an executable workflow.
 
 ## Product Vision
 
