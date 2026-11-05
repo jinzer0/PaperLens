@@ -10,6 +10,26 @@ approval: explicit-human-story-range-execution
 
 # 전체 실행 계약
 
+## Root checkout consolidation — 2026-11-05
+
+Actual instruction: “detached checkout도 main에 통합하자”.
+The canonical product location is now the repository root on `main`, superseding
+the nested execution path below. The detached root's 29 unique discovery/planning/
+review documents are retained byte-for-byte, without promoting historical briefs or
+reviews into approved requirements. Its ignore-policy changes are adopted while
+retaining main's `.build` and `.gjc` exclusions. Main's newer GitHub templates retain
+all older content plus functional-delivery guidance; they are not downgraded.
+
+The pre-integration 33 user files are hash-verified in
+`.build/detached-consolidation/root-user-files.tar.gz` and `root-files.json`.
+The original detached HEAD and committed snapshot remain under
+`refs/archive/detached-consolidation-20261105/`. No historical product code replaces
+the previously tested main implementation. The nested checkout's untracked/ignored
+build outputs, local SwiftPM configuration and session records remain at their old
+paths as local artifacts, not a second registered worktree. User runtime state is
+not copied into the active session or presented as completed workflow evidence.
+Remote and protected acceptance restrictions remain unchanged.
+
 ## Local main consolidation and branch closure — 2026-11-05
 
 Actual instruction: “branch도 정리해 다 merge하든 없애든 간에 일단 다 통합해서

@@ -8,8 +8,12 @@
 /.omx/
 /.opencode/
 /.codegraph/
-/_bmad/
-/docs/
+/_bmad/*
+!/_bmad/custom/
+/_bmad/custom/*
+!/_bmad/custom/bmad-build.toml
+/docs/*
+!/docs/ai-governance.md
 
 *.py[cod]
 __pycache__/
@@ -19,11 +23,3 @@ __pycache__/
 .hypothesis/
 .venv/
 venv/
-
-/bmad-docs/**
-!/bmad-docs/
-!/bmad-docs/planning-artifacts/
-!/bmad-docs/planning-artifacts/prds/
-!/bmad-docs/planning-artifacts/prds/prd-PaperLens-2026-08-27/
-!/bmad-docs/planning-artifacts/prds/prd-PaperLens-2026-08-27/prd.md
-!/bmad-docs/planning-artifacts/prds/prd-PaperLens-2026-08-27/addendum.md
