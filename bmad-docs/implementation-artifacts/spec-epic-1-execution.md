@@ -30,6 +30,24 @@ paths as local artifacts, not a second registered worktree. User runtime state i
 not copied into the active session or presented as completed workflow evidence.
 Remote and protected acceptance restrictions remain unchanged.
 
+Completed with one registered worktree and one local branch, both root `main`.
+The nested checkout was removed using `git worktree remove` after parking all nine
+untracked/ignored artifact roots. Restored artifact contents, modes, symlinks and
+inodes were verified across 73,739 entries; `retirement-receipt.json` records them.
+The 29 integrated documents match the original recorded SHA-256 hashes.
+
+Fresh root SwiftPM build/discovery used `.build/root-main-verification` and the
+preserved local pinned dependency mirror, not an external fetch or old test binary.
+The repository's isolated runner functions verified **558/558** fresh product cases;
+`.build/detached-consolidation/root-product-tests.json` records exact discovery and
+case results. Root offline topology **631**, Python request **35**, native request
+**32** and RPC **24** tests passed. The readiness bundle ran zero cases under the
+explicit native-contract selector; protected trials were not retried. Existing
+compiler/asyncio diagnostics remain visible. Product source is byte-identical to
+the previously verified main; this relocation adds no product acceptance claim.
+Root `.swiftpm/` and `Package.resolved` remain machine-local, uncommitted dependency
+configuration. Historical build/packaging and genuine SDK acceptance debt remains.
+
 ## Local main consolidation and branch closure — 2026-11-05
 
 Actual instruction: “branch도 정리해 다 merge하든 없애든 간에 일단 다 통합해서
