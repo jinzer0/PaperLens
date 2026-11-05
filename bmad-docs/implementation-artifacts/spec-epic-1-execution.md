@@ -10,6 +10,20 @@ approval: explicit-human-story-range-execution
 
 # 전체 실행 계약
 
+## Toolchain update selection — 2026-11-05
+
+After deleting `.build`, the user explicitly selected “27.2로 갱신·재빌드”
+after being informed that the approved 27.0 toolchain conflicts with installed
+27.2 and that rebuilding regenerates `.build`. Observed local probes reported
+Xcode 27.2 / Build 27B52, macOS SDK 27.2, Apple Swift 6.4.2 and
+`xcrun ld -version_details` version 27106.1. The dependency lock and acquisition
+linker pin now reflect that selection; deployment target 15.0, arm64 scope and
+dependency source hashes are unchanged. `approvalCommit` remains the historical
+PDFium patch approval, not a new toolchain approval commit.
+This entry records selection and pin changes only, not a successful rebuild,
+test result, signing or acceptance. Real authentication, paid requests and
+protected trial retries remain unauthorized.
+
 ## Root checkout consolidation — 2026-11-05
 
 Subsequent instruction “정리할 건 정리하자”: removed only the historical

@@ -77,6 +77,61 @@ import ProviderRequest
     return try XCTUnwrap(snapshot.papers.first(where: { $0.id == id }))
   }
 
+  private func parsingBinding() throws -> PDFiumGeometryBinding {
+    let page = try PDFPageGeometry(pageIndex: 0, cropOrigin: PDFPoint(x: 0, y: 0),
+      width: 100, height: 100, rotation: 0)
+    let transform = try PDFGeometryAffine(a: 1, b: 0, c: 0, d: 1, tx: 0, ty: 0)
+    // Explicit owned fixture only, never a production PDFKit calibration.
+    return try PDFiumGeometryBinding(
+      precision: PDFGeometryPrecision(maximumErrorPDFPoints: 0),
+      mapPage: { _ in PDFiumPageMapping(page: page, rawToCanonical: transform,
+        canonicalToReader: transform) })
+  }
+
+  func testCommittedImportWithoutGeometryNeverCreatesParsingJobAndReaderRemainsAvailable() async throws {
+    let f = try await fixture()
+    let id = try await importSelected(f)
+    XCTAssertNil(f.workspace.parsing)
+    XCTAssertNil(f.workspace.parsingRecoveryCoordinator)
+    XCTAssertNil(f.workspace.imported(id))
+    XCTAssertNil(f.workspace.imported(id))
+    XCTAssertEqual(try f.database.adapterRead {
+      try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM extractionInvocation")
+    }, 0)
+    try await f.workspace.open(try await paper(f, id: id))
+    XCTAssertEqual(f.workspace.reader?.id, id)
+    f.workspace.returnToLibrary()
+  }
+
+  func testCommittedImportUsesRetainedGraphAndSharedRecoveryWithoutRetryingDuplicates() async throws {
+    let f = try await fixture()
+    let id = try await importSelected(f)
+    let graph = try MainPDFiumParsingComposition(lifecycle: f.lifecycle,
+      authority: ProviderRequest(), geometryBinding: parsingBinding())
+    let workspace = try ProductWorkspace(database: f.database, lifecycle: f.lifecycle,
+      connection: f.connection, parsing: graph)
+    XCTAssertTrue(workspace.parsing === graph)
+    XCTAssertTrue(workspace.parsingRecoveryCoordinator === graph.recoveryCoordinator)
+    let reference = try f.database.readerSnapshot(paperID: id).pdfReference
+    // A guaranteed pre-helper acquisition failure; no PDF rendering trial.
+    try FileManager.default.removeItem(at: f.database.root.appendingPathComponent(reference))
+    let first = try XCTUnwrap(workspace.imported(id))
+    let duplicate = try XCTUnwrap(workspace.imported(id))
+    await first.value
+    await duplicate.value
+    let coordinator = try XCTUnwrap(workspace.parsingRecoveryCoordinator)
+    let context = try await coordinator.context(paperID: id)
+    XCTAssertNotNil(context)
+    XCTAssertEqual(context?.failedAttempt.epoch, f.lifecycle.epoch)
+    let repeated = try XCTUnwrap(workspace.imported(id))
+    await repeated.value
+    let after = try await coordinator.context(paperID: id)
+    XCTAssertEqual(after, context)
+    XCTAssertEqual(try f.database.adapterRead {
+      try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM extractionInvocation")
+    }, 1)
+  }
+
   private func openOwnedReader(_ f: Fixture, id: UUID,
     discard: @escaping @MainActor () -> Void = {}) async throws -> ProductWorkspace.OpenReader {
     try await f.workspace.open(paper(f, id: id))
@@ -1089,6 +1144,7 @@ import ProviderRequest
       return XCTFail("Local restore must still require explicit Continue")
     }
     XCTAssertNil(composition.workspace)
+    XCTAssertNil(composition.parsing)
     try composition.continueToLibrary()
     let retained = try XCTUnwrap(composition.workspace)
     XCTAssertEqual(retained.settings.activeSelection, connection.activeSelection)
@@ -1103,6 +1159,25 @@ import ProviderRequest
     try retained.settings.releaseAfterTermination(lease)
     XCTAssertThrowsError(try composition.configure(model: "other-fixture-model"))
     XCTAssertTrue(composition.workspace === retained)
+  }
+
+  func testRootRetainsExplicitGeometryGraphAndInjectsSameRecoveryOwner() async throws {
+    let f = try await fixture()
+    let composition = ProductAppComposition(root: f.root, transport: WorkspaceNoNetworkTransport(),
+      geometryBinding: try parsingBinding())
+    await composition.start()
+    let graph = try XCTUnwrap(composition.parsing)
+    guard case .connection = composition.phase else {
+      return XCTFail("Local restore must still require explicit Continue")
+    }
+    XCTAssertNil(composition.workspace)
+    try composition.continueToLibrary()
+    let workspace = try XCTUnwrap(composition.workspace)
+    XCTAssertTrue(workspace.parsing === graph)
+    XCTAssertTrue(workspace.parsingRecoveryCoordinator === graph.recoveryCoordinator)
+    await composition.start()
+    XCTAssertTrue(composition.parsing === graph)
+    XCTAssertTrue(composition.workspace === workspace)
   }
 
   func testYearFactsOnlyUseCurrentRevisionWithNoConflictPrecedence() async throws {

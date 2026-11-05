@@ -26,6 +26,8 @@ public final class ProductAppComposition: ObservableObject {
   @Published public private(set) var entryFailed = false
   @Published public private(set) var workspace: ProductWorkspace?
   @Published public private(set) var codex: NativeCodexConnection?
+  public private(set) var parsing: MainPDFiumParsingComposition?
+  private let geometryBinding: PDFiumGeometryBinding?
   private var codexObservation: AnyCancellable?
   private let root: URL
   private let transport: any NativeConnectionTestTransport
@@ -36,9 +38,11 @@ public final class ProductAppComposition: ObservableObject {
   private var connection: NativeAPIKeyConnection?
   private var started = false
 
-  public init(root: URL, transport: any NativeConnectionTestTransport) {
+  public init(root: URL, transport: any NativeConnectionTestTransport,
+    geometryBinding: PDFiumGeometryBinding? = nil) {
     self.root = root
     self.transport = transport
+    self.geometryBinding = geometryBinding
   }
 
   public static func production() throws -> ProductAppComposition {
@@ -74,6 +78,10 @@ public final class ProductAppComposition: ObservableObject {
       self.slots = slots
       self.authority = authority
       self.lifecycle = lifecycle
+      if let geometryBinding {
+        parsing = try MainPDFiumParsingComposition(lifecycle: lifecycle,
+          authority: authority, geometryBinding: geometryBinding)
+      }
       let persisted = try database.providerConfiguration()
       if persisted.slotID != nil, let model = persisted.model {
         try configure(model: model)
@@ -157,7 +165,7 @@ public final class ProductAppComposition: ObservableObject {
     if workspace == nil {
       workspace = try ProductWorkspace(
         database: database, lifecycle: lifecycle,
-        connection: connection, codex: codex)
+        connection: connection, codex: codex, parsing: parsing)
     }
     phase = .library(lifecycle)
   }

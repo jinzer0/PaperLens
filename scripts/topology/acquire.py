@@ -253,7 +253,7 @@ def load_lock():
     require(lock["schemaRevision"] == "topology-v1" and len(lock["wheels"]) == 8, "invalid_dependency_lock")
     require(lock["pdfium"]["commit"] == "ad5bc13610718aefe737bd9b2f1b258d08e39428", "pdfium_pin_mismatch")
     require(lock["approvalCommit"] == "bea3f4830fb650b5334149b7ca5ab3a082596f7a" and lock["pdfium"].get("patch") == PDFIUM_PATCH, "pdfium_patch_pin_mismatch")
-    require(lock["pdfium"]["gnArgs"].get("use_lld") is False and lock["toolchain"].get("systemLinkerVersion") == "27037.1", "pdfium_linker_pin_mismatch")
+    require(lock["pdfium"]["gnArgs"].get("use_lld") is False and lock["toolchain"].get("systemLinkerVersion") == "27106.1", "pdfium_linker_pin_mismatch")
     for arch in ARCHES:
         select_asset(lock["python"], arch)
         for wheel in lock["wheels"]:
@@ -359,7 +359,7 @@ def toolchain(lock):
     require(run(["/usr/bin/xcodebuild", "-version"]) == f"Xcode {expected['xcode']}\nBuild version {expected['build']}", "xcode_mismatch")
     require(run(["/usr/bin/xcrun", "--sdk", "macosx", "--show-sdk-version"]) == expected["sdk"], "sdk_mismatch")
     swift = run(["/usr/bin/xcrun", "--toolchain", "com.apple.dt.toolchain.XcodeDefault", "swiftc", "--version"])
-    require(re.search(r"Apple Swift version 6\.4(?:\s|\.)", swift), "swift_mismatch")
+    require(re.search(r"Apple Swift version " + re.escape(expected["swift"]) + r"(?:\s|\.)", swift), "swift_mismatch")
     sdk = run(["/usr/bin/xcrun", "--sdk", "macosx", "--show-sdk-path"])
     require(Path(sdk).is_relative_to(expected["developerDir"]) and Path(sdk).is_dir(), "sdk_path_mismatch")
     system_linker(lock)

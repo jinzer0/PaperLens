@@ -1,8 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 if ! { [[ "$#" == 2 && "$1" == --arch && "$2" == arm64 ]] ||
-       [[ "$#" == 7 && "$1" == --unsigned-only && "$2" == --arch && "$3" == arm64 && "$4" == --input-work && "$6" == --cache ]]; }; then
-  printf '%s\n' 'Usage: scripts/topology/build.sh --arch arm64 OR --unsigned-only --arch arm64 --input-work PATH --cache PATH' >&2
+       [[ "$#" == 3 && "$1" == --unsigned-only && "$2" == --arch && "$3" == arm64 ]]; }; then
+  printf '%s\n' 'Usage: scripts/topology/build.sh --arch arm64 OR --unsigned-only --arch arm64' >&2
   exit 2
 fi
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)"
@@ -15,8 +15,8 @@ import importlib.util
 import json
 from pathlib import Path
 import re
-import shutil
 import sys
+import tempfile
 
 root = Path(sys.argv[1])
 unsigned = sys.argv[2] == "--unsigned-only"
@@ -38,20 +38,19 @@ def frozen(text):
 
 def unsigned_input(lock, sdk):
     parent = Path(acquire.git(root, "rev-parse", "--path-format=absolute", "--git-common-dir")).parent
-    topology = acquire.safe_path(parent, ".build/topology")
-    acquire.require(root != parent and root.is_relative_to(topology), "isolated_project_required")
-    work = acquire.safe_path(topology, "full-acquisition-arm64-ae7a27c9-e584-40ef-a164-e9631d68d11a")
+    acquire.require(root == parent and acquire.git(root, "branch", "--show-current") == "main",
+                    "root_main_project_required")
+    topology = acquire.safe_path(root, ".build/topology")
+    work = acquire.safe_path(topology, arch)
     cache = acquire.safe_path(topology, "downloads")
-    acquire.require(Path(sys.argv[6]).absolute() == work and Path(sys.argv[8]).absolute() == cache,
-                    "unsigned_input_namespace_mismatch")
     acquire.require(work.is_dir() and cache.is_dir(), "unsigned_input_missing")
-    acquire.check_hash(acquire.LOCK_PATH, "32be141a78f7ef2480892023d94a9a617f77bdd475bd19611500a3dab4530fb8")
     acquire.require(acquire.platform.machine() == "arm64", "native_build_host_not_proven")
     acquire.require(acquire.run(["/usr/sbin/sysctl", "-in", "sysctl.proc_translated"]) == "0",
                     "rosetta_or_unknown_host_forbidden")
     acquire.check_hash(acquire.safe_path(work, "pdfium/src/" + acquire.PDFIUM_PATCH["target"]),
                        acquire.PDFIUM_PATCH["afterSha256"])
     receipt = acquire.validate_receipt(lock, work, "arm64", arch, cache)
+    acquire.require(receipt.get("schemaRevision") == "topology-v1", "acquisition_schema_mismatch")
     library = acquire.safe_path(work, "deps/libpdfium.a")
     evidence_path = acquire.safe_path(work, "pdfium-build.json")
     evidence = json.loads(evidence_path.read_text())
@@ -62,7 +61,7 @@ def unsigned_input(lock, sdk):
     expected = {"arch": arch, "sourceCommit": lock["pdfium"]["commit"],
                 "depsBlob": lock["pdfium"]["depsBlob"], "gnArgs": arguments,
                 "systemLinker": acquire.system_linker(lock),
-                "sha256": "d584abe4d10355cb242b3b0a83bc46b1327c173e009cf2f1413b69dc26374401",
+                "sha256": acquire.sha256(library),
                 "actualExecution": "not_checked"}
     acquire.require(not evidence_path.is_symlink() and evidence == expected, "pdfium_receipt_mismatch")
     args_file = acquire.safe_path(work, "pdfium/out/args.gn")
@@ -74,6 +73,7 @@ def unsigned_input(lock, sdk):
     acquire.require(acquire.run(["/usr/bin/lipo", "-archs", library]) == arch, "pdfium_arch_mismatch")
     bindings = {name: acquire.sha256(acquire.safe_path(work, name))
                 for name in ("acquisition.json", "pdfium-build.json", "pdfium/out/args.gn")}
+    bindings["lockHash"] = acquire.sha256(acquire.LOCK_PATH)
     return work, cache, library, expected["sha256"], (receipt, bindings)
 
 
@@ -98,16 +98,12 @@ try:
                 sys.executable, "-I", "-B", root / "scripts/topology/verify_pdfium_roll.py",
                 "--arch", arch,
             ], cwd=root))
-    work = acquire.safe_path(root, ".build/topology/" + arch) if unsigned else root / ".build/topology" / arch
-    products = work / "products"
     if unsigned:
-        acquire.require(not work.exists(), "unsigned_destination_occupied")
-        acquire.ensure_root(work.parent)
-        work.mkdir()
-        destination = acquire.ensure_root(work / "deps") / "libpdfium.a"
-        with library.open("rb") as source, destination.open("xb") as target:
-            shutil.copyfileobj(source, target)
-        acquire.check_hash(destination, digest)
+        topology = acquire.ensure_root(root / ".build/topology")
+        work = Path(tempfile.mkdtemp(prefix="unsigned-" + arch + "-", dir=topology))
+    else:
+        work = root / ".build/topology" / arch
+    products = work / "products"
     argv = [
         "/usr/bin/xcodebuild", "-project", root / "PaperLens.xcodeproj",
         "-scheme", "PaperLensTopology", "-configuration", "Release",
@@ -122,7 +118,7 @@ try:
     acquire.run(argv, cwd=root)
     if unsigned:
         acquire.require(unsigned_input(lock, sdk)[4] == receipt, "unsigned_input_changed")
-        acquire.check_hash(destination, digest)
+        acquire.check_hash(library, digest)
         print(json.dumps({"arch": arch, "verdict": "pass", "scope": "unsigned_compile_only",
                           "products": str(products.relative_to(root))}))
         raise SystemExit(0)

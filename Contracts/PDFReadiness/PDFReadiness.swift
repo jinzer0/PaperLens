@@ -12,7 +12,7 @@ public enum ReadinessBacking: Int, CaseIterable, Hashable, Codable, Sendable {
   case one = 1
   case two = 2
 }
-public enum ReadinessToolchain: String, Hashable, Codable, Sendable { case xcode27A266aSwift64 }
+public enum ReadinessToolchain: String, Hashable, Codable, Sendable { case xcode27B52Swift642 }
 public enum ReadinessProbeVersion: String, Hashable, Codable, Sendable { case zoomV1 = "zoom-v1" }
 public enum ReadinessCodeVersion: String, Hashable, Codable, Sendable {
   case precursorV1 = "readiness-precursor-v1"
@@ -38,7 +38,7 @@ public struct ReadinessProfile: Equatable, Hashable, Codable, Sendable {
   public init(
     source: ReadinessSource, cpu: ReadinessCPU, os: ReadinessOS,
     cache: ReadinessCache, backing: ReadinessBacking,
-    toolchain: ReadinessToolchain = .xcode27A266aSwift64
+    toolchain: ReadinessToolchain = .xcode27B52Swift642
   ) {
     self.source = source
     self.cpu = cpu

@@ -2,7 +2,7 @@
   "schemaRevision": "topology-v1",
   "approvalCommit": "bea3f4830fb650b5334149b7ca5ab3a082596f7a",
   "team": "397452Z366",
-  "toolchain": {"developerDir": "/Applications/Xcode.app/Contents/Developer", "xcode": "27.0", "build": "27A266a", "sdk": "27.0", "swift": "6.4", "deploymentTarget": "15.0", "systemLinkerVersion": "27037.1"},
+  "toolchain": {"developerDir": "/Applications/Xcode.app/Contents/Developer", "xcode": "27.2", "build": "27B52", "sdk": "27.2", "swift": "6.4.2", "deploymentTarget": "15.0", "systemLinkerVersion": "27106.1"},
   "pdfium": {
     "url": "https://pdfium.googlesource.com/pdfium.git",
     "commit": "ad5bc13610718aefe737bd9b2f1b258d08e39428",

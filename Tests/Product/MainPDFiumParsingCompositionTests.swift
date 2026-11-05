@@ -91,6 +91,99 @@ import XCTest
     try await input.finishAfterDisposal()
   }
 
+  func testInitialAdmissionCapturesFreshLineageAndNeverActsAsRetry() async throws {
+    let f = try await fixture(reserve: false)
+    defer { try? FileManager.default.removeItem(at: f.temporary) }
+    let graph = try graph(f)
+    let identity = try XCTUnwrap(graph.initialIdentity(paperID: f.identity.paperID))
+    XCTAssertEqual(identity.paperID, f.identity.paperID)
+    XCTAssertEqual(identity.generation, f.identity.generation)
+    XCTAssertEqual(identity.pdfSHA256, f.identity.pdfSHA256)
+    XCTAssertEqual(identity.pdfReference, f.identity.pdfReference)
+    XCTAssertEqual(identity.epoch, f.lifecycle.epoch)
+    XCTAssertEqual(identity.configuration, try f.database.providerConfiguration())
+    let lineage = [identity.revision, identity.job, identity.attempt, identity.fence,
+      identity.correlation, identity.input]
+    XCTAssertEqual(Set(lineage).count, lineage.count)
+    XCTAssertTrue(Set(lineage).isDisjoint(with: [f.identity.revision, f.identity.job,
+      f.identity.attempt, f.identity.fence, f.identity.correlation, f.identity.input]))
+    XCTAssertNil(try graph.initialIdentity(paperID: identity.paperID))
+    try f.database.reserveExtraction(identity)
+    try f.database.failExtraction(identity, failure: .interrupted)
+    let reopenedGraph = try self.graph(f)
+    XCTAssertNil(try reopenedGraph.initialIdentity(paperID: identity.paperID))
+    let context = try await graph.recoveryCoordinator.context(paperID: identity.paperID)
+    XCTAssertEqual(context?.failedAttempt.attempt, identity.attempt)
+    XCTAssertEqual(context?.currentConfiguration, identity.configuration)
+  }
+
+  func testInitialCommandPersistsAcquisitionFailureWithoutHelperAndDuplicateDoesNotRetry() async throws {
+    let f = try await fixture(reserve: false)
+    defer { try? FileManager.default.removeItem(at: f.temporary) }
+    let graph = try graph(f)
+    // Remove only this owned fixture's immutable input. Acquisition must throw
+    // before it can return an input or start an XPC helper, even if assertions fail.
+    try FileManager.default.removeItem(at: f.database.root.appendingPathComponent(f.snapshot.pdfReference))
+    do {
+      _ = try await graph.parseImportedPaper(f.identity.paperID)
+      XCTFail("Missing owned input must fail before helper startup")
+    } catch { }
+    let context = try await graph.recoveryCoordinator.context(paperID: f.identity.paperID)
+    let captured = try XCTUnwrap(context).failedAttempt
+    XCTAssertEqual(captured.epoch, f.lifecycle.epoch)
+    XCTAssertEqual(captured.configuration.slotID, f.identity.configuration.slotID)
+    let duplicate = try await graph.parseImportedPaper(f.identity.paperID)
+    XCTAssertNil(duplicate)
+    XCTAssertEqual(try f.database.adapterRead {
+      try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM extractionInvocation")
+    }, 1)
+    let after = try await graph.recoveryCoordinator.context(paperID: f.identity.paperID)
+    XCTAssertEqual(after, context)
+  }
+
+  func testCancelledInitialCommandDoesNotReserveAndStaleConfigurationCannotDispatch() async throws {
+    let f = try await fixture(reserve: false)
+    defer { try? FileManager.default.removeItem(at: f.temporary) }
+    let graph = try graph(f)
+    let cancelled = Task { @MainActor in
+      withUnsafeCurrentTask { $0?.cancel() }
+      return try await graph.parseImportedPaper(f.identity.paperID)
+    }
+    do { _ = try await cancelled.value; XCTFail("Cancelled command admitted") }
+    catch { XCTAssertTrue(error is CancellationError) }
+    XCTAssertEqual(try f.database.adapterRead {
+      try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM extractionInvocation")
+    }, 0)
+    let identity = try XCTUnwrap(graph.initialIdentity(paperID: f.identity.paperID))
+    _ = try f.database.compareAndSwapProviderConfiguration(expected: identity.configuration,
+      replacementKind: .openAIAPIKey, replacementSlotID: UUID(),
+      replacementModel: "changed-owned-fixture")
+    do { try await graph.service.parse(identity); XCTFail("Stale configuration dispatched") }
+    catch { XCTAssertEqual(error as? ExtractionError, .staleAttempt) }
+    XCTAssertEqual(try f.database.adapterRead {
+      try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM extractionInvocation")
+    }, 0)
+  }
+
+  func testDeletingPaperCannotAdmitInitialCommand() async throws {
+    let f = try await fixture(reserve: false)
+    defer { try? FileManager.default.removeItem(at: f.temporary) }
+    let graph = try graph(f)
+    let captured = try XCTUnwrap(graph.initialIdentity(paperID: f.identity.paperID))
+    try f.database.adapterWrite {
+      try $0.execute(sql: "UPDATE paper SET status = 'deleting', deletionID = ? WHERE id = ?",
+        arguments: [UUID().uuidString, f.identity.paperID.uuidString])
+    }
+    do { try await graph.service.parse(captured); XCTFail("Deleting capture dispatched") }
+    catch { XCTAssertEqual(error as? ExtractionError, .staleAttempt) }
+    let freshGraph = try self.graph(f)
+    let result = try await freshGraph.parseImportedPaper(f.identity.paperID)
+    XCTAssertNil(result)
+    XCTAssertEqual(try f.database.adapterRead {
+      try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM extractionInvocation")
+    }, 0)
+  }
+
   func testMissingGeometryDeniesConstructionBeforeNewJobsOrParserLease() async throws {
     let f = try await fixture(reserve: false)
     defer { try? FileManager.default.removeItem(at: f.temporary) }

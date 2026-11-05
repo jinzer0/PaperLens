@@ -84,11 +84,12 @@ class UnsignedBuildDriverTests(IsolatedTest):
     def setUp(self):
         super().setUp()
         self.lock = acquire.load_lock()
-        self.project = self.root / ".build/topology/isolated-story-1-4"
-        self.project.mkdir(parents=True)
-        self.input_work = self.root / ".build/topology/full-acquisition-arm64-ae7a27c9-e584-40ef-a164-e9631d68d11a"
+        self.project = self.root
+        self.common_root = self.root
+        self.branch = "main"
+        self.input_work = self.root / ".build/topology/arm64"
         self.cache = self.root / ".build/topology/downloads"
-        self.cache.mkdir()
+        self.cache.mkdir(parents=True)
         self.library = self.input_work / "deps/libpdfium.a"
         self.library.parent.mkdir(parents=True)
         self.library_bytes = b"!<arch>\nsynthetic driver archive"
@@ -107,13 +108,15 @@ class UnsignedBuildDriverTests(IsolatedTest):
         self.evidence = {"arch": "arm64", "sourceCommit": self.lock["pdfium"]["commit"],
                          "depsBlob": self.lock["pdfium"]["depsBlob"], "gnArgs": self.arguments,
                          "systemLinker": self.linker,
-                         "sha256": "d584abe4d10355cb242b3b0a83bc46b1327c173e009cf2f1413b69dc26374401",
+                         "sha256": hashlib.sha256(self.library_bytes).hexdigest(),
                          "actualExecution": "not_checked"}
         self.evidence_path = self.input_work / "pdfium-build.json"
         self.evidence_path.write_text(json.dumps(self.evidence))
         (self.input_work / "pdfium/out/args.gn").write_text(
             "\n".join(f"{key} = {json.dumps(value)}" for key, value in self.arguments.items()) + "\n")
-        (self.input_work / "acquisition.json").write_text('{"synthetic": true}\n')
+        self.acquisition = {"schemaRevision": "topology-v1", "lockHash": acquire.sha256(acquire.LOCK_PATH),
+                            "arch": "arm64", "host": "arm64"}
+        (self.input_work / "acquisition.json").write_text(json.dumps(self.acquisition))
         self.intent = self.project / "bmad-docs/implementation-artifacts/spec-1-1-isolated-app-topology.md"
         self.intent.parent.mkdir(parents=True)
         self.approved = '<frozen-after-approval reason="human-owned intent">\nimmutable\n</frozen-after-approval>\n'
@@ -126,7 +129,7 @@ class UnsignedBuildDriverTests(IsolatedTest):
         self.host = "arm64"
         self.translated = "0"
         self.build_action = None
-        self.hash_failure = None
+        self.original_check_hash = acquire.check_hash
 
     def fake_git(self, path, *argv):
         self.git_calls.append((path, argv))
@@ -134,7 +137,10 @@ class UnsignedBuildDriverTests(IsolatedTest):
             self.assertEqual(argv[1], self.lock["approvalCommit"] + ":bmad-docs/implementation-artifacts/spec-1-1-isolated-app-topology.md")
             return self.approved
         if argv[0] == "rev-parse":
-            return str(self.root / ".git")
+            return str(self.common_root / ".git")
+        if argv[0] == "branch":
+            self.assertEqual(argv, ("branch", "--show-current"))
+            return self.branch
         if argv[0] == "diff":
             raise acquire.Failure("subprocess_failed")
         self.assertEqual(argv, ("merge-base", "--is-ancestor", self.lock["approvalCommit"], "HEAD"))
@@ -154,21 +160,17 @@ class UnsignedBuildDriverTests(IsolatedTest):
 
     def fake_hash(self, path, expected):
         path = Path(path)
-        if path == acquire.LOCK_PATH:
-            self.assertEqual(expected, "32be141a78f7ef2480892023d94a9a617f77bdd475bd19611500a3dab4530fb8")
-            acquire.require(self.hash_failure != "manifest", "sha256_mismatch")
-        elif path == self.patch_target:
+        if path == self.patch_target:
             self.assertEqual(expected, acquire.PDFIUM_PATCH["afterSha256"])
             acquire.require(not path.is_symlink() and path.read_bytes() == self.patch_bytes, "sha256_mismatch")
         else:
-            self.assertEqual(expected, self.evidence["sha256"])
-            acquire.require(not path.is_symlink() and path.read_bytes() == self.library_bytes, "sha256_mismatch")
+            self.original_check_hash(path, expected)
 
-    def drive(self, *, unsigned=True, validation_error=None, input_work=None):
+    def drive(self, *, unsigned=True, validation_error=None, real_validation=False):
         args = ["build.sh", str(self.project)]
-        args += (["--unsigned-only", "--arch", "arm64", "--input-work", str(input_work or self.input_work),
-                  "--cache", str(self.cache)] if unsigned else ["--arch", "arm64"])
+        args += (["--unsigned-only", "--arch", "arm64"] if unsigned else ["--arch", "arm64"])
         output = io.StringIO()
+        validator = acquire.validate_receipt
         with contextlib.ExitStack() as stack:
             stack.enter_context(mock.patch.object(sys, "argv", args))
             stack.enter_context(mock.patch("importlib.util.module_from_spec", return_value=acquire))
@@ -181,8 +183,8 @@ class UnsignedBuildDriverTests(IsolatedTest):
             stack.enter_context(mock.patch.object(acquire, "system_linker", return_value=self.linker))
             stack.enter_context(mock.patch.object(acquire.platform, "machine", return_value=self.host))
             validation = stack.enter_context(mock.patch.object(acquire, "validate_receipt",
-                side_effect=acquire.Failure(validation_error) if validation_error else None,
-                return_value={"synthetic": True}))
+                side_effect=validator if real_validation else acquire.Failure(validation_error) if validation_error else None,
+                return_value=self.acquisition))
             preparation = stack.enter_context(mock.patch.object(acquire, "main", side_effect=AssertionError("preparation forbidden")))
             stack.enter_context(contextlib.redirect_stdout(output))
             with self.assertRaises(SystemExit) as exit_status:
@@ -201,7 +203,10 @@ class UnsignedBuildDriverTests(IsolatedTest):
         status, result, validation = self.drive()
         self.assertEqual(status, 0)
         self.assertEqual(result["scope"], "unsigned_compile_only")
-        work = self.project / ".build/topology/arm64"
+        work = (self.project / result["products"]).parent
+        self.assertEqual(work.parent, self.project / ".build/topology")
+        self.assertTrue(work.name.startswith("unsigned-arm64-"))
+        self.assertNotEqual(work, self.input_work)
         self.assertEqual(self.commands, [
             ["/usr/sbin/sysctl", "-in", "sysctl.proc_translated"],
             ["/usr/bin/lipo", "-archs", str(self.library)],
@@ -214,14 +219,14 @@ class UnsignedBuildDriverTests(IsolatedTest):
             ["/usr/sbin/sysctl", "-in", "sysctl.proc_translated"],
             ["/usr/bin/lipo", "-archs", str(self.library)]])
         self.assertEqual(validation.call_args_list, [mock.call(self.lock, self.input_work, "arm64", "arm64", self.cache)] * 2)
-        self.assertEqual((work / "deps/libpdfium.a").read_bytes(), self.library_bytes)
+        self.assertFalse((work / "deps").exists())
         self.assertEqual(self.library.read_bytes(), self.library_bytes)
         self.assertFalse(any(argv[0] == "diff" for _, argv in self.git_calls))
 
     def test_unsigned_restored_source_rejects_before_validator_or_patch_application(self):
         restored = b"synthetic restored upstream source\n"
         self.patch_target.write_bytes(restored)
-        work = self.project / ".build/topology/arm64"
+        work = self.project / ".build/topology/unsigned-arm64-historical"
         for occupied in (False, True):
             with self.subTest(occupied=occupied):
                 marker = work / "foreign-marker"
@@ -263,15 +268,28 @@ class UnsignedBuildDriverTests(IsolatedTest):
         self.assertIn((self.project, ("diff", "--exit-code", self.lock["approvalCommit"], "--",
                                       "bmad-docs/implementation-artifacts/spec-1-1-isolated-app-topology.md")), self.git_calls)
 
-    def test_unsigned_stale_full_receipt_and_manifest_reject_before_copy(self):
+    def test_unsigned_stale_receipt_rejects_before_output(self):
         self.assert_blocked("acquisition_pin_or_arch_mismatch", validation_error="acquisition_pin_or_arch_mismatch")
-        self.assertFalse((self.project / ".build/topology/arm64").exists())
-        self.hash_failure = "manifest"
-        self.assert_blocked("sha256_mismatch")
+        self.assertEqual(list(self.input_work.parent.glob("unsigned-arm64-*")), [])
 
-    def test_unsigned_wrong_input_namespace_rejects_without_output(self):
-        self.assert_blocked("unsigned_input_namespace_mismatch", input_work=self.root / "other")
-        self.assertFalse((self.project / ".build/topology/arm64").exists())
+    def test_unsigned_current_lock_host_and_arch_mismatched_receipts_reject(self):
+        for field, value in (("lockHash", "0" * 64), ("host", "x86_64"), ("arch", "x86_64")):
+            with self.subTest(field=field):
+                (self.input_work / "acquisition.json").write_text(json.dumps(self.acquisition | {field: value}))
+                self.assert_blocked("acquisition_pin_or_arch_mismatch", real_validation=True)
+                self.assertEqual(list(self.input_work.parent.glob("unsigned-arm64-*")), [])
+
+    def test_unsigned_non_root_or_non_main_checkout_rejects_without_output(self):
+        self.common_root = self.root / "other"
+        self.assert_blocked("root_main_project_required")
+        self.common_root = self.root
+        self.branch = "feature"
+        self.assert_blocked("root_main_project_required")
+        self.assertEqual(list(self.input_work.parent.glob("unsigned-arm64-*")), [])
+
+    def test_unsigned_unknown_acquisition_producer_schema_rejects(self):
+        self.acquisition["schemaRevision"] = "arbitrary-generated-input"
+        self.assert_blocked("acquisition_schema_mismatch")
 
     def test_unsigned_non_native_or_translated_host_rejects_without_output(self):
         self.host = "x86_64"
@@ -279,35 +297,51 @@ class UnsignedBuildDriverTests(IsolatedTest):
         self.host = "arm64"
         self.translated = "1"
         self.assert_blocked("rosetta_or_unknown_host_forbidden")
-        self.assertFalse((self.project / ".build/topology/arm64").exists())
+        self.assertEqual(list(self.input_work.parent.glob("unsigned-arm64-*")), [])
 
     def test_unsigned_missing_pdfium_receipt_rejects_without_output(self):
         self.evidence_path.unlink()
         self.assert_blocked("build_failed")
-        self.assertFalse((self.project / ".build/topology/arm64").exists())
+        self.assertEqual(list(self.input_work.parent.glob("unsigned-arm64-*")), [])
 
     def test_unsigned_wrong_pdfium_receipt_library_and_cpu_reject(self):
         for field, value in (("sourceCommit", "0" * 40), ("arch", "x86_64"),
-                             ("sha256", "a" * 64), ("actualExecution", "pass")):
+                             ("depsBlob", "0" * 40), ("gnArgs", {}), ("systemLinker", {}),
+                             ("sha256", "a" * 64), ("actualExecution", "pass"),
+                             ("inventedProducerClaim", True)):
             with self.subTest(field=field):
                 self.evidence_path.write_text(json.dumps(self.evidence | {field: value}))
                 self.assert_blocked("pdfium_receipt_mismatch")
         self.evidence_path.write_text(json.dumps(self.evidence))
         self.library.write_bytes(b"stale library")
-        self.assert_blocked("sha256_mismatch")
+        self.assert_blocked("pdfium_receipt_mismatch")
         self.library.write_bytes(self.library_bytes)
         self.lipo_arch = "x86_64"
         self.assert_blocked("pdfium_arch_mismatch")
 
-    def test_unsigned_occupied_dependency_derived_data_or_products_preserved(self):
-        work = self.project / ".build/topology/arm64"
-        for leaf in ("deps/libpdfium.a", "DerivedData/marker", "products/marker"):
-            with self.subTest(leaf=leaf):
-                target = work / leaf
-                target.parent.mkdir(parents=True)
-                target.write_bytes(b"preserve")
-                self.assert_blocked("unsigned_destination_occupied")
-                self.assertEqual(target.read_bytes(), b"preserve")
+    def test_unsigned_generated_arguments_must_match_current_producer(self):
+        (self.input_work / "pdfium/out/args.gn").write_text("target_cpu = \"x86_64\"\n")
+        self.assert_blocked("gn_args_mismatch")
+
+    def test_unsigned_matching_receipt_hash_does_not_bless_non_archive(self):
+        self.library.write_bytes(b"not a static archive")
+        self.evidence["sha256"] = hashlib.sha256(self.library.read_bytes()).hexdigest()
+        self.evidence_path.write_text(json.dumps(self.evidence))
+        self.assert_blocked("pdfium_not_static_archive")
+
+    def test_unsigned_repeated_builds_preserve_historical_and_acquired_outputs(self):
+        markers = [self.input_work / "DerivedData/marker", self.input_work / "products/marker",
+                   self.input_work.parent / "unsigned-arm64-historical/products/marker"]
+        for target in markers:
+            target.parent.mkdir(parents=True)
+            target.write_bytes(b"preserve")
+        first_status, first, _ = self.drive()
+        second_status, second, _ = self.drive()
+        self.assertEqual((first_status, second_status), (0, 0))
+        self.assertNotEqual(first["products"], second["products"])
+        for target in markers:
+            self.assertEqual(target.read_bytes(), b"preserve")
+        self.assertEqual(self.library.read_bytes(), self.library_bytes)
 
     def test_unsigned_postbuild_changed_acquisition_binding_rejects(self):
         self.build_action = lambda: (self.input_work / "acquisition.json").write_text('{"synthetic": true} \n')
@@ -482,6 +516,39 @@ class ArchiveTests(IsolatedTest):
 
 
 class PinTests(IsolatedTest):
+    def test_current_toolchain_accepts_pins_and_rejects_previous_versions(self):
+        lock = acquire.load_lock()
+        pins = lock["toolchain"]
+        sdk = pins["developerDir"] + "/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
+        replies = [f"Xcode {pins['xcode']}\nBuild version {pins['build']}",
+                   pins["sdk"], "Apple Swift version " + pins["swift"] + " (synthetic)", sdk]
+        with mock.patch.object(acquire.sys, "platform", "darwin"), mock.patch.object(acquire.Path, "is_dir", return_value=True), mock.patch.object(acquire, "system_linker") as linker:
+            with mock.patch.object(acquire, "run", side_effect=replies):
+                self.assertEqual(acquire.toolchain(lock), sdk)
+            linker.assert_called_once_with(lock)
+            for index, wrong, reason in (
+                (0, "Xcode 27.0\nBuild version 27A266a", "xcode_mismatch"),
+                (1, "27.0", "sdk_mismatch"),
+                (2, "Apple Swift version 6.4.1 (synthetic)", "swift_mismatch"),
+            ):
+                with self.subTest(reason=reason):
+                    changed = list(replies)
+                    changed[index] = wrong
+                    linker.reset_mock()
+                    with mock.patch.object(acquire, "run", side_effect=changed):
+                        with self.assertRaisesRegex(acquire.Failure, reason):
+                            acquire.toolchain(lock)
+                    linker.assert_not_called()
+
+    def test_current_lock_rejects_previous_system_linker(self):
+        lock = acquire.load_lock()
+        lock["toolchain"]["systemLinkerVersion"] = "27037.1"
+        manifest = self.root / "dependencies.json"
+        manifest.write_text(json.dumps(lock))
+        with mock.patch.object(acquire, "LOCK_PATH", manifest):
+            with self.assertRaisesRegex(acquire.Failure, "pdfium_linker_pin_mismatch"):
+                acquire.load_lock()
+
     def test_system_linker_receipt_requires_exact_path_version_and_bytes(self):
         linker = self.root / "Toolchains/XcodeDefault.xctoolchain/usr/bin/ld"
         linker.parent.mkdir(parents=True)

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Offline Story 1.4 conformance only; never release/P1/P2 promotion.
 
-The immutable canonical digest binds dependencies.json at 68b8f41 plus the
-sole GRDB addition approved by Spec 243a0ec. The manifest remains the only
+The immutable canonical digest binds the existing dependency pins plus the
+explicitly approved 2026-11-05 Xcode27.2 toolchain update in the Epic execution Spec.
+The manifest remains the only
 dependency inventory; no runtime git or historical checkout is required.
 Changing accepted pins requires a new approved Spec, not a recomputed checksum.
 """
@@ -18,7 +19,7 @@ SPEC_COMMIT = "33dcd8db20a122d13a6ce0a16b92077f278facb6"
 MINIMUM_OS_BUILD = "24A335"
 POINTS = ("minimum/arm64", "current/arm64")
 # Approved semantic identity; whitespace and object order are not pin identity.
-APPROVED_CANONICAL_SHA256 = "46ea50208ad8e8a95e2273c35c8613ee8d437b81ca6139ef0f24524475413d1e"
+APPROVED_CANONICAL_SHA256 = "c95fca4915010196524bb616ec4caeba0c65f416096642a38e7fd67fe0eabe90"
 
 CODES = (
     "LOCK_INPUT_MISSING", "LOCK_INPUT_CHANGED", "HASH_INVALID", "HASH_MISMATCH",

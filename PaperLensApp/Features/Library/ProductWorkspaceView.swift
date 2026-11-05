@@ -43,6 +43,10 @@ public final class ProductWorkspace: ObservableObject {
   public let urls: URLImportService
   public let annotations: AnnotationService
   public let metadata: ReaderMetadataService
+  public let parsing: MainPDFiumParsingComposition?
+  public var parsingRecoveryCoordinator: ParsingRecoveryCoordinator? {
+    parsing?.recoveryCoordinator
+  }
   fileprivate let database: ProductDatabase
   private let readLeases: LibraryReadLeaseProvider
   private var scopedSource: URL?
@@ -88,9 +92,15 @@ public final class ProductWorkspace: ObservableObject {
 
   public init(
     database: ProductDatabase, lifecycle: LocalLibraryLifecycle,
-    connection: NativeAPIKeyConnection, codex: NativeCodexConnection? = nil
+    connection: NativeAPIKeyConnection, codex: NativeCodexConnection? = nil,
+    parsing: MainPDFiumParsingComposition? = nil
   ) throws {
     self.database = database
+    if let parsing {
+      guard parsing.lifecycle === lifecycle,
+        parsing.service.database === database else { throw ExtractionError.staleAttempt }
+    }
+    self.parsing = parsing
     annotations = AnnotationService(database: database)
     metadata = ReaderMetadataService(database: database)
     organization = LibraryOrganizationService(database: database, lifecycle: lifecycle)
@@ -298,16 +308,25 @@ public final class ProductWorkspace: ObservableObject {
     }
   }
 
-  public func imported(_ paperID: UUID) {
+  @discardableResult public func imported(_ paperID: UUID) -> Task<Void, Never>? {
     revision += 1
     do {
       let record = try database.libraryRecords().first(where: { $0.id == paperID })
       guard record?.status == .ready else {
         failure = "PDF 가져오기가 완료되지 않았습니다. 라이브러리의 실패 상태를 확인하세요."
-        return
+        return nil
       }
       failure = nil
+      if let parsing {
+        return Task {
+          // Parsing reports its own persisted outcome. Reader admission does not
+          // depend on completion, nor does failure become an automatic retry.
+          do { _ = try await parsing.parseImportedPaper(paperID) }
+          catch { }
+        }
+      }
     } catch { failure = "PDF 가져오기 상태를 확인하지 못했습니다. 라이브러리에서 현재 상태를 다시 확인하세요." }
+    return nil
   }
 
   public func open(_ paper: OrganizedPaper) async throws {
@@ -593,6 +612,7 @@ public struct ProductWorkspaceView: View {
           metadataService: workspace.metadata, metadataIdentity: reader.metadataIdentity,
           parsingStatus: ParsingStatusView(
             database: workspace.database, paperID: reader.id,
+            coordinator: workspace.parsingRecoveryCoordinator,
             onUsableRevisionChange: { await workspace.refreshPublishedMetadata(for: reader) }),
           onReturn: { workspace.returnToLibrary() },
           onSaveFailure: { workspace.reportSaveFailure($0) }
@@ -712,7 +732,7 @@ public struct ProductWorkspaceView: View {
         cancelledConfirmation: actionBinding(slot, continued: false),
         continuedConfirmation: actionBinding(slot, continued: true),
         allowsInteractiveCancel: interactiveCancelAllowed(slot),
-        imported: { workspace.imported($0) })
+        imported: { _ = workspace.imported($0) })
     case .folders:
       VStack {
         FolderManagementView(service: workspace.imports)

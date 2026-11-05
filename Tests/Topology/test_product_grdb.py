@@ -130,7 +130,7 @@ class GRDBPreparationTests(unittest.TestCase):
                 "-hv": "fixture:\nMach header\n DYLIB\n",
                 "-D": "fixture:\n" + identifier + "\n",
                 "-L": "fixture:\n " + identifier + " (compatibility version 1.0.0)\n /usr/lib/libsqlite3.dylib (compatibility version 9.0.0)\n /usr/lib/libSystem.B.dylib (compatibility version 1.0.0)\n",
-                "-l": "fixture:\nLoad command 0\n cmd LC_BUILD_VERSION\n platform 1\n minos 15.0\n sdk 27.0\n",
+                "-l": f"fixture:\nLoad command 0\n cmd LC_BUILD_VERSION\n platform 1\n minos 15.0\n sdk {self.lock['toolchain']['sdk']}\n",
             }[args[0]].encode()
         else:
             self.fail("unexpected tool invocation")
@@ -319,7 +319,7 @@ class GRDBPreparationTests(unittest.TestCase):
         cases = [
             (("/usr/bin/lipo", "-archs"), b"x86_64\n"),
             (("/usr/bin/otool", "-D"), b"fixture:\n/tmp/cached/GRDB\n"),
-            (("/usr/bin/otool", "-l"), b"fixture:\nLoad command 0\n cmd LC_BUILD_VERSION\n platform 1\n minos 14.0\n sdk 27.0\n"),
+            (("/usr/bin/otool", "-l"), f"fixture:\nLoad command 0\n cmd LC_BUILD_VERSION\n platform 1\n minos 14.0\n sdk {self.lock['toolchain']['sdk']}\n".encode()),
             (("/usr/bin/otool", "-L"), b"fixture:\n @rpath/GRDB.framework/Versions/A/GRDB (compatibility version 1.0.0)\n @rpath/libsqlite3.dylib (compatibility version 9.0.0)\n"),
         ]
         for index, (key, value) in enumerate(cases):
@@ -471,6 +471,10 @@ class GRDBPreparationTests(unittest.TestCase):
         env = grdb.environment(self.root, developer)
         with mock.patch.object(grdb.Path, "is_dir", return_value=True), mock.patch.object(grdb, "read_bytes", return_value=b"synthetic linker"):
             for label, wrong in (
+                ("xcode", b"Xcode 27.0\nBuild version 27A266a"),
+                ("sdk-version", b"27.0"),
+                ("swift", b"Apple Swift version 6.4.1 (different)"),
+                ("linker-version", b'{"version":"27037.1"}'),
                 ("xcode", b"Xcode 26.0\nBuild version different"),
                 ("sdk-version", b"26.0"),
                 ("swift", b"Apple Swift version 6.3 (different)"),
