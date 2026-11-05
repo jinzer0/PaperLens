@@ -12,6 +12,16 @@ approval: explicit-human-story-range-execution
 
 ## Root checkout consolidation — 2026-11-05
 
+Subsequent instruction “정리할 건 정리하자”: removed only the historical
+`.build/out` and index-build `arm64-apple-macosx` generated products (918,300,031
+logical bytes; not a measured physical disk-space gain). Remaining nested artifacts
+were moved from `.build/topology/product-vertical-integration-20261009` to
+`.build/archive/product-integration-20261009`. Historical paths below describe
+their original locations; use that prefix mapping for retained evidence.
+Current root build, active GRDB source mirror, all recovery archives, session records,
+historical signed/failed-trial evidence and dependency source remain preserved.
+The local `.build/detached-consolidation/cache-cleanup.json` records the disposition.
+
 Actual instruction: “detached checkout도 main에 통합하자”.
 The canonical product location is now the repository root on `main`, superseding
 the nested execution path below. The detached root's 29 unique discovery/planning/
