@@ -2,13 +2,43 @@
 title: 'Epic 1 — Story 1.1~1.27 전체 계획·구현·검증'
 status: in-progress
 issue: 'https://github.com/jinzer0/PaperLens/issues/3'
-branch: planning/epic-1-execution
+branch: main
 product_baseline: 5eac3bb9424ad893eca7d63bc319b71f580838ed
 architecture_baseline: 1195c92227cc628e325f5ff24d70cc93639bf7a9
 approval: explicit-human-story-range-execution
 ---
 
 # 전체 실행 계약
+
+## Local main consolidation and branch closure — 2026-11-05
+
+Actual instruction: “branch도 정리해 다 merge하든 없애든 간에 일단 다 통합해서
+검수하고 테스트 돌려서 branch 다 정리하자”.
+The existing local main had no commits outside the reviewed product integration.
+It was fast-forwarded from `b83ebb4` to `08dbcd2`; no conflict resolution or
+whole-file replacement altered product source. This supersedes the integration
+branch name below: the canonical product checkout now holds **main** at the same
+original-root-relative `.build/topology/product-vertical-integration-20261009` path.
+The original root is detached at `58f3dba` to preserve unrelated dirty/untracked work.
+
+All **41** local branch tips were captured before integration in
+`refs/archive/branch-consolidation-20261105/` and the verified
+`.build/branch-consolidation/before.bundle` under the original root.
+The **40** non-main local branches were removed after checking each live tip against
+its archived SHA. Earlier source-to-integration review below accounts for reimplemented
+and superseded work; historical branches were not blindly merged to resurrect old
+contracts. `branches.json` and `removed.json` retain the exact mapping. Historical
+commits remain recoverable, including root policy commits, without keeping working
+branches open. Remote refs, push, PR and release state were not changed.
+
+On main, SwiftPM build/discovery passed; isolated product tests passed **558/558**,
+offline topology tests **631**, Python request tests **35**, and native request/RPC
+tests **32/24**. `.build/branch-consolidation-product-tests.json` holds the product
+receipt. Readiness bundle executed zero cases in the explicit native-contract filter;
+no protected renderer/allocation trial ran. Existing warnings were retained.
+Main fast-forward tree identity and final whitespace checks were verified.
+The earlier packaged GRDB/toolchain blocker and genuine SDK/signed acceptance debt
+remain unchanged; branch closure is not whole-product acceptance.
 
 ## Current consolidation instruction and result — 2026-11-05
 
