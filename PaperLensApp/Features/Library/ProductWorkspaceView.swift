@@ -71,7 +71,7 @@ public final class ProductWorkspace: ObservableObject {
         case .confirmation(let confirmation):
           guard preparing, pendingConfirmation == confirmation.id else { return }
         case .folders, .settings:
-          guard !preparing else { return }
+          guard !preparing, !opening, reader == nil else { return }
         }
         installingSheet = true
         defer { installingSheet = false }
@@ -85,6 +85,7 @@ public final class ProductWorkspace: ObservableObject {
   }
   @Published public var libraryFilter = OrganizationFilter()
   @Published public private(set) var reader: OpenReader?
+  @Published private(set) var latestLocalImport: UUID?
   @Published public private(set) var revision = 0
   @Published public private(set) var preparing = false
   @Published public private(set) var opening = false
@@ -296,19 +297,26 @@ public final class ProductWorkspace: ObservableObject {
   }
 
   public func openImportedURL(_ paperID: UUID) {
-    Task {
-      do {
+    Task { await openImportedPDF(paperID) }
+  }
+
+  func openImportedPDF(_ paperID: UUID) async {
+    guard canOpenReader else { return }
+    do {
+      try await openReader {
         let facts = try await sortFacts()
         let snapshot = try await organization.snapshot(filter: .init(), facts: facts)
         guard let paper = snapshot.papers.first(where: { $0.id == paperID }) else {
           throw OrganizationError.stalePaper
         }
-        try await open(paper)
-      } catch { failure = "가져온 PDF를 열지 못했습니다. 라이브러리에서 현재 상태를 확인하세요." }
-    }
+        return paper
+      }
+    } catch { failure = "가져온 PDF를 열지 못했습니다. 라이브러리에서 현재 상태를 확인하세요." }
   }
 
-  @discardableResult public func imported(_ paperID: UUID) -> Task<Void, Never>? {
+  @discardableResult public func imported(
+    _ paperID: UUID, localConfirmationID: UUID? = nil
+  ) -> Task<Void, Never>? {
     revision += 1
     do {
       let record = try database.libraryRecords().first(where: { $0.id == paperID })
@@ -317,6 +325,9 @@ public final class ProductWorkspace: ObservableObject {
         return nil
       }
       failure = nil
+      if let localConfirmationID, pendingConfirmation == localConfirmationID {
+        latestLocalImport = paperID
+      }
       if let parsing {
         return Task {
           // Parsing reports its own persisted outcome. Reader admission does not
@@ -330,12 +341,19 @@ public final class ProductWorkspace: ObservableObject {
   }
 
   public func open(_ paper: OrganizedPaper) async throws {
-    guard reader == nil, sheet == nil, !sheetCleanupPending, !preparing, !opening else {
-      throw ProductWorkspaceError.busy
-    }
+    try await openReader { paper }
+  }
+
+  private var canOpenReader: Bool {
+    reader == nil && sheet == nil && !sheetCleanupPending && !preparing && !opening
+  }
+
+  private func openReader(resolvePaper: () async throws -> OrganizedPaper) async throws {
+    guard canOpenReader else { throw ProductWorkspaceError.busy }
     confirmationCancellation = nil
     opening = true
     defer { opening = false }
+    let paper = try await resolvePaper()
     try await organization.admitOpen(paper)
     // Bind the selected generation at lease acquisition too, not just at the list's check.
     let provider = SelectedPaperReadLeases(base: readLeases, paper: paper)
@@ -351,6 +369,7 @@ public final class ProductWorkspace: ObservableObject {
     reader = OpenReader(
       id: paper.id, session: ReaderSession(database: database, leaseProvider: provider),
       annotationIdentity: identity, metadataIdentity: metadataIdentity)
+    if latestLocalImport == paper.id { latestLocalImport = nil }
     failure = nil
   }
 
@@ -622,6 +641,9 @@ public struct ProductWorkspaceView: View {
         HStack {
           Button("폴더 관리") { openToolbar(.folders) }.focused($folderOpenerFocused)
           Button("Settings") { openToolbar(.settings) }.focused($settingsOpenerFocused)
+          if let paperID = workspace.latestLocalImport {
+            Button("가져온 PDF 열기") { Task { await workspace.openImportedPDF(paperID) } }
+          }
           if workspace.preparing { ProgressView("PDF 확인 중") }
           Spacer()
         }.padding().disabled(
@@ -732,7 +754,7 @@ public struct ProductWorkspaceView: View {
         cancelledConfirmation: actionBinding(slot, continued: false),
         continuedConfirmation: actionBinding(slot, continued: true),
         allowsInteractiveCancel: interactiveCancelAllowed(slot),
-        imported: { _ = workspace.imported($0) })
+        imported: { _ = workspace.imported($0, localConfirmationID: confirmation.id) })
     case .folders:
       VStack {
         FolderManagementView(service: workspace.imports)

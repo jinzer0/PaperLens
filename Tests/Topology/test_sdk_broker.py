@@ -43,6 +43,7 @@ import signal
 import sys
 import time
 import weakref
+import uuid
 
 spec = importlib.util.spec_from_file_location('broker', Path(sys.argv[1]) / 'ProviderAgent/broker.py')
 broker = importlib.util.module_from_spec(spec)
@@ -56,6 +57,7 @@ env = {'PATH': '/usr/bin:/bin', 'LANG': 'C', 'LC_ALL': 'C',
        'HOME': str(root), 'CODEX_HOME': str(root / 'codex'), 'TMPDIR': str(root / 'tmp')}
 cwd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
 owner = None
+retirement = str(uuid.uuid4())
 original_cwd = os.stat('.')
 setup_failure = []
 original_setup = broker._CLIResourceOwner._setup
@@ -104,7 +106,7 @@ def retained(snapshot):
     for name, fd in snapshot.items():
         if fd is not None:
             os.fstat(fd)
-    assert owner.cleanup(time.monotonic_ns() + 300_000_000, terminate=True)['state'] == 'unknown'
+    assert owner.cleanup(retirement, terminate=True)['state'] == 'unknown'
     assert owner.resume()['state'] == 'unknown'
     assert owner._fds == snapshot
     try:
@@ -116,7 +118,7 @@ def retained(snapshot):
 
 try:
     factory = broker.fixture_fork if case == 'fork' else (
-        broker.fixture_cat if case in ('cat', 'expired', 'tooFar', 'changedDeadline',
+        broker.fixture_cat if case in ('cat', 'invalidIdentity', 'nonV4', 'changedIdentity', 'slowCleanup',
                                       'facadeLoss', 'terminate') else broker.fixture_true)
     owner = factory(cwd, env)
     assert owner.state == 'suspended', (dict(owner.record), setup_failure)
@@ -147,48 +149,50 @@ try:
         assert os.WSTOPSIG(status) == 0, (status, os.WSTOPSIG(status))
         assert owner._wait_status is None
         assert owner.resume()['state'] == 'running'
-        assert owner.cleanup(time.monotonic_ns() + 300_000_000)['state'] == 'clean'
+        assert owner.cleanup(retirement)['state'] == 'clean'
     else:
         assert owner.resume()['state'] == 'running'
         endpoints = dict(owner.endpoints)
         if case == 'cat':
             assert os.write(endpoints['stdin'], b'fixture-echo\n') == 13
             deadline = time.monotonic_ns() + 300_000_000
-            assert owner.close_stdin(deadline)['state'] == 'running'
+            assert owner.close_stdin(retirement)['state'] == 'running'
             assert owner._fds['stdin'] is None
             assert readable(endpoints['stdout'], deadline) == b'fixture-echo\n'
-            assert owner.cleanup(deadline)['state'] == 'clean'
+            assert owner.cleanup(retirement)['state'] == 'clean'
         elif case == 'fork':
             # This fixed output is emitted only AFTER the real fixture parent
             # waitpid has reaped its immediate fork. Descendant absence is NOT proof.
             assert readable(endpoints['stdout'], time.monotonic_ns() + 5_000_000_000) == b'reaped\n'
             snapshot = dict(owner._fds)
-            assert owner.cleanup(time.monotonic_ns() + 300_000_000)['state'] == 'unknown'
+            assert owner.cleanup(retirement)['state'] == 'unknown'
             assert owner._wait_status is None
             retained(snapshot)
             os.fstat(owner._fds['kqueue'])
-        elif case in ('expired', 'tooFar'):
+        elif case in ('invalidIdentity', 'nonV4'):
             snapshot = dict(owner._fds)
             queue_fd = owner._fds['kqueue']
-            deadline = time.monotonic_ns() + (
-                -1_000_000_000 if case == 'expired' else 1_000_000_000)
-            assert owner.cleanup(deadline, terminate=True)['state'] == 'unknown'
-            assert owner._deadline is None
+            identity = 123 if case == 'invalidIdentity' else str(uuid.UUID(int=0))
+            assert owner.cleanup(identity, terminate=True)['state'] == 'unknown'
+            assert owner._retirement_id is None
             assert owner._wait_status is None and not owner._exit_observed
             assert owner._fds['kqueue'] == queue_fd
             os.kill(owner.pid, 0)  # Actual cat is still owned and alive.
             retained(snapshot)
-        elif case == 'changedDeadline':
-            deadline = time.monotonic_ns() + 300_000_000
-            owner.close_stdin(deadline)
+        elif case == 'changedIdentity':
+            owner.close_stdin(retirement)
             assert owner._fds['stdin'] is None
             snapshot = dict(owner._fds)
-            assert owner.cleanup(deadline - 1_000_000)['state'] == 'unknown'
-            assert owner._deadline == deadline
+            assert owner.cleanup(str(uuid.uuid4()))['state'] == 'unknown'
+            assert owner._retirement_id == retirement
             retained(snapshot)
+        elif case == 'slowCleanup':
+            owner.close_stdin(retirement)
+            time.sleep(0.35)  # Delayed caller is not failed physical ownership.
+            assert owner.cleanup(retirement)['state'] == 'clean'
         elif case == 'facadeLoss':
             snapshot = dict(owner._fds)
-            owner.cleanup(time.monotonic_ns() - 1_000_000_000)
+            owner.cleanup('invalid')
             reference = weakref.ref(owner)
             del owner
             gc.collect()
@@ -199,7 +203,7 @@ try:
             # Real public OS EBADF, no fake close success or synthetic closure.
             # Deliberately violate endpoint borrowing to exercise fail-closed debt.
             os.close(endpoints['stdout'])
-            assert owner.cleanup(time.monotonic_ns() + 300_000_000)['state'] == 'unknown'
+            assert owner.cleanup(retirement)['state'] == 'unknown'
             assert owner._exit_observed and owner._wait_status is not None
             assert owner._fds['stdout'] == endpoints['stdout']
             assert 'stdout' in owner._uncertain_fds
@@ -207,7 +211,7 @@ try:
             os.fstat(owner._fds['stderr'])
             os.fstat(owner._fds['kqueue'])
             snapshot = dict(owner._fds)
-            assert owner.cleanup(time.monotonic_ns() + 300_000_000)['state'] == 'unknown'
+            assert owner.cleanup(retirement)['state'] == 'unknown'
             assert owner._fds == snapshot
         elif case == 'injectedCloseEINTR':
             # INJECTED raw return/errno, NOT an actual OS interruption. The
@@ -221,7 +225,7 @@ try:
                     return -1
                 return native_close(fd)
             owner._spawn.lib.close = injected_close
-            assert owner.cleanup(time.monotonic_ns() + 300_000_000)['state'] == 'unknown'
+            assert owner.cleanup(retirement)['state'] == 'unknown'
             assert owner._exit_observed and owner._wait_status is not None
             assert attempts.count(endpoints['stdout']) == 1
             assert owner._close_errors['stdout'] == errno.EINTR
@@ -236,12 +240,12 @@ try:
             retained(snapshot)
             assert tuple(attempts) == prior_attempts
         elif case == 'terminate':
-            assert owner.cleanup(time.monotonic_ns() + 300_000_000, terminate=True)['state'] == 'clean'
+            assert owner.cleanup(retirement, terminate=True)['state'] == 'clean'
             assert os.WIFSIGNALED(owner._wait_status)
             assert os.WTERMSIG(owner._wait_status) == signal.SIGKILL
         elif case == 'true':
             descriptors = tuple(fd for fd in owner._fds.values() if fd is not None)
-            assert owner.cleanup(time.monotonic_ns() + 300_000_000)['state'] == 'clean'
+            assert owner.cleanup(retirement)['state'] == 'clean'
             for fd in descriptors:
                 try:
                     os.fstat(fd)
@@ -256,7 +260,16 @@ try:
         assert owner._exit_observed and owner._wait_status is not None
         assert all(fd is None for fd in owner._fds.values())
         assert owner._fds['kqueue'] is None
-        assert time.monotonic_ns() < owner._deadline
+        assert owner._retirement_id == retirement
+        assert owner.cleanup(retirement, terminate=True)['state'] == 'clean'
+        assert owner.close_stdin(retirement)['state'] == 'clean'
+        for completed in (owner.cleanup, owner.close_stdin):
+            try:
+                completed(str(uuid.uuid4()))
+            except broker.OwnershipError:
+                pass
+            else:
+                raise AssertionError('clean receipt returned for another retirement')
         try:
             os.waitpid(owner.pid, os.WNOHANG)
         except ChildProcessError:
@@ -332,8 +345,8 @@ try:
     else:
         raise AssertionError('fault queue physically open')
     assert owner.resume()['state'] == 'unknown'
-    assert owner.cleanup(time.monotonic_ns() + 300_000_000, terminate=True)['state'] == 'unknown'
-    assert owner.close_stdin(time.monotonic_ns() + 300_000_000)['state'] == 'unknown'
+    assert owner.cleanup('invalid', terminate=True)['state'] == 'unknown'
+    assert owner.close_stdin('invalid')['state'] == 'unknown'
     assert owner._fds == snapshot
     assert broker._ROOTS == [owner] and broker._INVOKED
     try:
@@ -356,28 +369,22 @@ print(json.dumps({'case': case, 'state': owner.state}))
 
 
 class BrokerValidationTests(unittest.TestCase):
-    def test_deadline_is_uint64_monotonic_nanoseconds_without_conversion_or_reset(self):
-        now = 9_000_000_000
-        for deadline in (True, False, float(now + 1), None, -1, 1 << 64,
-                         now, now - 1, now + 300_000_001):
-            with self.subTest(deadline=deadline), \
-                    patch.object(broker.time, 'monotonic_ns', return_value=now):
+    def test_retirement_is_canonical_uuid4_without_conversion_or_reset(self):
+        identity = str(uuid.uuid4())
+        for invalid in (True, False, 1.0, None, -1, 1 << 64, '',
+                        identity.upper(), identity.replace('-', ''), str(uuid.UUID(int=0))):
+            with self.subTest(identity=invalid):
                 owner = broker._CLIResourceOwner(False)
                 with self.assertRaises(broker.OwnershipError):
-                    owner._begin_cleanup(deadline)
-                self.assertIsNone(owner._deadline)
+                    owner._begin_cleanup(invalid)
+                self.assertIsNone(owner._retirement_id)
                 self.assertEqual(owner._fds, {})
         owner = broker._CLIResourceOwner(False)
-        deadline = now + 300_000_000
-        with patch.object(broker.time, 'monotonic_ns', return_value=now):
-            owner._begin_cleanup(deadline)
-            owner._begin_cleanup(deadline)
-            with self.assertRaises(broker.OwnershipError):
-                owner._begin_cleanup(deadline - 1_000_000)
-        self.assertEqual(owner._deadline, deadline)
-        with patch.object(broker.time, 'monotonic_ns', return_value=deadline):
-            with self.assertRaises(broker.OwnershipError):
-                owner._clock()
+        owner._begin_cleanup(identity)
+        owner._begin_cleanup(identity)
+        with self.assertRaises(broker.OwnershipError):
+            owner._begin_cleanup(str(uuid.uuid4()))
+        self.assertEqual(owner._retirement_id, identity)
 
     def test_non_darwin_has_no_owner_or_native_effects(self):
         with patch.object(broker.sys, 'platform', 'linux'), \
@@ -453,8 +460,8 @@ class BrokerValidationTests(unittest.TestCase):
 @unittest.skipUnless(sys.platform == 'darwin', 'public Darwin spawn/kqueue fixtures')
 class DarwinCLIResourceOwnerTests(unittest.TestCase):
     def test_fresh_process_per_actual_resource_case(self):
-        for case in ('suspended', 'true', 'cat', 'fork', 'expired', 'tooFar',
-                     'changedDeadline', 'facadeLoss', 'badClose', 'terminate',
+        for case in ('suspended', 'true', 'cat', 'fork', 'invalidIdentity', 'nonV4',
+                     'changedIdentity', 'slowCleanup', 'facadeLoss', 'badClose', 'terminate',
                      'badRegistration', 'injectedCloseEINTR'):
             with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory).resolve()
@@ -469,7 +476,7 @@ class DarwinCLIResourceOwnerTests(unittest.TestCase):
                 record = json.loads(result.stdout)
                 self.assertEqual(record['case'], case)
                 self.assertEqual(record['state'], 'unknown' if case in (
-                    'fork', 'expired', 'tooFar', 'changedDeadline', 'facadeLoss',
+                    'fork', 'invalidIdentity', 'nonV4', 'changedIdentity', 'facadeLoss',
                     'badClose', 'badRegistration', 'injectedCloseEINTR') else 'clean')
 
 
@@ -498,29 +505,35 @@ class BrokerControlValidationTests(unittest.TestCase):
 
     def test_closed_frames_split_at_every_byte(self):
         run = str(uuid.uuid4())
+        retirement = str(uuid.uuid4())
         cases = [('hello', {}), ('run', dict(startupDeadlineNs=123, cwdDevice=1, cwdInode=2)),
                  ('running', {}), ('dispatch', {}), ('dispatching', {}),
                  ('revokeNeeded', dict(code='cliExit')),
                  ('revokeNeeded', dict(code='sessionLimit')),
                  ('revokeNeeded', dict(code='scopeRetire')),
-                 ('revoke', dict(deadlineNs=123)),
-                 ('cliRetired', dict(deadlineNs=123, scope='localDirectCLIResources', waitStatus=0)),
-                 ('preLaunchRetired', dict(deadlineNs=123)), ('brokerOffered', {}),
-                 ('reapBroker', dict(deadlineNs=123)),
-                 ('brokerReaped', dict(deadlineNs=123, waitStatus=0))]
+                 ('revoke', dict(retirementID=retirement)),
+                 ('cliRetired', dict(retirementID=retirement, scope='localDirectCLIResources', waitStatus=0)),
+                 ('preLaunchRetired', dict(retirementID=retirement)), ('brokerOffered', {}),
+                 ('reapBroker', dict(retirementID=retirement)),
+                 ('brokerReaped', dict(retirementID=retirement, waitStatus=0))]
         for op, fields in cases:
             with self.subTest(op=op):
                 self.assertEqual(self.decode(self.control.encode_control(run, op, **fields)),
-                                 dict(v=1, runID=run, op=op, **fields))
+                                 dict(v=2, runID=run, op=op, **fields))
 
     def test_malformed_closed_json_and_lengths(self):
         run = str(uuid.uuid4())
-        valid = dict(v=1, runID=run, op='revoke', deadlineNs=123)
-        invalid = [dict(valid, v=True), dict(valid, deadlineNs=True),
-                   dict(valid, deadlineNs=1.0), dict(valid, deadlineNs=-1),
-                   dict(valid, deadlineNs=1 << 64), dict(valid, pid=os.getpid()),
+        retirement = str(uuid.uuid4())
+        valid = dict(v=2, runID=run, op='revoke', retirementID=retirement)
+        invalid = [dict(valid, v=True), dict(valid, v=1),
+                   dict(v=1, runID=run, op='revoke', deadlineNs=123),
+                   dict(valid, retirementID=True), dict(valid, retirementID=1.0),
+                   dict(valid, retirementID=retirement.upper()),
+                   dict(valid, retirementID=retirement.replace('-', '')),
+                   dict(valid, retirementID=str(uuid.UUID(int=0))),
+                   dict(valid, deadlineNs=123), dict(valid, pid=os.getpid()),
                    dict(valid, runID=run.upper()), dict(valid, op='initialize'),
-                   {key: value for key, value in valid.items() if key != 'deadlineNs'}]
+                   {key: value for key, value in valid.items() if key != 'retirementID'}]
         for value in invalid:
             raw = json.dumps(value).encode()
             with self.subTest(value=value), self.assertRaises((ValueError, self.control.ControlError)):
@@ -625,7 +638,7 @@ class BrokerControlValidationTests(unittest.TestCase):
                 patch.object(self.control.time, 'monotonic_ns', return_value=200):
             role.priority()  # Dispatch disables only the startup timer.
             self.assertFalse(role.frozen)
-            role.deadline = 250
+            role.latch(str(uuid.uuid4()))
             with patch.object(role, 'retire', side_effect=RuntimeError('actualD')) as retire:
                 with self.assertRaisesRegex(RuntimeError, 'actualD'):
                     role.priority()
@@ -705,7 +718,7 @@ class BrokerControlValidationTests(unittest.TestCase):
                 for _ in range(5):
                     role.relay_once()
             self.assertTrue(role.frozen)
-            self.assertIsNone(role.deadline)
+            self.assertIsNone(role.retirement_id)
             self.assertEqual((role.input_bytes, role.input_lines), (8, 4))
             self.assertEqual(os.read(source, 2), b'e\n')
             self.assertEqual(self.decode(bytes(role.control_out))['code'], 'sessionLimit')
@@ -757,17 +770,20 @@ class BrokerControlValidationTests(unittest.TestCase):
             for fd in (source, writer, sink, destination):
                 os.close(fd)
 
-    def test_single_deadline_and_sticky_primitive_observation(self):
+    def test_single_retirement_and_sticky_primitive_observation(self):
         now = 9_000_000_000
         owner = self.control._Resources()
         with patch.object(self.control.time, 'monotonic_ns', return_value=now):
-            for bad in (True, 1.0, now, now + 300_000_001, 1 << 64):
+            for bad in (True, 1.0, now, '', str(uuid.UUID(int=0))):
                 with self.assertRaises(self.control.ControlError):
                     owner.latch(bad)
-            owner.latch(now + 300_000_000)
-            owner.latch(now + 300_000_000)
+            identity = str(uuid.uuid4())
+            owner.latch(identity)
+            owner.latch(identity)
             with self.assertRaises(self.control.ControlError):
-                owner.latch(now + 299_000_000)
+                owner.latch(str(uuid.uuid4()))
+        with patch.object(self.control.time, 'monotonic_ns', return_value=now + 10_000_000_000):
+            owner.clock()  # Slow cleanup does not expire.
         primitive = broker._CLIResourceOwner(False)
         primitive._state = 'running'
         with patch.object(primitive, '_events', side_effect=broker.OwnershipError('forkObserved')) as events:
@@ -895,6 +911,7 @@ assert case != 'longCwd' or len(os.fsencode(root)) > 104
 cwd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
 original = os.stat('.')
 run = str(uuid.uuid4())
+retirement = str(uuid.uuid4())
 startup = time.monotonic_ns() + (3_000_000_000 if case == 'dispatchDeadline' else 8_000_000_000)
 report_r, report_w = os.pipe()
 native, lifecycle = socket.socketpair()
@@ -979,7 +996,7 @@ if worker == 0:
             if status == 0:
                 assert role.state == 'clean'
                 assert all(fd is None for fd in role.fds.values())
-                assert role.deadline > time.monotonic_ns()
+                assert role.retirement_id == retirement
                 if role.factory_entered:
                     assert role.cli.record['state'] == 'clean'
                     assert role.cli.record['scope'] == 'localDirectCLIResources'
@@ -1012,7 +1029,7 @@ if worker == 0:
             if cli is not None and cli.state == 'unknown':
                 assert cli in broker._ROOTS
                 assert cli.observe_pending()['state'] == 'unknown'
-                assert cli.cleanup(time.monotonic_ns() + 300_000_000, terminate=True)['state'] == 'unknown'
+                assert cli.cleanup(retirement, terminate=True)['state'] == 'unknown'
                 assert cli._fds == debt
             fork_reaped = False
             if case == 'fork':
@@ -1050,11 +1067,11 @@ if worker == 0:
             result = original_close(role, name, deadline)
             if case == 'lateClose' and name == 'stdin':
                 # Inject a delayed return after the actual checked close.
-                time.sleep(max(0, (role.deadline - time.monotonic_ns()) / 1e9) + 0.01)
+                time.sleep(0.35)
             return result
 
-        def send_pending(role, deadline):
-            if case == 'preHelloRevoke' and role.deadline is None:
+        def send_pending(role, deadline=None):
+            if case == 'preHelloRevoke' and role.retirement_id is None:
                 packet(evidence_w, dict(helloPending=True))
                 assert exact(teardown_r, 1) == b'H'
             if case == 'afterCleanSend' and role.cli is not None and role.cli.state == 'clean':
@@ -1166,29 +1183,27 @@ if worker == 0:
         packet(report_w, dict(worker=os.getpid(), broker=broker_pid))
         instruction = message(lifecycle.fileno())
         assert instruction['op'] == 'reapBroker' and instruction['runID'] == run
-        deadline = instruction['deadlineNs']
-        reaped = authenticated.wait_direct_child(deadline)
+        retirement = instruction['retirementID']
+        reaped = authenticated.wait_direct_child(retirement)
         assert reaped.wait_status == 0
-        rendezvous.retire(deadline)
+        rendezvous.retire(retirement)
         assert rendezvous.state == 'clean' and rendezvous.entry is None
-        send(lifecycle.fileno(), run, 'brokerReaped', deadlineNs=deadline, waitStatus=reaped.wait_status)
-        lifecycle_owner.latch(deadline)
+        send(lifecycle.fileno(), run, 'brokerReaped', retirementID=retirement, waitStatus=reaped.wait_status)
+        lifecycle_owner.latch(retirement)
         lifecycle_owner.close('lifecycle')
         lifecycle.detach()
         packet(report_w, dict(case=case, outcome='clean'))
         os._exit(0)
     if case == 'preHelloRevoke':
         assert message(evidence_r)['helloPending']
-        deadline = time.monotonic_ns() + 300_000_000
-        send(fd, run, 'revoke', deadlineNs=deadline)
+        send(fd, run, 'revoke', retirementID=retirement)
         os.write(teardown_w, b'H')
     assert message(fd)['op'] == 'hello'
     if case == 'preHelloRevoke':
         retired = message(fd)
-        assert retired['op'] == 'preLaunchRetired' and retired['deadlineNs'] == deadline
+        assert retired['op'] == 'preLaunchRetired' and retired['retirementID'] == retirement
     elif case in ('preFactory', 'preFactoryRun'):
-        deadline = time.monotonic_ns() + 300_000_000
-        raw = control.encode_control(run, 'revoke', deadlineNs=deadline)
+        raw = control.encode_control(run, 'revoke', retirementID=retirement)
         if case == 'preFactoryRun':
             info = os.fstat(cwd)
             raw = control.encode_control(run, 'run', startupDeadlineNs=startup,
@@ -1204,8 +1219,7 @@ if worker == 0:
              cwdInode=info.st_ino + (1 if case == 'wrongNamespace' else 0))
         if case == 'factoryRevoke':
             assert message(evidence_r)['factoryCaptured']
-            deadline = time.monotonic_ns() + 300_000_000
-            send(fd, run, 'revoke', deadlineNs=deadline)
+            send(fd, run, 'revoke', retirementID=retirement)
             os.write(teardown_w, b'R')
             retired = message(fd)
             assert retired['op'] == 'cliRetired'
@@ -1220,7 +1234,7 @@ if worker == 0:
                     assert exact(parent_out, 7) == b'prefix\x00'
                 send(fd, run, 'dispatch')
                 ack = message(fd)
-                assert ack == dict(v=1, runID=run, op='dispatching')
+                assert ack == dict(v=2, runID=run, op='dispatching')
                 if case == 'dispatchDeadline':
                     time.sleep(max(0, (startup - time.monotonic_ns()) / 1e9) + 0.05)
                 if case in ('dispatchCat', 'dispatchPartial', 'dispatchDeadline'):
@@ -1286,38 +1300,38 @@ if worker == 0:
                 os.write(fd, struct.pack('!I', len(raw)) + raw)
             elif case == 'duplicateRun':
                 send(fd, run, 'run', startupDeadlineNs=startup, cwdDevice=info.st_dev, cwdInode=info.st_ino)
-            elif case in ('boolDeadline', 'floatDeadline', 'expiredDeadline', 'farDeadline'):
-                value = {'boolDeadline': True, 'floatDeadline': float(time.monotonic_ns()),
-                         'expiredDeadline': time.monotonic_ns() - 1,
-                         'farDeadline': time.monotonic_ns() + 1_000_000_000}[case]
-                packet(fd, dict(v=1, runID=run, op='revoke', deadlineNs=value))
+            elif case in ('boolRetirement', 'numericRetirement', 'nonV4Retirement', 'noncanonicalRetirement'):
+                value = {'boolRetirement': True, 'numericRetirement': 123,
+                         'nonV4Retirement': str(uuid.UUID(int=0)),
+                         'noncanonicalRetirement': retirement.upper()}[case]
+                packet(fd, dict(v=2, runID=run, op='revoke', retirementID=value))
+            elif case == 'oldVersion':
+                packet(fd, dict(v=1, runID=run, op='revoke', deadlineNs=123))
             else:
-                deadline = time.monotonic_ns() + 300_000_000
-                raw = control.encode_control(run, 'revoke', deadlineNs=deadline)
-                if case in ('duplicateDeadline', 'dispatchDuplicateDeadline'):
+                raw = control.encode_control(run, 'revoke', retirementID=retirement)
+                if case in ('duplicateRetirement', 'dispatchDuplicateRetirement'):
                     raw += raw
-                if case == 'changedDeadline':
-                    raw += control.encode_control(run, 'revoke', deadlineNs=deadline - 1)
+                if case == 'changedRetirement':
+                    raw += control.encode_control(run, 'revoke', retirementID=str(uuid.uuid4()))
                 if case == 'partialControl':
                     raw += b'\x00\x00'
                 os.write(fd, raw)
-                if case not in ('changedDeadline', 'waitECHILD', 'afterCleanSend'):
+                if case not in ('changedRetirement', 'waitECHILD', 'afterCleanSend'):
                     retired = message(fd)
-                    assert retired['op'] == 'cliRetired' and retired['deadlineNs'] == deadline
+                    assert retired['op'] == 'cliRetired' and retired['retirementID'] == retirement
                     assert retired['scope'] == 'localDirectCLIResources'
     if case in ('cumulativeFlood', 'lineFlood', 'inputRecordFlood', 'inputLineFlood', 'dispatchRecords', 'dispatchBytes'):
         needed = message(fd)
         assert needed['op'] == 'revokeNeeded' and needed['code'] == 'sessionLimit'
-        deadline = time.monotonic_ns() + 300_000_000
-        send(fd, run, 'revoke', deadlineNs=deadline)
+        send(fd, run, 'revoke', retirementID=retirement)
         retired = message(fd)
-        assert retired['op'] == 'cliRetired' and retired['deadlineNs'] == deadline
+        assert retired['op'] == 'cliRetired' and retired['retirementID'] == retirement
         assert retired['scope'] == 'localDirectCLIResources'
     unknown = case in ('fork', 'watchError', 'wrongNamespace', 'waitECHILD', 'controlEOF',
         'earlyDispatch', 'duplicateDispatch', 'staleDispatch',
-        'badLength', 'badJSON', 'duplicateRun', 'boolDeadline', 'floatDeadline',
-        'expiredDeadline', 'farDeadline', 'changedDeadline', 'afterCleanClose', 'afterCleanEINTR', 'afterCleanSend',
-        'partialControl', 'lateClose')
+        'badLength', 'badJSON', 'duplicateRun', 'boolRetirement', 'numericRetirement',
+        'nonV4Retirement', 'noncanonicalRetirement', 'oldVersion', 'changedRetirement', 'afterCleanClose', 'afterCleanEINTR', 'afterCleanSend',
+        'partialControl')
     if unknown:
         evidence = message(evidence_r)
         assert evidence['state'] == 'unknown'
@@ -1327,7 +1341,7 @@ if worker == 0:
             assert evidence['live']['stdin'] == (case == 'afterCleanEINTR')
         elif case == 'afterCleanSend':
             assert evidence['cli']['state'] == 'clean' and not evidence['live']['control']
-        elif case in ('partialControl', 'lateClose'):
+        elif case == 'partialControl':
             assert evidence['cli']['state'] == 'clean' and evidence['live']['control']
         elif case in ('wrongNamespace', 'earlyDispatch'):
             assert evidence['cli'] is None and not evidence['factoryEntered']
@@ -1343,8 +1357,8 @@ if worker == 0:
         assert authenticated.reaped is None
         packet(report_w, dict(case=case, outcome='unknown'))
     else:
-        record = authenticated.wait_direct_child(deadline)
-        assert record.wait_status == 0 and time.monotonic_ns() < deadline
+        record = authenticated.wait_direct_child(retirement)
+        assert record.wait_status == 0 and record.retirement_id == retirement
         evidence = message(evidence_r)
         assert evidence['exit'] == 0 and evidence['state'] == 'clean'
         assert evidence['inputBytes'] <= 262160 and evidence['stdoutBytes'] <= 262160
@@ -1360,7 +1374,7 @@ if worker == 0:
             assert evidence['physicalPressure'] > 0
             assert evidence['inputBytes'] == 260000 and evidence['stdoutBytes'] == 260000
         assert evidence['calls'] == (0 if case in ('preFactory', 'preFactoryRun', 'preHelloRevoke') else 1)
-        rendezvous.retire(deadline)
+        rendezvous.retire(retirement)
         assert rendezvous.state == 'clean'
         packet(report_w, dict(case=case, outcome='clean'))
     os._exit(0)
@@ -1389,14 +1403,13 @@ if case == 'scmRights':
     info = os.fstat(cwd)
     send(endpoint, run, 'run', startupDeadlineNs=startup, cwdDevice=info.st_dev, cwdInode=info.st_ino)
     assert message(endpoint)['op'] == 'running'
-    deadline = time.monotonic_ns() + 300_000_000
-    send(endpoint, run, 'revoke', deadlineNs=deadline)
+    send(endpoint, run, 'revoke', retirementID=retirement)
     retired = message(endpoint)
     assert retired['op'] == 'cliRetired' and retired['scope'] == 'localDirectCLIResources'
-    send(native.fileno(), run, 'reapBroker', deadlineNs=deadline)
+    send(native.fileno(), run, 'reapBroker', retirementID=retirement)
     reaped = message(native.fileno())
     assert reaped['op'] == 'brokerReaped' and reaped['waitStatus'] == 0
-    assert reaped['deadlineNs'] == deadline
+    assert reaped['retirementID'] == retirement
     os.close(endpoint)  # Fixture Native-owned duplicate, not worker's witness.
 result = message(report_r)
 pid, status = os.waitpid(worker, 0)
@@ -1409,7 +1422,7 @@ print(json.dumps(result))
 
 @unittest.skipUnless(sys.platform == 'darwin', 'authenticated public Darwin broker role')
 class DarwinBrokerRoleTests(unittest.TestCase):
-    def test_direct_authenticated_close_is_irreversible_and_uses_latched_deadline(self):
+    def test_direct_authenticated_close_is_irreversible_after_retirement(self):
         script = r'''
 import ctypes
 import errno
@@ -1447,7 +1460,7 @@ try:
     raw.close.argtypes, raw.close.restype = [ctypes.c_int], ctypes.c_int
     close_calls = []
     owner.lib = raw
-    deadline = time.monotonic_ns() + 300_000_000
+    retirement = str(uuid.uuid4())
     if case == 'failedWait':
         def failed_wait(*args):
             ctypes.set_errno(errno.ECHILD)
@@ -1455,13 +1468,13 @@ try:
         raw.waitpid = failed_wait
         with patch.object(control.ctypes, 'CDLL', return_value=raw):
             try:
-                owner.wait_direct_child(deadline)
+                owner.wait_direct_child(retirement)
             except control.ControlError:
                 pass
             else:
                 raise AssertionError('injected failed wait succeeded')
     else:
-        owner.latch(deadline)
+        owner.latch(retirement)
         if case == 'unknown':
             owner.unknown()
         elif case == 'eintr':
@@ -1477,17 +1490,13 @@ try:
             return
         raise AssertionError(('descriptor effect accepted', case, name))
     with patch.object(control.os, 'fstat', wraps=actual_fstat) as observations:
-        if case == 'expired':
-            with patch.object(control.time, 'monotonic_ns', return_value=deadline + 1):
-                refuse('control')
-        else:
-            explicit = {'changed': deadline + 1, 'bool': True,
-                        'float': float(deadline), 'huge': 1 << 64}.get(case)
-            refuse('control', explicit)
+        explicit = {'startupBound': time.monotonic_ns() + 300_000_000, 'bool': True,
+                    'float': 1.0, 'huge': 1 << 64}.get(case)
+        refuse('control', explicit)
         assert owner.state == 'unknown' and owner.fds['control'] is not None
         before = observations.call_count
-        refuse('control', deadline + 1)
-        refuse('other', deadline)
+        refuse('control', time.monotonic_ns() + 1)
+        refuse('other')
         assert observations.call_count == before, 'observation after uncertainty'
         assert len(close_calls) == (1 if case == 'eintr' else 0)
         for fd in owner.fds.values():
@@ -1508,7 +1517,7 @@ finally:
         os.close(fd)
     os.close(cwd)
 '''
-        for case in ('unknown', 'eintr', 'failedWait', 'changed', 'expired', 'bool', 'float', 'huge'):
+        for case in ('unknown', 'eintr', 'failedWait', 'startupBound', 'bool', 'float', 'huge'):
             with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory).resolve()
                 root.chmod(0o700)
@@ -1584,15 +1593,15 @@ os.close(fd)
     def test_actual_fresh_role_lifecycle_and_retained_unknown(self):
         unknown = {'fork', 'watchError', 'wrongNamespace', 'waitECHILD', 'controlEOF',
                    'earlyDispatch', 'duplicateDispatch', 'staleDispatch',
-                   'badLength', 'badJSON', 'duplicateRun', 'boolDeadline', 'floatDeadline',
-                   'expiredDeadline', 'farDeadline', 'changedDeadline', 'afterCleanClose', 'afterCleanEINTR', 'afterCleanSend',
-                   'partialControl', 'lateClose'}
+                   'badLength', 'badJSON', 'duplicateRun', 'boolRetirement', 'numericRetirement',
+                   'nonV4Retirement', 'noncanonicalRetirement', 'oldVersion', 'changedRetirement', 'afterCleanClose', 'afterCleanEINTR', 'afterCleanSend',
+                   'partialControl'}
         cases = ('cat', 'partialIO', 'earlyExit', 'preFactory', 'preFactoryRun', 'preHelloRevoke', 'factoryRevoke', 'longCwd',
                  'cumulativeFlood', 'lineFlood', 'inputRecordFlood', 'inputLineFlood',
                  'dispatchCat', 'dispatchPartial', 'dispatchDeadline', 'dispatchSink', 'dispatchRecords', 'dispatchBytes',
-                 'dispatchDuplicateDeadline',
+                 'dispatchDuplicateRetirement', 'lateClose',
                  'dispatchPressure',
-                 'duplicateDeadline', 'scmRights', 'wrongParent', *sorted(unknown))
+                 'duplicateRetirement', 'scmRights', 'wrongParent', *sorted(unknown))
         for case in cases:
             with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory).resolve()

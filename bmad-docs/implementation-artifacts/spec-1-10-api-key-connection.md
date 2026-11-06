@@ -1,5 +1,24 @@
 # Story 1.10 Build Spec — Native API-Key Connection
 
+## User-authorized exclusive slot ownership — 2026-11-07
+
+The user authorized exclusive coordination for API-key replacement and cleanup.
+One cooperating store owner holds a nonblocking directory `flock` for its lifetime;
+outstanding consumer leases and probes retain that ownership through teardown.
+Reads do not repeatedly acquire a global lock. Root replacement or a competing
+owner fails closed.
+
+Newly created slots carry a durable record bound to the root and slot inode.
+After exclusive acquisition, startup reconciliation may remove only recorded
+prior-owner slots that are not protected by the durable selector or current owner.
+Do not reinterpret an unmarked, copied, malformed or mismatched file as an orphan.
+Selection changes still use the sole durable CAS; a key held by a live consumer
+cannot be removed before actual termination releases its lease.
+
+Actual API-key validation is explicitly skipped by user instruction. One bounded
+dummy-key request returned HTTP 401 / `invalid_api_key`; that proves negative
+authentication transport only, not connection eligibility or model enforcement.
+
 ## Current shared Provider routing contract — 2026-10-14
 
 Whole-Epic G002 continues at integration baseline `a7de6d6`. The existing sole

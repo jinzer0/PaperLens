@@ -5,11 +5,28 @@ import PDFKit
 import XCTest
 @testable import PaperLensProduct
 
+private final class MetadataObservedPDFDocument: PDFDocument {
+  var onAttributes: (() -> Void)?
+  override var documentAttributes: [AnyHashable: Any]? {
+    get {
+      let attributes = super.documentAttributes
+      let callback = onAttributes
+      onAttributes = nil
+      callback?()
+      return attributes
+    }
+    set { super.documentAttributes = newValue }
+  }
+}
+
 /// Controlled position observations/reentry, not visible-frame or renderer evidence.
 @MainActor private final class MetadataObservedPDFView: PDFView {
   var observedDestination: PDFDestination?
   var onObservation: (() -> Void)?
   var onNavigation: (() -> Void)?
+  var requestedLocation: ReaderConfirmedLocation?
+  var requestedZoom: CGFloat?
+  var navigationCount = 0
   override var currentDestination: PDFDestination? {
     let result = observedDestination
     let callback = onObservation
@@ -18,6 +35,12 @@ import XCTest
     return result
   }
   override func go(to destination: PDFDestination) {
+    navigationCount += 1
+    if let page = destination.page, let document = page.document {
+      requestedLocation = ReaderConfirmedLocation(pageIndex: document.index(for: page),
+        x: Double(destination.point.x), y: Double(destination.point.y))
+    }
+    requestedZoom = destination.zoom
     super.go(to: destination)
     let callback = onNavigation
     onNavigation = nil
@@ -28,16 +51,20 @@ import XCTest
 @MainActor private final class MetadataBindingOwner {
   let session: ReaderSession
   let view = MetadataObservedPDFView()
+  private let database: ProductDatabase
+  private(set) var admittedIdentity: AnnotationPaperIdentity?
   var binding: ReaderMetadataBinding?
   var onDiscard: (() -> Void)?
 
   init(database: ProductDatabase, lifecycle: LocalLibraryLifecycle) {
+    self.database = database
     session = ReaderSession(database: database,
       leaseProvider: LibraryReadLeaseProvider(lifecycle: lifecycle))
   }
   func open(paperID: UUID) throws {
+    admittedIdentity = try database.annotationIdentity(paperID: paperID)
     try session.open(paperID: paperID, validateDocument: { url in
-      let document = try XCTUnwrap(PDFDocument(url: url))
+      let document = try XCTUnwrap(MetadataObservedPDFDocument(url: url))
       self.view.document = document
       return document.pageCount
     }, discard: { [weak self] in
@@ -57,7 +84,7 @@ import XCTest
 }
 
 @MainActor final class ReaderMetadataBindingTests: XCTestCase {
-  private func fixture() async throws
+  private func fixture(publishExtraction: Bool = true) async throws
     -> (ProductDatabase, LocalLibraryLifecycle, ReaderMetadataIdentity, MetadataBindingOwner) {
     let temporary = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
@@ -79,6 +106,7 @@ import XCTest
       pdfSHA256: annotation.pdfSHA256, pdfReference: paper.pdfReference, revisionID: UUID())
     // SQL models already-published visibility; it is not extraction producer proof.
     try database.adapterWrite { db in
+      guard publishExtraction else { return }
       try db.execute(sql: """
         INSERT INTO extractionRevision(id, paperID, generation, pdfSHA256, pdfReference)
         VALUES (?, ?, ?, ?, ?)
@@ -92,10 +120,11 @@ import XCTest
     return (database, lifecycle, identity, owner)
   }
 
-  private func mount(_ database: ProductDatabase, _ identity: ReaderMetadataIdentity,
+  private func mount(_ database: ProductDatabase, _ identity: ReaderMetadataIdentity?,
     _ owner: MetadataBindingOwner) throws -> ReaderMetadataBinding {
     let binding = try ReaderMetadataBinding(session: owner.session,
-      service: ReaderMetadataService(database: database), identity: identity,
+      service: ReaderMetadataService(database: database),
+      admittedIdentity: XCTUnwrap(owner.admittedIdentity), identity: identity,
       view: owner.view, document: XCTUnwrap(owner.view.document))
     owner.binding = binding
     return binding
@@ -113,6 +142,235 @@ import XCTest
     invalid.destination = PDFDestination(page: PDFPage(), at: .zero)
     root.insertChild(first, at: 0); root.insertChild(second, at: 1); root.insertChild(invalid, at: 2)
     document.outlineRoot = root
+  }
+
+  func testOpenedSubscriberHashChangeCannotRelabelAdmittedPDFBeforeMetadataMount() async throws {
+    let (db, lifecycle, identity, owner) = try await fixture(publishExtraction: false)
+    owner.session.close()
+    let session = ReaderSession(database: db,
+      leaseProvider: LibraryReadLeaseProvider(lifecycle: lifecycle))
+    defer { session.close() }
+    let presentation = ReaderPresentation(session: session,
+      annotationIdentity: try db.annotationIdentity(paperID: identity.paperID),
+      annotationService: AnnotationService(database: db),
+      metadataService: ReaderMetadataService(database: db), metadataIdentity: nil)
+    var changed = false
+    let subscription = presentation.$opened.sink { opened in
+      guard opened, !changed else { return }
+      changed = true
+      presentation.pdfView.document?.documentAttributes = [PDFDocumentAttribute.titleAttribute: "Admitted A"]
+      do {
+        try db.adapterWrite {
+          try $0.execute(sql: "UPDATE paper SET pdfSHA256 = ? WHERE id = ?",
+            arguments: [String(repeating: "b", count: 64), identity.paperID.uuidString])
+        }
+      } catch { XCTFail("Owned hash mutation failed: \(error)") }
+    }
+    defer { subscription.cancel() }
+    presentation.open(paperID: identity.paperID)
+    XCTAssertTrue(changed)
+    XCTAssertTrue(presentation.opened)
+    XCTAssertNotNil(presentation.pdfView.document)
+    XCTAssertNil(presentation.metadataBinding)
+    XCTAssertNotNil(presentation.metadataFailure)
+  }
+
+  func testNativeRemountRejectsChangedHashInsteadOfRecapturingIt() async throws {
+    let (db, lifecycle, identity, owner) = try await fixture()
+    owner.session.close()
+    let session = ReaderSession(database: db,
+      leaseProvider: LibraryReadLeaseProvider(lifecycle: lifecycle))
+    defer { session.close() }
+    let presentation = ReaderPresentation(session: session,
+      annotationIdentity: try db.annotationIdentity(paperID: identity.paperID),
+      annotationService: AnnotationService(database: db),
+      metadataService: ReaderMetadataService(database: db), metadataIdentity: identity)
+    presentation.open(paperID: identity.paperID)
+    let old = try XCTUnwrap(presentation.metadataBinding)
+    let document = try XCTUnwrap(presentation.pdfView.document)
+    try db.adapterWrite {
+      try $0.execute(sql: "UPDATE paper SET pdfSHA256 = ? WHERE id = ?",
+        arguments: [String(repeating: "b", count: 64), identity.paperID.uuidString])
+    }
+    presentation.replaceMetadataIdentity(nil)
+    XCTAssertNil(old.state)
+    XCTAssertNil(presentation.metadataBinding)
+    XCTAssertNotNil(presentation.metadataFailure)
+    XCTAssertTrue(presentation.pdfView.document === document)
+  }
+
+  func testNativeRefreshCannotOverwriteSamePositionObservedAgainstNewOutline() async throws {
+    let (db, _, _, owner) = try await fixture(publishExtraction: false)
+    defer { owner.session.close() }
+    try outline(owner)
+    let document = try XCTUnwrap(owner.view.document as? MetadataObservedPDFDocument)
+    let page = try XCTUnwrap(document.page(at: 0))
+    let binding = try mount(db, nil, owner)
+    owner.view.scaleFactor = 1
+    owner.view.observedDestination = PDFDestination(page: page, at: CGPoint(x: 20, y: 150))
+    try binding.observePosition()
+    XCTAssertEqual(binding.state?.activeSectionID, "/1")
+    let observed = binding.state?.observedLocation
+    var reentered = false
+    document.onAttributes = {
+      reentered = true
+      let root = PDFOutline(), section = PDFOutline()
+      section.label = "Replacement"
+      section.destination = PDFDestination(page: page, at: CGPoint(x: 20, y: 500))
+      root.insertChild(section, at: 0)
+      document.outlineRoot = root
+      do { try binding.observePosition() }
+      catch { XCTFail("New observation failed: \(error)") }
+    }
+    XCTAssertThrowsError(try binding.refresh()) {
+      XCTAssertEqual($0 as? ReaderMetadataError, .staleConfirmation)
+    }
+    XCTAssertTrue(reentered)
+    XCTAssertEqual(binding.state?.observedLocation, observed)
+    XCTAssertEqual(binding.state?.sections.map(\.title), ["Replacement"])
+    XCTAssertEqual(binding.state?.activeSectionID, "/0")
+  }
+
+  func testNativeRefreshIsSupersededByFailedObservationEvenWhenAlreadyUnconfirmed() async throws {
+    let (db, _, _, owner) = try await fixture(publishExtraction: false)
+    defer { owner.session.close() }
+    let document = try XCTUnwrap(owner.view.document as? MetadataObservedPDFDocument)
+    let binding = try mount(db, nil, owner)
+    XCTAssertNil(binding.state?.observedLocation)
+    var reentered = false
+    document.onAttributes = {
+      reentered = true
+      owner.view.observedDestination = nil
+      do {
+        try binding.observePosition()
+        XCTFail("Missing destination must reject observation")
+      } catch {
+        XCTAssertEqual(error as? ReaderMetadataError, .invalidDestination)
+      }
+    }
+    XCTAssertThrowsError(try binding.refresh()) {
+      XCTAssertEqual($0 as? ReaderMetadataError, .staleConfirmation)
+    }
+    XCTAssertTrue(reentered)
+    XCTAssertNotNil(binding.state)
+    XCTAssertNil(binding.state?.observedLocation)
+    XCTAssertNil(binding.state?.activeSectionID)
+  }
+
+  func testNativeTitleAndContentsWithoutExtractionDoNotCreateRevisionOrJob() async throws {
+    let (db, _, identity, owner) = try await fixture(publishExtraction: false)
+    defer { owner.session.close() }
+    try outline(owner)
+    owner.view.document?.documentAttributes = [
+      PDFDocumentAttribute.titleAttribute: "Native source title",
+      PDFDocumentAttribute.creationDateAttribute: Date(timeIntervalSince1970: 0),
+      PDFDocumentAttribute.subjectAttribute: "Not an abstract",
+      PDFDocumentAttribute.keywordsAttribute: ["Not a topic"]
+    ]
+    let binding = try mount(db, nil, owner)
+    XCTAssertNil(binding.identity)
+    XCTAssertEqual(binding.state?.presentation.metadata.title.candidates.map(\.text), ["Native source title"])
+    XCTAssertEqual(binding.state?.presentation.metadata.title.candidates.first?.sourceID,
+      "pdf:\(identity.pdfSHA256)")
+    XCTAssertEqual(binding.state?.presentation.metadata.year.candidates, [])
+    XCTAssertEqual(binding.state?.presentation.metadata.abstract.candidates, [])
+    XCTAssertEqual(binding.state?.presentation.metadata.topics.candidates, [])
+    XCTAssertEqual(binding.state?.sections.map(\.title), ["Introduction", "Methods", "Foreign"])
+    XCTAssertNil(binding.state?.sections.last?.location)
+    XCTAssertThrowsError(try binding.navigate(sectionID: "/2"))
+    try binding.navigate(sectionID: "/1")
+    XCTAssertNil(binding.state?.observedLocation)
+    let page = try XCTUnwrap(owner.view.document?.page(at: 0))
+    owner.view.scaleFactor = 1
+    owner.view.observedDestination = PDFDestination(page: page, at: CGPoint(x: 20, y: 150))
+    try binding.observePosition()
+    XCTAssertEqual(binding.state?.activeSectionID, "/1")
+    try binding.refresh()
+    XCTAssertEqual(binding.state?.activeSectionID, "/1")
+    XCTAssertNil(binding.state?.restorationCandidate)
+    XCTAssertNil(try db.publishedMetadataPaperIdentity(paperID: identity.paperID))
+    try db.adapterRead { sql in
+      for table in ["extractionInvocation", "extractionAttempt", "extractionRevision",
+        "extractionVisible", "readerMetadata", "readerMetadataContext"] {
+        XCTAssertEqual(try Int.fetchOne(sql, sql: "SELECT COUNT(*) FROM \(table)"), 0)
+      }
+      XCTAssertEqual(try Int.fetchOne(sql, sql: "SELECT lastReadPage FROM paper WHERE id = ?",
+        arguments: [identity.paperID.uuidString]), 0)
+    }
+  }
+
+  func testNativeContentsRevocationDuringNavigationClearsPresentation() async throws {
+    let (db, _, _, owner) = try await fixture(publishExtraction: false)
+    try outline(owner)
+    let binding = try mount(db, nil, owner)
+    owner.view.onNavigation = { owner.session.close() }
+    XCTAssertThrowsError(try binding.navigate(sectionID: "/0"))
+    XCTAssertNil(binding.state)
+    XCTAssertNil(owner.view.document)
+    XCTAssertThrowsError(try binding.refresh())
+    XCTAssertThrowsError(try binding.observePosition())
+  }
+
+  func testActualReaderMountsNativeMetadataWithoutPublishedExtraction() async throws {
+    let (db, lifecycle, identity, owner) = try await fixture(publishExtraction: false)
+    owner.session.close()
+    let session = ReaderSession(database: db,
+      leaseProvider: LibraryReadLeaseProvider(lifecycle: lifecycle))
+    defer { session.close() }
+    let presentation = ReaderPresentation(session: session,
+      annotationIdentity: try db.annotationIdentity(paperID: identity.paperID),
+      annotationService: AnnotationService(database: db),
+      metadataService: ReaderMetadataService(database: db), metadataIdentity: nil)
+    presentation.open(paperID: identity.paperID)
+    XCTAssertTrue(presentation.opened)
+    let binding = try XCTUnwrap(presentation.metadataBinding)
+    XCTAssertNil(binding.identity)
+    XCTAssertNotNil(binding.state)
+    XCTAssertNil(presentation.metadataFailure)
+    XCTAssertNil(try db.publishedMetadataPaperIdentity(paperID: identity.paperID))
+    XCTAssertEqual(try db.extractionStatus(paperID: identity.paperID).state, "notStarted")
+    session.close()
+    XCTAssertNil(binding.state)
+    XCTAssertNil(presentation.metadataBinding)
+    XCTAssertNil(presentation.pdfView.document)
+  }
+
+  func testNativeMetadataRejectsHashAndDocumentReplacement() async throws {
+    let (db, _, identity, owner) = try await fixture(publishExtraction: false)
+    defer { owner.session.close() }
+    let binding = try mount(db, nil, owner)
+    try db.adapterWrite {
+      try $0.execute(sql: "UPDATE paper SET pdfSHA256 = ? WHERE id = ?",
+        arguments: [String(repeating: "b", count: 64), identity.paperID.uuidString])
+    }
+    XCTAssertThrowsError(try binding.refresh())
+    XCTAssertNil(binding.state)
+    // Restore only the owned fixture's original identity to isolate document replacement.
+    try db.adapterWrite {
+      try $0.execute(sql: "UPDATE paper SET pdfSHA256 = ? WHERE id = ?",
+        arguments: [identity.pdfSHA256, identity.paperID.uuidString])
+    }
+    let next = try mount(db, nil, owner)
+    owner.view.document = PDFDocument()
+    XCTAssertThrowsError(try next.refresh())
+    XCTAssertNil(next.state)
+    XCTAssertThrowsError(try next.navigate(sectionID: "/0"))
+  }
+
+  func testNativeMetadataPublisherCloseCannotResurrectSnapshot() async throws {
+    let (db, _, _, owner) = try await fixture(publishExtraction: false)
+    let binding = try mount(db, nil, owner)
+    var interrupted = false
+    let subscription = binding.$state.dropFirst().sink { state in
+      guard state != nil, !interrupted else { return }
+      interrupted = true
+      owner.session.close()
+    }
+    defer { subscription.cancel(); owner.session.close() }
+    XCTAssertThrowsError(try binding.refresh())
+    XCTAssertTrue(interrupted)
+    XCTAssertNil(binding.state)
+    XCTAssertNil(owner.view.document)
   }
 
   func testRealTitleAttributeConflictAndDatesNeverBecomePublicationYear() async throws {
@@ -193,6 +451,186 @@ import XCTest
       sectionID: "/0", expected: context, for: identity)
     let next = try mount(db, identity, owner)
     XCTAssertNil(next.state?.restorationCandidate)
+  }
+
+  func testReopenedDestinationRequestsOnceAndOnlyActualObservationConfirmsSection() async throws {
+    let (db, _, identity, owner) = try await fixture()
+    let service = ReaderMetadataService(database: db)
+    let previous = try service.beginSession(for: identity)
+    let savedLocation = ReaderConfirmedLocation(pageIndex: 0, x: 20, y: 150)
+    _ = try service.saveConfirmed(savedLocation, sectionID: "obsolete",
+      expected: previous, for: identity)
+    try owner.session.save(ReaderPosition(pageIndex: 0, zoom: 2))
+    owner.session.close()
+    let reopened = try ProductDatabase.open(at: db.root)
+    try owner.open(paperID: identity.paperID)
+    defer { owner.session.close() }
+    try outline(owner)
+    owner.view.scaleFactor = 2
+    let binding = try mount(reopened, identity, owner)
+    let count = owner.view.navigationCount
+    XCTAssertTrue(try binding.restoreSavedPosition(onPage: 0))
+    XCTAssertEqual(owner.view.navigationCount, count + 1)
+    XCTAssertEqual(owner.view.requestedLocation, savedLocation)
+    XCTAssertEqual(owner.view.requestedZoom, 2)
+    XCTAssertNil(binding.state?.observedLocation)
+    XCTAssertNil(binding.state?.activeSectionID)
+    XCTAssertFalse(try binding.restoreSavedPosition(onPage: 0))
+    XCTAssertEqual(owner.view.navigationCount, count + 1)
+    // The actual observation can differ from the requested point; never echo the request.
+    let page = try XCTUnwrap(owner.view.document?.page(at: 0))
+    owner.view.observedDestination = PDFDestination(page: page, at: CGPoint(x: 20, y: 450))
+    try binding.observePosition()
+    XCTAssertEqual(binding.state?.observedLocation, .init(pageIndex: 0, x: 20, y: 450))
+    XCTAssertEqual(binding.state?.activeSectionID, "/0")
+    let persisted = try ReaderMetadataService(database: reopened).beginSession(for: identity)
+    XCTAssertEqual(persisted.location, .init(pageIndex: 0, x: 20, y: 450))
+    XCTAssertEqual(persisted.sectionID, "/0")
+  }
+
+  func testRestorationRejectsInvalidOrDifferentPageWithoutNavigation() async throws {
+    let (db, _, identity, owner) = try await fixture()
+    defer { owner.session.close() }
+    let service = ReaderMetadataService(database: db)
+    for location in [
+      ReaderConfirmedLocation(pageIndex: 99, x: 20, y: 150),
+      .init(pageIndex: 0, x: 401, y: 150),
+      .init(pageIndex: 1, x: 20, y: 150)
+    ] {
+      let previous = try service.beginSession(for: identity)
+      _ = try service.saveConfirmed(location, sectionID: "/0", expected: previous, for: identity)
+      let binding = try mount(db, identity, owner)
+      let count = owner.view.navigationCount
+      XCTAssertFalse(try binding.restoreSavedPosition(onPage: 0))
+      XCTAssertEqual(owner.view.navigationCount, count)
+      XCTAssertNil(binding.state?.observedLocation)
+      XCTAssertNil(binding.state?.activeSectionID)
+      binding.invalidate()
+    }
+  }
+
+  func testReplacedContextAndNewObservationCannotBeOverriddenByRestoration() async throws {
+    let (db, _, identity, owner) = try await fixture()
+    defer { owner.session.close() }
+    let service = ReaderMetadataService(database: db)
+    let previous = try service.beginSession(for: identity)
+    _ = try service.saveConfirmed(.init(pageIndex: 0, x: 20, y: 150), sectionID: "/1",
+      expected: previous, for: identity)
+    let stale = try mount(db, identity, owner)
+    _ = try service.beginSession(for: identity)
+    let count = owner.view.navigationCount
+    XCTAssertThrowsError(try stale.restoreSavedPosition(onPage: 0)) {
+      XCTAssertEqual($0 as? ReaderMetadataError, .staleConfirmation)
+    }
+    XCTAssertEqual(owner.view.navigationCount, count)
+    stale.invalidate()
+    try outline(owner)
+    let current = try mount(db, identity, owner)
+    let page = try XCTUnwrap(owner.view.document?.page(at: 0))
+    owner.view.observedDestination = PDFDestination(page: page, at: CGPoint(x: 20, y: 450))
+    try current.observePosition()
+    XCTAssertFalse(try current.restoreSavedPosition(onPage: 0))
+    XCTAssertEqual(owner.view.navigationCount, count)
+    XCTAssertEqual(current.state?.activeSectionID, "/0")
+  }
+
+  func testRestorationRevocationDoesNotConfirmOrOverwriteSavedLocation() async throws {
+    let (db, _, identity, owner) = try await fixture()
+    let service = ReaderMetadataService(database: db)
+    let previous = try service.beginSession(for: identity)
+    let location = ReaderConfirmedLocation(pageIndex: 0, x: 20, y: 150)
+    let saved = try service.saveConfirmed(location, sectionID: "/1",
+      expected: previous, for: identity)
+    let binding = try mount(db, identity, owner)
+    owner.view.scaleFactor = 1
+    owner.view.onNavigation = { owner.session.close() }
+    XCTAssertThrowsError(try binding.restoreSavedPosition(onPage: 0))
+    XCTAssertNil(binding.state)
+    XCTAssertNil(owner.view.document)
+    let retained = try service.beginSession(for: identity)
+    XCTAssertEqual(retained.location, saved.location)
+    XCTAssertEqual(retained.sequence, saved.sequence)
+    XCTAssertThrowsError(try binding.observePosition())
+  }
+
+  func testRemovedRevisionCannotDispatchSavedDestination() async throws {
+    let (db, _, identity, owner) = try await fixture()
+    defer { owner.session.close() }
+    let service = ReaderMetadataService(database: db)
+    let previous = try service.beginSession(for: identity)
+    _ = try service.saveConfirmed(.init(pageIndex: 0, x: 20, y: 150),
+      sectionID: "/1", expected: previous, for: identity)
+    let binding = try mount(db, identity, owner)
+    try db.adapterWrite {
+      try $0.execute(sql: "DELETE FROM extractionVisible WHERE paperID = ?",
+        arguments: [identity.paperID.uuidString])
+    }
+    let count = owner.view.navigationCount
+    XCTAssertThrowsError(try binding.restoreSavedPosition(onPage: 0))
+    XCTAssertEqual(owner.view.navigationCount, count)
+    XCTAssertNil(binding.state)
+  }
+
+  func testActualReaderReopenConsumesDestinationAndConfirmsPDFPosition() async throws {
+    let (db, lifecycle, identity, owner) = try await fixture()
+    let service = ReaderMetadataService(database: db)
+    let previous = try service.beginSession(for: identity)
+    let saved = try service.saveConfirmed(.init(pageIndex: 0, x: 20, y: 150),
+      sectionID: "obsolete", expected: previous, for: identity)
+    try owner.session.save(ReaderPosition(pageIndex: 0, zoom: 2))
+    owner.session.close()
+    let session = ReaderSession(database: db,
+      leaseProvider: LibraryReadLeaseProvider(lifecycle: lifecycle))
+    defer { session.close() }
+    let presentation = ReaderPresentation(session: session,
+      annotationIdentity: try db.annotationIdentity(paperID: identity.paperID),
+      annotationService: AnnotationService(database: db), metadataService: service,
+      metadataIdentity: identity)
+    // Owned windowless PDFKit viewport, not visible rendering or geometry calibration.
+    presentation.pdfView.frame = CGRect(x: 0, y: 0, width: 120, height: 180)
+    presentation.open(paperID: identity.paperID)
+    XCTAssertTrue(presentation.opened)
+    XCTAssertEqual(presentation.pageIndex, 0)
+    XCTAssertEqual(presentation.zoom, 2)
+    XCTAssertEqual(presentation.pdfView.scaleFactor, 2)
+    XCTAssertNil(presentation.metadataFailure)
+    let binding = try XCTUnwrap(presentation.metadataBinding)
+    let observed = try XCTUnwrap(binding.state?.observedLocation)
+    let destination = try XCTUnwrap(presentation.pdfView.currentDestination)
+    XCTAssertEqual(observed.pageIndex, 0)
+    XCTAssertEqual(observed.x, Double(destination.point.x))
+    XCTAssertEqual(observed.y, Double(destination.point.y))
+    // Returning to the page top would not satisfy the saved within-page move.
+    XCTAssertLessThan(observed.y, 500)
+    let persisted = try service.beginSession(for: identity)
+    XCTAssertEqual(persisted.location, observed)
+    XCTAssertEqual(persisted.sequence, saved.sequence + 1)
+    XCTAssertNil(binding.state?.activeSectionID) // No outline, never trust "obsolete".
+  }
+
+  func testActualReaderInvalidDestinationKeepsSavedPageAndZoom() async throws {
+    let (db, lifecycle, identity, owner) = try await fixture()
+    let service = ReaderMetadataService(database: db)
+    let previous = try service.beginSession(for: identity)
+    let saved = try service.saveConfirmed(.init(pageIndex: 1, x: 401, y: 150),
+      sectionID: "obsolete", expected: previous, for: identity)
+    try owner.session.save(ReaderPosition(pageIndex: 1, zoom: 2))
+    owner.session.close()
+    let session = ReaderSession(database: db,
+      leaseProvider: LibraryReadLeaseProvider(lifecycle: lifecycle))
+    defer { session.close() }
+    let presentation = ReaderPresentation(session: session,
+      annotationIdentity: try db.annotationIdentity(paperID: identity.paperID),
+      annotationService: AnnotationService(database: db), metadataService: service,
+      metadataIdentity: identity)
+    presentation.open(paperID: identity.paperID)
+    XCTAssertTrue(presentation.opened)
+    XCTAssertEqual(presentation.pageIndex, 1)
+    XCTAssertEqual(presentation.zoom, 2)
+    XCTAssertNil(presentation.metadataBinding?.state?.restorationCandidate)
+    XCTAssertNil(presentation.metadataBinding?.state?.observedLocation)
+    XCTAssertNil(presentation.metadataBinding?.state?.activeSectionID)
+    XCTAssertEqual(try service.beginSession(for: identity).sequence, saved.sequence)
   }
 
   func testObservationReentryClosesBeforeSaveAndNavigationReentryFailsClosed() async throws {
@@ -664,9 +1102,12 @@ import XCTest
     presentation.open(paperID: identity.paperID)
     XCTAssertTrue(presentation.opened)
     XCTAssertNotNil(presentation.pdfView.document)
-    XCTAssertNil(presentation.metadataBinding)
-    XCTAssertNotNil(presentation.metadataFailure)
+    let native = try XCTUnwrap(presentation.metadataBinding)
+    XCTAssertNil(native.identity)
+    XCTAssertNotNil(native.state)
+    XCTAssertNil(presentation.metadataFailure)
     presentation.replaceMetadataIdentity(try db.publishedMetadataPaperIdentity(paperID: identity.paperID))
+    XCTAssertNil(native.state)
     let binding = try XCTUnwrap(presentation.metadataBinding)
     XCTAssertEqual(binding.identity, identity)
     XCTAssertNotNil(binding.state)
@@ -680,7 +1121,11 @@ import XCTest
     XCTAssertFalse(annotations.isActive)
     XCTAssertNil(presentation.annotationContext)
     XCTAssertNotNil(document)
+    let replacement = try XCTUnwrap(presentation.metadataBinding)
+    XCTAssertNil(replacement.identity)
+    XCTAssertNotNil(replacement.state)
     session.close()
+    XCTAssertNil(replacement.state)
     XCTAssertNil(presentation.pdfView.document)
     XCTAssertNil(document)
   }

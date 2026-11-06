@@ -62,6 +62,82 @@ final class ProductCompositionTests: XCTestCase {
     XCTAssertEqual(try store.read(slot), "synthetic-key-not-a-credential")
   }
 
+  func testStartupUnknownNativeSlotRetainsLibraryEntryButDeniesProviderReplacement() async throws {
+    let root = try privateRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let database = try ProductDatabase.open(at: root.appendingPathComponent("database"))
+    let directory = root.appendingPathComponent("api-key-slots")
+    var slots: APIKeySlotStore? = try APIKeySlotStore(directory: directory)
+    let selectedID = try XCTUnwrap(slots).create(key: "synthetic-selected")
+    let unknownID = try XCTUnwrap(slots).create(key: "synthetic-unknown")
+    let unknownURL = directory.appendingPathComponent(unknownID.uuidString)
+    // An unmarked pre-ownership file is not adopted during startup recovery.
+    XCTAssertEqual(removexattr(unknownURL.path, APIKeySlotStore.ownershipAttribute, 0), 0)
+    slots = nil
+    let configuration = try NativeOpenAIConfiguration(model: "fixture-model")
+    let selector = DatabaseAPIKeySelector(database: database, configuration: configuration)
+    XCTAssertNil(try selector.currentSelection())
+    let selected = try XCTUnwrap(selector.compareAndSwap(expected: nil, slotID: selectedID))
+    let transport = CompositionProbe()
+    let composition = ProductAppComposition(root: root, transport: transport)
+    await composition.start()
+    guard case .connection(let connection) = composition.phase else {
+      return XCTFail("Expected restored native connection")
+    }
+    XCTAssertEqual(connection.phase, .failed(.cleanupBlocked))
+    XCTAssertEqual(connection.activeSelection, selected)
+    XCTAssertTrue(composition.canEnterLibrary)
+    XCTAssertFalse(connection.canReplaceOwner)
+    XCTAssertEqual(composition.codex?.canStart, false)
+    XCTAssertThrowsError(try composition.configure(model: "other-model"))
+    connection.connect(key: "synthetic-replacement")
+    try await waitForProbe(connection)
+    XCTAssertEqual(connection.phase, .failed(.cleanupBlocked))
+    XCTAssertEqual(transport.calls, 0)
+    XCTAssertEqual(try selector.currentSelection(), selected)
+    XCTAssertEqual(Set(try FileManager.default.contentsOfDirectory(atPath: directory.path)),
+      Set([selectedID.uuidString, unknownID.uuidString]))
+    try composition.continueToLibrary()
+    XCTAssertNotNil(composition.workspace)
+    XCTAssertEqual(try Data(contentsOf: unknownURL), Data("synthetic-unknown".utf8))
+  }
+
+  func testStartupExclusiveOwnershipReconcilesRecordedNativeOrphanWithoutProviderReplay() async throws {
+    let root = try privateRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let database = try ProductDatabase.open(at: root.appendingPathComponent("database"))
+    let directory = root.appendingPathComponent("api-key-slots")
+    var slots: APIKeySlotStore? = try APIKeySlotStore(directory: directory)
+    let selectedID = try XCTUnwrap(slots).create(key: "synthetic-selected")
+    let orphanID = try XCTUnwrap(slots).create(key: "synthetic-abandoned")
+    let configuration = try NativeOpenAIConfiguration(model: "fixture-model")
+    let selector = DatabaseAPIKeySelector(database: database, configuration: configuration)
+    XCTAssertNil(try selector.currentSelection())
+    let selected = try XCTUnwrap(selector.compareAndSwap(expected: nil, slotID: selectedID))
+    let transport = CompositionProbe()
+    let competing = ProductAppComposition(root: root, transport: transport)
+    await competing.start()
+    guard case .failed = competing.phase else { return XCTFail("A second slot owner must fail closed") }
+    XCTAssertEqual(try slots?.validatedSlotIDs(), Set([selectedID, orphanID]))
+    slots = nil
+    let restored = ProductAppComposition(root: root, transport: transport)
+    await restored.start()
+    guard case .connection(let connection) = restored.phase else {
+      return XCTFail("Expected restored selection after exclusive acquisition")
+    }
+    XCTAssertEqual(connection.phase, .connected(selected))
+    XCTAssertTrue(connection.canReplaceOwner)
+    XCTAssertTrue(restored.canEnterLibrary)
+    XCTAssertNil(restored.workspace)
+    XCTAssertEqual(try selector.currentSelection(), selected)
+    XCTAssertEqual(transport.calls, 0)
+    XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: directory.path), [selectedID.uuidString])
+    XCTAssertEqual(try Data(contentsOf: directory.appendingPathComponent(selectedID.uuidString)),
+      Data("synthetic-selected".utf8))
+    try restored.continueToLibrary()
+    XCTAssertNotNil(restored.workspace)
+  }
+
   func testProviderSwitchKeepsOneSelectorAndRefusesNativeCredentialRoutingForCodex() throws {
     let root = try privateRoot()
     defer { try? FileManager.default.removeItem(at: root) }
@@ -330,21 +406,24 @@ final class ProductCompositionTests: XCTestCase {
     // This is an injected synthetic label solely to exercise the success branch.
     // It is not real authentication evidence and cannot certify any product gate.
     transport.evidence = .authenticatedGenerationResponse
-    let composition = ProductAppComposition(root: root, transport: transport)
-    await composition.start()
-    try composition.configure(model: "fixture-model")
-    guard case .connection(let connection) = composition.phase else {
-      return XCTFail("Expected key entry")
+    // A restart is not a second simultaneous owner of the native slot directory.
+    func firstLaunch() async throws {
+      let composition = ProductAppComposition(root: root, transport: transport)
+      await composition.start()
+      try composition.configure(model: "fixture-model")
+      guard case .connection(let connection) = composition.phase else {
+        return XCTFail("Expected key entry")
+      }
+      connection.connect(key: "synthetic-key-not-a-credential")
+      try await waitForProbe(connection)
+      XCTAssertTrue(connection.eligibleForEntry)
+      guard case .connection = composition.phase else {
+        return XCTFail("Probe must not enter Library")
+      }
+      try composition.continueToLibrary()
+      guard case .library = composition.phase else { return XCTFail("Continue must compose Library") }
     }
-    connection.connect(key: "synthetic-key-not-a-credential")
-    try await waitForProbe(connection)
-    XCTAssertTrue(connection.eligibleForEntry)
-    guard case .connection = composition.phase else {
-      return XCTFail("Probe must not enter Library")
-    }
-    try composition.continueToLibrary()
-    guard case .library = composition.phase else { return XCTFail("Continue must compose Library") }
-
+    try await firstLaunch()
     let restored = ProductAppComposition(root: root, transport: transport)
     await restored.start()
     guard case .connection(let restoredConnection) = restored.phase else {
@@ -365,8 +444,9 @@ final class ProductCompositionTests: XCTestCase {
     let root = try privateRoot()
     defer { try? FileManager.default.removeItem(at: root) }
     let database = try ProductDatabase.open(at: root.appendingPathComponent("database"))
-    let slots = try APIKeySlotStore(directory: root.appendingPathComponent("api-key-slots"))
-    let slot = try slots.create(key: "synthetic-legacy-key")
+    var slots: APIKeySlotStore? = try APIKeySlotStore(directory: root.appendingPathComponent("api-key-slots"))
+    let slot = try XCTUnwrap(slots).create(key: "synthetic-legacy-key")
+    slots = nil
     try database.adapterWrite { db in
       try db.execute(sql: "UPDATE providerConfig SET kind = 'openAIAPIKey', slotID = ?, generation = 1, model = NULL WHERE singleton = 1",
         arguments: [slot.uuidString])

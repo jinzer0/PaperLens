@@ -50,6 +50,12 @@ class GRDBPreparationTests(unittest.TestCase):
         self.arch = "arm64"
         self.built_arch = None
         self.calls = []
+        self.image_calls = []
+        self.mounted = False
+        self.distinct = True
+        self.attach_returncode = 0
+        self.detach_returncode = 0
+        self.detach_hook = None
         self.overrides = {}
         self.build_returncode = 0
         self.build_hook = None
@@ -61,6 +67,8 @@ class GRDBPreparationTests(unittest.TestCase):
             mock.patch.object(grdb.sys, "platform", "darwin"),
             mock.patch.object(grdb.platform, "machine", return_value="arm64"),
             mock.patch.object(grdb, "validate_toolchain", return_value={"pins": self.lock["toolchain"]}),
+            mock.patch.object(grdb, "filesystem_device", side_effect=lambda path:
+                              2 if self.mounted and self.distinct and path == self.output else 1),
         ]
         for patch in self.patches:
             patch.start()
@@ -94,6 +102,8 @@ class GRDBPreparationTests(unittest.TestCase):
             (root / name).symlink_to("Versions/Current/" + name)
 
     def fake_run(self, argv, *, env, stdout, stderr, check):
+        if argv[0] == "/usr/bin/hdiutil":
+            return self.fake_image_run(argv, env, stdout, stderr, check)
         self.calls.append((argv, env))
         self.assertEqual(argv[:2], ["/usr/bin/sandbox-exec", "-p"])
         self.assertIn("(deny network*)", argv[2])
@@ -141,6 +151,46 @@ class GRDBPreparationTests(unittest.TestCase):
         stderr.write(error)
         return subprocess.CompletedProcess(argv, code)
 
+    def fake_image_run(self, argv, env, stdout, stderr, check):
+        self.image_calls.append((argv, env))
+        self.assertFalse(check)
+        self.assertEqual(env, grdb.environment("/var/empty", self.lock["toolchain"]["developerDir"]))
+        result, code = b"", 0
+        if argv[1] == "create":
+            self.assertEqual(argv[2:-1], ["-size", "4g", "-type", "SPARSE", "-fs", "APFS", "-volname", "PaperLens-GRDB"])
+            self.image = Path(argv[-1])
+            self.assertEqual(self.image.parent.parent, self.output.parent)
+            self.assertEqual(self.image.parent.stat().st_mode & 0o777, 0o700)
+            self.assertEqual(self.image.parent.stat().st_uid, os.getuid())
+            self.assertFalse(self.image.is_relative_to(self.output))
+            self.image.write_bytes(b"synthetic image")
+        elif argv[1] == "attach":
+            self.assertEqual(argv[2:-1], ["-plist", "-nobrowse", "-owners", "on", "-mountpoint", str(self.output)])
+            code = self.attach_returncode
+            if code == 0:
+                self.output.rename(self.image.parent / "underlying-mountpoint")
+                self.output.mkdir()
+                self.mounted = True
+                result = plistlib.dumps({"system-entities": [
+                    {"dev-entry": "/dev/disk987s1", "mount-point": str(self.output)}]})
+        elif argv[1] == "detach":
+            self.assertEqual(argv, ["/usr/bin/hdiutil", "detach", "/dev/disk987s1"])
+            self.assertTrue(self.mounted)
+            self.assertFalse((self.output / "preparation.json").exists()
+                             and self.build_hook is None)
+            code = self.detach_returncode
+            if code == 0:
+                self.output.rename(self.image.parent / "mounted-content")
+                (self.image.parent / "underlying-mountpoint").rename(self.output)
+                self.mounted = False
+                if self.detach_hook:
+                    self.detach_hook()
+        else:
+            self.fail("unexpected image invocation")
+        stdout.write(result)
+        stderr.write(b"image diagnostic\n")
+        return subprocess.CompletedProcess(argv, code)
+
     def prepare(self):
         return grdb.prepare(self.receipt, self.output, self.arch, self.manifest)
 
@@ -182,6 +232,8 @@ class GRDBPreparationTests(unittest.TestCase):
         self.assertFalse(result["runtimeExecuted"])
         self.assertIn("Versions/A/Modules/GRDB.swiftmodule/" + arch + "-apple-macos.swiftmodule", result["frameworkInventory"])
         self.assertIn("CODE_SIGNING_ALLOWED=NO", build)
+        self.assertIn("MODULE_CACHE_DIR=" + str(self.output / "cache/clang"), build)
+        self.assertEqual(env["CCHROOT"], str(self.output / "cache"))
         self.assertIn("MACOSX_DEPLOYMENT_TARGET=15.0", build)
         self.assertEqual(build[build.index("-target") + 1], "GRDB")
         self.assertEqual(build[build.index("-project") + 1], str(self.source / "GRDB.xcodeproj"))
@@ -276,7 +328,82 @@ class GRDBPreparationTests(unittest.TestCase):
         self.assert_failure("BUILD_FAILED")
         self.assertEqual((self.output / "logs/build.stderr").read_bytes(), b"complete stderr\n")
         self.assertIn(b"warning: retained", (self.output / "logs/build.stdout").read_bytes())
+        self.assertTrue((self.output / "products/GRDB.framework/GRDB").is_file())
+        self.assertFalse(self.mounted)
+        self.assertFalse(self.image.exists())
         self.assert_failure("OUTPUT_OCCUPIED")
+
+    def test_mount_must_be_distinct_before_any_build_or_toolchain_probe(self):
+        self.distinct = False
+        self.assert_failure("WORKSPACE_NOT_DISTINCT")
+        grdb.validate_toolchain.assert_not_called()
+        self.assertFalse(any(argv[3] == "/usr/bin/xcodebuild" for argv, _ in self.calls))
+        self.assertFalse(self.mounted)
+        self.assertTrue(self.image.exists())
+
+    def test_unowned_workspace_is_rejected_before_image_creation(self):
+        uid = os.getuid()
+        with mock.patch.object(grdb.os, "getuid", return_value=uid + 1):
+            self.assert_failure("WORKSPACE_OWNERSHIP_INVALID")
+        self.assertEqual(self.image_calls, [])
+        self.assertFalse(any(argv[3] == "/usr/bin/xcodebuild" for argv, _ in self.calls))
+
+    def test_attach_failure_preserves_resources_and_never_compiles(self):
+        self.attach_returncode = 1
+        self.assert_failure("WORKSPACE_ATTACH_FAILED")
+        self.assertTrue(self.image.exists())
+        self.assertEqual((self.image.parent / "logs/attach.stderr").read_bytes(), b"image diagnostic\n")
+        self.assertFalse(any(argv[1] == "detach" for argv, _ in self.image_calls))
+        grdb.validate_toolchain.assert_not_called()
+
+    def test_detach_failure_never_publishes_receipt_or_deletes_backing_image(self):
+        self.detach_returncode = 1
+        self.assert_failure("WORKSPACE_DETACH_FAILED")
+        self.assertTrue(self.mounted)
+        self.assertTrue(self.image.exists())
+        self.assertEqual((self.image.parent / "export/logs/build.stdout").read_bytes(),
+                         b"complete build output\nwarning: retained\n")
+        self.assertTrue((self.image.parent / "export/products/GRDB.framework/GRDB").is_file())
+
+    def test_copy_tampering_is_detected_before_receipt_and_retains_recovery_image(self):
+        real_copy = grdb.shutil.copytree
+
+        def tamper(source, destination, *args, **kwargs):
+            result = real_copy(source, destination, *args, **kwargs)
+            path = Path(destination) / "build.stdout"
+            if path.exists():
+                path.write_bytes(b"altered export")
+            return result
+
+        with mock.patch.object(grdb.shutil, "copytree", side_effect=tamper):
+            self.assert_failure("EXPORT_INVALID")
+        self.assertFalse(self.mounted)
+        self.assertTrue(self.image.exists())
+
+    def test_exported_framework_is_rechecked_after_detach(self):
+        def tamper():
+            (self.image.parent / "export/products/GRDB.framework/Versions/A/GRDB").write_bytes(b"changed after validation")
+        self.detach_hook = tamper
+        self.assert_failure("OUTPUT_INVALID")
+        self.assertTrue(self.image.exists())
+
+    def test_exported_logs_are_rechecked_after_detach(self):
+        def tamper():
+            (self.image.parent / "export/logs/build.stdout").write_bytes(b"changed after validation")
+        self.detach_hook = tamper
+        self.assert_failure("EXPORT_INVALID")
+        self.assertTrue(self.image.exists())
+
+    def test_unexpected_file_under_mountpoint_is_not_overwritten(self):
+        self.detach_hook = lambda: (self.output / "marker").write_bytes(b"preserved")
+        self.assert_failure("OUTPUT_OCCUPIED")
+        self.assertEqual((self.output / "marker").read_bytes(), b"preserved")
+        self.assertTrue(self.image.exists())
+
+    def test_input_drift_during_detach_cannot_publish_receipt(self):
+        self.detach_hook = lambda: self.manifest.write_bytes(self.manifest.read_bytes() + b"\n")
+        self.assert_failure("INPUT_TAMPERED")
+        self.assertTrue(self.image.exists())
 
     def test_pifcache_permission_failure_preserves_inputs_and_failed_namespace(self):
         before = grdb.inventory(self.source)
@@ -305,7 +432,9 @@ class GRDBPreparationTests(unittest.TestCase):
         with self.assertRaises(grdb.Failure) as failure:
             self.prepare()
         self.assertEqual(failure.exception.code, "OUTPUT_OCCUPIED")
-        self.assertEqual((self.output / "preparation.json").read_bytes(), b"concurrent artifact")
+        self.assertFalse((self.output / "preparation.json").exists())
+        self.assertEqual((self.image.parent / "mounted-content/preparation.json").read_bytes(), b"concurrent artifact")
+        self.assertTrue(self.image.exists())
 
     def test_input_drift_during_toolchain_probes_never_compiles(self):
         def drift(*args):

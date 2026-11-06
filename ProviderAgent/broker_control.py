@@ -1,8 +1,8 @@
-"""Authenticated finite broker lifecycle; never an SDK RPC transport.
+"""Authenticated broker lifecycle; never an SDK RPC transport.
 
 All effects use one lane. Unknown owners deliberately remain rooted and alive.
-Python clock checks are NOT an independent execution bound. Native production
-routing and the public SDK worker are intentionally not implemented here.
+Startup is bounded separately. Retirement uses an immutable UUID4 and actual
+resource observations, never a completion deadline or SDK FileObject proof.
 """
 from __future__ import annotations
 
@@ -36,11 +36,12 @@ _UINT64 = (1 << 64) - 1
 _FIELDS = {
     'hello': (), 'run': ('startupDeadlineNs', 'cwdDevice', 'cwdInode'),
     'running': (), 'dispatch': (), 'dispatching': (),
-    'revokeNeeded': ('code',), 'revoke': ('deadlineNs',),
-    'cliRetired': ('deadlineNs', 'scope', 'waitStatus'),
-    'preLaunchRetired': ('deadlineNs',), 'unknown': ('code',),
-    'brokerOffered': (), 'reapBroker': ('deadlineNs',),
-    'brokerReaped': ('deadlineNs', 'waitStatus'),
+    'revokeNeeded': ('code',), 'revoke': ('retirementID',),
+    'cliRetired': ('retirementID', 'scope', 'waitStatus'),
+    'preLaunchRetired': ('retirementID',), 'unknown': ('code',),
+    'brokerOffered': (), 'reapBroker': ('retirementID',),
+    'brokerReaped': ('retirementID', 'waitStatus'),
+
 }
 _CODES = frozenset(('startupDeadline', 'stdioEOF', 'cliExit', 'sessionLimit', 'scopeRetire'))
 _UNKNOWN_CODES = frozenset(('roleUncertain', 'controlUncertain', 'relayUncertain'))
@@ -60,6 +61,16 @@ def _uint(value):
     return type(value) is int and 0 <= value <= _UINT64
 
 
+def retirement_id(value):
+    try:
+        parsed = uuid.UUID(value) if type(value) is str else None
+    except ValueError:
+        parsed = None
+    if parsed is None or parsed.version != 4 or str(parsed) != value:
+        raise ControlError('invalidRetirementID')
+    return value
+
+
 def _pairs(items):
     result = {}
     for key, value in items:
@@ -77,10 +88,12 @@ def _validate(message):
         raise ControlError('invalidOperation')
     if set(message) != {'v', 'runID', 'op', *_FIELDS[op]}:
         raise ControlError('closedMessageRequired')
-    if type(message['v']) is not int or message['v'] != 1:
+    if type(message['v']) is not int or message['v'] != 2:
         raise ControlError('invalidVersion')
     _uuid(message['runID'])
-    for name in ('deadlineNs', 'startupDeadlineNs', 'cwdDevice', 'cwdInode'):
+    if 'retirementID' in message:
+        retirement_id(message['retirementID'])
+    for name in ('startupDeadlineNs', 'cwdDevice', 'cwdInode'):
         if name in message and not _uint(message[name]):
             raise ControlError('invalidInteger')
     if 'waitStatus' in message and type(message['waitStatus']) is not int:
@@ -95,7 +108,7 @@ def _validate(message):
 
 
 def encode_control(run_id, op, **fields):
-    message = _validate(dict(v=1, runID=run_id, op=op, **fields))
+    message = _validate(dict(v=2, runID=run_id, op=op, **fields))
     body = json.dumps(message, separators=(',', ':'), ensure_ascii=True).encode('utf-8')
     if not 0 < len(body) <= _MAX_CONTROL:
         raise ControlError('controlTooLarge')
@@ -327,7 +340,7 @@ class _Resources:
         self.uncertain_fds = set()
         self.state = 'settingUp'
         self.reason = None
-        self.deadline = None
+        self.retirement_id = None
         self.pending_socket = None
         self.lib = None
         broker._ROOTS.append(self)  # Before opening/accepting any resource.
@@ -347,24 +360,20 @@ class _Resources:
         return self.own(name, self.fds[name])
 
     def clock(self, deadline=None):
-        if self.deadline is not None:
-            if deadline is not None and (not _uint(deadline) or deadline != self.deadline):
-                raise ControlError('deadlineChanged')
-            end = self.deadline
-        else:
-            end = deadline  # Separate startup-refusal bound, never a cleanup override.
-        if not _uint(end) or time.monotonic_ns() >= end:
+        if self.state in ('unknown', 'clean'):
+            raise ControlError('resourceTerminal')
+        if self.retirement_id is not None:
+            if deadline is not None:
+                raise ControlError('startupBoundDuringRetirement')
+            return
+        if not _uint(deadline) or time.monotonic_ns() >= deadline:
             raise ControlError('deadlineExpired')
 
-    def latch(self, deadline):
-        if self.deadline is not None:
-            if deadline != self.deadline or type(deadline) is not int:
-                raise ControlError('deadlineChanged')
-            return
-        now = time.monotonic_ns()
-        if not _uint(deadline) or not 0 < deadline - now <= 300_000_000:
-            raise ControlError('invalidDeadline')
-        self.deadline = deadline
+    def latch(self, identity):
+        identity = retirement_id(identity)
+        if self.retirement_id is not None and identity != self.retirement_id:
+            raise ControlError('retirementChanged')
+        self.retirement_id = identity
 
     def close(self, name, deadline=None):
         if self.state in ('unknown', 'clean') or name in self.uncertain_fds:
@@ -412,7 +421,7 @@ class _Resources:
 
 @dataclass(frozen=True)
 class ReapRecord:
-    deadline_ns: int
+    retirement_id: str
     wait_status: int
     scope: str = 'localDirectBrokerProcess'
 
@@ -427,11 +436,11 @@ class AuthenticatedBroker(_Resources):
         self.reaped = None
         self.wait_status = ctypes.c_int()
 
-    def wait_direct_child(self, deadline_ns: int) -> ReapRecord:
+    def wait_direct_child(self, identity: str) -> ReapRecord:
         if self.state == 'unknown' or self.wait_attempted:
             raise ControlError('brokerWaitAlreadyUsed')
         try:
-            self.latch(deadline_ns)
+            self.latch(identity)
             if self.peer.parent_pid != os.getpid():
                 raise ControlError('notDirectChild')
             self.lib = ctypes.CDLL('/usr/lib/libSystem.B.dylib', use_errno=True)
@@ -445,14 +454,14 @@ class AuthenticatedBroker(_Resources):
                 if pid != 0:
                     self.wait_attempted = True
                     if pid == self.peer.pid:
-                        self.reaped = ReapRecord(deadline_ns, self.wait_status.value)
+                        self.reaped = ReapRecord(identity, self.wait_status.value)
                     self.clock()
                     if (pid != self.peer.pid or not os.WIFEXITED(self.wait_status.value)
                             or os.WEXITSTATUS(self.wait_status.value) != 0):
                         raise ControlError('brokerExitUncertain')
                     self.state = 'reaped'
                     return self.reaped
-                select.select([], [], [], min(0.001, max(0, (deadline_ns - time.monotonic_ns()) / 1e9)))
+                select.select([], [], [], 0.001)
         except BaseException:
             self.wait_attempted = True
             self.unknown()
@@ -536,13 +545,13 @@ class WorkerRendezvous(_Resources):
             authenticated_broker.unknown()
             raise
 
-    def retire(self, deadline_ns: int):
+    def retire(self, identity: str):
         """Worker-only checked retirement, after its actual broker waitpid."""
         try:
-            self.latch(deadline_ns)
+            self.latch(identity)
             accepted = self.accepted
             if (self.state != 'accepted' or accepted is None or accepted.state != 'reaped'
-                    or accepted.reaped.deadline_ns != deadline_ns):
+                    or accepted.reaped.retirement_id != identity):
                 raise ControlError('brokerNotReaped')
             accepted.close('control')
             self.close('listener')
@@ -647,7 +656,7 @@ class _Role(_Resources):
             self.queue('revokeNeeded', code=code)
 
     def receive(self):
-        # Drain control first, bounded per turn so hostile duplicates cannot starve D.
+        # Drain control first, bounded per turn so hostile duplicates cannot starve retirement.
         for _ in range(16):
             self.observe()
             try:
@@ -664,16 +673,16 @@ class _Role(_Resources):
                 raise ControlError('runIDMismatch')
             op = message['op']
             if op == 'revoke':
-                self.latch(message['deadlineNs'])
+                self.latch(message['retirementID'])
                 self.frozen = True
-            elif op == 'run' and not self.run_seen and self.deadline is None and self.state == 'awaitingRun':
+            elif op == 'run' and not self.run_seen and self.retirement_id is None and self.state == 'awaitingRun':
                 self.run_seen = True
                 info = os.fstat(self.fds['cwd'])
                 if (message['startupDeadlineNs'] != self.startup_deadline
                         or (message['cwdDevice'], message['cwdInode']) != (info.st_dev, info.st_ino)):
                     raise ControlError('namespaceMismatch')
             elif (op == 'dispatch' and self.running_sent and not self.dispatch_seen
-                  and self.state == 'relaying' and not self.frozen and self.deadline is None
+                  and self.state == 'relaying' and not self.frozen and self.retirement_id is None
                   and time.monotonic_ns() < self.startup_deadline):
                 self.startup_counters = (self.input_bytes, self.input_lines, self.input_partial,
                                          self.stdout_bytes, self.stdout_lines, self.stdout_partial,
@@ -688,7 +697,7 @@ class _Role(_Resources):
     def priority(self):
         self.receive()
         self.observe()
-        if self.deadline is not None:
+        if self.retirement_id is not None:
             self.retire()
         if self.cli is not None and self.cli.record['exitObserved']:
             self.request_revoke('cliExit')
@@ -697,21 +706,19 @@ class _Role(_Resources):
                 raise ControlError('controlBackpressure')
             self.request_revoke('startupDeadline')
 
-    def send_pending(self, deadline):
+    def send_pending(self, deadline=None):
         while self.control_out:
-            self.clock(deadline)
+            self.clock(None if self.retirement_id is not None else deadline)
             self.receive()
             self.observe()
-            if self.deadline is not None:
-                # A revoke received during startup replaces only that startup
-                # bound; the latched cleanup deadline itself never changes.
-                deadline = self.deadline
+            if self.retirement_id is not None:
+                deadline = None
             self.clock(deadline)
             try:
                 count = os.write(self.fds['control'], self.control_out)
             except BlockingIOError:
                 select.select([self.fds['control']], [self.fds['control']], [],
-                              max(0, (deadline - time.monotonic_ns()) / 1e9))
+                              None if deadline is None else max(0, (deadline - time.monotonic_ns()) / 1e9))
                 continue
             if count <= 0:
                 raise ControlError('controlWriteUncertain')
@@ -855,22 +862,22 @@ class _Role(_Resources):
         self.observe()
         self.state = 'revoked'
         if not self.factory_entered:
-            self.queue('preLaunchRetired', deadlineNs=self.deadline)
+            self.queue('preLaunchRetired', retirementID=self.retirement_id)
         else:
             if self.cli is None:
                 raise ControlError('missingFactoryResult')
             record = self.cli.record
             if record['state'] == 'running':
-                self.cli.close_stdin(self.deadline)
-            record = self.cli.cleanup(self.deadline, terminate=True)
+                self.cli.close_stdin(self.retirement_id)
+            record = self.cli.cleanup(self.retirement_id, terminate=True)
             if record['state'] != 'clean':
                 raise ControlError('cliRetirementUncertain')
-            self.queue('cliRetired', deadlineNs=self.deadline,
+            self.queue('cliRetired', retirementID=self.retirement_id,
                        scope=record['scope'], waitStatus=record['waitStatus'])
-        self.send_pending(self.deadline)
+        self.send_pending()
         for name in ('stdin', 'stdout', 'stderr', 'cwd'):
             self.close(name)
-        self.receive()  # Changed D/queued malformed control cannot authorize exit.
+        self.receive()  # Changed retirement/queued malformed control cannot authorize exit.
         if self.decoder.buffer:
             raise ControlError('incompleteControlAtRetirement')
         self.close('control')

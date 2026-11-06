@@ -118,6 +118,22 @@ import SwiftUI
       try step { _ in opened = true }
       try step { _ in failure = nil }
       try step { _ in mountMetadata() }
+      try step { _ in
+        guard let binding = metadataBinding else { return }
+        do {
+          if try binding.restoreSavedPosition(onPage: position.pageIndex) {
+            // Restoration suppresses notifications. Confirm from the actual PDF destination,
+            // never from the requested point or the saved section identifier.
+            try checkpoint()
+            guard metadataBinding === binding else { return }
+            try binding.observePosition()
+          }
+        } catch {
+          try checkpoint()
+          guard metadataBinding === binding else { return }
+          metadataFailure = (error as? ReaderMetadataError)?.message ?? "읽기 위치 미확인"
+        }
+      }
     } catch is RestorationInterrupted {
       // Published setters finish after their callbacks; repair any late stale write.
       discard()
@@ -165,15 +181,13 @@ import SwiftUI
   }
 
   private func mountMetadata() {
-    guard opened, let identity = metadataIdentity else {
-      metadataFailure = "발행된 추출 정보가 없어 논문 정보와 목차를 사용할 수 없습니다. PDF는 계속 읽을 수 있습니다."
-      return
-    }
+    guard opened else { return }
     do {
       let binding = try session.withReadAccess {
         guard let document = pdfView.document else { throw ReaderError.notOpen }
         return try ReaderMetadataBinding(session: session, service: metadataService,
-          identity: identity, view: pdfView, document: document)
+          admittedIdentity: annotationIdentity, identity: metadataIdentity,
+          view: pdfView, document: document)
       }
       guard opened, binding.state != nil else { binding.invalidate(); return }
       metadataBinding = binding
@@ -273,7 +287,7 @@ import SwiftUI
       try session.save(ReaderPosition(pageIndex: pageIndex, zoom: zoom))
       failure = nil
     } catch { failure = "Reading position was not saved: \(error)" }
-    // Only actual PDFKit position notifications confirm metadata navigation.
+    // Normal navigation is confirmed by actual PDFKit position notifications.
     guard opened, let binding = metadataBinding else { return }
     do { try binding.observePosition(); metadataFailure = nil }
     catch { metadataFailure = (error as? ReaderMetadataError)?.message ?? "읽기 위치 미확인" }

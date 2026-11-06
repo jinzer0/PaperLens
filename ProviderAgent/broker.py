@@ -1,7 +1,7 @@
 """Callable Darwin CLI ownership primitive, not an Agent role or SDK transport.
 
-Setup, kevent, close and waitpid can block. A future native enclosing owner must
-supply its own independent deadline; this Python primitive is NOT bounded.
+Setup, kevent, close and waitpid can block. Run retirement on its owning
+background lane; elapsed cleanup time is not resource uncertainty.
 The queue is a raw public libc kqueue, not a Python wrapper whose close can
 discard errors or whose destructor could close a reused descriptor.
 Endpoints are borrowed raw descriptors, never transferred closure authority.
@@ -18,7 +18,7 @@ import select
 import signal
 import stat
 import sys
-import time
+import uuid
 from types import MappingProxyType
 
 # Public Darwin sys/spawn.h and spawn.h: opaque handles are void *, pid_t int,
@@ -219,7 +219,7 @@ class _CLIResourceOwner:
         self._registered = False
         self._exit_observed = False
         self._wait_status = None
-        self._deadline = None
+        self._retirement_id = None
 
     @property
     def pid(self):
@@ -281,8 +281,6 @@ class _CLIResourceOwner:
                 # Exactly one public raw close attempt; an error is permanent
                 # uncertainty, not permission to retry a possibly reused fd.
                 ctypes.set_errno(0)
-                if self._deadline is not None:
-                    self._clock()
                 result = self._spawn.lib.close(fd)
                 error = ctypes.get_errno()
                 if result != 0:
@@ -382,14 +380,13 @@ class _CLIResourceOwner:
         self._registered = True
 
     def _kevents(self, change, timeout_ns):
-        seconds, nanos = divmod(timeout_ns, 1_000_000_000)
+        seconds, nanos = divmod(timeout_ns or 0, 1_000_000_000)
         duration = _Timespec(seconds, nanos)
         event = _Kevent()
-        if self._deadline is not None:
-            self._clock()
         count = self._spawn.lib.kevent(
             self._fds['kqueue'], ctypes.byref(change) if change is not None else None,
-            int(change is not None), ctypes.byref(event), 1, ctypes.byref(duration))
+            int(change is not None), ctypes.byref(event), 1,
+            ctypes.byref(duration) if timeout_ns is not None else None)
         if count < 0 or count > 1:
             raise OwnershipError('publicEventFailure')
         return [event] if count else []
@@ -415,37 +412,31 @@ class _CLIResourceOwner:
             raise OwnershipError('endpointsNotRunning')
         return MappingProxyType({name: self._fds[name] for name in ('stdin', 'stdout', 'stderr')})
 
-    def _clock(self):
-        if time.monotonic_ns() >= self._deadline:
-            raise OwnershipError('cleanupExpired')
+    def _begin_cleanup(self, retirement_id):
+        try:
+            parsed = uuid.UUID(retirement_id) if type(retirement_id) is str else None
+        except ValueError:
+            parsed = None
+        if parsed is None or parsed.version != 4 or str(parsed) != retirement_id:
+            raise OwnershipError('invalidRetirementID')
+        if self._retirement_id is None:
+            self._retirement_id = retirement_id
+        elif retirement_id != self._retirement_id:
+            raise OwnershipError('retirementChanged')
 
-    def _begin_cleanup(self, deadline):
-        now = time.monotonic_ns()
-        if (type(deadline) is not int or not 0 <= deadline <= 0xffffffffffffffff
-                or deadline <= now or deadline - now > 300_000_000):
-            raise OwnershipError('invalidCleanupDeadline')
-        if self._deadline is None:
-            self._deadline = deadline
-        elif deadline != self._deadline:
-            raise OwnershipError('cleanupDeadlineChanged')
-        self._clock()
-
-    def _effect(self, function, *arguments):
-        self._clock()
-        result = function(*arguments)
-        self._clock()
-        return result
-
-    def close_stdin(self, deadline):
-        """Checked EOF sharing cleanup's UInt64 monotonic-nanosecond deadline."""
-        if self.state in ('unknown', 'clean'):
+    def close_stdin(self, retirement_id):
+        """Checked EOF for one immutable retirement; not exit or purge proof."""
+        if self.state == 'unknown':
+            return self.record
+        if self.state == 'clean':
+            self._begin_cleanup(retirement_id)
             return self.record
         try:
             if self.state != 'running':
                 raise OwnershipError('notRunning')
-            self._begin_cleanup(deadline)
-            self._effect(self._events, 0)
-            self._effect(self._close_fd, 'stdin')
+            self._begin_cleanup(retirement_id)
+            self._events(0)
+            self._close_fd('stdin')
         except BaseException as error:
             self._unknown('stdinCloseUncertain')
             if not isinstance(error, Exception):
@@ -469,45 +460,42 @@ class _CLIResourceOwner:
             if event.fflags & select.KQ_NOTE_EXIT:
                 self._exit_observed = True
 
-    def cleanup(self, deadline, *, terminate=False):
-        """Attempt retirement using one <=300ms proof window, NOT a time bound.
+    def cleanup(self, retirement_id, *, terminate=False):
+        """Observe retirement on the owning background lane, without a time bound.
 
         No signal, EOF, cancellation, boolean, or pipe closure is exit proof.
         Unknown is terminal: no further production effects, even on later calls.
         terminate targets only the owned unreaped direct child, never a group.
-        deadline is an integer UInt64 absolute MONOTONIC nanosecond value,
-        at most 300_000_000ns ahead; no float conversion or grace period.
+        retirement_id is a canonical UUID4, immutable across EOF and cleanup.
         """
-        if self.state in ('unknown', 'clean'):
+        if self.state == 'unknown':
+            return self.record
+        if self.state == 'clean':
+            self._begin_cleanup(retirement_id)
             return self.record
         try:
             if self.state not in ('running', 'suspended') or type(terminate) is not bool:
                 raise OwnershipError('invalidCleanupState')
-            self._begin_cleanup(deadline)
-            self._effect(self._events, 0)
+            self._begin_cleanup(retirement_id)
+            self._events(0)
             if terminate and not self._exit_observed:
-                self._effect(os.kill, self.pid, signal.SIGKILL)
+                os.kill(self.pid, signal.SIGKILL)
             while not self._exit_observed:
-                self._clock()
-                self._effect(self._events, max(0, self._deadline - time.monotonic_ns()))
-            # Capture waitpid result immediately, even if the post-effect clock
-            # expires: it must never cause a second wait or reused-PID signal.
+                self._events(None)
+            # Capture waitpid immediately; never signal or wait again after reaping.
             status = ctypes.c_int()
-            self._effect(self._events, 0)
-            self._clock()
+            self._events(0)
             reaped = self._spawn.lib.waitpid(self.pid, ctypes.byref(status), 0)
             if reaped == self.pid:
                 self._wait_status = status.value
-            self._clock()
             if reaped != self.pid or not (
                     os.WIFEXITED(status.value) or os.WIFSIGNALED(status.value)):
                 raise OwnershipError('waitIdentityUncertain')
             for name in tuple(self._fds):
-                self._effect(self._events, 0)
-                self._effect(self._close_fd, name)
+                self._events(0)
+                self._close_fd(name)
             if self._attr_live or self._actions_live or self._uncertain_fds:
                 raise OwnershipError('setupRetirementUncertain')
-            self._clock()
             self._state = 'clean'
         except BaseException as error:
             self._unknown('cleanupUncertain')

@@ -13,7 +13,7 @@ import XCTest
 /// Fixture teardown is physical hygiene only; it cannot discharge production debt.
 @MainActor
 final class OwnedChildRetirementTests: XCTestCase {
-  // Existing aggregate owned-cleanup AC, not a new production duration/default/grace.
+  // One-shot native fixture budget, not an SDK retirement completion requirement.
   private let cleanupBudgetNanoseconds: UInt64 = 300_000_000
 
   private final class Counts: @unchecked Sendable {
@@ -229,7 +229,7 @@ final class OwnedChildRetirementTests: XCTestCase {
                 raise TimeoutError(name)
             time.sleep(0.005)
     def send(sock, op):
-        body = json.dumps(dict(v=1, runID=run_id, op=op)).encode()
+        body = json.dumps(dict(v=2, runID=run_id, op=op)).encode()
         sock.sendall(struct.pack('!I', len(body)) + body)
     def exact(sock, count):
         result = b''
@@ -248,7 +248,7 @@ final class OwnedChildRetirementTests: XCTestCase {
         assert 0 < size <= 1024
         message = json.loads(exact(sock, size))
         assert set(message) == set(('v', 'runID', 'op') + fields)
-        assert message['v'] == 1 and message['runID'] == run_id
+        assert message['v'] == 2 and message['runID'] == run_id
         assert message['op'] == op
         return message
     def product_exact(count):
@@ -371,6 +371,15 @@ final class OwnedChildRetirementTests: XCTestCase {
     try Data().write(to: directory.appendingPathComponent("work/" + name))
   }
 
+  private func waitForWorkerRetirement(_ child: OwnedChildRetirement) async throws {
+    for _ in 0..<100 {
+      if child.core.lock.withLock({ child.core.retirementID != nil }) { return }
+      try await Task.sleep(nanoseconds: 10_000_000)
+    }
+    XCTFail("Worker startup did not revoke admission")
+    throw OwnedChildRetirement.Failure.deadline
+  }
+
   private func controlHandshake(offeredFirst: Bool, wrongOrder: Bool = false) async throws {
     let (root, namespace, launch) = try workerFixture(
       script: controlWorkerScript(wrongOrder: wrongOrder))
@@ -379,7 +388,7 @@ final class OwnedChildRetirementTests: XCTestCase {
       worker: launch,
       deadlineUptimeNanoseconds: DispatchTime.now().uptimeNanoseconds + 3_000_000_000)
     let directory = namespace.directoryURL
-    let done = terminalExpectation(child)
+    let done = wrongOrder ? terminalExpectation(child) : nil
     child.launchWorker()
     var failure: Error?
     do {
@@ -469,7 +478,7 @@ final class OwnedChildRetirementTests: XCTestCase {
       XCTAssertFalse(child.core.markRunning())
       try controlGate("hello", in: directory)
       if wrongOrder {
-        await fulfillment(of: [done], timeout: 1)
+        await fulfillment(of: [try XCTUnwrap(done)], timeout: 1)
         XCTAssertEqual(child.terminal, .unknown(.control))
         XCTAssertThrowsError(try child.core.reservedEndpoints())
         XCTAssertFalse(child.core.markRunning())
@@ -512,10 +521,13 @@ final class OwnedChildRetirementTests: XCTestCase {
         // Control handoff is not product/Provider acceptance: no transport has
         // captured these endpoints, and no scripted product hello is supplied.
         XCTAssertFalse(child.core.markRunning())
-        let deadline = child.revoke()
-        XCTAssertEqual(child.revoke(), deadline)
-        await fulfillment(of: [done], timeout: 1)
-        XCTAssertEqual(child.terminal, .unknown(.deadline))
+        child.revoke()
+        let identity = try XCTUnwrap(child.core.lock.withLock { child.core.retirementID })
+        child.revoke()
+        XCTAssertEqual(child.core.lock.withLock { child.core.retirementID }, identity)
+        try await Task.sleep(nanoseconds: 400_000_000)
+        XCTAssertNil(child.terminal, "Slow SDK cleanup must remain pending, not expire at 300ms")
+        XCTAssertFalse(child.core.allowsIO)
       }
       XCTAssertTrue(child.testingRetained)
       XCTAssertFalse(child.testingReaped)
@@ -523,7 +535,6 @@ final class OwnedChildRetirementTests: XCTestCase {
     } catch {
       failure = error
       child.revoke()
-      await fulfillment(of: [done], timeout: 1)
     }
     let terminal = child.terminal
     do {
@@ -533,7 +544,11 @@ final class OwnedChildRetirementTests: XCTestCase {
       failure = failure ?? error
     }
     await physicalTeardown(child)
-    XCTAssertEqual(child.terminal, terminal, "Physical hygiene cannot change runtime debt")
+    if let terminal {
+      XCTAssertEqual(child.terminal, terminal, "Physical hygiene cannot change runtime debt")
+    } else if case .some(.clean(_)) = child.terminal {
+      XCTFail("Physical hygiene is not a production clean receipt")
+    }
     XCTAssertTrue(child.testingRetained)
     XCTAssertFalse(child.testingReaped)
     if let failure { throw failure }
@@ -666,16 +681,19 @@ final class OwnedChildRetirementTests: XCTestCase {
     } catch { failure = error }
     // Revoke once, then physically reap controlled fixture processes. Neither
     // this script nor teardown supplies a runtime clean/SDK closure ACK.
-    let done = terminalExpectation(owner)
     owner.revoke()
-    await fulfillment(of: [done], timeout: 1)
+    try await waitForWorkerRetirement(owner)
     let terminal = owner.terminal
     do {
       try controlGate("stop", in: directory)
       try await waitForControlMarker("broker-reaped-physically", in: directory)
     } catch { failure = failure ?? error }
     await physicalTeardown(owner)
-    XCTAssertEqual(owner.terminal, terminal)
+    if let terminal {
+      XCTAssertEqual(owner.terminal, terminal)
+    } else if case .some(.clean(_)) = owner.terminal {
+      XCTFail("Physical hygiene is not a production clean receipt")
+    }
     XCTAssertTrue(owner.testingRetained)
     XCTAssertFalse(owner.testingReaped)
     XCTAssertEqual(transport.calls, 0)
@@ -765,11 +783,13 @@ final class OwnedChildRetirementTests: XCTestCase {
     var socketTypeSize = socklen_t(MemoryLayout<Int32>.size)
     XCTAssertEqual(getsockopt(fd, SOL_SOCKET, SO_TYPE, &socketType, &socketTypeSize), 0)
     XCTAssertEqual(socketType, SOCK_STREAM)
-    let done = terminalExpectation(child)
-    let deadline = child.revoke()
-    XCTAssertEqual(child.revoke(), deadline)
-    await fulfillment(of: [done], timeout: 1)
-    XCTAssertEqual(child.terminal, .unknown(.deadline))
+    child.revoke()
+    let retirementID = try XCTUnwrap(child.core.lock.withLock { child.core.retirementID })
+    child.revoke()
+    XCTAssertEqual(child.core.lock.withLock { child.core.retirementID }, retirementID)
+    try await Task.sleep(nanoseconds: 400_000_000)
+    XCTAssertNil(child.terminal)
+    XCTAssertFalse(child.core.allowsIO)
     XCTAssertFalse(child.testingReaped)
     XCTAssertTrue(child.testingRetained)
     XCTAssertEqual(child.testingDescriptorCount, 4)
@@ -780,12 +800,14 @@ final class OwnedChildRetirementTests: XCTestCase {
     let replacementDirectory = try cwd()
     defer { try? FileManager.default.removeItem(at: replacementDirectory) }
     let replacement = owner(.trueUtility, replacementDirectory)
-    let refused = terminalExpectation(replacement)
+    let completed = terminalExpectation(replacement)
     replacement.retire()
-    await fulfillment(of: [refused], timeout: 1)
-    XCTAssertEqual(replacement.terminal, .unknown(.admissionBlocked))
+    await fulfillment(of: [completed], timeout: 1)
+    assertClean(replacement)
     await physicalTeardown(child)
-    XCTAssertEqual(child.terminal, .unknown(.deadline))
+    if case .some(.clean(_)) = child.terminal {
+      XCTFail("Physical hygiene is not a production clean receipt")
+    }
     XCTAssertFalse(namespace.permitsNamespaceMutation)
   }
 
@@ -838,6 +860,7 @@ final class OwnedChildRetirementTests: XCTestCase {
     let (root, namespace, launch) = try workerFixture()
     defer { try? FileManager.default.removeItem(at: root) }
     let gate = DispatchSemaphore(value: 0)
+    defer { gate.signal() }
     let spawned = expectation(description: "actual worker PID captured before held hook")
     let counts = Counts()
     let child = OwnedChildRetirement(
@@ -848,10 +871,11 @@ final class OwnedChildRetirementTests: XCTestCase {
           spawned.fulfill()
           gate.wait()
         }, workerLaunched: { XCTFail("late worker launch publication") }))
-    let done = terminalExpectation(child)
     child.launchWorker()
-    await fulfillment(of: [spawned, done], timeout: 2)
-    XCTAssertEqual(child.terminal, .unknown(.deadline))
+    await fulfillment(of: [spawned], timeout: 2)
+    try await waitForWorkerRetirement(child)
+    XCTAssertNil(child.terminal)
+    XCTAssertFalse(child.core.allowsIO)
     XCTAssertEqual(child.testingDescriptorCount, 10)
     XCTAssertTrue(child.testingChildExists)
     XCTAssertFalse(child.testingReaped)
@@ -860,7 +884,7 @@ final class OwnedChildRetirementTests: XCTestCase {
     gate.signal()
     await physicalTeardown(child)
     XCTAssertEqual(counts.snapshot.0, effects)
-    XCTAssertEqual(child.terminal, .unknown(.deadline))
+    if case .some(.clean(_)) = child.terminal { XCTFail("Unproved cleanup became clean") }
     XCTAssertTrue(child.testingRetained)
     XCTAssertFalse(namespace.permitsNamespaceMutation)
   }
@@ -871,6 +895,7 @@ final class OwnedChildRetirementTests: XCTestCase {
     let (root, namespace, launch) = try workerFixture()
     defer { try? FileManager.default.removeItem(at: root) }
     let gate = DispatchSemaphore(value: 0)
+    defer { gate.signal() }
     let captured = expectation(
       description: "actual acquisition captured before held validation hook")
     let counts = Counts()
@@ -893,10 +918,11 @@ final class OwnedChildRetirementTests: XCTestCase {
     let child = OwnedChildRetirement(
       worker: launch, deadlineUptimeNanoseconds: DispatchTime.now().uptimeNanoseconds + 200_000_000,
       hooks: hooks)
-    let done = terminalExpectation(child)
     child.launchWorker()
-    await fulfillment(of: [captured, done], timeout: 2)
-    XCTAssertEqual(child.terminal, .unknown(.deadline))
+    await fulfillment(of: [captured], timeout: 2)
+    try await waitForWorkerRetirement(child)
+    XCTAssertNil(child.terminal)
+    XCTAssertFalse(child.core.allowsIO)
     XCTAssertEqual(child.testingDescriptorCount, descriptors)
     XCTAssertFalse(child.testingChildExists)
     XCTAssertEqual(child.core.lock.withLock { child.core.closes }, 0)
@@ -908,15 +934,15 @@ final class OwnedChildRetirementTests: XCTestCase {
     XCTAssertFalse(namespace.cleanup())
   }
 
-  func testWorkerLatePipeCaptureCannotStartAnotherEffectAfterUnknown() async throws {
+  func testWorkerLatePipeCaptureCannotStartAnotherEffectAfterRevocation() async throws {
     try await workerLateCapture(.pipe, descriptors: 3)
   }
 
-  func testWorkerLateSocketCaptureCannotStartAnotherEffectAfterUnknown() async throws {
+  func testWorkerLateSocketCaptureCannotStartAnotherEffectAfterRevocation() async throws {
     try await workerLateCapture(.socket, descriptors: 9)
   }
 
-  func testWorkerLateDuplicateCaptureCannotStartAnotherEffectAfterUnknown() async throws {
+  func testWorkerLateDuplicateCaptureCannotStartAnotherEffectAfterRevocation() async throws {
     try await workerLateCapture(.duplicate, descriptors: 1)
   }
 
@@ -930,10 +956,11 @@ final class OwnedChildRetirementTests: XCTestCase {
       hooks: .init(workerLaunched: { acquired.fulfill() }))
     child.launchWorker()
     await fulfillment(of: [acquired], timeout: 2)
-    let done = terminalExpectation(child)
     child.retire()
-    await fulfillment(of: [done], timeout: 1)
-    XCTAssertEqual(child.terminal, .unknown(.deadline))
+    try await waitForWorkerRetirement(child)
+    try await Task.sleep(nanoseconds: 400_000_000)
+    XCTAssertNil(child.terminal)
+    XCTAssertFalse(child.core.allowsIO)
     XCTAssertFalse(child.testingReaped)
     XCTAssertEqual(child.testingDescriptorCount, 4)
     XCTAssertTrue(child.testingRetained)
@@ -989,9 +1016,11 @@ final class OwnedChildRetirementTests: XCTestCase {
     XCTAssertNil(child.terminal)
     let done = terminalExpectation(child)
     let t0 = DispatchTime.now().uptimeNanoseconds
-    let deadline = child.revoke()
+    child.revoke()
+    let deadline = child.core.lock.withLock { child.core.deadline }
     XCTAssertLessThanOrEqual(deadline - t0, cleanupBudgetNanoseconds + 1_000_000)
-    XCTAssertEqual(child.revoke(), deadline)
+    child.revoke()
+    XCTAssertEqual(child.core.lock.withLock { child.core.deadline }, deadline)
     do {
       try await channel.write(frame)
       XCTFail("Revoke admitted new channel IO")
@@ -1000,7 +1029,8 @@ final class OwnedChildRetirementTests: XCTestCase {
     }
     lifecycle.close()
     await fulfillment(of: [done], timeout: 1)
-    XCTAssertEqual(child.revoke(), deadline)
+    child.revoke()
+    XCTAssertEqual(child.core.lock.withLock { child.core.deadline }, deadline)
     XCTAssertTrue(channel.closureOutcome.bothClosed)
     assertClean(child)
   }
@@ -1073,8 +1103,10 @@ final class OwnedChildRetirementTests: XCTestCase {
     XCTAssertTrue(child.testingRetained)
     XCTAssertFalse(child.testingReaped)
     let effects = counts.snapshot.0
-    let deadline = child.revoke()
-    XCTAssertEqual(child.revoke(), deadline)
+    child.revoke()
+    let deadline = child.core.lock.withLock { child.core.deadline }
+    child.revoke()
+    XCTAssertEqual(child.core.lock.withLock { child.core.deadline }, deadline)
     XCTAssertEqual(counts.snapshot.0, effects)
     let hygiene = expectation(description: "physical hygiene without debt discharge")
     child.testingPhysicalTeardown { _ in hygiene.fulfill() }
@@ -1132,9 +1164,11 @@ final class OwnedChildRetirementTests: XCTestCase {
       done.fulfill()
     }
     gate.arm()
-    let deadline = child.revoke()
+    child.revoke()
+    let deadline = child.core.lock.withLock { child.core.deadline }
     await fulfillment(of: [done], timeout: 1)
-    XCTAssertEqual(child.revoke(), deadline)
+    child.revoke()
+    XCTAssertEqual(child.core.lock.withLock { child.core.deadline }, deadline)
     XCTAssertFalse(channel.closureOutcome.bothClosed)
     XCTAssertEqual(channel.closureOutcome.read, .closed)
     XCTAssertEqual(channel.closureOutcome.write, .unknown)
@@ -1168,14 +1202,16 @@ final class OwnedChildRetirementTests: XCTestCase {
     let channel = try await start(child)
     let done = terminalExpectation(child, counts: counts)
     fault.arm()
-    let deadline = child.revoke()
+    child.revoke()
+    let deadline = child.core.lock.withLock { child.core.deadline }
     await fulfillment(of: [done], timeout: 1)
     XCTAssertEqual(child.terminal, .unknown(.close))
     XCTAssertEqual(channel.closureOutcome.read, .unknown)
     XCTAssertEqual(channel.closureOutcome.write, .unknown)
     XCTAssertEqual(counts.snapshot.2, 1)
     channel.requestClose()
-    XCTAssertEqual(child.revoke(), deadline)
+    child.revoke()
+    XCTAssertEqual(child.core.lock.withLock { child.core.deadline }, deadline)
     XCTAssertEqual(counts.snapshot.2, 1)
     let hygiene = expectation(description: "failed-close fixture hygiene")
     child.testingPhysicalTeardown { _ in hygiene.fulfill() }

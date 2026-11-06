@@ -48,6 +48,22 @@ extension ProductDatabase {
         END;
         """)
     }
+    migrator.registerMigration("extractionOriginalGeometryOwnersV1") { db in
+      // Deliberately no INSERT SELECT/backfill: candidate blobs cannot establish originals.
+      try db.execute(sql: """
+        CREATE TABLE extractionGeometryOwner (
+          revision TEXT NOT NULL,
+          sentenceID INTEGER NOT NULL,
+          page INTEGER NOT NULL,
+          maximumErrorPDFPoints REAL NOT NULL CHECK(maximumErrorPDFPoints >= 0),
+          originalAnchor BLOB NOT NULL
+            CHECK(length(originalAnchor) > 0 AND length(originalAnchor) <= \(SummaryOwnerArchive.maximumBytes)),
+          PRIMARY KEY(revision, sentenceID),
+          FOREIGN KEY(revision, sentenceID)
+            REFERENCES extractionSentence(revision, sentenceID) ON DELETE CASCADE
+        );
+        """)
+    }
   }
 
   private func guardExtractionPaper(_ db: Database, _ identity: ExtractionIdentity) throws {
@@ -135,6 +151,8 @@ extension ProductDatabase {
   func publishExtraction(_ identity: ExtractionIdentity, sentences: [ValidatedExtractionSentence],
     checkBudget: @Sendable () throws -> Void) throws {
     guard !sentences.isEmpty else { throw ExtractionError.invalidBatch }
+    let ownedCount = sentences.reduce(0) { $0 + ($1.originalOwner == nil ? 0 : 1) }
+    guard ownedCount == 0 || ownedCount == sentences.count else { throw ExtractionError.invalidBatch }
     try adapterWrite { db in
       try checkBudget()
       try guardExtractionAttempt(db, identity)
@@ -143,12 +161,29 @@ extension ProductDatabase {
         VALUES (?, ?, ?, ?, ?)
         """, arguments: [identity.revision.uuidString, identity.paperID.uuidString,
           identity.generation.uuidString, identity.pdfSHA256, identity.pdfReference])
+      var ownerPrecision: PDFGeometryPrecision?
       for sentence in sentences {
         try checkBudget()
         try db.execute(sql: """
           INSERT INTO extractionSentence(revision, page, sentenceID, text, geometry) VALUES (?, ?, ?, ?, ?)
           """, arguments: [identity.revision.uuidString, sentence.page, sentence.sentenceID,
             sentence.text, sentence.geometry])
+        if let owner = sentence.originalOwner {
+          if let ownerPrecision, ownerPrecision != owner.precision { throw ExtractionError.invalidBatch }
+          ownerPrecision = owner.precision
+          let key = ExtractionSentenceIdentity(paperID: identity.paperID, pdfSHA256: identity.pdfSHA256,
+            revision: identity.revision, page: sentence.page, sentenceID: sentence.sentenceID)
+          let archive = try owner.archive(for: key, text: sentence.text, candidate: sentence.geometry)
+          guard archive.anchors.count == 1, let original = archive.anchors.first else {
+            throw ExtractionError.invalidBatch
+          }
+          try checkBudget()
+          try db.execute(sql: """
+            INSERT INTO extractionGeometryOwner(revision, sentenceID, page, maximumErrorPDFPoints, originalAnchor)
+            VALUES (?, ?, ?, ?, ?)
+            """, arguments: [identity.revision.uuidString, sentence.sentenceID, sentence.page,
+              archive.maximumErrorPDFPoints, original.bytes])
+        }
       }
       try checkBudget()
       try guardExtractionAttempt(db, identity)
@@ -218,6 +253,59 @@ extension ProductDatabase {
           identity.revision.uuidString, identity.page, identity.sentenceID]) else { return nil }
       return .init(revision: identity.revision, page: identity.page, sentenceID: identity.sentenceID,
         text: row["text"], canonicalGeometry: row["geometry"])
+    }
+  }
+
+  /// Read-only original facts for an exact retained revision of the current live Paper.
+  /// Does not pin a job, dispatch work, authorize publication, or certify calibration.
+  /// Legacy/missing owners return nil; candidate geometry is never read or backfilled.
+  public func originalExtractionGeometryOwners(paperID: UUID, generation: UUID, pdfSHA256: String,
+    revision: UUID, sentences: Set<PDFSentenceIdentity>) throws -> CanonicalExtractionGeometryValidator? {
+    guard !sentences.isEmpty, sentences.count <= SummaryOwnerArchive.maximumBytes / 128,
+      sentences.allSatisfy({
+        $0.paperID == paperID && $0.pdfSHA256 == pdfSHA256
+          && $0.extractionRevision == revision.uuidString.lowercased()
+      }) else { throw ExtractionError.invalidBatch }
+    return try adapterRead { db in
+      guard try Int.fetchOne(db, sql: """
+        SELECT COUNT(*) FROM paper p JOIN extractionRevision r ON r.paperID = p.id
+        WHERE p.id = ? AND p.generation = ? AND p.pdfSHA256 = ?
+          AND p.status = 'ready' AND p.deletionID IS NULL AND r.id = ?
+          AND r.generation = p.generation AND r.pdfSHA256 = p.pdfSHA256
+          AND r.pdfReference = p.pdfReference
+        """, arguments: [paperID.uuidString, generation.uuidString, pdfSHA256, revision.uuidString]) == 1
+      else { return nil }
+      var originals: [PDFSentenceAnchor] = []
+      var precision: PDFGeometryPrecision?
+      var totalBytes = 0
+      for identity in sentences.sorted(by: { ($0.pageIndex, $0.sentenceID) < ($1.pageIndex, $1.sentenceID) }) {
+        let arguments: StatementArguments = [revision.uuidString, identity.sentenceID, identity.pageIndex]
+        // Check aggregate length before materializing the BLOB, under the same read snapshot.
+        guard let row = try Row.fetchOne(db, sql: """
+          SELECT length(originalAnchor) AS byteCount, maximumErrorPDFPoints
+          FROM extractionGeometryOwner WHERE revision = ? AND sentenceID = ? AND page = ?
+          """, arguments: arguments) else { return nil }
+        let byteCount: Int = row["byteCount"]
+        guard byteCount > 0, byteCount <= SummaryOwnerArchive.maximumBytes - totalBytes else {
+          throw ExtractionError.invalidBatch
+        }
+        let recorded = try PDFGeometryPrecision(maximumErrorPDFPoints: row["maximumErrorPDFPoints"])
+        if let precision, precision != recorded { throw ExtractionError.invalidBatch }
+        precision = recorded
+        guard let bytes = try Data.fetchOne(db, sql: """
+          SELECT originalAnchor FROM extractionGeometryOwner
+          WHERE revision = ? AND sentenceID = ? AND page = ?
+          """, arguments: arguments), bytes.count == byteCount else { throw ExtractionError.invalidBatch }
+        let original = try CanonicalExtractionGeometryValidator.decodeCanonicalAnchor(bytes)
+        guard original.identity == identity else { throw ExtractionError.invalidBatch }
+        originals.append(original)
+        totalBytes += byteCount
+      }
+      guard let precision else { return nil }
+      let validator = try CanonicalExtractionGeometryValidator(owningAnchors: originals, precision: precision)
+      // Reuse the existing archive's conservative quote/quad and aggregate limits.
+      _ = try validator.captureSummaryOwners(sentences)
+      return validator
     }
   }
 

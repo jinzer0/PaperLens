@@ -1,5 +1,32 @@
 # Story 1.9 Build Spec — Product ProviderRPC
 
+## User-authorized asynchronous retirement contract — 2026-11-07
+
+The user removed the SDK termination/deletion **300ms completion requirement**.
+The following supersedes that timing requirement and the old cleanup-deadline
+correlation described below; earlier execution evidence remains historical.
+
+- Revoke work admission and publication immediately. Resource cleanup runs outside
+  MainActor and must not disable unrelated Paper activity merely because it is slow.
+- Slow cleanup is pending, not proof of failure or resource release. Report actual
+  terminal errors without inventing clean closure, namespace absence or deletion.
+- Internal broker control uses envelope version **2** and an immutable canonical
+  UUIDv4 `retirementID` on `revoke`, `cliRetired`, `preLaunchRetired`, `reapBroker`
+  and `brokerReaped`. Reject the old version and `deadlineNs` cleanup fields.
+  Correlation no longer doubles as a deadline.
+- Keep startup and normal operation deadlines distinct. Do not replace the removed
+  300ms rule with a larger global cleanup deadline. The cancellation-frame handoff
+  allowance only bounds best-effort dispatch; it cannot expire physical cleanup.
+- Retain actual owners, checked closes/reaps, same-saga deletion and identity fences
+  until their resources are accounted for. A process reap is not an assertion that
+  every in-process SDK FileObject was individually observed closed.
+
+
+This is implementation authority, not a passing result. Genuine SDK containment,
+resource cleanup and production Paper purge still require real implementation and
+verification. See `docs/ai-governance.md` for the exact user-authorized execution,
+calibration, dummy-key, signing and no-release boundaries.
+
 ## Consolidation cancellation correction — 2026-11-05
 
 Review of the existing uncommitted integration found that `cancel()` queued

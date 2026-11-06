@@ -110,7 +110,8 @@ public final class OwnedChildRetirement: @unchecked Sendable {
     var workerLaunched: @Sendable () -> Void = {}
   }
 
-  // Lifetime roots, not a second product store. Unknown debt permanently closes admission.
+  // Lifetime roots, not a second product store. Worker debt retains its namespace,
+  // never poisons unrelated namespaces. One-shot fixture/backup debt is unchanged.
   private final class Roots: @unchecked Sendable {
     static let shared = Roots()
     let lock = NSLock()
@@ -118,14 +119,30 @@ public final class OwnedChildRetirement: @unchecked Sendable {
     var debt = false
     func admit(_ core: Core) -> Bool {
       lock.withLock {
-        guard !debt else { return false }
+        if case .worker(let launch) = core.command {
+          guard !owners.values.contains(where: { existing in
+            guard existing !== core else { return false }
+            switch existing.command {
+            case .worker(let owned):
+              return owned.namespace.runID == launch.namespace.runID
+                || owned.namespace.directoryURL == launch.namespace.directoryURL
+            case .backup(let owned):
+              return owned.namespace.runID == launch.namespace.runID
+                || owned.namespace.directoryURL == launch.namespace.directoryURL
+            case .fixture: return false
+            }
+          }) else { return false }
+        } else {
+          guard !debt else { return false }
+        }
         owners[core.identity] = core
         return true
       }
     }
     func finish(_ core: Core, clean: Bool) {
       lock.withLock {
-        if clean { owners.removeValue(forKey: core.identity) } else { debt = true }
+        if clean { owners.removeValue(forKey: core.identity) }
+        else if !core.isWorker { debt = true }
       }
     }
   }
@@ -161,6 +178,7 @@ public final class OwnedChildRetirement: @unchecked Sendable {
     var attributes: posix_spawnattr_t?
     var startupTimer: DispatchSourceTimer?
     var revoked = false
+    var retirementID: String?
     var cancelDispatchPending = false
     var handoff = false
     var endpoints: (Int32, Int32)?
@@ -266,11 +284,58 @@ public final class OwnedChildRetirement: @unchecked Sendable {
         run()
       }
     }
-    @discardableResult
-    func revoke(startupOnly: Bool = false, dispatchCancellation: Bool = false) -> UInt64 {
+    func revoke(startupOnly: Bool = false, dispatchCancellation: Bool = false) {
+      if isWorker {
+        var needsAdmission = false
+        var beginCleanup = false
+        let first = lock.withLock { () -> Bool in
+          guard terminal == nil, !revoked else { return false }
+          if cancelDispatchPending {
+            guard !dispatchCancellation else { return false }
+            cancelDispatchPending = false
+            revoked = true
+            beginCleanup = true
+            return false
+          }
+          if startupOnly {
+            guard startupTimer != nil, DispatchTime.now().uptimeNanoseconds >= startupDeadline
+            else { return false }
+          }
+          needsAdmission = !invoked
+          invoked = true
+          cancelDispatchPending = dispatchCancellation
+          revoked = !dispatchCancellation
+          beginCleanup = !dispatchCancellation
+          retirementID = UUID().uuidString.lowercased()
+          return true
+        }
+        if first {
+          if needsAdmission, !Roots.shared.admit(self) {
+            select(.unknown(.admissionBlocked))
+            return
+          }
+          let startup = lock.withLock { () -> DispatchSourceTimer? in
+            let result = startupTimer
+            startupTimer = nil
+            return result
+          }
+          startup?.cancel()
+          resolveStartupFailure(startupOnly ? .deadline : .revoked)
+          if dispatchCancellation {
+            // AgentConnectionLifecycle synchronously fences ordinary requests and
+            // admits only its final cancellation frame. This independent handoff
+            // bound is not a deadline for the subsequent observed cleanup.
+            terminalLane.asyncAfter(deadline: .now() + .milliseconds(50)) { [self] in
+              revoke()
+            }
+          }
+        }
+        if beginCleanup { operation.async { [self] in retireWorker() } }
+        return
+      }
       guard runsUntilRevoked else {
         invoke()
-        return lock.withLock { deadline }
+        return
       }
       var needsAdmission = false
       var beginCleanup = false
@@ -301,7 +366,7 @@ public final class OwnedChildRetirement: @unchecked Sendable {
       if first {
         if needsAdmission, !Roots.shared.admit(self) {
           select(.unknown(.admissionBlocked))
-          return lock.withLock { deadline }
+          return
         }
         let source = DispatchSource.makeTimerSource(queue: terminalLane)
         source.setEventHandler { [self] in select(.unknown(.deadline)) }
@@ -329,7 +394,6 @@ public final class OwnedChildRetirement: @unchecked Sendable {
           if isWorker { retireWorker() } else { beginRunningCleanup() }
         }
       }
-      return lock.withLock { deadline }
     }
     func reservedEndpoints() throws -> (Int32, Int32) {
       try lock.withLock {
@@ -601,6 +665,9 @@ public final class OwnedChildRetirement: @unchecked Sendable {
       return withinDeadline()
     }
     func withinDeadline() -> Bool {
+      if isWorker, lock.withLock({ revoked }) {
+        return lock.withLock { terminal == nil }
+      }
       if DispatchTime.now().uptimeNanoseconds >= lock.withLock({ deadline }) {
         if runsUntilRevoked, !lock.withLock({ revoked }) {
           revoke(startupOnly: true)
@@ -636,7 +703,9 @@ public final class OwnedChildRetirement: @unchecked Sendable {
     // All control buffers, identities and readiness sources belong to this same Core.
     // The terminal lane can seal unknown while any operation below is blocked.
     var controlPermitted: Bool {
-      lock.withLock { terminal == nil && DispatchTime.now().uptimeNanoseconds < deadline }
+      lock.withLock {
+        terminal == nil && (isWorker && revoked || DispatchTime.now().uptimeNanoseconds < deadline)
+      }
     }
     func armControl(_ fd: Int32) {
       guard controlPermitted, controlSources[fd] == nil else { return }
@@ -648,7 +717,7 @@ public final class OwnedChildRetirement: @unchecked Sendable {
     func queueControl(_ fd: Int32, _ op: String, _ fields: [String: Any] = [:]) throws {
       guard controlPermitted, case .worker(let launch) = command else { return }
       var message = fields
-      message["v"] = 1
+      message["v"] = 2
       message["runID"] = launch.namespace.runID
       message["op"] = op
       let frame = try ProviderRPC.encode(message)
@@ -759,7 +828,8 @@ public final class OwnedChildRetirement: @unchecked Sendable {
             else { throw Failure.control }
             controlSources.removeValue(forKey: fd)?.cancel()
             workerPhase = .reaping
-            try queueControl(workerFD, "reapBroker", ["deadlineNs": lock.withLock { deadline }])
+            guard let retirementID = lock.withLock({ self.retirementID }) else { throw Failure.control }
+            try queueControl(workerFD, "reapBroker", ["retirementID": retirementID])
             return
           }
           if count < 0 {
@@ -781,7 +851,7 @@ public final class OwnedChildRetirement: @unchecked Sendable {
     }
     func receiveControl(_ message: [String: Any], from fd: Int32) throws {
       guard controlPermitted, case .worker(let launch) = command,
-        ProviderRPC.exactUInt64(message["v"]) == 1,
+        ProviderRPC.exactUInt64(message["v"]) == 2,
         message["runID"] as? String == launch.namespace.runID,
         let op = message["op"] as? String
       else { throw Failure.control }
@@ -789,12 +859,17 @@ public final class OwnedChildRetirement: @unchecked Sendable {
       switch op {
       case "hello", "running", "dispatching", "brokerOffered": extras = []
       case "revokeNeeded", "unknown": extras = ["code"]
-      case "cliRetired": extras = ["deadlineNs", "scope", "waitStatus"]
-      case "preLaunchRetired": extras = ["deadlineNs"]
-      case "brokerReaped": extras = ["deadlineNs", "waitStatus"]
+      case "cliRetired": extras = ["retirementID", "scope", "waitStatus"]
+      case "preLaunchRetired": extras = ["retirementID"]
+      case "brokerReaped": extras = ["retirementID", "waitStatus"]
       default: throw Failure.control
       }
       guard Set(message.keys) == Set(["v", "runID", "op"] + extras) else { throw Failure.control }
+      if extras.contains("retirementID") {
+        guard let value = message["retirementID"] as? String,
+          let expected = lock.withLock({ retirementID }), value == expected
+        else { throw Failure.control }
+      }
       switch op {
       case "hello" where fd == brokerFD && workerPhase == .hello && allowsIO:
         guard allowsIO else { return }
@@ -826,8 +901,7 @@ public final class OwnedChildRetirement: @unchecked Sendable {
         else { throw Failure.control }
         revoke()
       case "cliRetired", "preLaunchRetired":
-        guard fd == brokerFD, workerPhase == .retiring,
-          ProviderRPC.exactUInt64(message["deadlineNs"]) == lock.withLock({ deadline })
+        guard fd == brokerFD, workerPhase == .retiring
         else { throw Failure.control }
         if op == "cliRetired" {
           guard message["scope"] as? String == "localDirectCLIResources",
@@ -838,7 +912,6 @@ public final class OwnedChildRetirement: @unchecked Sendable {
         workerPhase = .brokerEOF
       case "brokerReaped":
         guard fd == workerFD, workerPhase == .reaping,
-          ProviderRPC.exactUInt64(message["deadlineNs"]) == lock.withLock({ deadline }),
           let status = ProviderRPC.exactUInt64(message["waitStatus"])
         else { throw Failure.control }
         brokerWaitStatus = status
@@ -880,12 +953,12 @@ public final class OwnedChildRetirement: @unchecked Sendable {
       guard controlPermitted, !revokeSent else { return }
       revokeSent = true
       workerPhase = .retiring
-      let end = lock.withLock { deadline }
+      guard let retirementID = lock.withLock({ self.retirementID }) else { return }
       do {
         if let brokerFD, brokerIdentity != nil {
-          try queueControl(brokerFD, "revoke", ["deadlineNs": end])
+          try queueControl(brokerFD, "revoke", ["retirementID": retirementID])
         }
-        if let workerFD { try queueControl(workerFD, "revoke", ["deadlineNs": end]) }
+        if let workerFD { try queueControl(workerFD, "revoke", ["retirementID": retirementID]) }
       } catch { if controlPermitted { failed(.control) } }
     }
     func run() {
@@ -1293,7 +1366,7 @@ public final class OwnedChildRetirement: @unchecked Sendable {
       command: .fixture(runningFixture, privateWorkingDirectory),
       deadline: UInt64.max, hooks: hooks, runningFixture: true)
   }
-  @discardableResult internal func revoke() -> UInt64 { core.revoke() }
+  internal func revoke() { core.revoke() }
   deinit { if core.runsUntilRevoked { core.revoke() } }
   /// Caller supplies the existing absolute monotonic cleanup deadline and a fresh 0700 cwd.
   /// No child exists until the sole `retire` invocation; no arbitrary executable/PID is accepted.
@@ -1331,13 +1404,6 @@ public final class OwnedChildRetirement: @unchecked Sendable {
   }
   public func retire() {
     if core.runsUntilRevoked { core.revoke() } else { core.invoke() }
-  }
-  @MainActor
-  internal func retire(cancelling lifecycle: AgentConnectionLifecycle, params: [String: Any]) {
-    core.revoke(dispatchCancellation: true)
-    do {
-      try lifecycle.dispatchCancellation(params: params) { [core] in core.revoke() }
-    } catch { core.revoke() }
   }
   public func observeTerminal(_ observer: @escaping @Sendable (Terminal) -> Void) {
     core.observe(observer)

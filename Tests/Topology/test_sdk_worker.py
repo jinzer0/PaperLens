@@ -136,6 +136,7 @@ def scripted_worker():
         'TurnStartParams', 'ReadOnlySandboxPolicy')},
         SandboxMode=SimpleNamespace(read_only='read-only'))
     owner.cwd = Path('/SCRIPTED-PUBLIC-CONTRACT-NOT-PRODUCTION')
+    owner.run_id = str(uuid.uuid4())
     owner.dispatch_enabled = True
     return owner
 
@@ -463,8 +464,8 @@ class ScriptedDispatchTests(unittest.IsolatedAsyncioTestCase):
                 if action == 'cancel':
                     self.assertTrue((await self.call('product.loginCancel', self.bound))['accepted'])
                 elif action == 'revoke':
-                    self.owner._control({'runID': self.owner.run_id, 'op': 'revoke',
-                                         'deadlineNs': time.monotonic_ns() + 200_000_000})
+                    self.owner._control({'v': 2, 'runID': self.owner.run_id, 'op': 'revoke',
+                                         'retirementID': str(uuid.uuid4())})
                 else:
                     retirement = asyncio.create_task(self.call('product.stageRetire',
                         dict(self.bound, cleanupID=str(uuid.uuid4()))))
@@ -597,7 +598,7 @@ class ScriptedDispatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(stage.cancel_selected)
         self.assertFalse(self.owner.retirement_requested)
         self.assertFalse(self.owner.unknown)
-        self.assertIsNone(self.owner.deadline_ns)
+        self.assertIsNone(self.owner.retirement_id)
         self.assertEqual(self.owner.cleanup_requests, [])
         self.assertEqual(self.owner.control_output, bytearray())
         self.assertEqual(self.owner.client.calls, calls)
@@ -650,7 +651,7 @@ class ScriptedDispatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(stage.cancel_selected)
         self.assertEqual(self.owner.cleanup_requests, [])
         self.assertFalse(self.owner.retirement_requested)
-        self.assertIsNone(self.owner.deadline_ns)
+        self.assertIsNone(self.owner.retirement_id)
         self.assertEqual(self.owner.control_output, bytearray())
         self.assertEqual(self.owner.jobs, jobs)
         self.assertEqual(self.owner.client.calls, calls)
@@ -729,30 +730,124 @@ class ScriptedDispatchTests(unittest.IsolatedAsyncioTestCase):
 
 
 class LifecycleContractTests(unittest.TestCase):
-    def test_first_deadline_and_actual_helper_interface_no_sdk_closure_inference(self):
+    def test_first_retirement_identity_and_actual_helper_interface_no_sdk_closure_inference(self):
         owner = scripted_worker()
         owner.run_id = str(uuid.uuid4())
         owner.startup_deadline_ns = time.monotonic_ns() + 5_000_000_000
-        deadline = time.monotonic_ns() + 250_000_000
-        owner._control({'runID': owner.run_id, 'op': 'revoke', 'deadlineNs': deadline})
-        owner._control({'runID': owner.run_id, 'op': 'revoke', 'deadlineNs': deadline})
+        identity = str(uuid.uuid4())
+        revoke = {'v': 2, 'runID': owner.run_id, 'op': 'revoke', 'retirementID': identity}
+        owner._control(revoke)
+        owner._control(revoke)
         with self.assertRaises(ProtocolError):
-            owner._control({'runID': owner.run_id, 'op': 'revoke', 'deadlineNs': deadline + 1})
-        self.assertEqual(owner.deadline_ns, deadline)
+            owner._control(dict(revoke, retirementID=str(uuid.uuid4())))
+        with self.assertRaises(ProtocolError):
+            owner._control({'v': 1, 'runID': owner.run_id, 'op': 'revoke',
+                            'deadlineNs': time.monotonic_ns() + 250_000_000})
+        self.assertEqual(owner.retirement_id, identity)
         # SCRIPTED helper receipt tests only call ownership, not real OS reaping.
-        receipt = SimpleNamespace(wait_status=0, deadline_ns=deadline)
-        owner.broker = SimpleNamespace(wait_direct_child=Mock(return_value=receipt))
+        receipt = SimpleNamespace(wait_status=0, retirement_id=identity)
+        entered, release = threading.Event(), threading.Event()
+
+        def delayed_reap(actual):
+            self.assertEqual(actual, identity)
+            entered.set()
+            if not release.wait(2):
+                raise RuntimeError('scripted reaper was not released')
+            return receipt
+
+        owner.broker = SimpleNamespace(wait_direct_child=Mock(side_effect=delayed_reap))
         owner.rendezvous = SimpleNamespace(retire=Mock())
         actual_client = owner.client
         with patch.object(owner, '_send_control') as control:
-            owner._control({'runID': owner.run_id, 'op': 'reapBroker', 'deadlineNs': deadline})
-            owner.broker.wait_direct_child.assert_called_once_with(deadline)
-            owner.rendezvous.retire.assert_called_once_with(deadline)
-            control.assert_called_once_with('brokerReaped', deadlineNs=deadline, waitStatus=0)
+            reap = dict(revoke, op='reapBroker')
+            owner._control(reap)
+            try:
+                self.assertTrue(entered.wait(1))
+                self.assertTrue(owner.retirement_requested)
+                self.assertFalse(owner.unknown)
+                control.assert_not_called()
+                owner.rendezvous.retire.assert_not_called()
+                with patch.object(sdk_worker.time, 'monotonic_ns',
+                                  return_value=owner.startup_deadline_ns + 60_000_000_000):
+                    owner._control(revoke)
+                    owner._control(reap)
+                    self.assertFalse(owner.unknown)
+                owner.broker.wait_direct_child.assert_called_once_with(identity)
+            finally:
+                release.set()
+                owner.retirement_thread.join(3)
+            self.assertFalse(owner.retirement_thread.is_alive())
+            owner.rendezvous.retire.assert_called_once_with(identity)
+            control.assert_called_once_with('brokerReaped', retirementID=identity, waitStatus=0)
         self.assertTrue(owner.unknown)
         self.assertEqual(owner.reason, 'sdkClosureUnproven')
         self.assertIs(owner.client, actual_client)
         self.assertIs(owner.reap_record, receipt)
+
+    def test_start_attempt_is_consumed_before_import_constructor_or_start_failure(self):
+        for failure in ('module', 'constructor', 'start'):
+            with self.subTest(failure=failure):
+                owner = sdk_worker.OfficialSDKWorker()
+                owner.environment_replaced = True
+                owner.fds['cwd'] = 123  # Never accessed: rendezvous is explicitly mocked.
+                owner.cwd = Path('/SCRIPTED-NOT-AN-SDK-HOME')
+                owner.python, owner.agent = Path('/SCRIPTED/python'), Path('/SCRIPTED/agent.py')
+                owner.run_id = str(uuid.uuid4())
+                owner.startup_deadline_ns = time.monotonic_ns() + 5_000_000_000
+                client = SimpleNamespace(start=Mock(side_effect=RuntimeError('start')),
+                                         close=Mock(side_effect=AssertionError('must not close')))
+                public = SimpleNamespace(CodexConfig=Mock(side_effect=lambda **kw: SimpleNamespace(**kw)),
+                    CodexClient=Mock(side_effect=RuntimeError('constructor')) if failure == 'constructor'
+                    else Mock(return_value=client))
+                modules = {'openai_codex': SimpleNamespace(__version__='0.160.0'),
+                           'openai_codex.client': public,
+                           'openai_codex.generated.v2_all': SimpleNamespace()}
+                def load(name):
+                    self.assertTrue(owner.sdk_start_attempted)
+                    if failure == 'module': raise RuntimeError('module')
+                    return modules[name]
+                with patch.object(owner, '_sdk_module', side_effect=load) as module, \
+                        patch('broker_control.open_worker_rendezvous') as rendezvous:
+                    with self.assertRaises(RuntimeError):
+                        owner.start()
+                    self.assertTrue(owner.sdk_start_attempted)
+                    counts = (module.call_count, rendezvous.call_count, public.CodexClient.call_count)
+                    with self.assertRaises(ProtocolError):
+                        owner.start()
+                    self.assertEqual(counts, (module.call_count, rendezvous.call_count,
+                                             public.CodexClient.call_count))
+                    client.close.assert_not_called()
+                    if failure == 'start':
+                        client.start.assert_called_once_with()
+                        config = public.CodexConfig.call_args.kwargs
+                        self.assertEqual(config['launch_args_override'],
+                            ('/SCRIPTED/python', '-I', '-B', '/SCRIPTED/agent.py', '--native-broker'))
+
+    def test_concurrent_start_cannot_enter_public_constructor_twice(self):
+        owner = sdk_worker.OfficialSDKWorker()
+        owner.environment_replaced = True
+        entered, release = threading.Event(), threading.Event()
+        errors = []
+        def module(_):
+            entered.set()
+            if not release.wait(2): raise RuntimeError('fixture wait')
+            raise RuntimeError('scripted module failure')
+        def first():
+            try: owner.start()
+            except RuntimeError as error: errors.append(error)
+        with patch.object(owner, '_sdk_module', side_effect=module) as load:
+            thread = threading.Thread(target=first)
+            thread.start()
+            try:
+                self.assertTrue(entered.wait(1))
+                with self.assertRaises(ProtocolError): owner.start()
+                self.assertEqual(load.call_count, 1)
+            finally:
+                release.set()
+                thread.join(3)
+            self.assertFalse(thread.is_alive())
+            self.assertEqual(len(errors), 1)
+            self.assertTrue(owner.sdk_start_attempted)
 
 
 class MarkerContractTests(unittest.TestCase):
@@ -836,6 +931,12 @@ class SourceContractTests(unittest.TestCase):
         self.assertIn("sdk.__version__ != '0.160.0'", source)
         self.assertIn("self.rendezvous = open_worker_rendezvous(self.fds['cwd']", source)
         self.assertLess(source.index('self.client = public.CodexClient'), source.index('self.client.start()'))
+        self.assertLess(source.index('self.sdk_start_attempted = True'),
+                        source.index('self.client = public.CodexClient'))
+        client_starts = [node for node in calls if isinstance(node.func, ast.Attribute)
+                         and node.func.attr == 'start' and isinstance(node.func.value, ast.Attribute)
+                         and node.func.value.attr == 'client']
+        self.assertEqual(len(client_starts), 1)
         for node in calls:
             if isinstance(node.func, ast.Attribute) and node.func.attr in (
                     'initialize', 'next_notification', 'next_login_notification',

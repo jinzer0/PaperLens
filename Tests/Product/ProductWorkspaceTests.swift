@@ -2,6 +2,7 @@ import Darwin
 import Combine
 import Foundation
 import GRDB
+import PDFKit
 import XCTest
 #if SWIFT_PACKAGE
 import ProviderRequest
@@ -18,7 +19,6 @@ import ProviderRequest
 
 @MainActor final class ProductWorkspaceTests: XCTestCase {
   private struct Fixture {
-    let root: URL
     let source: URL
     let database: ProductDatabase
     let lifecycle: LocalLibraryLifecycle
@@ -26,7 +26,7 @@ import ProviderRequest
     let workspace: ProductWorkspace
   }
 
-  private func fixture() async throws -> Fixture {
+  private func privateRoot() throws -> URL {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true,
       attributes: [.posixPermissions: 0o700])
@@ -36,21 +36,42 @@ import ProviderRequest
     defer { free(physicalPath) }
     let physical = URL(fileURLWithPath: String(cString: physicalPath), isDirectory: true)
     addTeardownBlock { try FileManager.default.removeItem(at: physical) }
+    return physical
+  }
+
+  private func seedProviderSelection(
+    database: ProductDatabase, slots: APIKeySlotStore
+  ) throws -> NativeOpenAIConfiguration {
+    let configuration = try NativeOpenAIConfiguration(model: "fixture-model")
+    _ = try database.compareAndSwapProviderConfiguration(expected: database.providerConfiguration(),
+      replacementKind: .openAIAPIKey, replacementSlotID: slots.create(key: "fixture-secret"),
+      replacementModel: configuration.model)
+    return configuration
+  }
+
+  private func rootWithPersistedSelection() throws -> URL {
+    let root = try privateRoot()
+    let database = try ProductDatabase.open(at: root.appendingPathComponent("database"))
+    let slots = try APIKeySlotStore(directory: root.appendingPathComponent("api-key-slots"))
+    _ = try seedProviderSelection(database: database, slots: slots)
+    // The seed store closes before composition opens the same exclusively owned directory.
+    return root
+  }
+
+  private func fixture() async throws -> Fixture {
+    let physical = try privateRoot()
     let source = physical.appendingPathComponent("selected-1999.pdf")
     try Data("%PDF-1.4\nsynthetic workspace fixture\n%%EOF\n".utf8).write(to: source)
     let database = try ProductDatabase.open(at: physical.appendingPathComponent("database"))
     let lifecycle = try await LocalLibraryLifecycle.open(database: database)
     let slots = try APIKeySlotStore(directory: physical.appendingPathComponent("api-key-slots"))
-    let configuration = try NativeOpenAIConfiguration(model: "fixture-model")
-    _ = try database.compareAndSwapProviderConfiguration(expected: database.providerConfiguration(),
-      replacementKind: .openAIAPIKey, replacementSlotID: slots.create(key: "fixture-secret"),
-      replacementModel: configuration.model)
+    let configuration = try seedProviderSelection(database: database, slots: slots)
     let connection = NativeAPIKeyConnection(configuration: configuration, slots: slots,
       persistence: DatabaseAPIKeySelector(database: database, configuration: configuration),
       transport: WorkspaceNoNetworkTransport(), authority: try ProviderRequest())
     connection.restore()
     let workspace = try ProductWorkspace(database: database, lifecycle: lifecycle, connection: connection)
-    return Fixture(root: physical, source: source, database: database,
+    return Fixture(source: source, database: database,
       lifecycle: lifecycle, connection: connection, workspace: workspace)
   }
 
@@ -967,6 +988,52 @@ import ProviderRequest
     XCTAssertEqual(after.papers.map(\.id), [selectedID])
   }
 
+  func testConfirmedLocalImportCanOpenExactPDFHiddenByCurrentLibraryFilter() async throws {
+    let f = try await fixture()
+    let bytes = NSMutableData()
+    let consumer = try XCTUnwrap(CGDataConsumer(data: bytes as CFMutableData))
+    var pageBounds = CGRect(x: 0, y: 0, width: 400, height: 600)
+    let pdf = try XCTUnwrap(CGContext(consumer: consumer, mediaBox: &pageBounds, nil))
+    pdf.beginPDFPage(nil)
+    pdf.endPDFPage()
+    pdf.closePDF()
+    try (bytes as Data).write(to: f.source)
+
+    f.workspace.libraryFilter.favoritesOnly = true
+    try await f.workspace.prepareImport(source: f.source)
+    let selected = try confirmation(f.workspace)
+    let paperID = try await f.workspace.imports.continueImport(
+      selected.id, destinationFolderID: selected.destinationFolderID)
+    f.workspace.imported(paperID, localConfirmationID: UUID())
+    XCTAssertNil(f.workspace.latestLocalImport)
+    f.workspace.imported(paperID, localConfirmationID: selected.id)
+    XCTAssertEqual(f.workspace.latestLocalImport, paperID)
+    XCTAssertNil(f.workspace.reader, "Import success keeps the user in the Library")
+
+    f.workspace.sheet = nil
+    await f.workspace.openImportedPDF(paperID)
+    XCTAssertNil(f.workspace.reader, "Reader waits for the owned sheet cleanup")
+    let cleanup = try XCTUnwrap(f.workspace.presentationDidDismiss(confirmationID: selected.id))
+    _ = await cleanup.value
+    let filtered = try await f.workspace.organization.snapshot(
+      filter: f.workspace.libraryFilter, facts: f.workspace.sortFacts())
+    XCTAssertFalse(filtered.papers.contains { $0.id == paperID })
+    XCTAssertNil(f.workspace.reader)
+
+    await f.workspace.openImportedPDF(paperID)
+    let reader = try XCTUnwrap(f.workspace.reader)
+    XCTAssertEqual(reader.id, paperID)
+    _ = try reader.session.open(paperID: paperID, validateDocument: { url in
+      XCTAssertEqual(try Data(contentsOf: url), bytes as Data)
+      let document = try XCTUnwrap(PDFDocument(url: url))
+      XCTAssertEqual(document.pageCount, 1)
+      return document.pageCount
+    }, discard: {})
+    XCTAssertNil(f.workspace.latestLocalImport)
+    f.workspace.returnToLibrary()
+    XCTAssertTrue(f.workspace.libraryFilter.favoritesOnly)
+  }
+
   func testActualWorkspaceImportDuplicateAndPersistedOrganizationBinding() async throws {
     let f = try await fixture()
     let folder = try await f.workspace.imports.createFolder(name: "Destination")
@@ -1137,8 +1204,8 @@ import ProviderRequest
   }
 
   func testRootOwnsWorkspaceOnlyAfterExplicitContinueAndCannotAbandonItsNativeOwner() async throws {
-    let f = try await fixture()
-    let composition = ProductAppComposition(root: f.root, transport: WorkspaceNoNetworkTransport())
+    let composition = ProductAppComposition(root: try rootWithPersistedSelection(),
+      transport: WorkspaceNoNetworkTransport())
     await composition.start()
     guard case .connection(let connection) = composition.phase else {
       return XCTFail("Local restore must still require explicit Continue")
@@ -1162,8 +1229,8 @@ import ProviderRequest
   }
 
   func testRootRetainsExplicitGeometryGraphAndInjectsSameRecoveryOwner() async throws {
-    let f = try await fixture()
-    let composition = ProductAppComposition(root: f.root, transport: WorkspaceNoNetworkTransport(),
+    let composition = ProductAppComposition(root: try rootWithPersistedSelection(),
+      transport: WorkspaceNoNetworkTransport(),
       geometryBinding: try parsingBinding())
     await composition.start()
     let graph = try XCTUnwrap(composition.parsing)

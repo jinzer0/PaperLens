@@ -1,5 +1,14 @@
 import Foundation
+import GRDB
 import PDFKit
+
+/// Immutable native document identity, independent of extraction publication.
+struct ReaderMetadataDocumentIdentity: Equatable {
+  let paperID: UUID
+  let generation: UUID
+  let pdfSHA256: String
+  let pdfReference: String
+}
 
 public struct ReaderMetadataIdentity: Equatable, Sendable {
   public let paperID: UUID
@@ -98,6 +107,18 @@ public struct ReaderMetadataContext: Codable, Equatable, Sendable {
 public struct ReaderMetadataService: Sendable {
   private let database: ProductDatabase
   public init(database: ProductDatabase) { self.database = database }
+  func documentIdentity(paperID: UUID) throws -> ReaderMetadataDocumentIdentity {
+    let paper = try database.readerSnapshot(paperID: paperID)
+    let identity: AnnotationPaperIdentity
+    do { identity = try database.annotationIdentity(paperID: paperID) }
+    catch AnnotationError.stalePaper { throw ReaderMetadataError.staleIdentity }
+    guard paper.paperID == identity.id, paper.generation == identity.generation else {
+      throw ReaderMetadataError.staleIdentity
+    }
+    return ReaderMetadataDocumentIdentity(paperID: paperID, generation: paper.generation,
+      pdfSHA256: identity.pdfSHA256, pdfReference: paper.pdfReference)
+  }
+
   public func metadata(for identity: ReaderMetadataIdentity) throws -> ReaderMetadataSnapshot {
     try database.readerMetadata(for: identity) ?? ReaderMetadataSnapshot()
   }
@@ -107,6 +128,19 @@ public struct ReaderMetadataService: Sendable {
   }
   public func beginSession(for identity: ReaderMetadataIdentity) throws -> ReaderMetadataContext {
     try database.beginReaderMetadataSession(for: identity)
+  }
+  /// Read-only CAS check before restoration; a navigation request must not renew a stale session.
+  func validateContext(_ expected: ReaderMetadataContext, for identity: ReaderMetadataIdentity) throws {
+    try database.adapterRead { db in
+      guard let data = try Data.fetchOne(db, sql: """
+        SELECT payload FROM readerMetadataContext
+        WHERE paperID = ? AND revisionID = ? AND sessionID = ? AND sequence = ?
+        """, arguments: [identity.paperID.uuidString, identity.revisionID.uuidString,
+          expected.sessionID.uuidString, expected.sequence]),
+        try JSONDecoder().decode(ReaderMetadataContext.self, from: data) == expected else {
+        throw ReaderMetadataError.staleConfirmation
+      }
+    }
   }
   @MainActor
   public func saveObservedPosition(in view: PDFView, using adapter: ReaderOutlineAdapter,
@@ -134,9 +168,9 @@ public final class ReaderOutlineAdapter {
     fileprivate let destination: PDFDestination?
   }
   public let document: PDFDocument
-  public let identity: ReaderMetadataIdentity
+  public let identity: ReaderMetadataIdentity?
   public private(set) var sections: [Section] = []
-  public init(document: PDFDocument, identity: ReaderMetadataIdentity) {
+  public init(document: PDFDocument, identity: ReaderMetadataIdentity?) {
     self.document = document; self.identity = identity
     if let root = document.outlineRoot { collect(root, path: "", depth: -1) }
   }
@@ -165,7 +199,7 @@ public final class ReaderOutlineAdapter {
     return location
   }
   /// Dispatch is only intent. This method does not report success or persist a position.
-  public func navigate(sectionID: String, in view: PDFView, current: ReaderMetadataIdentity) throws {
+  public func navigate(sectionID: String, in view: PDFView, current: ReaderMetadataIdentity?) throws {
     guard current == identity, view.document === document else { throw ReaderMetadataError.staleIdentity }
     guard let section = sections.first(where: { $0.id == sectionID }),
       let destination = section.destination else { throw ReaderMetadataError.invalidDestination }
@@ -194,8 +228,19 @@ public final class ReaderOutlineAdapter {
   }
   /// Restored data is only a candidate until checked against the actual current document.
   public func validatedRestoration(_ context: ReaderMetadataContext) -> ReaderConfirmedLocation? {
-    guard let location = context.location, let page = document.page(at: location.pageIndex),
+    guard let location = context.location,
+      location.pageIndex >= 0, location.pageIndex < document.pageCount,
+      let page = document.page(at: location.pageIndex),
+      page.document === document,
       location.isValid(pageCount: document.pageCount, bounds: page.bounds(for: .cropBox)) else { return nil }
     return location
+  }
+
+  /// A freshly validated destination, borrowed only inside the caller's Reader access.
+  func restorationDestination(_ context: ReaderMetadataContext) -> PDFDestination? {
+    guard let location = validatedRestoration(context),
+      let page = document.page(at: location.pageIndex), page.document === document,
+      location.isValid(pageCount: document.pageCount, bounds: page.bounds(for: .cropBox)) else { return nil }
+    return PDFDestination(page: page, at: CGPoint(x: location.x, y: location.y))
   }
 }

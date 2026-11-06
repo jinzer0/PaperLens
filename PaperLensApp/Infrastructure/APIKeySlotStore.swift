@@ -1,13 +1,28 @@
 import Darwin
 import Foundation
 
+/// The descriptor is never unlocked or exported. Closing its last owner releases
+/// the BSD flock; unrelated read descriptors do not release this lock.
+internal final class APIKeySlotOwnership: Sendable {
+  fileprivate let descriptor: Int32
+
+  fileprivate init(descriptor: Int32) {
+    self.descriptor = descriptor
+  }
+
+  deinit { close(descriptor) }
+}
+
 /// Plaintext secret storage. The caller supplies a private, already-owned parent directory.
 /// Existing paths are verified, never adopted or permission-repaired.
 @MainActor
 public final class APIKeySlotStore {
+  internal static let ownershipAttribute = "io.github.jinzer0.PaperLens.api-key-slot-owner"
   private let root: URL
   private let device: dev_t
   private let inode: ino_t
+  internal let ownership: APIKeySlotOwnership
+  private var startupOwnedSlots: Set<UUID> = []
   private var identities: [UUID: (dev_t, ino_t)] = [:]
   private struct ContentStamp: Equatable {
     let size: Int64
@@ -72,10 +87,31 @@ public final class APIKeySlotStore {
         throw APIKeyConnectionError.unsafeStorage
       }
     }
+    let fd = open(root.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+    guard fd >= 0 else { throw APIKeyConnectionError.unsafeStorage }
+    let ownership = APIKeySlotOwnership(descriptor: fd)
+    var opened = stat()
+    guard fstat(fd, &opened) == 0, opened.st_dev == info.st_dev,
+      opened.st_ino == info.st_ino, opened.st_uid == geteuid(),
+      opened.st_mode & S_IFMT == S_IFDIR, opened.st_mode & 0o7777 == 0o700
+    else { throw APIKeyConnectionError.unsafeStorage }
+    // A lifetime nonblocking directory lock, not a lock around each read.
+    // Unsupported locking and contention both fail closed without fallback.
+    guard flock(fd, LOCK_EX | LOCK_NB) == 0 else {
+      throw APIKeyConnectionError.cleanupBlocked
+    }
     self.root = root
     device = info.st_dev
     inode = info.st_ino
-    try validate()
+    self.ownership = ownership
+    let initial = try validatedSlotIDs()
+    for id in initial {
+      let file = try checkedFile(id, rootFD: fd)
+      defer { close(file) }
+      if try hasOwnershipRecord(id, descriptor: file) {
+        startupOwnedSlots.insert(id)
+      }
+    }
   }
 
   private func openRoot() throws -> Int32 {
@@ -91,7 +127,11 @@ public final class APIKeySlotStore {
     let fd = open(root.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
     guard fd >= 0 else { throw APIKeyConnectionError.unsafeStorage }
     var info = stat()
+    var locked = stat()
     guard fstat(fd, &info) == 0, info.st_dev == device, info.st_ino == inode,
+      fstat(ownership.descriptor, &locked) == 0,
+      locked.st_dev == info.st_dev, locked.st_ino == info.st_ino,
+      locked.st_mode & S_IFMT == S_IFDIR, locked.st_nlink > 0,
       info.st_uid == geteuid(), info.st_mode & 0o7777 == 0o700,
       Self.excludedFromBackup(root)
     else {
@@ -102,7 +142,7 @@ public final class APIKeySlotStore {
   }
 
   private func checkedFile(_ id: UUID, rootFD: Int32) throws -> Int32 {
-    let fd = openat(rootFD, id.uuidString, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+    let fd = openat(rootFD, id.uuidString, O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC)
     guard fd >= 0 else { throw APIKeyConnectionError.unsafeStorage }
     var info = stat()
     guard fstat(fd, &info) == 0, info.st_uid == geteuid(),
@@ -131,17 +171,58 @@ public final class APIKeySlotStore {
   }
 
   public func validate() throws {
+    _ = try validatedSlotIDs()
+  }
+
+  /// Validated inventory is not proof of ownership or absence of live references.
+  internal func validatedSlotIDs() throws -> Set<UUID> {
     let fd = try openRoot()
     defer { close(fd) }
     let entries: [URL]
     do { entries = try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil) }
     catch { throw APIKeyConnectionError.unsafeStorage }
+    var ids: Set<UUID> = []
     for entry in entries {
       guard let id = UUID(uuidString: entry.lastPathComponent), id.uuidString == entry.lastPathComponent else {
         throw APIKeyConnectionError.unsafeStorage
       }
       let file = try checkedFile(id, rootFD: fd)
       close(file)
+      ids.insert(id)
+    }
+    return ids
+  }
+
+  private func ownershipRecord(_ id: UUID, descriptor: Int32) throws -> Data {
+    var info = stat()
+    guard fstat(descriptor, &info) == 0 else { throw APIKeyConnectionError.unsafeStorage }
+    return Data("PaperLensAPIKeySlot/1\n\(device):\(inode)\n\(id.uuidString)\n\(info.st_dev):\(info.st_ino)".utf8)
+  }
+
+  private func hasOwnershipRecord(_ id: UUID, descriptor: Int32) throws -> Bool {
+    let expected = try ownershipRecord(id, descriptor: descriptor)
+    var bytes = [UInt8](repeating: 0, count: expected.count + 1)
+    let count = bytes.withUnsafeMutableBytes {
+      fgetxattr(descriptor, Self.ownershipAttribute, $0.baseAddress, $0.count, 0, 0)
+    }
+    if count < 0 {
+      if errno == ENOATTR || errno == ERANGE { return false }
+      throw APIKeyConnectionError.unsafeStorage
+    }
+    return count == expected.count && Data(bytes.prefix(count)) == expected
+  }
+
+  /// Only records present when this exclusive owner acquired the directory can
+  /// be crash orphans. Newly created slots may belong to another live connection
+  /// sharing this store. Unmarked/foreign files are never adopted for deletion.
+  internal func reconcileStartup(preserving protected: Set<UUID>) throws {
+    let inventory = try validatedSlotIDs()
+    let candidates = startupOwnedSlots.intersection(inventory).subtracting(protected)
+    // Consume even protected records: a later selector change does not make a
+    // previously selected/live slot an orphan. Its normal lease owner must retire it.
+    startupOwnedSlots.removeAll()
+    for id in candidates {
+      try remove(id)
     }
   }
 
@@ -177,7 +258,15 @@ public final class APIKeySlotStore {
       values.isExcludedFromBackup = true
       var url = root.appendingPathComponent(id.uuidString)
       try url.setResourceValues(values)
+      let record = try ownershipRecord(id, descriptor: fd)
+      let recorded = record.withUnsafeBytes {
+        fsetxattr(fd, Self.ownershipAttribute, $0.baseAddress, $0.count, 0, XATTR_CREATE)
+      }
+      guard recorded == 0 else { throw APIKeyConnectionError.unsafeStorage }
       guard fsync(fd) == 0, fsync(rootFD) == 0 else { throw APIKeyConnectionError.unsafeStorage }
+      guard try hasOwnershipRecord(id, descriptor: fd) else {
+        throw APIKeyConnectionError.unsafeStorage
+      }
       try validate()
       return id
     } catch {
@@ -229,9 +318,13 @@ public final class APIKeySlotStore {
     defer { close(fd) }
     var opened = stat()
     var named = stat()
-    guard fstat(fd, &opened) == 0,
+    guard try hasOwnershipRecord(id, descriptor: fd),
+      fstat(fd, &opened) == 0,
       fstatat(rootFD, id.uuidString, &named, AT_SYMLINK_NOFOLLOW) == 0,
       opened.st_dev == named.st_dev, opened.st_ino == named.st_ino,
+      contentStamps[id] == ContentStamp(named),
+      named.st_uid == geteuid(), named.st_mode & S_IFMT == S_IFREG,
+      named.st_mode & 0o7777 == 0o600, named.st_nlink == 1,
       unlinkat(rootFD, id.uuidString, 0) == 0, fsync(rootFD) == 0
     else { throw APIKeyConnectionError.cleanupBlocked }
     identities.removeValue(forKey: id)

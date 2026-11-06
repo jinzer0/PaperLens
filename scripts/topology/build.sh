@@ -81,15 +81,13 @@ try:
     lock = acquire.load_lock()
     sdk = acquire.toolchain(lock)
     acquire.git(root, "merge-base", "--is-ancestor", lock["approvalCommit"], "HEAD")
+    intent_path = "bmad-docs/implementation-artifacts/spec-1-1-isolated-app-topology.md"
+    approved = acquire.git(root, "show", lock["approvalCommit"] + ":" + intent_path)
+    with acquire.safe_path(root, intent_path).open(newline="") as stream:
+        current = stream.read()
+    acquire.require(frozen(current) == frozen(approved), "frozen_intent_changed")
     if unsigned:
-        intent_path = "bmad-docs/implementation-artifacts/spec-1-1-isolated-app-topology.md"
-        approved = acquire.git(root, "show", lock["approvalCommit"] + ":" + intent_path)
-        with acquire.safe_path(root, intent_path).open(newline="") as stream:
-            current = stream.read()
-        acquire.require(frozen(current) == frozen(approved), "frozen_intent_changed")
         input_work, cache, library, digest, receipt = unsigned_input(lock, sdk)
-    else:
-        acquire.git(root, "diff", "--exit-code", lock["approvalCommit"], "--", "bmad-docs/implementation-artifacts/spec-1-1-isolated-app-topology.md")
     for stage in (() if unsigned else ("fetch", "pdfium", "runtime")):
         if acquire.main(["--arch", arch, "--stage", stage]):
             raise acquire.Failure("preparation_blocked")
@@ -104,6 +102,7 @@ try:
     else:
         work = root / ".build/topology" / arch
     products = work / "products"
+    grdb_preparation = acquire.verify_grdb_preparation(root, arch)
     argv = [
         "/usr/bin/xcodebuild", "-project", root / "PaperLens.xcodeproj",
         "-scheme", "PaperLensTopology", "-configuration", "Release",
@@ -116,6 +115,8 @@ try:
     if unsigned:
         argv.append("CODE_SIGNING_ALLOWED=NO")
     acquire.run(argv, cwd=root)
+    acquire.require(acquire.verify_grdb_preparation(root, arch) == grdb_preparation,
+                    "grdb_preparation_changed")
     if unsigned:
         acquire.require(unsigned_input(lock, sdk)[4] == receipt, "unsigned_input_changed")
         acquire.check_hash(library, digest)

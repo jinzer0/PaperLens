@@ -1,5 +1,15 @@
 import Foundation
 
+extension OwnedChildRetirement {
+  @MainActor
+  internal func retire(cancelling lifecycle: AgentConnectionLifecycle, params: [String: Any]) {
+    core.revoke(dispatchCancellation: true)
+    do {
+      try lifecycle.dispatchCancellation(params: params) { [core] in core.revoke() }
+    } catch { core.revoke() }
+  }
+}
+
 /// Implemented by the actual process/XPC channel owner, not by a synthetic production peer.
 /// write completes only after the frame is handed to the channel in order. read returns nil
 /// only on observed closure. requestClose must revoke IO and unblock both pending operations;

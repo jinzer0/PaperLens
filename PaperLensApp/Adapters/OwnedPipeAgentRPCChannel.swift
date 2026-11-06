@@ -489,7 +489,7 @@ public final class OwnedPipeAgentRPCChannel: AgentRPCChannel, OwnedChildTranspor
     func shutdown(error: Error = Failure.closed) {
       core?.revoke()
       // Worker SDK closure is unproved. Keep its actual endpoint/session state;
-      // only the independent Core control lane may attempt bounded retirement.
+      // only the independent Core control lane may observe asynchronous retirement.
       if core?.isWorker == true {
         quiesceNotifications()
         return

@@ -99,9 +99,9 @@ final class CanonicalExtractionGeometryTests: XCTestCase {
         return (owner, input, mapping)
     }
 
-    private func nativeValidator(_ mapping: PDFiumPageMapping) throws -> PDFiumGeometryValidator {
+    private func nativeValidator(_ mapping: PDFiumPageMapping, tolerance: Double = 0) throws -> PDFiumGeometryValidator {
         try PDFiumGeometryValidator(binding: PDFiumGeometryBinding(
-            precision: PDFGeometryPrecision(maximumErrorPDFPoints: 0), mapPage: { _ in mapping }))
+            precision: PDFGeometryPrecision(maximumErrorPDFPoints: tolerance), mapPage: { _ in mapping }))
     }
 
     private func replacing(_ input: PDFiumGeometryInput, text: String? = nil, page: PDFiumRawPage? = nil,
@@ -204,11 +204,40 @@ final class CanonicalExtractionGeometryTests: XCTestCase {
         XCTAssertEqual(decoded.page, owner.page)
         XCTAssertEqual(decoded.quads, owner.quads)
         XCTAssertEqual(native.quadCount, owner.quads.count)
+        XCTAssertEqual(try XCTUnwrap(native.originalOwner).anchor, owner)
+        XCTAssertEqual(native.originalOwner?.precision.maximumErrorPDFPoints, 0)
         XCTAssertEqual(native.canonicalBytes, try encode(owner, with: codec).canonicalBytes)
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: native.canonicalBytes) as? [String: Any])
         XCTAssertEqual(object["version"] as? Int, 1)
         assertError(PDFGeometryError.unknownSentence) {
             try validator([]).decodeAndValidate(native.canonicalBytes, identity: identity())
+        }
+    }
+
+    func testNativeOriginalOwnerRetainsExplicitPrecisionAndCannotComeFromCandidateCodec() throws {
+        let (expected, input, mapping) = try nativeFixture()
+        let native = try nativeValidator(mapping, tolerance: 0.25)
+            .validateAndEncode(input, identity: identity(), expectedText: expected.fullSourceQuote)
+        let original = try XCTUnwrap(native.originalOwner)
+        XCTAssertEqual(original.anchor, expected)
+        XCTAssertEqual(original.precision.maximumErrorPDFPoints, 0.25)
+        let archive = try original.archive(for: identity(), text: expected.fullSourceQuote,
+                                           candidate: native.canonicalBytes)
+        XCTAssertEqual(archive.maximumErrorPDFPoints, 0.25)
+        XCTAssertEqual(archive.anchors.count, 1)
+        XCTAssertEqual(try CanonicalExtractionGeometryValidator.decodeCanonicalAnchor(
+            XCTUnwrap(archive.anchors.first).bytes), expected)
+        let candidateOnly = try encode(expected, with: validator([expected], tolerance: 0.25))
+        XCTAssertEqual(candidateOnly.canonicalBytes, native.canonicalBytes)
+        XCTAssertNil(candidateOnly.originalOwner)
+        XCTAssertNil(ExtractionGeometryEncoding(canonicalBytes: native.canonicalBytes,
+                                                 quadCount: native.quadCount).originalOwner)
+        assertError(PDFGeometryError.identityMismatch) {
+            try original.archive(for: identity(paper: UUID()), text: expected.fullSourceQuote,
+                                 candidate: native.canonicalBytes)
+        }
+        assertError(ExtractionError.invalidBatch) {
+            try original.archive(for: identity(), text: "shortened", candidate: native.canonicalBytes)
         }
     }
 

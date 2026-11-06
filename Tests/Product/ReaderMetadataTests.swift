@@ -144,6 +144,35 @@ final class ReaderMetadataTests: XCTestCase {
   }
 
   @MainActor
+  func testRestorationDestinationUsesCurrentCropBoundsAndNativePage() throws {
+    let document = PDFDocument(), page = PDFPage()
+    page.setBounds(CGRect(x: 20, y: 30, width: 200, height: 300), for: .cropBox)
+    document.insert(page, at: 0)
+    let adapter = ReaderOutlineAdapter(document: document, identity: identity())
+    func context(_ location: ReaderConfirmedLocation) -> ReaderMetadataContext {
+      .init(sessionID: UUID(), sequence: 1, location: location, sectionID: "untrusted")
+    }
+    let valid = context(.init(pageIndex: 0, x: 40, y: 150))
+    let destination = try XCTUnwrap(adapter.restorationDestination(valid))
+    XCTAssertTrue(destination.page === page)
+    XCTAssertEqual(destination.point, CGPoint(x: 40, y: 150))
+    for location in [
+      ReaderConfirmedLocation(pageIndex: -1, x: 40, y: 150),
+      .init(pageIndex: 1, x: 40, y: 150),
+      .init(pageIndex: 0, x: 19, y: 150),
+      .init(pageIndex: 0, x: 40, y: 331),
+      .init(pageIndex: 0, x: .nan, y: 150),
+      .init(pageIndex: 0, x: 40, y: .infinity)
+    ] {
+      XCTAssertNil(adapter.restorationDestination(context(location)))
+    }
+    page.setBounds(CGRect(x: 100, y: 100, width: 100, height: 100), for: .cropBox)
+    XCTAssertNil(adapter.restorationDestination(valid))
+    document.removePage(at: 0)
+    XCTAssertNil(adapter.restorationDestination(valid))
+  }
+
+  @MainActor
   func testActualOutlineMappingAndInvalidDestinationsWithoutRendererTrial() throws {
     let document = PDFDocument(), page = PDFPage(), foreignPage = PDFPage()
     page.setBounds(CGRect(x: 0, y: 0, width: 200, height: 300), for: .cropBox)

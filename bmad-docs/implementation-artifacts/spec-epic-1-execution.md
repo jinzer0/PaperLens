@@ -10,6 +10,135 @@ approval: explicit-human-story-range-execution
 
 # 전체 실행 계약
 
+## Integrated native checkpoint — 2026-11-07
+
+**Fixed-design correction:** The unapproved generation pool, alternate package
+output option and `WorkerProcessScopeProof`/`exitWorker` cleanup replacement were
+withdrawn. The precision-based boundary projection was also withdrawn: the fixed
+contract rejects outside-CropBox geometry. Historical tests/builds below remain
+evidence for their original source snapshots, not approval of the restored tree.
+Approved asynchronous retirement, exclusive key ownership, GRDB build recovery
+and the failed single calibration receipt are preserved. Feature implementation
+and integration must finish before grouped tests and signed verification.
+
+**Notarization and verification correction:** The user completed Keychain profile
+`PaperLens`. Submission `5658d135-096a-486f-b75e-fe0628e85808` of the earlier packaged
+snapshot was rejected: 19 nested/main signing findings report missing secure
+timestamps. The original submission and Apple log are retained in
+`.build/epic1-notarization-submission.json` and `.build/epic1-notarization-log.json`.
+The packaging signer now requests secure timestamps and rejects signatures without
+one. Packaging 32 and SDK 63 tests subsequently passed, but executing these partial
+repair checks before complete feature integration violated the user's intended
+test sequencing; they are not whole-feature acceptance. No corrected notarization
+submission or current-source final signed build has completed. Further tests/builds
+remain deferred until the requested feature implementation is complete.
+
+- Pinned GRDB arm64 preparation succeeded in a private APFS workspace with the
+  unchanged output-only build sandbox. Process `CCHROOT` resolves the build
+  service's session-cache path; target cache settings alone did not. Failed
+  attempts remain preserved. The verified output is installed under
+  `.build/product-dependencies`; native builds validate its receipt, source,
+  driver, framework and logs before and after compilation.
+- The complete arm64 unsigned application build passed at
+  `.build/topology/unsigned-arm64-7vd76wir/products`. Local packaging and signing
+  passed at `.build/topology/arm64/PaperLens.app`. This is not notarization,
+  distribution, minimum-OS acceptance or whole-Epic completion.
+- At the user's explicit request, Xcode Release compilation also ran with
+  Developer ID signing enabled. The signed product at
+  `.build/topology/signed-arm64-lgrywb7k/products/PaperLens.app` passed deep,
+  strict signature verification, including after the geometry correction below.
+- Integrated isolated suites passed: API-key/HTTP transport 28, PDF geometry 13,
+  native retirement 31 and owned transport 12. An additional real synthetic
+  pre-launch broker/worker reap case passed and verifies that process-resource
+  proof does not erase remaining namespace debt. Python SDK suites passed 66.
+  GRDB preparation tests passed 39; build-consumer tests passed 9 plus 21 driver
+  cases after correcting the signed-success fixture's normal exit handling.
+- Reader advisory re-review resolved both admitted-identity and failed-observation
+  freshness findings. Persisted repaired Reader results are 36 binding, 7 metadata
+  and 21 annotation cases; these are not a fresh whole-product run.
+- Exactly one authorized signed synthetic geometry run executed:
+  `aa33c129-1e67-4ced-a768-d5763134cf26`. Its matching terminal receipt reports
+  failure. Extraction completed once, cleanup was confirmed, and 4/24 cells
+  passed. The other cells rejected roundtrip coordinates at page edges despite
+  small measured residuals. The original report is preserved under the app's
+  `Application Support/PaperLensSyntheticGeometryCalibration/<run-id>/`.
+  No retry, fitted bound or production/P6 promotion was performed.
+- Withdrawn experiment: the adapter projected inverse-conversion boundary noise only within the
+  existing caller-supplied precision. The affine and PDFKit observations must
+  agree with each other and with the returned point; excessive/nonfinite inputs
+  still fail and strict canonical geometry validation is unchanged.
+  Geometry unit tests passed 15, including deterministic edge-budget regressions.
+  This experiment and its added tests were removed to retain the fixed boundary
+  contract. Its passing results do not replace the failed signed calibration receipt.
+- Genuine bounded HTTP transport exists, including actual completion/invalidation
+  drainage. Summary composition/profile admission is not finished. Public model
+  documentation does not establish the current hidden-server-control proof;
+  no certification flags were fabricated and real API-key tests remain skipped.
+  The alternate SDK process-scope retirement implementation was withdrawn;
+  required SDK closure, Paper/account ownership and namespace-purge integration
+  remain incomplete under the fixed contract.
+
+## Epic 1 implementation checkpoint — 2026-11-06
+
+The user requested Epic 1 implementation from the existing specifications and
+parallel GJC sessions in Orca. Library, Reader and Provider lanes compared the
+current root source with those contracts; no historical workflow was restored.
+
+- Reader now presents the actual PDF title and valid native Contents without
+  requiring a published extraction. Extraction-derived metadata retains its
+  revision guards; native presentation validates Paper, PDF and Reader ownership.
+- Reopening Reader requests a validated saved within-page destination once,
+  preserving the existing page/zoom restoration. Current location and section
+  are confirmed from the actual PDF position, not the requested destination.
+  Invalid, stale, replaced and revoked contexts cannot overwrite the saved state.
+- API-key startup and pre-promotion inventory reconciliation preserve separately
+  validated last-good availability while blocking replacement on unknown slot
+  ownership. Unknown slots are not adopted or deleted. This contains uncertainty;
+  it does not implement crash-orphan deletion without durable ownership proof.
+- The Main-only cancellation adapter moved from shared `OwnedChildRetirement`
+  into `AgentConnectionLifecycle`. This fixes the helper-target compile error
+  without changing cancellation or closure semantics.
+
+Fresh Swift test discovery/build passed. The first isolated Product run passed
+575/576; the new startup fixture failed before composition because it omitted the
+selector's initial snapshot read. After correcting that setup, the exact case
+passed. Independent Reader review then found pre-mount hash rebinding and
+equal-coordinate refresh supersession defects. The binding now requires the
+immutable admitted document identity and tracks observation freshness, including
+failed observations. Four new regressions cover both findings. A throwing test
+callback initially failed compilation; explicit error assertions fixed the
+callback without weakening the regression.
+
+Final affected Reader binding, metadata and annotation suites passed 36, 7 and
+21 cases. The initial run plus these affected reruns covers all **588 currently
+discovered Product cases** with passing latest results; this is not a single
+588-case rerun. Offline topology
+637, Python request 35, native request 32 and native RPC 24 tests passed. Existing
+warnings remain visible; no protected readiness/renderer trial was executed.
+Reports are `.build/epic1-product-tests.json`, `epic1-reader-binding-tests.json`,
+`epic1-reader-metadata-tests.json`, `epic1-startup-retest.json`,
+`epic1-reader-binding-review-fixes.json` and `epic1-reader-annotation-tests.json`
+under `.build/`.
+
+The whole unsigned app build remains unsuccessful: helper compilation proceeds,
+but Main cannot resolve GRDB. Pinned GRDB preparation fails while persisting the
+PIF cache under the unchanged sandbox; logs remain in
+`.build/epic1-grdb-framework/logs/`. Ordinary output-file creation succeeds, but
+Foundation replacement-directory acquisition fails. The exact denied staging
+operation is not established; scoped filesystem tracing requires root access.
+No sandbox expansion, unsandboxed preparation or fabricated receipt was used.
+
+Epic 1 is **not complete**. Genuine SDK closure/containment and Paper purge,
+production Summary enforcement/binding, independently admitted geometry
+calibration, actual authenticated execution, signed isolation and the two arm64
+OS environments remain unresolved. The pinned SDK's public close operation does
+not establish the required bounded checked resource closure. The dependency
+audit and verification scope are recorded in
+`.build/epic1-library-dependency-audit.json` and
+`.build/epic1-verification-summary.json`. Intel remains cancelled; Story 1.27
+remains undefined. No credentials, user documents, paid requests, protected
+trial retries, remote writes or release operations were used.
+
 ## Toolchain update selection — 2026-11-05
 
 After deleting `.build`, the user explicitly selected “27.2로 갱신·재빌드”

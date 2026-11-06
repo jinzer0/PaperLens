@@ -34,9 +34,47 @@ public struct ExtractionSentenceIdentity: Equatable, Sendable {
 
 /// Implemented only by the actual PDFium typed boundary; never an untyped JSON envelope.
 public protocol ExtractionGeometryInput: Sendable {}
+/// Original facts created at the raw-glyph validation boundary, not decoded candidates.
+/// This value grants no job, calibration, publication or resource authority.
+public struct ExtractionGeometryOwner: Sendable {
+  public let anchor: PDFSentenceAnchor
+  public let precision: PDFGeometryPrecision
+
+  fileprivate init(anchor: PDFSentenceAnchor, precision: PDFGeometryPrecision) {
+    self.anchor = anchor
+    self.precision = precision
+  }
+
+  func archive(for identity: ExtractionSentenceIdentity, text: String,
+    candidate: Data) throws -> SummaryOwnerArchive {
+    guard anchor.fullSourceQuote.utf8.elementsEqual(text.utf8) else {
+      throw ExtractionError.invalidBatch
+    }
+    let validator = try CanonicalExtractionGeometryValidator(owningAnchors: [anchor], precision: precision)
+    _ = try validator.decodeAndValidate(candidate, identity: identity)
+    // Encode from the original anchor using the existing bounded owner archive path.
+    // Even identical candidate bytes are never substituted for the original facts.
+    return try validator.captureSummaryOwners([anchor.identity])
+  }
+}
+
 public struct ExtractionGeometryEncoding: Sendable {
   public let canonicalBytes: Data
   public let quadCount: Int
+  public let originalOwner: ExtractionGeometryOwner?
+
+  /// Validation/encoding of a candidate does not manufacture original ownership.
+  public init(canonicalBytes: Data, quadCount: Int) {
+    self.canonicalBytes = canonicalBytes
+    self.quadCount = quadCount
+    self.originalOwner = nil
+  }
+
+  fileprivate init(canonicalBytes: Data, originalOwner: ExtractionGeometryOwner) {
+    self.canonicalBytes = canonicalBytes
+    self.quadCount = originalOwner.anchor.quads.count
+    self.originalOwner = originalOwner
+  }
 }
 public protocol ExtractionGeometryValidating: Sendable {
   /// Must verify actual membership, canonical geometry, full semantic extent and exact text using 1.19.
@@ -76,6 +114,13 @@ struct ValidatedExtractionSentence: Sendable {
   let sentenceID: Int
   let text: String
   let geometry: Data
+  let originalOwner: ExtractionGeometryOwner?
+
+  init(page: Int, sentenceID: Int, text: String, geometry: Data,
+    originalOwner: ExtractionGeometryOwner? = nil) {
+    self.page = page; self.sentenceID = sentenceID; self.text = text
+    self.geometry = geometry; self.originalOwner = originalOwner
+  }
 }
 public struct ExtractionStatus: Sendable {
   public let state: String
@@ -691,7 +736,8 @@ public struct PDFiumGeometryValidator: ExtractionGeometryValidating {
     let anchor = try PDFSentenceAnchor(identity: anchorIdentity, fullSourceQuote: expectedText,
       page: mapping.page, quads: quads)
     let bytes = try CanonicalExtractionGeometryValidator.encodeCanonicalAnchor(anchor)
-    return ExtractionGeometryEncoding(canonicalBytes: bytes, quadCount: quads.count)
+    return ExtractionGeometryEncoding(canonicalBytes: bytes,
+      originalOwner: ExtractionGeometryOwner(anchor: anchor, precision: binding.precision))
   }
 }
 
@@ -815,6 +861,11 @@ public struct ExtractionRevisionService: Sendable {
           geometry.canonicalBytes.count <= authority.limit("batchBytes") else {
           throw ExtractionError.invalidBatch
         }
+        if let owner = geometry.originalOwner {
+          guard owner.anchor.quads.count == geometry.quadCount else { throw ExtractionError.invalidBatch }
+          _ = try owner.archive(for: key, text: sentence.text, candidate: geometry.canonicalBytes)
+          try scope.checkBudget()
+        }
         batchBytes += sentence.text.utf8.count + geometry.canonicalBytes.count
         textBytes += sentence.text.utf8.count
         quads += geometry.quadCount
@@ -823,7 +874,7 @@ public struct ExtractionRevisionService: Sendable {
           throw ExtractionError.invalidBatch
         }
         output.append(.init(page: key.page, sentenceID: key.sentenceID,
-          text: sentence.text, geometry: geometry.canonicalBytes))
+          text: sentence.text, geometry: geometry.canonicalBytes, originalOwner: geometry.originalOwner))
       }
     }
     guard batches.last?.totalSentences == output.count else { throw ExtractionError.invalidBatch }

@@ -78,6 +78,158 @@ class IsolatedTest(unittest.TestCase):
         return path
 
 
+class GRDBPreparationConsumerTests(IsolatedTest):
+    """Exercise receipt/inventory policy; native source Git checks stay mocked."""
+
+    def setUp(self):
+        super().setUp()
+        self.driver = acquire.ROOT / "scripts/product/prepare-grdb.py"
+        spec = acquire.importlib.util.spec_from_file_location("consumer_grdb_fixture", self.driver)
+        self.preparer = acquire.importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.preparer)
+        self.lock = acquire.load_lock()
+        self.output = self.root / ".build/product-dependencies"
+        self.framework = self.output / "products/GRDB.framework"
+        version = self.framework / "Versions/A"
+        version.mkdir(parents=True)
+        (version / "GRDB").write_bytes(b"synthetic already-validated framework")
+        (self.framework / "Versions/Current").symlink_to("A")
+        (self.framework / "GRDB").symlink_to("Versions/Current/GRDB")
+        (self.output / "logs").mkdir()
+        (self.output / "logs/build.stdout").write_bytes(b"full synthetic build log\n")
+        self.source_receipt = self.root / ".build/dependencies/grdb/grdb-source/source-only.json"
+        self.source_receipt.parent.mkdir(parents=True)
+        self.source_receipt.write_bytes(b"synthetic source receipt identity")
+        self.manifest = self.root / "scripts/topology/dependencies.json"
+        self.manifest.parent.mkdir(parents=True)
+        self.manifest.write_bytes(acquire.LOCK_PATH.read_bytes())
+        self.inputs = {"sourceReceiptSha256": acquire.sha256(self.source_receipt),
+                       "manifestSha256": acquire.sha256(self.manifest), "tree": "1" * 40,
+                       "sourceInventory": {"Package.swift": {"sha256": "2" * 64, "executable": False}}}
+        self.linker = Path(self.lock["toolchain"]["developerDir"]) / "Toolchains/XcodeDefault.xctoolchain/usr/bin/ld"
+        self.receipt = {
+            "schemaRevision": "grdb-unsigned-preparation-v1", "pin": self.preparer.PIN,
+            "inputs": self.inputs, "driverSha256": acquire.sha256(self.driver),
+            "toolchain": {"pins": self.lock["toolchain"], "linkerSha256": self.preparer.digest(b"synthetic pinned linker")},
+            "framework": "products/GRDB.framework",
+            "frameworkInventory": self.preparer.inventory(self.framework, framework=True),
+            "architecture": "arm64", "configuration": "Release", "codeSigningAllowed": False,
+            "runtimeExecuted": False, "lintStatus": "UNKNOWN",
+            "logs": {"build.stdout": acquire.sha256(self.output / "logs/build.stdout")},
+        }
+        self.receipt_path = self.output / "preparation.json"
+        self.write_receipt()
+        self.real_read = self.preparer.read_bytes
+        loader_spec = mock.Mock()
+        patches = contextlib.ExitStack()
+        self.addCleanup(patches.close)
+        self.loader = patches.enter_context(mock.patch.object(acquire.importlib.util, "spec_from_file_location", return_value=loader_spec))
+        patches.enter_context(mock.patch.object(acquire.importlib.util, "module_from_spec", return_value=self.preparer))
+        self.source_validation = patches.enter_context(mock.patch.object(self.preparer, "validate_inputs",
+            return_value=(self.source_receipt.parent / "src", self.lock, self.inputs)))
+        patches.enter_context(mock.patch.object(self.preparer, "read_bytes", side_effect=lambda path:
+                          b"synthetic pinned linker" if path == self.linker else self.real_read(path)))
+        self.native = patches.enter_context(mock.patch.object(self.preparer.subprocess, "run",
+                                       side_effect=AssertionError("native execution forbidden")))
+
+    def write_receipt(self):
+        self.receipt_path.write_text(json.dumps(self.receipt))
+
+    def verify(self):
+        return acquire.verify_grdb_preparation(self.root, "arm64")
+
+    def assert_rejected(self, code):
+        with self.assertRaises(acquire.Failure) as failure:
+            self.verify()
+        self.assertEqual(str(failure.exception), code)
+        self.native.assert_not_called()
+
+    def test_immutable_snapshot_and_canonical_trusted_driver_and_input_paths(self):
+        before = self.verify()
+        self.assertIsInstance(before, bytes)
+        self.assertEqual(self.verify(), before)
+        self.loader.assert_called_with("topology_grdb_preparer", self.driver)
+        self.source_validation.assert_called_with(self.source_receipt, self.manifest)
+        self.assertEqual(json.loads(before)["frameworkInventory"], self.receipt["frameworkInventory"])
+        self.assertFalse((self.root / "scripts/product/prepare-grdb.py").exists())
+        self.native.assert_not_called()
+
+    def test_missing_receipt_never_adopts_existing_framework(self):
+        self.receipt_path.unlink()
+        self.assert_rejected("grdb_preparation_missing")
+        self.assertTrue((self.framework / "GRDB").is_file())
+        self.source_validation.assert_not_called()
+
+    def test_receipt_flags_schema_pin_and_framework_path_fail_closed(self):
+        original = self.receipt.copy()
+        for key, value, code in (
+            ("schemaRevision", "unknown", "grdb_preparation_invalid"),
+            ("architecture", "x86_64", "grdb_preparation_invalid"),
+            ("codeSigningAllowed", 0, "grdb_preparation_invalid"),
+            ("runtimeExecuted", 0, "grdb_preparation_invalid"),
+            ("configuration", "Debug", "grdb_preparation_invalid"),
+            ("pin", {}, "grdb_preparation_invalid"),
+            ("driverSha256", "0" * 64, "grdb_preparation_driver_changed"),
+            ("framework", "../GRDB.framework", "grdb_preparation_framework_invalid"),
+            ("toolchain", {}, "grdb_preparation_toolchain_changed"),
+        ):
+            with self.subTest(key=key):
+                self.receipt = original | {key: value}
+                self.write_receipt()
+                self.assert_rejected(code)
+
+    def test_source_identity_drift_and_preparer_source_failure_are_closed(self):
+        self.source_validation.return_value = (self.source_receipt.parent / "src", self.lock,
+                                               self.inputs | {"tree": "3" * 40})
+        self.assert_rejected("grdb_preparation_inputs_changed")
+        self.source_validation.side_effect = self.preparer.Failure("SOURCE_TAMPERED")
+        self.assert_rejected("grdb_preparation_invalid")
+
+    def test_linker_content_is_bound_to_preparation(self):
+        with mock.patch.object(self.preparer, "read_bytes", side_effect=lambda path:
+                               b"changed linker" if path == self.linker else self.real_read(path)):
+            self.assert_rejected("grdb_preparation_toolchain_changed")
+
+    def test_framework_byte_mode_addition_and_link_tampering_are_rejected(self):
+        binary = self.framework / "Versions/A/GRDB"
+        original = binary.read_bytes()
+        binary.write_bytes(b"tampered")
+        self.assert_rejected("grdb_preparation_framework_changed")
+        binary.write_bytes(original)
+        binary.chmod(0o755)
+        self.assert_rejected("grdb_preparation_framework_changed")
+        binary.chmod(0o644)
+        extra = self.framework / "unrecorded"
+        extra.write_bytes(b"extra")
+        self.assert_rejected("grdb_preparation_framework_changed")
+        extra.unlink()
+        link = self.framework / "GRDB"
+        link.unlink()
+        link.symlink_to(self.manifest)
+        self.assert_rejected("grdb_preparation_invalid")
+
+    def test_logs_and_receipt_bytes_bind_postbuild_snapshot(self):
+        before = self.verify()
+        self.receipt_path.write_text(json.dumps(self.receipt, indent=2))
+        self.assertNotEqual(self.verify(), before)
+        (self.output / "logs/build.stdout").write_bytes(b"changed log")
+        self.assert_rejected("grdb_preparation_logs_changed")
+
+    def test_duplicate_json_and_symlink_receipt_are_rejected(self):
+        self.receipt_path.write_bytes(b'{"schemaRevision":"one","schemaRevision":"two"}')
+        self.assert_rejected("grdb_preparation_invalid")
+        self.receipt_path.unlink()
+        self.receipt_path.symlink_to(self.manifest)
+        self.assert_rejected("grdb_preparation_invalid")
+
+    def test_architecture_rejected_before_import_or_native_effects(self):
+        with self.assertRaises(acquire.Failure) as failure:
+            acquire.verify_grdb_preparation(self.root, "x86_64")
+        self.assertEqual(str(failure.exception), "grdb_preparation_arch_mismatch")
+        self.loader.assert_not_called()
+        self.native.assert_not_called()
+
+
 class UnsignedBuildDriverTests(IsolatedTest):
     """Synthetic driver coverage only; never run Xcode or acquired inputs."""
 
@@ -129,6 +281,7 @@ class UnsignedBuildDriverTests(IsolatedTest):
         self.host = "arm64"
         self.translated = "0"
         self.build_action = None
+        self.allow_signed = False
         self.original_check_hash = acquire.check_hash
 
     def fake_git(self, path, *argv):
@@ -142,7 +295,7 @@ class UnsignedBuildDriverTests(IsolatedTest):
             self.assertEqual(argv, ("branch", "--show-current"))
             return self.branch
         if argv[0] == "diff":
-            raise acquire.Failure("subprocess_failed")
+            self.fail("whole-file intent diff is not the frozen-block approval guard")
         self.assertEqual(argv, ("merge-base", "--is-ancestor", self.lock["approvalCommit"], "HEAD"))
         return ""
 
@@ -152,6 +305,12 @@ class UnsignedBuildDriverTests(IsolatedTest):
             return self.translated
         if str(argv[0]) == "/usr/bin/lipo":
             return self.lipo_arch
+        if self.allow_signed and str(argv[0]) == sys.executable:
+            script = Path(argv[3]).name
+            self.assertIn(script, ("verify_pdfium_roll.py", "package.py"))
+            if script == "package.py":
+                (self.input_work / "PaperLens.app").mkdir()
+            return ""
         self.assertEqual(str(argv[0]), "/usr/bin/xcodebuild", "forbidden driver command")
         self.assertEqual(kwargs, {"cwd": self.project})
         if self.build_action:
@@ -166,7 +325,8 @@ class UnsignedBuildDriverTests(IsolatedTest):
         else:
             self.original_check_hash(path, expected)
 
-    def drive(self, *, unsigned=True, validation_error=None, real_validation=False):
+    def drive(self, *, unsigned=True, validation_error=None, real_validation=False, grdb_error=None,
+              grdb_snapshots=None):
         args = ["build.sh", str(self.project)]
         args += (["--unsigned-only", "--arch", "arm64"] if unsigned else ["--arch", "arm64"])
         output = io.StringIO()
@@ -182,16 +342,24 @@ class UnsignedBuildDriverTests(IsolatedTest):
             stack.enter_context(mock.patch.object(acquire, "check_hash", side_effect=self.fake_hash))
             stack.enter_context(mock.patch.object(acquire, "system_linker", return_value=self.linker))
             stack.enter_context(mock.patch.object(acquire.platform, "machine", return_value=self.host))
+            self.grdb_validation = stack.enter_context(mock.patch.object(acquire, "verify_grdb_preparation",
+                side_effect=acquire.Failure(grdb_error) if grdb_error else grdb_snapshots,
+                return_value=b"immutable synthetic GRDB snapshot"))
             validation = stack.enter_context(mock.patch.object(acquire, "validate_receipt",
                 side_effect=validator if real_validation else acquire.Failure(validation_error) if validation_error else None,
                 return_value=self.acquisition))
-            preparation = stack.enter_context(mock.patch.object(acquire, "main", side_effect=AssertionError("preparation forbidden")))
+            preparation = stack.enter_context(mock.patch.object(acquire, "main",
+                side_effect=None if self.allow_signed else AssertionError("preparation forbidden"), return_value=0))
             stack.enter_context(contextlib.redirect_stdout(output))
-            with self.assertRaises(SystemExit) as exit_status:
+            status = 0
+            try:
                 exec(compile(self.driver, str(SCRIPTS / "build.sh"), "exec"), {})
-            preparation.assert_not_called()
+            except SystemExit as exit_status:
+                status = exit_status.code
+            if not self.allow_signed:
+                preparation.assert_not_called()
             toolchain.assert_called_once_with(self.lock)
-        return exit_status.exception.code, json.loads(output.getvalue()), validation
+        return status, json.loads(output.getvalue()), validation
 
     def assert_blocked(self, reason, **kwargs):
         status, result, _ = self.drive(**kwargs)
@@ -222,6 +390,47 @@ class UnsignedBuildDriverTests(IsolatedTest):
         self.assertFalse((work / "deps").exists())
         self.assertEqual(self.library.read_bytes(), self.library_bytes)
         self.assertFalse(any(argv[0] == "diff" for _, argv in self.git_calls))
+        self.assertEqual(self.grdb_validation.call_args_list,
+                         [mock.call(self.project, "arm64"), mock.call(self.project, "arm64")])
+
+    def test_missing_tampered_or_stale_grdb_preparation_blocks_native_build(self):
+        for reason in ("grdb_preparation_missing", "grdb_preparation_driver_changed",
+                       "grdb_preparation_inputs_changed", "grdb_preparation_framework_changed"):
+            with self.subTest(reason=reason):
+                self.assert_blocked(reason, grdb_error=reason)
+                self.grdb_validation.assert_called_once_with(self.project, "arm64")
+
+    def test_grdb_snapshot_drift_after_build_blocks_success(self):
+        status, result, _ = self.drive(grdb_snapshots=[b"before", b"after"])
+        self.assertEqual(status, 2)
+        self.assertEqual(result["reason"], "grdb_preparation_changed")
+        self.assertTrue(any(command[0] == "/usr/bin/xcodebuild" for command in self.commands))
+        self.assertEqual(self.grdb_validation.call_args_list, [mock.call(self.project, "arm64")] * 2)
+
+    def test_grdb_validation_failure_after_build_blocks_success(self):
+        status, result, _ = self.drive(grdb_snapshots=[b"before", acquire.Failure("grdb_preparation_framework_changed")])
+        self.assertEqual(status, 2)
+        self.assertEqual(result["reason"], "grdb_preparation_framework_changed")
+        self.assertTrue(any(command[0] == "/usr/bin/xcodebuild" for command in self.commands))
+
+    def test_signed_build_rechecks_grdb_before_packaging(self):
+        self.allow_signed = True
+        status, result, _ = self.drive(unsigned=False, grdb_snapshots=[b"before", b"after"])
+        self.assertEqual(status, 2)
+        self.assertEqual(result["reason"], "grdb_preparation_changed")
+        self.assertTrue(any(command[0] == "/usr/bin/xcodebuild" for command in self.commands))
+        self.assertFalse(any("package.py" in command[3] for command in self.commands
+                             if command[0] == sys.executable))
+        self.assertEqual(self.grdb_validation.call_args_list, [mock.call(self.project, "arm64")] * 2)
+
+    def test_signed_build_accepts_unchanged_grdb_and_packages(self):
+        self.allow_signed = True
+        status, result, _ = self.drive(unsigned=False)
+        self.assertEqual(status, 0)
+        self.assertEqual(result["scope"], "local_build_only")
+        self.assertTrue(any("package.py" in command[3] for command in self.commands
+                            if command[0] == sys.executable))
+        self.assertEqual(self.grdb_validation.call_args_list, [mock.call(self.project, "arm64")] * 2)
 
     def test_unsigned_restored_source_rejects_before_validator_or_patch_application(self):
         restored = b"synthetic restored upstream source\n"
@@ -263,10 +472,28 @@ class UnsignedBuildDriverTests(IsolatedTest):
                 self.approved = baseline
                 self.assert_blocked("frozen_intent_missing_or_ambiguous")
 
-    def test_default_whole_file_guard_still_rejects_outside_frozen_changes(self):
-        self.assert_blocked("subprocess_failed", unsigned=False)
-        self.assertIn((self.project, ("diff", "--exit-code", self.lock["approvalCommit"], "--",
-                                      "bmad-docs/implementation-artifacts/spec-1-1-isolated-app-topology.md")), self.git_calls)
+    def test_signed_build_accepts_changes_outside_frozen_block(self):
+        self.allow_signed = True
+        status, result, _ = self.drive(unsigned=False)
+        self.assertEqual(status, 0)
+        self.assertEqual(result["scope"], "local_build_only")
+        self.assertIn((self.project, ("show", self.lock["approvalCommit"] +
+                                      ":bmad-docs/implementation-artifacts/spec-1-1-isolated-app-topology.md")),
+                      self.git_calls)
+        self.assertFalse(any(argv[0] == "diff" for _, argv in self.git_calls))
+
+    def test_signed_build_rejects_changed_frozen_block_before_native_build(self):
+        self.allow_signed = True
+        self.intent.write_text(self.approved.replace("immutable", "changed") +
+                               "new admitted evidence outside frozen intent\n")
+        self.assert_blocked("frozen_intent_changed", unsigned=False)
+
+    def test_signed_build_rejects_missing_or_ambiguous_frozen_block(self):
+        self.allow_signed = True
+        for value in ("missing block", self.approved * 2):
+            with self.subTest(value=value):
+                self.intent.write_text(value)
+                self.assert_blocked("frozen_intent_missing_or_ambiguous", unsigned=False)
 
     def test_unsigned_stale_receipt_rejects_before_output(self):
         self.assert_blocked("acquisition_pin_or_arch_mismatch", validation_error="acquisition_pin_or_arch_mismatch")

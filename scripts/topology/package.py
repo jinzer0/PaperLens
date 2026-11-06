@@ -408,7 +408,7 @@ def code_policy(relative, kind):
 
 
 def sign(path, identity, identifier, entitlements, scratch):
-    arguments = ["/usr/bin/codesign", "--force", "--sign", identity, "--identifier", identifier, "--options", "runtime", "--timestamp=none", "--generate-entitlement-der"]
+    arguments = ["/usr/bin/codesign", "--force", "--sign", identity, "--identifier", identifier, "--options", "runtime", "--timestamp", "--generate-entitlement-der"]
     if entitlements:
         entitlement_file = scratch / (hashlib.sha256(identifier.encode()).hexdigest() + ".plist")
         entitlement_file.write_bytes(plistlib.dumps(entitlements, sort_keys=True))
@@ -425,6 +425,9 @@ def verify_signature(path, identifier, rights):
     require(re.search(r"^Identifier=" + re.escape(identifier) + r"$", text, re.MULTILINE), "signed_identifier_mismatch")
     require(re.search(r"^TeamIdentifier=" + TEAM + r"$", text, re.MULTILINE), "signed_team_mismatch")
     require("Authority=Developer ID Application:" in text and re.search(r"flags=0x[0-9a-fA-F]+\([^\n]*runtime", text), "hardened_developer_id_required")
+    timestamp = re.search(r"^Timestamp=(.+)$", text, re.MULTILINE)
+    require(timestamp and timestamp.group(1).strip().lower() not in ("none", "not set"),
+            "secure_timestamp_required")
     output, _ = command(["/usr/bin/codesign", "-d", "--entitlements", ":-", path])
     actual = plistlib.loads(output) if output.strip() else {}
     require(actual == rights, "signed_entitlements_mismatch")

@@ -432,6 +432,8 @@ class PackagingTests(unittest.TestCase):
             package.sign(self.root / "extension.so", "A" * 40, package.IDENTITY + ".Library", {}, self.root)
             arguments = command.call_args_list[0].args[0]
             self.assertIn("runtime", arguments)
+            self.assertIn("--timestamp", arguments)
+            self.assertNotIn("--timestamp=none", arguments)
             self.assertNotIn("--entitlements", arguments)
             self.assertNotIn("--deep", arguments)
             package.sign(self.root / "python", "A" * 40, package.IDENTITY + ".Python", package.CHILD_RIGHTS, self.root)
@@ -440,13 +442,23 @@ class PackagingTests(unittest.TestCase):
             self.assertEqual(rights, {package.SANDBOX: True, package.INHERIT: True})
 
     def test_signature_verification_rejects_debugging_or_library_exceptions(self):
-        text = f"Identifier={package.IDENTITY}\nTeamIdentifier={package.TEAM}\nAuthority=Developer ID Application: Synthetic\nCodeDirectory flags=0x10000(runtime)\n".encode()
+        text = f"Identifier={package.IDENTITY}\nTeamIdentifier={package.TEAM}\nAuthority=Developer ID Application: Synthetic\nCodeDirectory flags=0x10000(runtime)\nTimestamp=Nov 7, 2026 at 1:00:00 AM\n".encode()
         expected = {package.SANDBOX: True, package.NETWORK: True}
         for forbidden in ("com.apple.security.get-task-allow", "com.apple.security.cs.disable-library-validation", "com.apple.security.cs.allow-jit"):
             results = [(b"", b""), (b"", text), (plistlib.dumps({**expected, forbidden: True}), b"")]
             with patch.object(package, "command", side_effect=results):
                 with self.assertRaisesRegex(package.Failure, "signed_entitlements_mismatch"):
                     package.verify_signature(self.root / "app", package.IDENTITY, expected)
+
+    def test_signature_verification_rejects_local_signing_time_without_secure_timestamp(self):
+        base = (f"Identifier={package.IDENTITY}\nTeamIdentifier={package.TEAM}\n"
+                "Authority=Developer ID Application: Synthetic\nCodeDirectory flags=0x10000(runtime)\n")
+        for suffix in ("", "Signed Time=Nov 7, 2026 at 1:00:00 AM\n", "Timestamp=none\n"):
+            with self.subTest(suffix=suffix), patch.object(package, "command",
+                    side_effect=[(b"", b""), (b"", (base + suffix).encode())]) as command:
+                with self.assertRaisesRegex(package.Failure, "secure_timestamp_required"):
+                    package.verify_signature(self.root / "app", package.IDENTITY, {})
+                self.assertEqual(command.call_count, 2)
 
     def test_manifest_rejects_paths_secrets_extra_fields_and_false_completion(self):
         package.safe_manifest(self.manifest())

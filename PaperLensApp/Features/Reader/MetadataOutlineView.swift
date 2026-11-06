@@ -1,9 +1,9 @@
 import SwiftUI
 
 public struct ReaderMetadataPresentation {
-  public let identity: ReaderMetadataIdentity
+  public let identity: ReaderMetadataIdentity?
   public let metadata: ReaderMetadataSnapshot
-  public init(identity: ReaderMetadataIdentity, metadata: ReaderMetadataSnapshot) {
+  public init(identity: ReaderMetadataIdentity?, metadata: ReaderMetadataSnapshot) {
     self.identity = identity; self.metadata = metadata
   }
 }
@@ -21,6 +21,10 @@ public struct MetadataOutlineView: View {
       VStack(alignment: .leading, spacing: 16) {
         Text("논문 정보").font(.headline).accessibilityAddTraits(.isHeader)
         if let state = binding.state {
+          if state.presentation.identity == nil {
+            Text("원본 PDF의 정보를 표시합니다. 추출 정보는 아직 사용할 수 없습니다.")
+              .font(.caption).foregroundStyle(.secondary)
+          }
           field("제목", state.presentation.metadata.title)
           field("저자", .init())
           field("발행연도", state.presentation.metadata.year)
@@ -78,7 +82,7 @@ public struct MetadataOutlineView: View {
       .padding()
     }
     .background(.background)
-    .onChange(of: binding.identity) { navigationError = nil }
+    .onChange(of: ObjectIdentifier(binding)) { navigationError = nil }
   }
 
   private func report(_ error: Error) {

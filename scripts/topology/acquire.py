@@ -7,6 +7,7 @@ import ast
 import base64
 import csv
 import hashlib
+import importlib.util
 import io
 import json
 import os
@@ -388,6 +389,63 @@ def checkout(path, url, commit):
     checkout_base(path, url, commit)
     git(path, "diff", "--exit-code", "HEAD", "--")
     require(git(path, "ls-files", "--deleted") == "", "missing_git_source")
+
+
+def verify_grdb_preparation(root, arch):
+    """Validate canonical, already prepared GRDB; return an immutable snapshot.
+
+    Import only this checkout's driver, never code selected by the caller's root.
+    This consumer does not acquire, build, repair or adopt arbitrary frameworks.
+    """
+    require(arch == "arm64", "grdb_preparation_arch_mismatch")
+    driver = safe_path(ROOT, "scripts/product/prepare-grdb.py")
+    spec = importlib.util.spec_from_file_location("topology_grdb_preparer", driver)
+    preparer = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(preparer)
+    try:
+        root = preparer.checked_path(root)
+        output = preparer.checked_path(root / ".build/product-dependencies")
+        receipt_path = preparer.checked_path(output / "preparation.json")
+        require(receipt_path.is_file(), "grdb_preparation_missing")
+        receipt_bytes = preparer.read_bytes(receipt_path)
+        receipt = preparer.json_object(receipt_bytes)
+        require(set(receipt) == {"schemaRevision", "pin", "inputs", "driverSha256", "toolchain",
+                                "framework", "frameworkInventory", "architecture", "configuration",
+                                "codeSigningAllowed", "runtimeExecuted", "lintStatus", "logs"},
+                "grdb_preparation_invalid")
+        require(receipt["schemaRevision"] == "grdb-unsigned-preparation-v1"
+                and receipt["architecture"] == arch and receipt["configuration"] == "Release"
+                and receipt["codeSigningAllowed"] is False and receipt["runtimeExecuted"] is False
+                and receipt["lintStatus"] == "UNKNOWN" and receipt["pin"] == preparer.PIN,
+                "grdb_preparation_invalid")
+        require(receipt["driverSha256"] == preparer.digest(preparer.read_bytes(driver)),
+                "grdb_preparation_driver_changed")
+        source_receipt = preparer.checked_path(root / ".build/dependencies/grdb/grdb-source/source-only.json")
+        manifest = preparer.checked_path(root / "scripts/topology/dependencies.json")
+        _, lock, inputs = preparer.validate_inputs(source_receipt, manifest)
+        require(receipt["inputs"] == inputs, "grdb_preparation_inputs_changed")
+        linker = Path(lock["toolchain"]["developerDir"]) / "Toolchains/XcodeDefault.xctoolchain/usr/bin/ld"
+        require(receipt["toolchain"] == {"pins": lock["toolchain"],
+                "linkerSha256": preparer.digest(preparer.read_bytes(linker))}, "grdb_preparation_toolchain_changed")
+        require(receipt["framework"] == "products/GRDB.framework", "grdb_preparation_framework_invalid")
+        framework = preparer.checked_path(output / receipt["framework"])
+        require(framework.is_dir(), "grdb_preparation_framework_invalid")
+        files = preparer.inventory(framework, framework=True)
+        require(files and files == receipt["frameworkInventory"], "grdb_preparation_framework_changed")
+        logs = preparer.checked_path(output / "logs")
+        require(logs.is_dir() and isinstance(receipt["logs"], dict) and receipt["logs"],
+                "grdb_preparation_logs_changed")
+        actual_logs = {path.name: preparer.digest(preparer.read_bytes(path)) for path in logs.iterdir()}
+        require(actual_logs == receipt["logs"], "grdb_preparation_logs_changed")
+        require(preparer.read_bytes(receipt_path) == receipt_bytes
+                and receipt["driverSha256"] == preparer.digest(preparer.read_bytes(driver)),
+                "grdb_preparation_changed")
+        return json.dumps({"receiptSha256": preparer.digest(receipt_bytes), "inputs": inputs,
+                           "frameworkInventory": files}, sort_keys=True, separators=(",", ":")).encode()
+    except preparer.Failure:
+        raise Failure("grdb_preparation_invalid") from None
+    except (OSError, ValueError, KeyError, TypeError, UnicodeError, RuntimeError):
+        raise Failure("grdb_preparation_invalid") from None
 
 
 def grdb_source_stage(lock, work):

@@ -10,9 +10,11 @@ from pathlib import Path
 import platform
 import plistlib
 import re
+import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
 MANIFEST = ROOT / "scripts/topology/dependencies.json"
@@ -235,6 +237,7 @@ def build_arguments(source, output, lock, arch):
         "SYMROOT=" + str(output / "build"), "OBJROOT=" + str(output / "intermediates"),
         "CONFIGURATION_BUILD_DIR=" + str(output / "products"),
         "SHARED_PRECOMPS_DIR=" + str(output / "precompiled"),
+        "MODULE_CACHE_DIR=" + str(output / "cache/clang"),
         "CLANG_MODULE_CACHE_PATH=" + str(output / "cache/clang"),
         "SWIFT_MODULE_CACHE_PATH=" + str(output / "cache/swift"),
         "COMPILER_INDEX_STORE_ENABLE=NO",
@@ -280,6 +283,99 @@ def validate_output(output, lock, env, arch):
     return files
 
 
+def filesystem_device(path):
+    return path.stat().st_dev
+
+
+def image_command(args, env, logs, label):
+    # Disk management is outside the build sandbox; only these fixed argv are used.
+    with (logs / (label + ".stdout")).open("xb") as out:
+        with (logs / (label + ".stderr")).open("xb") as err:
+            completed = subprocess.run(["/usr/bin/hdiutil", *map(str, args)], env=env,
+                                       stdout=out, stderr=err, check=False)
+    require(completed.returncode == 0, "WORKSPACE_" + label.upper() + "_FAILED")
+    return read_bytes(logs / (label + ".stdout"))
+
+
+def export_workspace(output, destination):
+    require(not (output / "preparation.json").exists(), "OUTPUT_OCCUPIED")
+    destination.mkdir()
+    # Preserve full build logs and even incomplete products on build failure.
+    # Do not follow links while copying; inventory rejects escaping links first.
+    for name in ("logs", "products"):
+        source = output / name
+        if source.exists():
+            require(source.is_dir() and not source.is_symlink(), "OUTPUT_INVALID")
+            before = inventory(source, framework=True)
+            shutil.copytree(source, destination / name, symlinks=True)
+            require(inventory(source, framework=True) == before
+                    and inventory(destination / name, framework=True) == before, "EXPORT_INVALID")
+
+
+def mounted_preparation(receipt_path, output, arch, manifest_path, source, lock, inputs):
+    # mkdtemp exclusively creates a private sibling; never expose the image to
+    # the build's only writable namespace (the mounted output).
+    private = Path(tempfile.mkdtemp(prefix=".grdb-workspace-", dir=output.parent))
+    metadata = private.stat()
+    require(metadata.st_uid == os.getuid() and stat.S_IMODE(metadata.st_mode) == 0o700,
+            "WORKSPACE_OWNERSHIP_INVALID")
+    image = private / "workspace.sparseimage"
+    logs = private / "logs"
+    logs.mkdir()
+    env = environment("/var/empty", lock["toolchain"]["developerDir"])
+    image_command(["create", "-size", "4g", "-type", "SPARSE", "-fs", "APFS",
+                   "-volname", "PaperLens-GRDB", image], env, logs, "create")
+    # Once attach has been attempted, any uncertain outcome retains the image.
+    attached = image_command(["attach", "-plist", "-nobrowse", "-owners", "on",
+                              "-mountpoint", output, image], env, logs, "attach")
+    entities = plistlib.loads(attached).get("system-entities", [])
+    devices = [entry.get("dev-entry") for entry in entities
+               if entry.get("mount-point") == str(output)]
+    require(len(devices) == 1 and isinstance(devices[0], str)
+            and re.fullmatch(r"/dev/disk[0-9]+(?:s[0-9]+)*", devices[0]), "WORKSPACE_ATTACH_INVALID")
+    device = devices[0]
+    result = None
+    error = None
+    exported = private / "export"
+    try:
+        require(filesystem_device(output) != filesystem_device(output.parent), "WORKSPACE_NOT_DISTINCT")
+        metadata = output.stat()
+        require(metadata.st_uid == os.getuid(), "WORKSPACE_OWNERSHIP_INVALID")
+        output.chmod(0o700)
+        try:
+            result = build_preparation(receipt_path, output, arch, manifest_path, source, lock, inputs)
+        except Exception as failure:
+            error = failure
+        export_workspace(output, exported)
+    finally:
+        # No force, no global detach, no deletion on detach or device uncertainty.
+        image_command(["detach", device], env, logs, "detach")
+        require(filesystem_device(output) == filesystem_device(output.parent), "WORKSPACE_DETACH_FAILED")
+    require(exported.is_dir(), "EXPORT_INVALID")
+    # Detach reveals our original, empty mountpoint. Exclusive copies must not
+    # merge with any unexpected files there.
+    require(not any(output.iterdir()), "OUTPUT_OCCUPIED")
+    for child in exported.iterdir():
+        shutil.copytree(child, output / child.name, symlinks=True)
+        require(inventory(child, framework=True) == inventory(output / child.name, framework=True), "EXPORT_INVALID")
+    (output / "logs").mkdir(exist_ok=True)
+    for path in logs.iterdir():
+        with (output / "logs" / ("workspace-" + path.name)).open("xb") as stream:
+            stream.write(read_bytes(path))
+    if result is not None:
+        require(inventory(output / "products/GRDB.framework", framework=True) == result["frameworkInventory"], "OUTPUT_INVALID")
+        require({name: digest(read_bytes(output / "logs" / name)) for name in result["logs"]}
+                == result["logs"], "EXPORT_INVALID")
+        require(validate_inputs(receipt_path, manifest_path)[2] == inputs
+                and digest(read_bytes(Path(__file__))) == result["driverSha256"], "INPUT_TAMPERED")
+        result["logs"] = {path.name: digest(read_bytes(path)) for path in sorted((output / "logs").iterdir())}
+    # Only proven detached, completely exported workspaces may be removed.
+    shutil.rmtree(private)
+    if error is not None:
+        raise error
+    return result
+
+
 def prepare(receipt_path, output, arch, manifest_path=MANIFEST):
     require(arch == "arm64", "INVALID_ARCHITECTURE")
     output = checked_path(output)
@@ -292,13 +388,28 @@ def prepare(receipt_path, output, arch, manifest_path=MANIFEST):
     env = environment("/var/empty", lock["toolchain"]["developerDir"])
     require(command(["/usr/sbin/sysctl", "-in", "sysctl.proc_translated"], env).strip() == b"0", "NATIVE_ARM64_REQUIRED")
     try:
-        output.mkdir()
+        output.mkdir(mode=0o700)
     except FileExistsError:
         raise Failure("OUTPUT_OCCUPIED") from None
+    result = mounted_preparation(receipt_path, output, arch, manifest_path, source, lock, inputs)
+    try:
+        stream = (output / "preparation.json").open("x")
+    except FileExistsError:
+        raise Failure("OUTPUT_OCCUPIED") from None
+    with stream:
+        json.dump(result, stream, indent=2, sort_keys=True)
+        stream.write("\n")
+    return result
+
+
+def build_preparation(receipt_path, output, arch, manifest_path, source, lock, inputs):
     for name in ("home", "cache", "tmp", "logs", "products", "build", "intermediates", "precompiled"):
         (output / name).mkdir()
     env = environment(output / "home", lock["toolchain"]["developerDir"])
-    env.update({"TMPDIR": str(output / "tmp") + "/", "XDG_CACHE_HOME": str(output / "cache"), "CLANG_MODULE_CACHE_PATH": str(output / "cache/clang")})
+    # Swift Build's WorkspaceContext.getModuleSessionFilePath reads process
+    # CCHROOT, not the resolved target's MODULE_CACHE_DIR build setting.
+    env.update({"TMPDIR": str(output / "tmp") + "/", "XDG_CACHE_HOME": str(output / "cache"),
+                "CCHROOT": str(output / "cache"), "CLANG_MODULE_CACHE_PATH": str(output / "cache/clang")})
     tools = validate_toolchain(lock, env, output)
     driver_hash = digest(read_bytes(Path(__file__)))
     require(validate_inputs(receipt_path, manifest_path)[2] == inputs, "INPUT_TAMPERED")
@@ -317,13 +428,6 @@ def prepare(receipt_path, output, arch, manifest_path=MANIFEST):
         "runtimeExecuted": False, "lintStatus": "UNKNOWN",
         "logs": {path.name: digest(read_bytes(path)) for path in sorted((output / "logs").iterdir())},
     }
-    try:
-        stream = (output / "preparation.json").open("x")
-    except FileExistsError:
-        raise Failure("OUTPUT_OCCUPIED") from None
-    with stream:
-        json.dump(result, stream, indent=2, sort_keys=True)
-        stream.write("\n")
     return result
 
 

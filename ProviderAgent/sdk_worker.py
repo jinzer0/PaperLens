@@ -1,6 +1,6 @@
 """Lazy official SDK owner. Importing this module acquires no OS resources.
 
-Only Native can select the independent retirement deadline. Broker retirement
+Only Native can select the immutable retirement identity. Broker retirement
 proves neither public SDK FileObject closure nor namespace purge. Unknown is a
 permanent, retained state, not an exception-driven cleanup opportunity.
 """
@@ -98,6 +98,7 @@ class OfficialSDKWorker:
         self.unknown = False
         self.reason = None
         self.client = None
+        self.sdk_start_attempted = False
         self.models = None
         self.rendezvous = None
         self.broker = None
@@ -112,7 +113,7 @@ class OfficialSDKWorker:
         self.agent = None
         self.run_id = None
         self.startup_deadline_ns = None
-        self.deadline_ns = None
+        self.retirement_id = None
         self.environment_replaced = False
         self.dispatch_enabled = False
         self.initialized = False
@@ -134,6 +135,8 @@ class OfficialSDKWorker:
         self.acl_objects = []
         self.reap_record = None
         self.reap_started = False
+        self.retirement_thread = None
+        self.control_lock = threading.Lock()
         self.captured = False
         self.event_loop = None
         self.transport_decoder = None
@@ -156,7 +159,7 @@ class OfficialSDKWorker:
         if self.event_loop is not None:
             # stop() only latches the loop flag. Do not close/deregister its
             # selector/self-pipe, run finalizers, or drain ready/pending data.
-            self.event_loop.stop()
+            self.event_loop.call_soon_threadsafe(self.event_loop.stop)
 
     async def park_async(self):
         # Retain frames, jobs, SDK queues, descriptors and namespace indefinitely.
@@ -314,8 +317,14 @@ class OfficialSDKWorker:
 
     def start(self):
         self._check()
-        if not self.environment_replaced or self.client is not None:
-            raise ProtocolError('unavailable')
+        with self.state_lock:
+            if (self.unknown or not self.environment_replaced or self.client is not None
+                    or self.sdk_start_attempted or self.retirement_requested
+                    or self.retirement_id is not None):
+                raise ProtocolError('unavailable')
+            # One-start admission is consumed before any constructor/start effect,
+            # including failure. This is not cleanup or resource-closure proof.
+            self.sdk_start_attempted = True
         sdk = self._sdk_module('openai_codex')
         if sdk.__version__ != '0.160.0':
             raise ProtocolError('unavailable')
@@ -337,23 +346,20 @@ class OfficialSDKWorker:
         self.broker = self.rendezvous.accept_broker()
         self.rendezvous.offer_to_native(5, self.broker)
         while not self.dispatch_enabled and not self.unknown:
-            self._startup_clock()
-            end = self.deadline_ns or self.startup_deadline_ns
-            ready, _, _ = select.select([5], [], [], max(
-                0, (end - time.monotonic_ns()) / 1e9))
+            if self.retirement_id is None:
+                self._startup_clock()
+            ready, _, _ = select.select([5], [], [], 0.05 if self.retirement_id is not None else max(
+                0, (self.startup_deadline_ns - time.monotonic_ns()) / 1e9))
             if ready:
                 self._control_read()
         self._check()
 
     def _startup_clock(self):
-        if time.monotonic_ns() >= min(self.startup_deadline_ns,
-                                      self.deadline_ns or self.startup_deadline_ns):
+        if time.monotonic_ns() >= self.startup_deadline_ns:
             raise ProtocolError('unavailable')
 
     def _control_read(self):
         self._check()
-        if self.deadline_ns is not None and time.monotonic_ns() >= self.deadline_ns:
-            raise ProtocolError('unavailable')
         self._identity('lifecycle')
         try:
             byte = os.read(5, 1)
@@ -366,50 +372,70 @@ class OfficialSDKWorker:
             self._control(message)
 
     def _control(self, message):
+        from broker_control import ControlError, _validate
+        try:
+            _validate(message)
+        except (ControlError, ValueError):
+            raise ProtocolError('unavailable') from None
         if message['runID'] != self.run_id:
             raise ProtocolError('unavailable')
         op = message['op']
-        if op == 'dispatching' and not self.dispatch_enabled and self.deadline_ns is None:
+        if op == 'dispatching' and not self.dispatch_enabled and self.retirement_id is None:
             self._startup_clock()
             self.dispatch_enabled = True
         elif op == 'revoke':
-            deadline = message['deadlineNs']
+            identity = message['retirementID']
             with self.state_lock:
-                if self.deadline_ns is None:
-                    if not 0 < deadline - time.monotonic_ns() <= 300_000_000:
-                        raise ProtocolError('unavailable')
-                    self.deadline_ns = deadline
+                if self.retirement_id is None:
+                    self.retirement_id = identity
+                    self.retirement_requested = True
                     if self.stage is not None:
                         self.stage.stale = True
-                elif type(deadline) is not int or deadline != self.deadline_ns:
+                elif identity != self.retirement_id:
                     raise ProtocolError('unavailable')
-        elif op == 'reapBroker' and self.deadline_ns == message['deadlineNs'] and not self.reap_started:
+        elif op == 'reapBroker' and self.retirement_id == message['retirementID']:
+            if self.reap_started:
+                return
             self.reap_started = True
-            self.reap_record = self.broker.wait_direct_child(self.deadline_ns)
-            self.rendezvous.retire(self.deadline_ns)
-            # This message only proves the actual local broker wait, not SDK closure.
-            self._send_control('brokerReaped', deadlineNs=self.deadline_ns,
-                               waitStatus=self.reap_record.wait_status)
-            self.select_unknown('sdkClosureUnproven')
+            self.retirement_thread = threading.Thread(
+                target=self._reap_broker, name='PaperLensBrokerRetirement', daemon=True)
+            self.retirement_thread.start()
         else:
             raise ProtocolError('unavailable')
 
+    def _reap_broker(self):
+        try:
+            self.reap_record = self.broker.wait_direct_child(self.retirement_id)
+            self.rendezvous.retire(self.retirement_id)
+            # Actual local broker wait only; never SDK FileObject closure or purge.
+            self._send_control('brokerReaped', retirementID=self.retirement_id,
+                               waitStatus=self.reap_record.wait_status)
+            self.select_unknown('sdkClosureUnproven')
+        except BaseException as error:
+            self.failure = self.failure or error
+            self.select_unknown('brokerRetirementUncertain')
+
     def _send_control(self, op, **fields):
+        with self.control_lock:
+            self._write_control(op, **fields)
+
+    def _write_control(self, op, **fields):
         self._check()
         from broker_control import encode_control
         self.control_output.extend(encode_control(self.run_id, op, **fields))
         while self.control_output:
             self._check()
-            end = self.deadline_ns or self.startup_deadline_ns
-            # scopeRetire may occur after startup; Native, not a renewed Python
-            # timer, selects the real cleanup D in response to this request.
-            if op != 'revokeNeeded' and time.monotonic_ns() >= end:
+            if (self.retirement_id is None and op != 'revokeNeeded'
+                    and time.monotonic_ns() >= self.startup_deadline_ns):
                 raise ProtocolError('unavailable')
             self._identity('lifecycle')
             try:
                 count = os.write(5, self.control_output)
             except BlockingIOError:
-                # No unbounded synchronous wait for a Native reader.
+                if op == 'brokerReaped':
+                    # Only the retained retirement thread waits for cleanup delivery.
+                    select.select([], [5], [], 0.05)
+                    continue
                 raise ProtocolError('unavailable') from None
             if count <= 0:
                 raise ProtocolError('unavailable')
@@ -424,11 +450,7 @@ class OfficialSDKWorker:
                     future.set_result(None)
             loop.add_reader(5, readable)
             try:
-                end = self.deadline_ns
-                if end is None:
-                    await future
-                else:
-                    await asyncio.wait_for(future, max(0, (end - time.monotonic_ns()) / 1e9))
+                await future
                 self._control_read()
             except BaseException as error:
                 self.failure = self.failure or error
@@ -461,7 +483,7 @@ class OfficialSDKWorker:
         # Pure metadata only, serialized with cancellation/retirement. An
         # admitted effect may finish late; admission is never cleanup proof.
         self._check()
-        if self.deadline_ns is not None or self.retirement_requested:
+        if self.retirement_id is not None or self.retirement_requested:
             raise ProtocolError('unavailable')
         self._check(request_id)
         if stage is not None and (self.stage is not stage or stage.stale or stage.cancel_selected):
@@ -490,7 +512,7 @@ class OfficialSDKWorker:
             self.loop.call_soon_threadsafe(self._session_limit)
         except BaseException as error:
             self.reader_failures.append(error)
-            if not self.unknown and self.deadline_ns is None and not self.retirement_requested:
+            if not self.unknown and self.retirement_id is None and not self.retirement_requested:
                 self.loop.call_soon_threadsafe(self.select_unknown, 'notificationUncertain')
 
     def _session_limit(self):
@@ -507,7 +529,7 @@ class OfficialSDKWorker:
 
     async def _job(self, request_id, deadline, call, *, reserved=False, stage=None, probe=False):
         self._check(request_id)
-        if self.deadline_ns is not None or self.retirement_requested:
+        if self.retirement_id is not None or self.retirement_requested:
             raise ProtocolError('unavailable')
         loop = asyncio.get_running_loop()
         if loop.time() >= deadline:
@@ -593,7 +615,7 @@ class OfficialSDKWorker:
     def _login_reader_start(self, stage):
         with self.state_lock:
             if (self.unknown or self.stage is not stage or stage.stale
-                    or self.deadline_ns is not None or self.retirement_requested):
+                    or self.retirement_id is not None or self.retirement_requested):
                 return
         self._start_reader(lambda: self._login_reader(stage), 'PaperLensSDKLogin')
 
@@ -778,7 +800,7 @@ class OfficialSDKWorker:
                     self._send_control('revokeNeeded', code='scopeRetire')
                 except BaseException:
                     self.select_unknown('retirementRequestUncertain')
-            # Lifecycle continues to consume actual first D and reapBroker. No
+            # Lifecycle continues to consume retirementID and reapBroker. No
             # cleanup result is emitted: the public SDK has no whole-scope proof.
             await self.park_async()
         raise ProtocolError('unknownMethod')

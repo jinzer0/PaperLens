@@ -1,5 +1,23 @@
 # Story 1.19 Build Spec — Shared sentence, geometry and Anchor contract
 
+## User-authorized bounded synthetic calibration — 2026-11-07
+
+The user authorized a new synthetic-only geometry calibration, not a rerun of
+previously exhausted raster/readiness trials. The first diagnostic is one explicit
+calibration invocation: two synthetic CropBox-origin profiles, four quarter-turn
+rotations and zoom 0.1, 1 and 10, giving 24 cells after one PDFium extraction.
+Use an embedded synthetic font and source-defined independent glyph/landmark
+expectations; no user PDF, network, Provider request or raster capture.
+
+Derive the candidate numerical uncertainty bound from the pinned arithmetic and
+fixture constants before execution. Record extraction, display correspondence and
+roundtrip residuals separately. A failure cannot authorize increasing the bound
+to fit the observed maximum. Preserve failures and actual drain/closure outcomes;
+no automatic calibration retry. This bounded matrix does not by itself certify
+arbitrary fonts/page magnitudes, all intermediate zooms, visible rendering or P6.
+Production admission requires evaluation of the resulting evidence and supported
+domain, not a fabricated precision value or an always-true certification flag.
+
 ## Authority and admission
 
 Issue#21 / issue/21-story-1-19, basef14f15f3f1c1fed02657ebf0c7ecdcb23721bfa8. PRODUCT5eac3bb9424ad893eca7d63bc319b71f580838ed; ARCHITECTURE1195c92227cc628e325f5ff24d70cc93639bf7a9; Whole-Epic https://github.com/jinzer0/PaperLens/issues/3#issuecomment-6049004229. Own Spec before source; no repeated unchanged-scope SHA approval, no actual gate/live/paid/credential/remote/distribution permission.
