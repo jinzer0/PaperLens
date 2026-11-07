@@ -265,6 +265,7 @@ public struct ReaderMetadataBindingState {
   private func makeState(metadata: ReaderMetadataSnapshot, document: PDFDocument,
     adapter: ReaderOutlineAdapter, context: ReaderMetadataContext?,
     observed: ReaderConfirmedLocation?) throws -> ReaderMetadataBindingState {
+    var retainedMetadata = metadata
     var titles = metadata.title.candidates
     let attributes = document.documentAttributes
     _ = try validate()
@@ -272,11 +273,14 @@ public struct ReaderMetadataBindingState {
       !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
       let candidate = ReaderMetadataValue(text: title, source: .source,
         sourceID: "pdf:\(documentIdentity.pdfSHA256)")
-      if !titles.contains(candidate) { titles.append(candidate) }
+      if let identity {
+        retainedMetadata = try service.recordSourceTitle(title, for: identity)
+        titles = retainedMetadata.title.candidates
+      } else if !titles.contains(candidate) { titles.append(candidate) }
     }
     // PDF creation/modification dates, subject and keywords have different semantics.
-    let combined = ReaderMetadataSnapshot(title: .init(titles), year: metadata.year,
-      abstract: metadata.abstract, topics: metadata.topics)
+    let combined = ReaderMetadataSnapshot(title: .init(titles), year: retainedMetadata.year,
+      abstract: retainedMetadata.abstract, topics: retainedMetadata.topics)
     try combined.validate()
     return ReaderMetadataBindingState(presentation: .init(identity: identity, metadata: combined),
       sections: adapter.sections.map {

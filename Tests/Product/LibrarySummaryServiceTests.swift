@@ -961,6 +961,62 @@ final class LibrarySummaryServiceTests: XCTestCase {
     XCTAssertNil(try LibrarySummaryService(database: f.db).restore(paperID: f.identity.paperID))
     XCTAssertEqual(try f.db.adapterRead { try String.fetchOne($0,
       sql: "SELECT state FROM librarySummaryJob") }, "failed")
+    XCTAssertEqual(try f.db.librarySortFacts().first?.summary?.recentAttempt?.failure, .cancelled)
+  }
+
+  @MainActor func testActualSummaryFailuresPersistRedactedReasonsAcrossReopenWithoutRetry() async throws {
+    let cases: [(any Error, LibrarySummaryFailure)] = [
+      (APIKeyConnectionError.authentication, .authentication),
+      (APIKeyConnectionError.rateLimited, .rateLimited),
+      (URLError(.timedOut), .timedOut),
+      (AgentRPCConnection.Failure.timeout, .timedOut),
+      (AgentRPCConnection.Failure.remote("unavailable"), .providerUnavailable),
+      (AgentRPCConnection.Failure.remote("private-remote-error"), .invalidResponse),
+      (LibrarySummaryError.invalidGrounding, .invalidGrounding),
+      (LibrarySummaryError.cleanupUnavailable, .cleanupUnavailable),
+      (NSError(domain: "secret-provider-body", code: 7,
+        userInfo: [NSLocalizedDescriptionKey: "secret-key-paper-text"]), .terminated),
+    ]
+    for (error, expected) in cases {
+      let f = try fixture()
+      defer { try? FileManager.default.removeItem(at: f.root) }
+      try prepareCoordinator(f)
+      let leases = SummaryLeases(), provider = SummaryProvider()
+      provider.beforeResult = { _ in throw error }
+      let coordinator = LibrarySummaryCoordinator(database: f.db, epoch: UUID(), leases: leases,
+        authority: try ProviderRequest(), provider: provider)
+      do {
+        _ = try await coordinator.generate(paperID: f.identity.paperID,
+          generation: f.identity.generation, outputLanguage: "ko")
+        XCTFail("Failed provider request must not publish")
+      } catch { }
+      let stored = try f.db.adapterRead { try String.fetchOne($0,
+        sql: "SELECT failure FROM librarySummaryJob") }
+      XCTAssertEqual(stored, expected.rawValue)
+      let reopened = try ProductDatabase.open(at: f.root)
+      let recent = try XCTUnwrap(reopened.librarySortFacts().first?.summary?.recentAttempt)
+      XCTAssertEqual(recent.failure, expected)
+      XCTAssertEqual(recent.identity.paperID, f.identity.paperID)
+      XCTAssertFalse(expected.koreanMessage.contains("secret"))
+      XCTAssertEqual(provider.calls, 1, "Reading a failure must never retry generation")
+      XCTAssertEqual(leases.lease.closed, expected != .cleanupUnavailable)
+    }
+  }
+
+  func testSummaryFailureProjectionReadsLegacyAndUnknownCodesWithoutExposingRawText() throws {
+    let f = try fixture()
+    defer { try? FileManager.default.removeItem(at: f.root) }
+    try reserve(f)
+    try f.db.failLibrarySummary(f.identity)
+    let codes: [String?] = ["terminated", nil, "private-unknown-provider-error", "interrupted", "paperUnavailable"]
+    for code in codes {
+      try f.db.adapterWrite { db in
+        try db.execute(sql: "UPDATE librarySummaryJob SET failure = ?", arguments: [code])
+      }
+      let recent = try XCTUnwrap(f.db.librarySortFacts().first?.summary?.recentAttempt)
+      XCTAssertEqual(recent.failure, code.flatMap(LibrarySummaryFailure.init(rawValue:)) ?? .terminated)
+      XCTAssertFalse(recent.failure!.koreanMessage.contains("private"))
+    }
   }
 
   @MainActor func testCoordinatorPreservesUnownedStageAndRejectsPublicationAfterConfigurationChange() async throws {

@@ -6,6 +6,65 @@ import GRDB
 import ProviderRequest
 #endif
 
+extension LibrarySummaryFailure {
+  static func classify(_ error: any Error) -> Self {
+    if error is CancellationError { return .cancelled }
+    if error is DatabaseError { return .persistenceFailure }
+    if error is RequestContractError { return .invalidResponse }
+    if let value = error as? AgentRPCConnection.Failure {
+      switch value {
+      case .timeout: return .timedOut
+      case .busy: return .requestInProgress
+      case .unavailable, .notReady, .unsupportedOperation: return .providerUnavailable
+      case .remote(let code):
+        switch code {
+        case "timeout": return .timedOut
+        case "busy": return .requestInProgress
+        case "unavailable", "handshakeRequired": return .providerUnavailable
+        default: return .invalidResponse
+        }
+      case .exhausted, .invalidRequest, .protocolViolation: return .invalidResponse
+      }
+    }
+    if let value = error as? LibrarySummaryError {
+      switch value {
+      case .providerUnavailable: return .providerUnavailable
+      case .geometryUnavailable: return .geometryUnavailable
+      case .staleIdentity: return .staleIdentity
+      case .invalidGrounding: return .invalidGrounding
+      case .invalidResult: return .invalidResponse
+      case .requestInProgress: return .requestInProgress
+      case .cleanupUnavailable: return .cleanupUnavailable
+      }
+    }
+    if let value = error as? APIKeyConnectionError {
+      switch value {
+      case .cancelled: return .cancelled
+      case .authentication, .invalidKey: return .authentication
+      case .rateLimited: return .rateLimited
+      case .transport: return .network
+      case .deadline: return .timedOut
+      case .invalidResponse: return .invalidResponse
+      case .cleanupBlocked: return .cleanupUnavailable
+      case .staleCandidate, .selectorConflict: return .staleIdentity
+      case .persistenceUnavailable, .persistenceFailure: return .persistenceFailure
+      case .invalidConfiguration, .unsupportedProfile, .unsafeStorage, .providerUnavailable:
+        return .providerUnavailable
+      }
+    }
+    if error is ReaderError { return .paperUnavailable }
+    if error is ProductDatabaseError { return .staleIdentity }
+    if let value = error as? URLError {
+      switch value.code {
+      case .cancelled: return .cancelled
+      case .timedOut: return .timedOut
+      default: return .network
+      }
+    }
+    return .terminated
+  }
+}
+
 /// The ChatGPT adapter uses the app-owned isolated execution scope. A missing
 /// connection remains unavailable and never falls back to a different provider.
 @MainActor public final class NativeCodexSummaryProvider: LibrarySummaryProviding {
@@ -202,19 +261,24 @@ import ProviderRequest
       return record
     } catch {
       let cause = error
-      if reserved { try? database.failLibrarySummary(identity) }
+      func recordFailure(_ reason: LibrarySummaryFailure) {
+        if reserved { try? database.failLibrarySummary(identity, reason: reason) }
+      }
       // An isolated producer may report unknown physical retirement. Keep the
       // paper lease held so deletion cannot remove a producer's remaining input.
       if awaitingProducer, cause as? LibrarySummaryError == .cleanupUnavailable {
+        recordFailure(.cleanupUnavailable)
         producerCleanupDebt.append(lease)
         throw cause
       }
       if let stage {
         do { try stage.remove() } catch {
+          recordFailure(.cleanupUnavailable)
           cleanupDebt.append((stage, lease))
           throw LibrarySummaryError.cleanupUnavailable
         }
       }
+      recordFailure(.classify(cause))
       lease.close()
       throw cause
     }

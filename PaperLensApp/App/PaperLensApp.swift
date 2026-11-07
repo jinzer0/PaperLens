@@ -15,7 +15,9 @@ struct PaperLensApp: App {
   var body: some Scene {
     WindowGroup(CommandLine.arguments.contains("--topology-smoke")
       ? "PaperLens — Topology Prototype" : "PaperLens") {
-      if SyntheticPDFGeometryCalibration.launch(CommandLine.arguments) != .absent {
+      if SyntheticWorkspaceSmoke.launch(CommandLine.arguments) != .absent {
+        SyntheticWorkspaceSmokeView()
+      } else if SyntheticPDFGeometryCalibration.launch(CommandLine.arguments) != .absent {
         Text("합성 PDF geometry 진단 전용 · 결과는 별도 run 디렉터리에 기록합니다.")
           .padding()
       } else if CommandLine.arguments.contains("--topology-smoke") {
@@ -32,6 +34,7 @@ private final class TopologyApplicationDelegate: NSObject, NSApplicationDelegate
   let model = TopologyModel()
 
   func applicationDidFinishLaunching(_ notification: Notification) {
+    if SyntheticWorkspaceSmoke.launch(CommandLine.arguments) != .absent { return }
     if SyntheticPDFGeometryCalibration.launch(CommandLine.arguments) != .absent {
       Task { await SyntheticPDFGeometryCalibration.run(arguments: CommandLine.arguments) }
       return

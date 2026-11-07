@@ -335,6 +335,46 @@ private final class MetadataObservedPDFDocument: PDFDocument {
     XCTAssertNil(presentation.pdfView.document)
   }
 
+  func testPublishedIdentityRemountPersistsPreviouslyTransientSourceTitle() async throws {
+    let (db, lifecycle, identity, owner) = try await fixture(publishExtraction: false)
+    owner.session.close()
+    let session = ReaderSession(database: db,
+      leaseProvider: LibraryReadLeaseProvider(lifecycle: lifecycle))
+    defer { session.close() }
+    let presentation = ReaderPresentation(session: session,
+      annotationIdentity: try db.annotationIdentity(paperID: identity.paperID),
+      annotationService: AnnotationService(database: db),
+      metadataService: ReaderMetadataService(database: db), metadataIdentity: nil)
+    presentation.open(paperID: identity.paperID)
+    presentation.pdfView.document?.documentAttributes = [
+      PDFDocumentAttribute.titleAttribute: "Title before publication"]
+    let transient = try XCTUnwrap(presentation.metadataBinding)
+    try transient.refresh()
+    XCTAssertNil(transient.identity)
+    XCTAssertEqual(try db.adapterRead { try Int.fetchOne($0,
+      sql: "SELECT COUNT(*) FROM readerMetadata") }, 0)
+    // Model the published extraction event which supplies the production remount identity.
+    try db.adapterWrite { sql in
+      try sql.execute(sql: """
+        INSERT INTO extractionRevision(id, paperID, generation, pdfSHA256, pdfReference)
+        VALUES (?, ?, ?, ?, ?)
+        """, arguments: [identity.revisionID.uuidString, identity.paperID.uuidString,
+          identity.generation.uuidString, identity.pdfSHA256, identity.pdfReference])
+      try sql.execute(sql: "INSERT INTO extractionVisible(paperID, revision) VALUES (?, ?)",
+        arguments: [identity.paperID.uuidString, identity.revisionID.uuidString])
+    }
+    presentation.replaceMetadataIdentity(identity)
+    XCTAssertNil(transient.state)
+    XCTAssertNil(presentation.metadataFailure)
+    let remounted = try XCTUnwrap(presentation.metadataBinding)
+    XCTAssertEqual(remounted.identity, identity)
+    let stored = try ReaderMetadataService(database: db).metadata(for: identity)
+    XCTAssertEqual(stored.title.candidates.map(\.text), ["Title before publication"])
+    XCTAssertTrue(stored.year.candidates.isEmpty)
+    XCTAssertTrue(stored.abstract.candidates.isEmpty)
+    XCTAssertTrue(stored.topics.candidates.isEmpty)
+  }
+
   func testNativeMetadataRejectsHashAndDocumentReplacement() async throws {
     let (db, _, identity, owner) = try await fixture(publishExtraction: false)
     defer { owner.session.close() }
@@ -394,9 +434,30 @@ private final class MetadataObservedPDFDocument: PDFDocument {
     XCTAssertTrue(metadata.year.candidates.isEmpty)
     XCTAssertTrue(metadata.abstract.candidates.isEmpty)
     XCTAssertTrue(metadata.topics.candidates.isEmpty)
-    XCTAssertEqual(try service.metadata(for: identity), accepted)
+    XCTAssertEqual(try service.metadata(for: identity), metadata)
     try binding.refresh()
     XCTAssertEqual(binding.state?.presentation.metadata.title.candidates.count, 2)
+  }
+
+  func testSourceTitleSurvivesReaderCloseAndReopenWithoutInventedFields() async throws {
+    let (db, _, identity, owner) = try await fixture()
+    defer { owner.session.close() }
+    owner.view.document?.documentAttributes = [PDFDocumentAttribute.titleAttribute: "Durable source title"]
+    let binding = try mount(db, identity, owner)
+    let before = try XCTUnwrap(binding.state).presentation.metadata
+    binding.invalidate()
+    owner.session.close()
+    try owner.open(paperID: identity.paperID)
+    // The reopened fixture has no injected title; persistence must supply the candidate.
+    owner.view.document?.documentAttributes = [:]
+    let reopened = try mount(db, identity, owner)
+    XCTAssertEqual(reopened.state?.presentation.metadata, before)
+    XCTAssertEqual(before.title.candidates.map(\.text), ["Durable source title"])
+    XCTAssertTrue(before.year.candidates.isEmpty)
+    XCTAssertTrue(before.abstract.candidates.isEmpty)
+    XCTAssertTrue(before.topics.candidates.isEmpty)
+    try reopened.refresh()
+    XCTAssertEqual(try ReaderMetadataService(database: db).metadata(for: identity), before)
   }
 
   func testBlankOrWrongTypedAttributesPreserveAdmittedFieldsWithoutDefaults() async throws {

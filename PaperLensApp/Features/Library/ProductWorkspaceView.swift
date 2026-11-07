@@ -50,6 +50,7 @@ public final class ProductWorkspace: ObservableObject {
     parsing?.recoveryCoordinator
   }
   fileprivate let database: ProductDatabase
+  private let diagnosticSource: URL?
   private let readLeases: LibraryReadLeaseProvider
   private var scopedSource: URL?
   private var pendingConfirmation: UUID?
@@ -93,12 +94,22 @@ public final class ProductWorkspace: ObservableObject {
   @Published public private(set) var opening = false
   @Published public private(set) var failure: String?
 
-  public init(
+  public convenience init(
     database: ProductDatabase, lifecycle: LocalLibraryLifecycle,
     connection: NativeAPIKeyConnection, codex: NativeCodexConnection? = nil,
     parsing: MainPDFiumParsingComposition? = nil
   ) throws {
+    try self.init(database: database, lifecycle: lifecycle, connection: connection,
+      codex: codex, parsing: parsing, diagnosticSource: nil)
+  }
+
+  internal init(
+    database: ProductDatabase, lifecycle: LocalLibraryLifecycle,
+    connection: NativeAPIKeyConnection, codex: NativeCodexConnection? = nil,
+    parsing: MainPDFiumParsingComposition? = nil, diagnosticSource: URL?
+  ) throws {
     self.database = database
+    self.diagnosticSource = diagnosticSource
     if let parsing {
       guard parsing.lifecycle === lifecycle,
         parsing.service.database === database else { throw ExtractionError.staleAttempt }
@@ -112,7 +123,8 @@ public final class ProductWorkspace: ObservableObject {
     urls = URLImportService(
       authority: try ProviderRequest(),
       grantWriter: {
-        try await lifecycle.grantURLImportWriter(for: $0)
+        guard diagnosticSource == nil else { throw URLImportError.writerUnavailable }
+        return try await lifecycle.grantURLImportWriter(for: $0)
       })
     let readLeases = LibraryReadLeaseProvider(lifecycle: lifecycle)
     self.readLeases = readLeases
@@ -137,6 +149,7 @@ public final class ProductWorkspace: ObservableObject {
   }
 
   @discardableResult public func prepareImport(source: URL) async throws -> UUID {
+    try admitDiagnosticSource(source)
     guard !preparing, !opening, !sheetCleanupPending, sheet == nil, reader == nil else {
       throw ProductWorkspaceError.busy
     }
@@ -198,6 +211,7 @@ public final class ProductWorkspace: ObservableObject {
   }
 
   public func prepareRetry(source: URL, paperID: UUID, generation: UUID) async throws {
+    try admitDiagnosticSource(source)
     guard !preparing, !opening, !sheetCleanupPending, sheet == nil, reader == nil else {
       throw ProductWorkspaceError.busy
     }
@@ -310,6 +324,11 @@ public final class ProductWorkspace: ObservableObject {
         failure = "PDF 가져오기를 준비하지 못했습니다. 원본 PDF를 다시 선택하세요."
       }
     }
+  }
+
+  private func admitDiagnosticSource(_ source: URL) throws {
+    guard diagnosticSource == nil || source.standardizedFileURL == diagnosticSource?.standardizedFileURL
+    else { throw ProductWorkspaceError.diagnosticSourceRequired }
   }
 
   public func openImportedURL(_ paperID: UUID) {
@@ -549,7 +568,7 @@ public final class ProductWorkspace: ObservableObject {
   }
 }
 
-public enum ProductWorkspaceError: Error { case busy }
+public enum ProductWorkspaceError: Error { case busy, diagnosticSourceRequired }
 
 @MainActor private final class SelectedPaperReadLeases: ReaderLeaseProvider {
   private let base: LibraryReadLeaseProvider

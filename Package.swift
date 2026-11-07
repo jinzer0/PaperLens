@@ -29,6 +29,7 @@ let package = Package(
       sources: [
         "App/ProductAppComposition.swift",
         "App/TopologyFixtures.swift",
+        "App/SyntheticWorkspaceSmoke.swift",
         "Application/JobRecoveryPolicy.swift",
         "Application/ProductJobRecovery.swift",
         "Application/AgentConnectionLifecycle.swift",
@@ -96,6 +97,7 @@ let package = Package(
       sources: [
         "LocalLibraryLifecycleTests.swift", "APIKeyConnectionTests.swift",
         "ProductCompositionTests.swift",
+        "SyntheticWorkspaceSmokeTests.swift",
         "ProviderSettingsTests.swift", "ReaderSessionTests.swift", "AnnotationServiceTests.swift",
         "FolderImportTests.swift", "URLImportTests.swift", "PDFGeometryTests.swift",
         "ExtractionRevisionTests.swift", "ReaderMetadataTests.swift",

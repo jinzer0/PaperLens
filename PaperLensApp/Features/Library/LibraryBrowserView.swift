@@ -20,6 +20,7 @@ public struct LibraryBrowserView: View {
   @State private var tagLoadFailed = false
   @Binding private var filter: OrganizationFilter
   @State private var operationFailed = false
+  @State private var summaryFailureMessage: String?
   @State private var busy = false
   @State private var deleting: OrganizedPaper?
   @State private var summaryTask: Task<Void, Never>?
@@ -305,6 +306,7 @@ public struct LibraryBrowserView: View {
     }
     .onChange(of: operationFailed) { _, value in
       if value { organizationFocusToRestore = nil; interruptSheetReturn(newerWork: true) }
+      else { summaryFailureMessage = nil }
     }
     .onChange(of: deleting?.id) { _, value in
       if value != nil { organizationFocusToRestore = nil }
@@ -318,7 +320,9 @@ public struct LibraryBrowserView: View {
       }
     .alert("저장 또는 작업 실패", isPresented: $operationFailed) {
       Button("확인", role: .cancel) {}
-    } message: { Text("성공으로 저장되지 않았습니다. 새로 불러온 현재 상태를 확인하세요.") }
+    } message: {
+      Text(summaryFailureMessage ?? "성공으로 저장되지 않았습니다. 새로 불러온 현재 상태를 확인하세요.")
+    }
     .background {
       if let presentation = sheetPresentation {
         sheetPresenter(presentation.slot).id(presentation.slot.id)
@@ -725,11 +729,17 @@ public struct LibraryBrowserView: View {
   private func beginSummary(_ paper: OrganizedPaper, language: String) {
     guard let generateSummary, !nativeSheetPending, !busy else { return }
     busy = true
+    summaryFailureMessage = nil
     summaryPaperID = paper.id
     invalidateObservation()
     summaryTask = Task {
       do { try await generateSummary(paper, language) }
-      catch { if !Task.isCancelled { operationFailed = true } }
+      catch {
+        if !Task.isCancelled {
+          summaryFailureMessage = LibrarySummaryFailure.classify(error).koreanMessage
+          operationFailed = true
+        }
+      }
       summaryPaperID = nil
       summaryTask = nil
       busy = false
@@ -1071,7 +1081,9 @@ private struct LibraryIdentification {
           attempt.identity.paperID == paper.id, attempt.identity.generation == paper.generation {
           switch attempt.activity {
           case .running: Text("최근 요약 시도 · 준비 중")
-          case .failed: Text("최근 요약 시도 · 실패")
+          case .failed:
+            Text("최근 요약 시도 · 실패")
+            Text((attempt.failure ?? .terminated).koreanMessage)
           case .succeeded: Text("최근 요약 시도 · 완료 (저장 요약의 사용 가능 여부와 별개)")
           }
         }

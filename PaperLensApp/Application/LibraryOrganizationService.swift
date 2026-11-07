@@ -35,9 +35,41 @@ public enum LibrarySummaryAvailability: Sendable {
 public enum LibrarySummaryAttemptActivity: Sendable {
   case running, failed, succeeded
 }
+/// Allowlisted local reasons only; provider messages and document text are never stored here.
+public enum LibrarySummaryFailure: String, CaseIterable, Sendable {
+  case cancelled, interrupted, providerUnavailable, authentication, rateLimited, network, timedOut
+  case invalidResponse, invalidGrounding, geometryUnavailable, staleIdentity, cleanupUnavailable
+  case persistenceFailure, paperUnavailable, requestInProgress, terminated
+
+  public var koreanMessage: String {
+    switch self {
+    case .cancelled: return "요약 생성을 취소했습니다. 원할 때 요약 생성을 다시 선택하세요."
+    case .interrupted: return "앱 종료로 요약 생성이 중단되었습니다. 현재 연결과 파싱 상태를 확인한 뒤 다시 생성하세요."
+    case .providerUnavailable: return "선택한 Provider를 사용할 수 없습니다. 설정에서 연결 상태를 확인한 뒤 다시 생성하세요."
+    case .authentication: return "Provider 인증에 실패했습니다. 설정에서 다시 연결한 뒤 생성하세요."
+    case .rateLimited: return "Provider 요청 한도에 도달했습니다. 잠시 후 다시 생성하세요."
+    case .network: return "네트워크 요청을 완료하지 못했습니다. 연결 상태를 확인한 뒤 다시 생성하세요."
+    case .timedOut: return "요약 요청 시간이 초과되었습니다. 잠시 후 다시 생성하세요."
+    case .invalidResponse: return "Provider 응답 형식이 올바르지 않아 요약을 저장하지 않았습니다. 다시 생성할 수 있습니다."
+    case .invalidGrounding: return "응답의 원문 근거를 확인하지 못해 요약을 저장하지 않았습니다. 파싱 상태를 확인하세요."
+    case .geometryUnavailable: return "요약에 필요한 원문 위치 정보가 없습니다. 파싱 상태를 확인하세요. PDF는 계속 읽을 수 있습니다."
+    case .staleIdentity: return "논문 또는 Provider 설정이 변경되어 이전 요청을 저장하지 않았습니다. 현재 상태에서 다시 생성하세요."
+    case .cleanupUnavailable: return "요약 실행의 안전한 종료를 확인하지 못했습니다. 원문 보호를 위해 새 요청과 삭제를 보류합니다."
+    case .persistenceFailure: return "요약을 안전하게 저장하지 못했습니다. 현재 저장 상태를 새로 확인하세요."
+    case .paperUnavailable: return "현재 논문을 사용할 수 없어 요약을 중단했습니다. 라이브러리 상태를 확인하세요."
+    case .requestInProgress: return "다른 요약이 실행 중이거나 이전 실행의 정리가 필요합니다. 현재 작업 상태를 확인하세요."
+    case .terminated: return "요약 작업을 완료하지 못했습니다. 현재 연결과 파싱 상태를 확인한 뒤 다시 생성하세요."
+    }
+  }
+}
 public struct LibrarySummaryRecentAttempt: Sendable {
   public let identity: LibrarySummaryIdentity
   public let activity: LibrarySummaryAttemptActivity
+  public let failure: LibrarySummaryFailure?
+  public init(identity: LibrarySummaryIdentity, activity: LibrarySummaryAttemptActivity,
+    failure: LibrarySummaryFailure? = nil) {
+    self.identity = identity; self.activity = activity; self.failure = failure
+  }
 }
 /// Passive facts from one database read, never dispatch or publication authority.
 public struct LibrarySummaryObservation: Sendable {

@@ -401,6 +401,7 @@ internal final class NativeCodexSummaryScope {
 
   private func receive(_ id: UUID, terminal: AgentRPCConnection.Terminal) {
     guard id == requestID, outcome == nil else { return }
+    if case .failure(let error) = terminal { fail(error); return }
     guard case .result(let result) = terminal,
       let json = result["resultJSON"] as? String, json.utf8.count <= 32_768 else {
       fail(LibrarySummaryError.invalidResult); return

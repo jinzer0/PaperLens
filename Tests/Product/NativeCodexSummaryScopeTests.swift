@@ -124,7 +124,7 @@ import ProviderRequest
     )
   }
 
-  private func controlWorkerScript(holdResult: Bool) -> String {
+  private func controlWorkerScript(holdResult: Bool, remoteTimeout: Bool = false) -> String {
     """
     import array, json, os, select, socket, struct, subprocess, sys, time
     end = time.monotonic() + 3
@@ -200,7 +200,11 @@ import ProviderRequest
                 result['resultJSON'] = json.dumps(dict(summary=dict(text='Insufficient evidence', kind='insufficient', evidenceIndices=[]), insufficiency='noEvidence'))
             else:
                 raise AssertionError('forbidden synthetic product method: ' + method)
-            body = json.dumps(dict(kind='result', id=request['id'], result=result)).encode()
+            if method == 'product.librarySummary' and \(remoteTimeout ? "True" : "False"):
+                response = dict(kind='error', id=request['id'], code='timeout')
+            else:
+                response = dict(kind='result', id=request['id'], result=result)
+            body = json.dumps(response).encode()
             frame = struct.pack('!I', len(body)) + body
             while frame:
                 count = os.write(1, frame)
@@ -355,6 +359,28 @@ import ProviderRequest
     try Data().write(to: marker("release-retirement", directory: namespace.directoryURL))
     do { _ = try await task.value; XCTFail("Cancelled execution must not return a late result") }
     catch { XCTAssertTrue(error is CancellationError) }
+    XCTAssertTrue(scope.clean)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: namespace.directoryURL.path))
+  }
+
+  func testRemoteTimeoutIsPreservedOnlyAfterActualRetirementAndNamespaceRemoval() async throws {
+    let (root, namespace, launch) = try workerFixture(
+      script: controlWorkerScript(holdResult: false, remoteTimeout: true))
+    defer { try? FileManager.default.removeItem(at: root) }
+    let (_, _, params) = try parameters()
+    let scope = NativeCodexSummaryScope(launch: launch, paperID: UUID(), params: params)
+    let completion = Completion()
+    let task = Task { defer { completion.returned = true }; return try await scope.execute() }
+    try await waitForMarker("retirement-received", directory: namespace.directoryURL)
+    XCTAssertFalse(completion.returned, "A remote error cannot substitute for physical retirement")
+    XCTAssertFalse(scope.clean)
+    XCTAssertTrue(FileManager.default.fileExists(atPath: namespace.directoryURL.path))
+    try Data().write(to: marker("release-retirement", directory: namespace.directoryURL))
+    do { _ = try await task.value; XCTFail("The remote failure must not become a result") }
+    catch {
+      XCTAssertEqual(error as? AgentRPCConnection.Failure, .remote("timeout"))
+      XCTAssertEqual(LibrarySummaryFailure.classify(error), .timedOut)
+    }
     XCTAssertTrue(scope.clean)
     XCTAssertFalse(FileManager.default.fileExists(atPath: namespace.directoryURL.path))
   }

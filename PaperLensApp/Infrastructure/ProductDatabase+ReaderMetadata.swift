@@ -95,6 +95,30 @@ extension ProductDatabase {
     }
   }
 
+  /// Merge a witnessed PDF title without overwriting candidates accepted by another reader.
+  func mergeReaderSourceTitle(_ title: String, for identity: ReaderMetadataIdentity) throws -> ReaderMetadataSnapshot {
+    let candidate = ReaderMetadataValue(text: title, source: .source,
+      sourceID: "pdf:\(identity.pdfSHA256)")
+    return try adapterWrite { db in
+      try Self.guardReaderMetadata(identity, in: db)
+      let data = try Data.fetchOne(db, sql: "SELECT payload FROM readerMetadata WHERE paperID = ? AND revisionID = ?",
+        arguments: [identity.paperID.uuidString, identity.revisionID.uuidString])
+      let existing = try data.map { try JSONDecoder().decode(ReaderMetadataSnapshot.self, from: $0) }
+        ?? ReaderMetadataSnapshot()
+      try existing.validate()
+      if existing.title.candidates.contains(candidate) { return existing }
+      let merged = ReaderMetadataSnapshot(title: .init(existing.title.candidates + [candidate]),
+        year: existing.year, abstract: existing.abstract, topics: existing.topics)
+      try merged.validate()
+      try db.execute(sql: """
+        INSERT INTO readerMetadata(paperID, revisionID, payload) VALUES (?, ?, ?)
+        ON CONFLICT(paperID) DO UPDATE SET revisionID = excluded.revisionID, payload = excluded.payload
+        """, arguments: [identity.paperID.uuidString, identity.revisionID.uuidString,
+          try JSONEncoder().encode(merged)])
+      return merged
+    }
+  }
+
   /// Atomically fences previous Reader sessions while retaining only current-revision candidates.
   public func beginReaderMetadataSession(for identity: ReaderMetadataIdentity) throws -> ReaderMetadataContext {
     try adapterWrite { db in

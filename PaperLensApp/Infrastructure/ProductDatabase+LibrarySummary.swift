@@ -371,15 +371,16 @@ extension ProductDatabase {
   }
 
   /// Parent calls only after its policy termination; this does not attest physical closure/purge.
-  public func failLibrarySummary(_ identity: LibrarySummaryIdentity) throws {
+  public func failLibrarySummary(_ identity: LibrarySummaryIdentity,
+    reason: LibrarySummaryFailure = .terminated) throws {
     try adapterWrite { db in
       guard let data = try Data.fetchOne(db, sql: "SELECT identity FROM librarySummaryJob WHERE job = ?",
         arguments: [identity.job.uuidString]),
         try JSONDecoder().decode(LibrarySummaryIdentity.self, from: data) == identity else {
         throw LibrarySummaryError.staleIdentity
       }
-      try db.execute(sql: "UPDATE librarySummaryJob SET state = 'failed', failure = 'terminated' WHERE job = ? AND state = 'running'",
-        arguments: [identity.job.uuidString])
+      try db.execute(sql: "UPDATE librarySummaryJob SET state = 'failed', failure = ? WHERE job = ? AND state = 'running'",
+        arguments: [reason.rawValue, identity.job.uuidString])
     }
   }
 

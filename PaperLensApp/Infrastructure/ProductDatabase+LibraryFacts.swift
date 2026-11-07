@@ -56,7 +56,7 @@ extension ProductDatabase {
           var recentAttempt: LibrarySummaryRecentAttempt?
           // Insertion order is only a display observation, never action authority.
           if let job = try Row.fetchOne(db, sql: """
-            SELECT job, attempt, fence, correlation, input, epoch, identity, state
+            SELECT job, attempt, fence, correlation, input, epoch, identity, state, failure
             FROM librarySummaryJob WHERE paperID = ? ORDER BY rowid DESC LIMIT 1
             """, arguments: [id]) {
             // SQL/storage decoding stays outside semantic isolation.
@@ -86,7 +86,11 @@ extension ProductDatabase {
                 UUID(uuidString: input) == identity.input,
                 UUID(uuidString: epoch) == identity.epoch
               else { throw LibrarySummaryError.staleIdentity }
-              recentAttempt = LibrarySummaryRecentAttempt(identity: identity, activity: activity)
+              let failure: LibrarySummaryFailure? = state == "failed"
+                ? (LibrarySummaryFailure(rawValue: (job["failure"] as String?) ?? "") ?? .terminated)
+                : nil
+              recentAttempt = LibrarySummaryRecentAttempt(identity: identity, activity: activity,
+                failure: failure)
             } catch {
               availability = .verificationFailed
             }

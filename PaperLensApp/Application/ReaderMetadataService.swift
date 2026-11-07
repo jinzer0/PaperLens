@@ -126,6 +126,10 @@ public struct ReaderMetadataService: Sendable {
     try snapshot.validate()
     try database.saveReaderMetadata(snapshot, for: identity)
   }
+  /// Called while the binding borrows the actual admitted PDF under its read lease.
+  func recordSourceTitle(_ title: String, for identity: ReaderMetadataIdentity) throws -> ReaderMetadataSnapshot {
+    try database.mergeReaderSourceTitle(title, for: identity)
+  }
   public func beginSession(for identity: ReaderMetadataIdentity) throws -> ReaderMetadataContext {
     try database.beginReaderMetadataSession(for: identity)
   }
