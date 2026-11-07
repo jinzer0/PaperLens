@@ -123,7 +123,7 @@ public struct NativeCodexConnectionView: View {
   public var body: some View {
     VStack(alignment: .leading, spacing: 12) {
       Text("ChatGPT 연결").font(.headline)
-      Text("공식 로그인 후 실제 생성 응답을 검사합니다. 사용량이 발생할 수 있습니다. 일반 논문 추론과 Agent 삭제는 제공하지 않습니다.")
+      Text("공식 로그인 후 실제 생성 응답을 검사합니다. 사용량이 발생할 수 있습니다. 논문 요약은 OpenAI API 연결에서 사용할 수 있습니다.")
         .font(.callout)
       HStack {
         Button("브라우저로 로그인") { connection.connect(mode: "browser") }
@@ -154,6 +154,8 @@ public struct NativeCodexConnectionView: View {
         }
       } else if connection.phase == .retiring {
         ProgressView("실제 종료 및 정리 확인 중")
+      } else if connection.phase == .connected {
+        Button("ChatGPT 연결 해제") { connection.cancel() }
       }
       if connection.phase == .blocked {
         Label(connection.message, systemImage: "exclamationmark.triangle")
@@ -163,7 +165,7 @@ public struct NativeCodexConnectionView: View {
       }
       if connection.blocksReplacement {
         Text(
-          "SDK 종료와 비공개 저장소 정리가 입증되기 전에는 재연결 및 Provider 교체를 할 수 없습니다. 로그인 취소 수락만으로 정리가 완료되지는 않습니다."
+          "프로세스 종료와 전용 저장소 정리가 끝난 뒤 재연결하거나 Provider를 교체할 수 있습니다. 로그인 취소만으로 정리가 완료되지는 않습니다."
         )
         .font(.caption).foregroundStyle(.secondary)
       }

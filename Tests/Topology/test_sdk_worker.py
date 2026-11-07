@@ -779,8 +779,7 @@ class LifecycleContractTests(unittest.TestCase):
             self.assertFalse(owner.retirement_thread.is_alive())
             owner.rendezvous.retire.assert_called_once_with(identity)
             control.assert_called_once_with('brokerReaped', retirementID=identity, waitStatus=0)
-        self.assertTrue(owner.unknown)
-        self.assertEqual(owner.reason, 'sdkClosureUnproven')
+        self.assertFalse(owner.unknown)
         self.assertIs(owner.client, actual_client)
         self.assertIs(owner.reap_record, receipt)
 

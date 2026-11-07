@@ -211,13 +211,14 @@ final class OwnedChildRetirementTests: XCTestCase {
   // Core performs the unmodified Darwin peer-token/image/birth/ancestry checks.
   // Optional product replies remain synthetic pending login, never SDK import,
   // provider probing, authenticated login, or Provider acceptance.
-  private func controlWorkerScript(wrongOrder: Bool, productLogin: Bool = false) -> String {
+  private func controlWorkerScript(wrongOrder: Bool, productLogin: Bool = false, retirement: Bool = false) -> String {
     """
     import array, json, os, select, socket, struct, subprocess, sys, time
     end = time.monotonic() + 3
     run_id = os.environ['PAPERLENS_BROKER_RUN_ID']
     wrong_order = \(wrongOrder ? "True" : "False")
     product_login = \(productLogin ? "True" : "False")
+    retirement = \(retirement ? "True" : "False")
     def mark(name):
         with open('work/' + name, 'x'):
             pass
@@ -228,8 +229,8 @@ final class OwnedChildRetirementTests: XCTestCase {
             if os.path.exists('work/stop') or time.monotonic() >= end:
                 raise TimeoutError(name)
             time.sleep(0.005)
-    def send(sock, op):
-        body = json.dumps(dict(v=2, runID=run_id, op=op)).encode()
+    def send(sock, op, **fields):
+        body = json.dumps(dict(v=2, runID=run_id, op=op, **fields)).encode()
         sock.sendall(struct.pack('!I', len(body)) + body)
     def exact(sock, count):
         result = b''
@@ -296,6 +297,8 @@ final class OwnedChildRetirementTests: XCTestCase {
                 count = os.write(1, frame)
                 assert count > 0
                 frame = frame[count:]
+            if retirement and method == 'product.loginCancel':
+                return
     if sys.argv[-1] == '--fixture-broker':
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as broker:
             broker.settimeout(3)
@@ -314,7 +317,11 @@ final class OwnedChildRetirementTests: XCTestCase {
                 mark('dispatch-received')
                 gate('dispatching')
                 send(broker, 'dispatching')
-            gate('stop')
+            if retirement:
+                message = receive(broker, 'revoke', ('retirementID',))
+                send(broker, 'preLaunchRetired', retirementID=message['retirementID'])
+            else:
+                gate('stop')
     else:
         broker = None
         try:
@@ -338,7 +345,20 @@ final class OwnedChildRetirementTests: XCTestCase {
                         mark('worker-dispatching')
                         if product_login:
                             product_loop()
-                    gate('stop')
+                    if retirement:
+                        message = receive(lifecycle, 'revoke', ('retirementID',))
+                        identity = message['retirementID']
+                        message = receive(lifecycle, 'reapBroker', ('retirementID',))
+                        assert message['retirementID'] == identity
+                        status = broker.wait(timeout=3)
+                        assert status == 0
+                        listener.close()
+                        os.unlink('b')
+                        send(lifecycle, 'brokerReaped', retirementID=identity, waitStatus=0)
+                        while True:
+                            time.sleep(1)
+                    else:
+                        gate('stop')
         finally:
             # Physical fixture hygiene ONLY. This is not a control retirement
             # receipt and cannot discharge native roots or SDK closure debt.
@@ -566,6 +586,44 @@ final class OwnedChildRetirementTests: XCTestCase {
     try await controlHandshake(offeredFirst: false, wrongOrder: true)
   }
 
+  func testWorkerObservedProcessRetirementPurgesOnlyItsOwnedNamespace() async throws {
+    let (root, namespace, launch) = try workerFixture(
+      script: controlWorkerScript(wrongOrder: false, retirement: true))
+    defer { try? FileManager.default.removeItem(at: root) }
+    let child = OwnedChildRetirement(worker: launch,
+      deadlineUptimeNanoseconds: DispatchTime.now().uptimeNanoseconds + 3_000_000_000)
+    let completed = terminalExpectation(child)
+    child.launchWorker()
+    try await waitForControlMarker("right-offered", in: namespace.directoryURL)
+    for gate in ["hello", "running", "dispatching", "offered"] {
+      try controlGate(gate, in: namespace.directoryURL)
+    }
+    try await waitForControlMarker("worker-dispatching", in: namespace.directoryURL)
+    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+      child.core.operation.async { continuation.resume() }
+    }
+    let channel = try OwnedPipeAgentRPCChannel.consumePipes(from: child.core)
+    XCTAssertTrue(child.core.markRunning())
+    let sentinel = root.appendingPathComponent("unrelated.txt")
+    try Data("preserve".utf8).write(to: sentinel)
+    let nested = namespace.directoryURL.appendingPathComponent("codex/nested")
+    try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+    try Data("owned private state".utf8).write(to: nested.appendingPathComponent("state"))
+    try FileManager.default.createSymbolicLink(at: nested.appendingPathComponent("external"),
+      withDestinationURL: sentinel)
+    child.retire()
+    await fulfillment(of: [completed], timeout: 3)
+    guard case .clean(let proof) = child.terminal else {
+      await physicalTeardown(child)
+      return XCTFail("Expected observed native cleanup, got \(String(describing: child.terminal))")
+    }
+    XCTAssertTrue(proof.childReaped)
+    XCTAssertTrue(channel.checkedEndpointsClosed)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: namespace.directoryURL.path))
+    XCTAssertEqual(try Data(contentsOf: sentinel), Data("preserve".utf8))
+    XCTAssertFalse(child.testingRetained)
+  }
+
   private final class LoginNoNetworkTransport: NativeConnectionTestTransport {
     private(set) var calls = 0
     func probe(
@@ -576,6 +634,87 @@ final class OwnedChildRetirementTests: XCTestCase {
       XCTFail("Pending synthetic login must never probe a provider")
       throw APIKeyConnectionError.authentication
     }
+  }
+
+  func testNativeCodexObservedCleanupReleasesReplacementAndPreservesPriorSelection() async throws {
+    let (root, _, template) = try workerFixture(
+      script: controlWorkerScript(wrongOrder: false, productLogin: true, retirement: true))
+    defer { try? FileManager.default.removeItem(at: root) }
+    let database = try ProductDatabase.open(at: root.appendingPathComponent("database"))
+    let slots = try APIKeySlotStore(directory: root.appendingPathComponent("api-key-slots"))
+    let configuration = try NativeOpenAIConfiguration(model: "fixture-model")
+    let selected = try database.providerConfiguration()
+    let transport = LoginNoNetworkTransport()
+    let apiKey = NativeAPIKeyConnection(configuration: configuration, slots: slots,
+      persistence: DatabaseAPIKeySelector(database: database, configuration: configuration),
+      transport: transport, authority: try ProviderRequest())
+    var prepared: TopologyOwnedFixtures?
+    let candidate = NativeCodexConnection(database: database, root: root, apiKey: apiKey,
+      prepareWorker: { namespace in
+        prepared = namespace
+        guard namespace.prepareBackupExclusionFixture(
+          agentScript: root.appendingPathComponent("resources/agent.py")) else { return nil }
+        return .testing(namespace: namespace, interpreter: template.interpreter, script: template.script)
+      })
+    candidate.connect(mode: "browser")
+    let owner = try XCTUnwrap(candidate.testingOwner)
+    let completed = terminalExpectation(owner)
+    let directory = try XCTUnwrap(prepared).directoryURL
+    try await waitForControlMarker("right-offered", in: directory)
+    for gate in ["hello", "running", "dispatching", "offered"] { try controlGate(gate, in: directory) }
+    for _ in 0..<200 {
+      if candidate.phase == .signingIn || candidate.phase == .blocked { break }
+      try await Task.sleep(nanoseconds: 5_000_000)
+    }
+    XCTAssertEqual(candidate.phase, .signingIn)
+    candidate.cancel()
+    await fulfillment(of: [completed], timeout: 3)
+    for _ in 0..<100 {
+      if candidate.phase == .idle { break }
+      await Task.yield()
+    }
+    XCTAssertEqual(candidate.phase, .idle)
+    XCTAssertFalse(candidate.blocksReplacement)
+    XCTAssertTrue(candidate.canStart)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: directory.path))
+    XCTAssertEqual(try database.providerConfiguration(), selected)
+    XCTAssertEqual(transport.calls, 0)
+    candidate.connect(mode: "browser")
+    let replacement = try XCTUnwrap(candidate.testingOwner)
+    XCTAssertFalse(owner === replacement)
+    let replacementDone = terminalExpectation(replacement)
+    for _ in 0..<200 {
+      if candidate.phase == .signingIn || candidate.phase == .blocked { break }
+      try await Task.sleep(nanoseconds: 5_000_000)
+    }
+    XCTAssertEqual(candidate.phase, .signingIn)
+    candidate.cancel()
+    await fulfillment(of: [replacementDone], timeout: 3)
+    for _ in 0..<100 {
+      if candidate.phase == .idle { break }
+      await Task.yield()
+    }
+    XCTAssertEqual(candidate.phase, .idle)
+    XCTAssertFalse(candidate.blocksReplacement)
+    XCTAssertEqual(transport.calls, 0)
+  }
+
+  func testNativeOnlyDeletionPeerRefusesUnknownNamespaceAndPreservesItsData() async throws {
+    let root = try cwd()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let unsupported = root.appendingPathComponent("agent-paper-data")
+    let peer = NativeOnlyAgentLibraryPurge(unsupportedPaperRoot: unsupported)
+    let paper = UUID(), deletion = UUID()
+    let receipt = try await peer.purgeLibraryPaper(paperID: paper, deletionID: deletion)
+    XCTAssertEqual(receipt, AgentLibraryPurgeReceipt(paperID: paper, deletionID: deletion))
+    try FileManager.default.createDirectory(at: unsupported, withIntermediateDirectories: false)
+    let unknown = unsupported.appendingPathComponent("unknown")
+    try Data("preserve".utf8).write(to: unknown)
+    do {
+      _ = try await peer.purgeLibraryPaper(paperID: paper, deletionID: deletion)
+      XCTFail("An unknown Agent paper namespace cannot be attested or deleted")
+    } catch { XCTAssertEqual(error as? LocalLibraryError, .producerClosureUnknown) }
+    XCTAssertEqual(try Data(contentsOf: unknown), Data("preserve".utf8))
   }
 
   func testNativeCodexPendingLoginCoalescesSameTurnAndAllowsImmediateExplicitObservationsBeyond100()

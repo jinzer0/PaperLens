@@ -811,4 +811,216 @@ final class LibrarySummaryServiceTests: XCTestCase {
     XCTAssertEqual(try f.db.adapterRead { try Int.fetchOne($0,
       sql: "SELECT COUNT(*) FROM librarySummaryJob") }, 0)
   }
+
+  func testWireGenerationOrdinalIsStableAcrossReopenAndRejectsReplacedGeneration() throws {
+    let f = try fixture()
+    defer { try? FileManager.default.removeItem(at: f.root) }
+    let first = try f.db.summaryGenerationOrdinal(paperID: f.identity.paperID,
+      generation: f.identity.generation)
+    let reopened = try ProductDatabase.open(at: f.root)
+    XCTAssertEqual(try reopened.summaryGenerationOrdinal(paperID: f.identity.paperID,
+      generation: f.identity.generation), first)
+    let replacement = UUID()
+    try f.db.adapterWrite {
+      try $0.execute(sql: "UPDATE paper SET generation = ? WHERE id = ?",
+        arguments: [replacement.uuidString, f.identity.paperID.uuidString])
+    }
+    let next = try reopened.summaryGenerationOrdinal(paperID: f.identity.paperID,
+      generation: replacement)
+    XCTAssertGreaterThan(next, first)
+    XCTAssertThrowsError(try reopened.summaryGenerationOrdinal(paperID: f.identity.paperID,
+      generation: f.identity.generation))
+    XCTAssertThrowsError(try f.db.reserveLibrarySummary(f.identity, frozen: f.frozen,
+      geometry: originalGeometry(f)))
+  }
+
+  @MainActor private final class SummaryLease: ReaderReadLease {
+    var revoked = false
+    var closed = false
+    func validate() throws { if revoked || closed { throw ReaderError.revoked } }
+    func withReadAccess<T>(_ operation: () throws -> T) throws -> T {
+      try validate(); let result = try operation(); try validate(); return result
+    }
+    func close() { closed = true }
+  }
+
+  @MainActor private final class SummaryLeases: ReaderLeaseProvider {
+    let lease = SummaryLease()
+    var callback: (@MainActor () -> Void)?
+    func acquireReadLease(for snapshot: ReaderPaperSnapshot,
+      onRevoked: @escaping @MainActor () -> Void) throws -> any ReaderReadLease {
+      callback = onRevoked
+      return lease
+    }
+    func revoke() { lease.revoked = true; callback?() }
+  }
+
+  @MainActor private final class SummaryProvider: LibrarySummaryProviding {
+    var calls = 0
+    var suspend = false
+    var continuation: CheckedContinuation<Void, Never>?
+    var beforeResult: ((LibrarySummaryIdentity) throws -> Void)?
+    func execute(_ request: AuthorizedProviderRequest, identity: LibrarySummaryIdentity) async throws
+      -> ValidatedProviderResult {
+      calls += 1
+      if suspend { await withCheckedContinuation { continuation = $0 } }
+      try beforeResult?(identity)
+      guard case .librarySummary(_, let evidence) = request.wire.typedInput else {
+        throw LibrarySummaryError.invalidResult
+      }
+      let value: [String: Any] = [
+        "summary": ["text": evidence.items.isEmpty ? "Insufficient evidence" : "Grounded summary",
+          "kind": evidence.items.isEmpty ? "insufficient" : "paper",
+          "evidenceIndices": evidence.items.isEmpty ? [] : [0]],
+        "insufficiency": evidence.insufficiency,
+      ]
+      let authority = try ProviderRequest()
+      let rebound = try LibrarySummaryFrozen(request: request).authorized(using: authority)
+      return try authority.wrapModelResult(JSONSerialization.data(withJSONObject: value), request: rebound)
+    }
+  }
+
+  private func prepareCoordinator(_ f: Fixture) throws {
+    var owners = try canonicalOwners(f)
+    let first = owners[0]
+    owners[0] = try PDFSentenceAnchor(identity: first.identity,
+      fullSourceQuote: "main contribution results conclusion alpha", page: first.page, quads: first.quads)
+    try f.db.adapterWrite {
+      try $0.execute(sql: "UPDATE extractionSentence SET text = ? WHERE revision = ? AND sentenceID = 0",
+        arguments: [owners[0].fullSourceQuote, f.identity.revision.uuidString])
+      // Production extraction rows are immutable and inserted with their FTS text.
+      // This fixture replaces a quote after insertion, so update its search entry too.
+      try $0.execute(sql: """
+        UPDATE extractionFTS SET text = ? WHERE rowid = (
+          SELECT id FROM extractionSentence WHERE revision = ? AND sentenceID = 0
+        )
+        """, arguments: [owners[0].fullSourceQuote, f.identity.revision.uuidString])
+    }
+    _ = try installCanonicalGeometry(f, owners: owners)
+    try f.db.adapterWrite { db in
+      for owner in owners {
+        try db.execute(sql: """
+          INSERT INTO extractionGeometryOwner(revision, sentenceID, page, maximumErrorPDFPoints, originalAnchor)
+          VALUES (?, ?, ?, 0, ?)
+          """, arguments: [f.identity.revision.uuidString, owner.identity.sentenceID,
+            owner.identity.pageIndex, CanonicalExtractionGeometryValidator.encodeCanonicalAnchor(owner)])
+      }
+    }
+    _ = try f.db.compareAndSwapProviderConfiguration(expected: f.db.providerConfiguration(),
+      replacementKind: .openAIAPIKey, replacementSlotID: UUID(), replacementModel: "fixture-model")
+    let paper = f.db.root.appendingPathComponent("papers/\(f.identity.paperID.uuidString)")
+    try FileManager.default.createDirectory(at: paper, withIntermediateDirectories: true)
+    try Data("%PDF-1.4\nsynthetic summary fixture\n%%EOF".utf8)
+      .write(to: paper.appendingPathComponent("document.pdf"))
+  }
+
+  @MainActor func testExplicitCoordinatorDispatchPublishesGroundedResultAndRestoresWithoutRequest() async throws {
+    let f = try fixture()
+    defer { try? FileManager.default.removeItem(at: f.root) }
+    try prepareCoordinator(f)
+    let leases = SummaryLeases(), provider = SummaryProvider()
+    let coordinator = LibrarySummaryCoordinator(database: f.db, epoch: UUID(), leases: leases,
+      authority: try ProviderRequest(), provider: provider)
+    XCTAssertEqual(provider.calls, 0)
+    let saved = try await coordinator.generate(paperID: f.identity.paperID,
+      generation: f.identity.generation, outputLanguage: "ko")
+    XCTAssertEqual(provider.calls, 1)
+    XCTAssertTrue(leases.lease.closed)
+    XCTAssertNil(coordinator.activePaperID)
+    XCTAssertEqual(saved.claimAnchors.map(\.fullSourceQuote), ["main contribution results conclusion alpha"])
+    let restored = try XCTUnwrap(LibrarySummaryService(database: ProductDatabase.open(at: f.root))
+      .restore(paperID: f.identity.paperID))
+    XCTAssertEqual(restored.id, saved.id)
+    XCTAssertEqual(provider.calls, 1)
+    let files = try FileManager.default.contentsOfDirectory(atPath:
+      f.db.root.appendingPathComponent("papers/\(f.identity.paperID.uuidString)").path)
+    XCTAssertEqual(files, ["document.pdf"])
+  }
+
+  @MainActor func testRevocationCancelsSummaryButRetainsLeaseUntilActualProviderReturn() async throws {
+    let f = try fixture()
+    defer { try? FileManager.default.removeItem(at: f.root) }
+    try prepareCoordinator(f)
+    let leases = SummaryLeases(), provider = SummaryProvider()
+    provider.suspend = true
+    let coordinator = LibrarySummaryCoordinator(database: f.db, epoch: UUID(), leases: leases,
+      authority: try ProviderRequest(), provider: provider)
+    let task = Task { try await coordinator.generate(paperID: f.identity.paperID,
+      generation: f.identity.generation, outputLanguage: "en") }
+    for _ in 0..<1000 where provider.continuation == nil { await Task.yield() }
+    guard let completion = provider.continuation else {
+      _ = try await task.value
+      return XCTFail("Provider did not enter controlled execution")
+    }
+    leases.revoke()
+    XCTAssertFalse(leases.lease.closed, "Cancellation acceptance cannot release the actual producer pin")
+    completion.resume(); provider.continuation = nil
+    do { _ = try await task.value; XCTFail("Revoked generation cannot publish") }
+    catch { XCTAssertTrue(error is CancellationError) }
+    XCTAssertTrue(leases.lease.closed)
+    XCTAssertNil(try LibrarySummaryService(database: f.db).restore(paperID: f.identity.paperID))
+    XCTAssertEqual(try f.db.adapterRead { try String.fetchOne($0,
+      sql: "SELECT state FROM librarySummaryJob") }, "failed")
+  }
+
+  @MainActor func testCoordinatorPreservesUnownedStageAndRejectsPublicationAfterConfigurationChange() async throws {
+    for createUnownedStage in [false, true] {
+      let f = try fixture()
+      defer { try? FileManager.default.removeItem(at: f.root) }
+      try prepareCoordinator(f)
+      let leases = SummaryLeases(), provider = SummaryProvider()
+      var sentinel: URL?
+      provider.beforeResult = { identity in
+        if createUnownedStage {
+          let directory = f.db.root.appendingPathComponent("papers/\(identity.paperID.uuidString)/.summary-\(identity.job.uuidString)")
+          try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+          sentinel = directory.appendingPathComponent("unowned")
+          try Data("preserve".utf8).write(to: sentinel!)
+        } else {
+          _ = try f.db.compareAndSwapProviderConfiguration(expected: f.db.providerConfiguration(),
+            replacementKind: .openAIAPIKey, replacementSlotID: UUID(), replacementModel: "changed-model")
+        }
+      }
+      let coordinator = LibrarySummaryCoordinator(database: f.db, epoch: UUID(), leases: leases,
+        authority: try ProviderRequest(), provider: provider)
+      do {
+        _ = try await coordinator.generate(paperID: f.identity.paperID,
+          generation: f.identity.generation, outputLanguage: "ko")
+        XCTFail("Unowned stage/configuration replacement must reject publication")
+      } catch { }
+      if let sentinel { XCTAssertEqual(try Data(contentsOf: sentinel), Data("preserve".utf8)) }
+      XCTAssertTrue(leases.lease.closed)
+      XCTAssertNil(try LibrarySummaryService(database: f.db).restore(paperID: f.identity.paperID))
+    }
+  }
+
+  @MainActor func testSummaryStageRejectsReplacedFileBeforeRenameOrUnlink() throws {
+    let f = try fixture()
+    defer { try? FileManager.default.removeItem(at: f.root) }
+    try prepareCoordinator(f)
+    let job = UUID()
+    let paper = try f.db.readerSnapshot(paperID: f.identity.paperID)
+    let stage = SummaryStage(root: f.db.root, paper: paper, job: job)
+    try stage.prepare()
+    try stage.write(Data("owned result".utf8))
+    let directory = f.db.root.appendingPathComponent("papers/\(paper.paperID.uuidString)/.summary-\(job.uuidString)")
+    let original = directory.appendingPathComponent("result.tmp")
+    let displaced = directory.appendingPathComponent("displaced")
+    try FileManager.default.moveItem(at: original, to: displaced)
+    try Data("unowned replacement".utf8).write(to: original)
+    XCTAssertThrowsError(try stage.rename())
+    XCTAssertThrowsError(try stage.remove())
+    XCTAssertEqual(try Data(contentsOf: original), Data("unowned replacement".utf8))
+    XCTAssertEqual(try Data(contentsOf: displaced), Data("owned result".utf8))
+    // Restore exact synthetic ownership so this test can close its actual directory FDs.
+    try FileManager.default.removeItem(at: original)
+    try FileManager.default.moveItem(at: displaced, to: original)
+    let occupiedTarget = directory.appendingPathComponent("result.json")
+    try Data("preserve target".utf8).write(to: occupiedTarget)
+    XCTAssertThrowsError(try stage.rename())
+    XCTAssertEqual(try Data(contentsOf: occupiedTarget), Data("preserve target".utf8))
+    try FileManager.default.removeItem(at: occupiedTarget)
+    try stage.remove()
+    XCTAssertFalse(FileManager.default.fileExists(atPath: directory.path))
+  }
 }

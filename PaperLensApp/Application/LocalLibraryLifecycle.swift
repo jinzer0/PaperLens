@@ -21,6 +21,23 @@ public protocol AgentLibraryPurging: Sendable {
   func purgeLibraryPaper(paperID: UUID, deletionID: UUID) async throws -> AgentLibraryPurgeReceipt
 }
 
+/// Production currently admits paper generation only through Main-owned native
+/// transports. SDK paper RPCs remain refused. An unexpected Agent-paper namespace
+/// is debt, never evidence that this version may erase or adopt it.
+public actor NativeOnlyAgentLibraryPurge: AgentLibraryPurging {
+  private let unsupportedPaperRoot: URL
+  public init(unsupportedPaperRoot: URL) { self.unsupportedPaperRoot = unsupportedPaperRoot }
+
+  public func purgeLibraryPaper(paperID: UUID, deletionID: UUID) async throws -> AgentLibraryPurgeReceipt {
+    guard unsupportedPaperRoot.isFileURL else { throw LocalLibraryError.cleanupFailed }
+    var info = stat()
+    guard lstat(unsupportedPaperRoot.path, &info) != 0, errno == ENOENT else {
+      throw LocalLibraryError.producerClosureUnknown
+    }
+    return AgentLibraryPurgeReceipt(paperID: paperID, deletionID: deletionID)
+  }
+}
+
 public enum LocalLibraryError: Error, Equatable, Sendable {
   case invalidPDF, cancelled, agentPurgeUnavailable, invalidPurgeReceipt
   case deletionInProgress, cleanupFailed, producerClosureUnknown, importCapacity
@@ -219,6 +236,7 @@ public actor LocalLibraryLifecycle {
   nonisolated let readLeaseRegistry = LibraryReadLeaseRegistry()
   nonisolated var readLeaseDatabase: ProductDatabase { database }
   private let agentPurge: (any AgentLibraryPurging)?
+  public nonisolated let deletionPeerAvailable: Bool
   private let copyEffects: ActualCopyEffects
   private let validationEffects: ActualURLStageValidationEffects
   nonisolated let epoch = UUID()
@@ -283,6 +301,7 @@ public actor LocalLibraryLifecycle {
     copyEffects: ActualCopyEffects, validationEffects: ActualURLStageValidationEffects) {
     self.database = database
     self.agentPurge = agentPurge
+    self.deletionPeerAvailable = agentPurge != nil
     self.copyEffects = copyEffects
     self.validationEffects = validationEffects
   }

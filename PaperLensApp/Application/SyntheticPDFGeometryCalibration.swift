@@ -274,9 +274,13 @@ enum SyntheticPDFGeometryCalibration {
             try PDFQuad(topLeft: $0[0], topRight: $0[1], bottomRight: $0[2], bottomLeft: $0[3], page: geometry)
           })
         let precision = try PDFGeometryPrecision(maximumErrorPDFPoints: correspondenceBound)
-        let mapping = try independentMapping(source, page: page, view: view, zoom: cell.zoom)
+        // Exercise the production witness against the actual helper's page metadata.
+        // The separate source-program oracle below remains the comparison authority.
+        let mapping = try OriginalPDFKitPageWitness.mapping(raw: input.rawPage, page: page, view: view)
+        let productionPrecision = try PDFGeometryPrecision(
+          maximumErrorPDFPoints: OriginalPDFKitPageWitness.maximumErrorPDFPoints)
         stage = "canonical"
-        let validator = PDFiumGeometryValidator(binding: PDFiumGeometryBinding(precision: precision,
+        let validator = PDFiumGeometryValidator(binding: PDFiumGeometryBinding(precision: productionPrecision,
           mapPage: { raw in
             guard raw.pageIndex == source.index else { throw Failure.geometry }
             return mapping

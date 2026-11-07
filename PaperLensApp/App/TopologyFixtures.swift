@@ -1790,6 +1790,7 @@ final class TopologyOwnedFixtures: @unchecked Sendable {
     ownedLinks.map { ["alias": $0.alias, "name": $0.alias + ".link"] }
   }
   private var cleaned = false
+  private var runtimeCleanupDescriptors: Set<Int32> = []
 
   init?(root: URL, runID: String, hooks: Hooks = Hooks()) {
     guard TopologyFixtures.validRunID(runID),
@@ -2107,6 +2108,70 @@ final class TopologyOwnedFixtures: @unchecked Sendable {
       // Verify existing-file write permission only after checking integrity.
       var byte = bytes[0]
       return pwrite(fd, &byte, 1, 0) == 1
+    }
+  }
+
+  /// Only called by the retained native worker owner after CLI, broker and worker
+  /// waits and checked pipe closure. No pre-existing run is ever adopted.
+  func cleanupWorkerNamespace(owner: UUID) -> Bool {
+    guard backupAdmission.withLock({ metadataLease == owner }), matchesOwnedNamespace() else {
+      return false
+    }
+    for record in ownedDirectories {
+      guard let expected = record.identity,
+        TopologyFixtures.matches(directory: descriptor, name: record.name, info: expected),
+        emptyOwnedRuntimeDirectory(record.descriptor, device: directoryDevice)
+      else { return false }
+    }
+    endMetadataMutation(owner: owner)
+    return cleanup()
+  }
+
+  private func emptyOwnedRuntimeDirectory(_ directory: Int32, device: dev_t) -> Bool {
+    let copy = fcntl(directory, F_DUPFD_CLOEXEC, 64)
+    guard copy >= 0 else { return false }
+    runtimeCleanupDescriptors.insert(copy)
+    guard let stream = fdopendir(copy) else {
+      if close(copy) == 0 { runtimeCleanupDescriptors.remove(copy) }
+      return false
+    }
+    func finish(_ success: Bool) -> Bool {
+      let closed = closedir(stream) == 0
+      if closed { runtimeCleanupDescriptors.remove(copy) }
+      return success && closed
+    }
+    while true {
+      errno = 0
+      guard let entry = readdir(stream) else { return finish(errno == 0) }
+      let capacity = Int(entry.pointee.d_namlen) + 1
+      let name = withUnsafePointer(to: &entry.pointee.d_name) {
+        $0.withMemoryRebound(to: CChar.self, capacity: capacity) {
+          String(cString: $0)
+        }
+      }
+      if name == "." || name == ".." { continue }
+      var info = stat()
+      guard fstatat(directory, name, &info, AT_SYMLINK_NOFOLLOW) == 0,
+        info.st_uid == getuid(), info.st_dev == device else { return finish(false) }
+      if info.st_mode & S_IFMT == S_IFDIR {
+        let child = openat(directory, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard child >= 0 else { return finish(false) }
+        runtimeCleanupDescriptors.insert(child)
+        var opened = stat()
+        let valid = fstat(child, &opened) == 0 && opened.st_dev == info.st_dev
+          && opened.st_ino == info.st_ino && emptyOwnedRuntimeDirectory(child, device: device)
+        let closed = close(child) == 0
+        if closed { runtimeCleanupDescriptors.remove(child) }
+        guard valid, closed,
+          TopologyFixtures.matches(directory: directory, name: name, info: info),
+          unlinkat(directory, name, AT_REMOVEDIR) == 0 else { return finish(false) }
+      } else {
+        // A local symlink is unlinked without following its target. Hard-linked
+        // regular files are retained because their external ownership is unknown.
+        guard info.st_mode & S_IFMT != S_IFREG || info.st_nlink == 1,
+          TopologyFixtures.matches(directory: directory, name: name, info: info),
+          unlinkat(directory, name, 0) == 0 else { return finish(false) }
+      }
     }
   }
 

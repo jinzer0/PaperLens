@@ -68,6 +68,8 @@ public final class NativeCodexConnection: ObservableObject {
   public func connect(mode: String) {
     guard canStart, mode == "browser" || mode == "device" else { return }
     do {
+      cancelled = false
+      retirementRequested = false
       expected = try database.providerConfiguration()
       guard let model = apiKey.configuration.model.nilIfEmpty else { return }
       intentID = UUID()
@@ -95,13 +97,32 @@ public final class NativeCodexConnection: ObservableObject {
         Task { @MainActor in
           guard let self, let owner, self.owner === owner else { return }
           self.instructions = nil
-          self.phase = .blocked
           switch terminal {
           case .unknown:
-            self.message = "ChatGPT SDK 종료와 비공개 저장소 정리가 입증되지 않았습니다. 재연결과 Provider 교체가 차단됩니다."
+            self.phase = .blocked
+            self.message = "ChatGPT 프로세스 또는 전용 저장소 정리를 확인하지 못했습니다. 재연결과 Provider 교체가 차단됩니다."
           case .clean:
-            // Native retirement alone is not SDK scope closure/absence proof.
-            self.message = "프로세스 종료만으로 SDK 저장소 정리를 증명할 수 없어 Provider 교체를 차단합니다."
+            do {
+              let selected = try self.database.providerConfiguration()
+              if selected.kind == .codexChatGPT,
+                selected.slotID?.uuidString.lowercased() == self.namespace?.runID {
+                _ = try self.database.compareAndSwapProviderConfiguration(expected: selected,
+                  replacementKind: nil, replacementSlotID: nil, replacementModel: nil)
+              }
+              self.lifecycle = nil
+              self.owner = nil
+              self.namespace = nil
+              self.committed = nil
+              self.expected = nil
+              self.requests.removeAll()
+              self.results.removeAll()
+              self.retirementRequested = false
+              self.phase = .idle
+              self.message = "ChatGPT 프로세스 종료와 전용 저장소 정리를 완료했습니다. 다시 연결할 수 있습니다."
+            } catch {
+              self.phase = .blocked
+              self.message = "ChatGPT 정리는 끝났지만 저장된 선택을 갱신하지 못했습니다. 다시 연결하기 전에 설정을 확인하세요."
+            }
           }
         }
       }
@@ -243,7 +264,7 @@ public final class NativeCodexConnection: ObservableObject {
         try apiKey.retireSupersededSelection()
         phase = .connected
         message =
-          "ChatGPT 생성 검사와 선택 저장이 완료되었습니다. 일반 논문 추론 및 Agent 삭제는 제공되지 않습니다. SDK 정리가 입증되지 않아 재연결과 Provider 교체는 차단됩니다."
+          "ChatGPT 생성 검사와 선택 저장이 완료되었습니다. 일반 논문 추론은 아직 제공되지 않습니다."
       } catch { failClosed() }
     }
   }

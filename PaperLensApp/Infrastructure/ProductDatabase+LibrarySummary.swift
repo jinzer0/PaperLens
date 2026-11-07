@@ -66,10 +66,58 @@ extension ProductDatabase {
         BEGIN SELECT RAISE(ABORT, 'immutable summary owner anchor'); END;
         """)
     }
+    migrator.registerMigration("librarySummaryGenerationOrdinalsV1") { db in
+      // UUID remains the product identity. The wire contract requires a numeric
+      // generation; allocate it once from the trusted owner rather than hash/default it.
+      try db.execute(sql: """
+        CREATE TABLE librarySummaryGeneration (
+          ordinal INTEGER PRIMARY KEY AUTOINCREMENT,
+          paperID TEXT NOT NULL REFERENCES paper(id) ON DELETE CASCADE,
+          generation TEXT NOT NULL,
+          UNIQUE(paperID, generation)
+        );
+        CREATE TRIGGER librarySummaryGenerationTombstone AFTER UPDATE OF status ON paper
+        WHEN NEW.status = 'tombstone'
+        BEGIN DELETE FROM librarySummaryGeneration WHERE paperID = NEW.id; END;
+        """)
+    }
+  }
+
+  func summaryGenerationOrdinal(paperID: UUID, generation: UUID) throws -> Int {
+    try adapterWrite { db in
+      guard try Int.fetchOne(db, sql: """
+        SELECT COUNT(*) FROM paper WHERE id = ? AND generation = ?
+          AND status = 'ready' AND deletionID IS NULL
+        """, arguments: [paperID.uuidString, generation.uuidString]) == 1 else {
+        throw LibrarySummaryError.staleIdentity
+      }
+      if let existing = try Int.fetchOne(db, sql: """
+        SELECT ordinal FROM librarySummaryGeneration WHERE paperID = ? AND generation = ?
+        """, arguments: [paperID.uuidString, generation.uuidString]) {
+        guard existing > 0 else { throw LibrarySummaryError.staleIdentity }
+        return existing
+      }
+      try db.execute(sql: """
+        INSERT INTO librarySummaryGeneration(paperID, generation) VALUES (?, ?)
+        ON CONFLICT(paperID, generation) DO NOTHING
+        """, arguments: [paperID.uuidString, generation.uuidString])
+      guard let ordinal = try Int.fetchOne(db, sql: """
+        SELECT ordinal FROM librarySummaryGeneration WHERE paperID = ? AND generation = ?
+        """, arguments: [paperID.uuidString, generation.uuidString]), ordinal > 0 else {
+        throw LibrarySummaryError.staleIdentity
+      }
+      return ordinal
+    }
   }
 
   private func guardSummaryPaper(_ i: LibrarySummaryIdentity, db: Database,
     currentInput: Bool) throws {
+    if let ordinal = try Int.fetchOne(db, sql: """
+      SELECT ordinal FROM librarySummaryGeneration WHERE paperID = ? AND generation = ?
+      """, arguments: [i.paperID.uuidString, i.generation.uuidString]),
+      ordinal != i.requestPaperGeneration {
+      throw LibrarySummaryError.staleIdentity
+    }
     guard try Int.fetchOne(db, sql: """
       SELECT COUNT(*) FROM paper JOIN extractionRevision ON extractionRevision.paperID = paper.id
       WHERE paper.id = ? AND paper.generation = ? AND paper.pdfSHA256 = ?

@@ -55,6 +55,7 @@ let package = Package(
         "Application/SyntheticPDFGeometryCalibration.swift",
         "Application/ParsingRecoveryCoordinator.swift",
         "Application/LibrarySummaryService.swift",
+        "Application/LibrarySummaryCoordinator.swift",
         "Application/ReaderMetadataService.swift",
         "Application/ReaderMetadataBinding.swift",
         "Application/LibraryOrganizationService.swift",

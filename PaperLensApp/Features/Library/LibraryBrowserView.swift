@@ -10,6 +10,7 @@ public struct LibraryBrowserView: View {
   private let importPDF: @MainActor () -> Void
   private let retryImportPDF: @MainActor (UUID, UUID) -> Void
   private let manageFolders: @MainActor () -> Void
+  private let generateSummary: (@MainActor (OrganizedPaper, String) async throws -> Void)?
   private let refreshRevision: Int
   @State private var query = OrganizationQueryState()
   @State private var currentFacts: [UUID: OrganizationSortFacts] = [:]
@@ -21,6 +22,8 @@ public struct LibraryBrowserView: View {
   @State private var operationFailed = false
   @State private var busy = false
   @State private var deleting: OrganizedPaper?
+  @State private var summaryTask: Task<Void, Never>?
+  @State private var summaryPaperID: UUID?
   @State private var rootMount: UUID?
   @State private var sheetPresentation: LibrarySheetPresentation?
   @State private var organizationFocusToRestore: OrganizationActionReturn?
@@ -39,13 +42,15 @@ public struct LibraryBrowserView: View {
     openPaper: @escaping @MainActor (OrganizedPaper) async throws -> Void,
     importPDF: @escaping @MainActor () -> Void,
     retryImportPDF: @escaping @MainActor (UUID, UUID) -> Void,
-    manageFolders: @escaping @MainActor () -> Void) {
+    manageFolders: @escaping @MainActor () -> Void,
+    generateSummary: (@MainActor (OrganizedPaper, String) async throws -> Void)? = nil) {
     self.service = service; self.folderService = folderService; self.sortFacts = sortFacts
     self.readReadingRecords = readReadingRecords
     _filter = filter; self.refreshRevision = refreshRevision
     self.openPaper = openPaper; self.importPDF = importPDF
     self.retryImportPDF = retryImportPDF
     self.manageFolders = manageFolders
+    self.generateSummary = generateSummary
   }
 
   private var folderHeading: String {
@@ -273,6 +278,7 @@ public struct LibraryBrowserView: View {
     }
     .onDisappear {
       rootMount = nil
+      summaryTask?.cancel()
       if sheetPresentation?.slot.content.isTagEditor == true { sheetPresentation = nil }
       invalidateObservation()
     }
@@ -368,6 +374,19 @@ public struct LibraryBrowserView: View {
         Text("최근 읽음 \(date.formatted())").font(.caption)
       }
       LibraryStoredSummary(paper: paper, observation: fact?.summary, showEvidence: false)
+      if summaryPaperID == paper.id {
+        HStack {
+          ProgressView("요약 생성 중")
+          Button("요약 취소") { summaryTask?.cancel() }
+        }
+      } else {
+        Menu(fact?.summary?.record == nil ? "요약 생성" : "요약 다시 생성") {
+          Button("한국어") { beginSummary(paper, language: "ko") }
+          Button("English") { beginSummary(paper, language: "en") }
+        }
+        .disabled(!paper.readable || busy || loading || loadFailed || generateSummary == nil)
+        .accessibilityLabel("\(paper.title) 근거 문장으로 요약 생성")
+      }
       Text("초록 · \(LibraryMetadataPresentation.preview(fact?.metadata?.abstract, limit: 220))")
         .font(.caption).textSelection(.enabled)
       Text("출처 주제 (사용자 태그 아님) · \(LibraryMetadataPresentation.preview(fact?.metadata?.topics, limit: 120))")
@@ -700,6 +719,21 @@ public struct LibraryBrowserView: View {
         busy = false
         if rootMount != nil { refresh() }
       }
+    }
+  }
+
+  private func beginSummary(_ paper: OrganizedPaper, language: String) {
+    guard let generateSummary, !nativeSheetPending, !busy else { return }
+    busy = true
+    summaryPaperID = paper.id
+    invalidateObservation()
+    summaryTask = Task {
+      do { try await generateSummary(paper, language) }
+      catch { if !Task.isCancelled { operationFailed = true } }
+      summaryPaperID = nil
+      summaryTask = nil
+      busy = false
+      if rootMount != nil { refresh() }
     }
   }
   private func refresh(preservingEditor slotID: UUID? = nil,

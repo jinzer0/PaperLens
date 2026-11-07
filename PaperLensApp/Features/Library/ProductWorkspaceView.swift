@@ -44,6 +44,8 @@ public final class ProductWorkspace: ObservableObject {
   public let annotations: AnnotationService
   public let metadata: ReaderMetadataService
   public let parsing: MainPDFiumParsingComposition?
+  public let summaries: LibrarySummaryCoordinator
+  public let deletionPeerAvailable: Bool
   public var parsingRecoveryCoordinator: ParsingRecoveryCoordinator? {
     parsing?.recoveryCoordinator
   }
@@ -112,7 +114,19 @@ public final class ProductWorkspace: ObservableObject {
       grantWriter: {
         try await lifecycle.grantURLImportWriter(for: $0)
       })
-    readLeases = LibraryReadLeaseProvider(lifecycle: lifecycle)
+    let readLeases = LibraryReadLeaseProvider(lifecycle: lifecycle)
+    self.readLeases = readLeases
+    deletionPeerAvailable = lifecycle.deletionPeerAvailable
+    let summaryAuthority = try ProviderRequest()
+    summaries = LibrarySummaryCoordinator(database: database, epoch: lifecycle.epoch,
+      leases: readLeases, authority: summaryAuthority,
+      provider: NativeAPIKeySummaryProvider(connection: connection, authority: summaryAuthority))
+  }
+
+  public func generateSummary(for paper: OrganizedPaper, outputLanguage: String) async throws {
+    _ = try await summaries.generate(paperID: paper.id, generation: paper.generation,
+      outputLanguage: outputLanguage)
+    revision += 1
   }
 
   public func sortFacts() async throws -> [OrganizationSortFacts] {
@@ -691,6 +705,9 @@ public struct ProductWorkspaceView: View {
             manageFolders: {
               invalidateDirectIntent()
               workspace.sheet = .folders
+            },
+            generateSummary: { paper, language in
+              try await workspace.generateSummary(for: paper, outputLanguage: language)
             })
         }
         .onChange(of: urls.state) {
@@ -701,8 +718,10 @@ public struct ProductWorkspaceView: View {
         Label(failure, systemImage: "exclamationmark.triangle")
           .foregroundStyle(.red).textSelection(.enabled)
       }
-      Text("Agent 삭제 연결이 없어 삭제는 미완료 상태로 남습니다.")
-        .font(.caption).foregroundStyle(.secondary).padding(8)
+      if !workspace.deletionPeerAvailable {
+        Text("Agent 삭제 연결이 없어 삭제는 미완료 상태로 남습니다.")
+          .font(.caption).foregroundStyle(.secondary).padding(8)
+      }
     }
     .onAppear {
       mount = UUID()

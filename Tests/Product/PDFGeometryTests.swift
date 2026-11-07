@@ -164,6 +164,57 @@ final class PDFGeometryTests: XCTestCase {
     }
 
 
+    @MainActor
+    func testOriginalPDFKitWitnessUsesActualPageAcrossCalibrationMatrix() throws {
+        let document = try XCTUnwrap(PDFDocument(data: SyntheticPDFGeometryCalibration.fixturePDF()))
+        let view = PDFView(frame: CGRect(x: 0, y: 0, width: 800, height: 1000))
+        view.displayMode = .singlePage
+        view.displayBox = .cropBox
+        view.autoScales = false
+        view.document = document
+        defer { view.document = nil }
+        for source in SyntheticPDFGeometryCalibration.pages {
+            let page = try XCTUnwrap(document.page(at: source.index))
+            let crop = try PDFiumRawQuad(topLeftX: source.x, topLeftY: source.y + 300,
+                topRightX: source.x + 200, topRightY: source.y + 300,
+                bottomRightX: source.x + 200, bottomRightY: source.y,
+                bottomLeftX: source.x, bottomLeftY: source.y)
+            let raw = try PDFiumRawPage(pageIndex: source.index, boundingBox: crop,
+                mediaBox: nil, cropBox: crop, rotationQuarterTurns: source.rotation / 90)
+            for zoom in SyntheticPDFGeometryCalibration.scales {
+                view.go(to: page)
+                view.scaleFactor = zoom
+                view.layoutDocumentView()
+                let mapping = try OriginalPDFKitPageWitness.mapping(raw: raw, page: page, view: view)
+                XCTAssertEqual(mapping.page, try source.geometry())
+                let precision = try PDFGeometryPrecision(
+                    maximumErrorPDFPoints: OriginalPDFKitPageWitness.maximumErrorPDFPoints)
+                for point in source.corners + source.glyphVertices.flatMap({ $0 }) {
+                    let display = try PDFKitGeometryAdapter.displayPoint(point, page: page, in: view,
+                        geometry: mapping.page, precision: precision)
+                    let restored = try PDFKitGeometryAdapter.canonicalPoint(display, page: page, in: view,
+                        geometry: mapping.page, precision: precision)
+                    try precision.validate(expected: point, actual: restored)
+                }
+            }
+            let inherited = try PDFiumRawPage(pageIndex: source.index, boundingBox: crop,
+                mediaBox: nil, cropBox: nil, rotationQuarterTurns: source.rotation / 90)
+            XCTAssertEqual(try OriginalPDFKitPageWitness.mapping(raw: inherited, page: page, view: view).page,
+                try source.geometry())
+            let shifted = try PDFiumRawQuad(topLeftX: source.x + 1, topLeftY: source.y + 300,
+                topRightX: source.x + 201, topRightY: source.y + 300,
+                bottomRightX: source.x + 201, bottomRightY: source.y,
+                bottomLeftX: source.x + 1, bottomLeftY: source.y)
+            let wrongEffectiveCrop = try PDFiumRawPage(pageIndex: source.index, boundingBox: shifted,
+                mediaBox: crop, cropBox: nil, rotationQuarterTurns: source.rotation / 90)
+            XCTAssertThrowsError(try OriginalPDFKitPageWitness.mapping(raw: wrongEffectiveCrop,
+                page: page, view: view))
+            let wrong = try PDFiumRawPage(pageIndex: source.index, boundingBox: crop,
+                mediaBox: nil, cropBox: crop, rotationQuarterTurns: (source.rotation / 90 + 1) % 4)
+            XCTAssertThrowsError(try OriginalPDFKitPageWitness.mapping(raw: wrong, page: page, view: view))
+        }
+    }
+
     func testCalibrationLaunchRejectsMixedModesPathsAndNoncanonicalIDs() {
         typealias Calibration = SyntheticPDFGeometryCalibration
         let id = "00000000-0000-4000-8000-000000000abc"

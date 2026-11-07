@@ -80,7 +80,7 @@ public final class OwnedChildRetirement: @unchecked Sendable {
   }
   public enum Failure: Error, Sendable, Equatable {
     case deadline, setup, spawn, close, wait, admissionBlocked, revoked
-    case identity, control, sdkClosureUnproven
+    case identity, control, sdkClosureUnproven, namespaceCleanup
   }
   public struct Proof: Sendable, Equatable {
     public let checkedDescriptorCloses: Int
@@ -186,6 +186,7 @@ public final class OwnedChildRetirement: @unchecked Sendable {
     var stderrSource: DispatchSourceRead?
     var stderrJoined = true
     var cleanupQueued = false
+    var workerProcessesRetired = false
     var readyFailure: (@MainActor @Sendable (Failure) -> Void)?
     var consumeTransport: (@MainActor @Sendable (Core) -> Void)?
     enum WorkerPhase {
@@ -454,7 +455,7 @@ public final class OwnedChildRetirement: @unchecked Sendable {
       operation.async { [self] in beginRunningCleanup() }
     }
     func beginRunningCleanup() {
-      guard !isWorker else { return }
+      guard !isWorker || workerProcessesRetired else { return }
       guard lock.withLock({ revoked }) else { return }
       guard withinDeadline() else { return }
       let state = lock.withLock { (handoff, channel, stderrSource, stderrJoined) }
@@ -479,7 +480,7 @@ public final class OwnedChildRetirement: @unchecked Sendable {
       }
     }
     func finishRunningCleanup() {
-      guard !isWorker else { return }
+      guard !isWorker || workerProcessesRetired else { return }
       guard withinDeadline() else { return }
       let first = lock.withLock { () -> Bool in
         guard !cleanupQueued else { return false }
@@ -522,6 +523,12 @@ public final class OwnedChildRetirement: @unchecked Sendable {
       guard result == pid else {
         failed(.wait)
         return
+      }
+      if case .worker(let launch) = command {
+        guard launch.namespace.cleanupWorkerNamespace(owner: identity) else {
+          failed(.namespaceCleanup)
+          return
+        }
       }
       let proof = lock.withLock {
         Proof(checkedDescriptorCloses: closes, childReaped: reaped, childExitStatus: status)
@@ -580,9 +587,7 @@ public final class OwnedChildRetirement: @unchecked Sendable {
         guard terminal == nil else { return nil }
         // A delayed timer or delayed completion is never evidence of on-time cleanup.
         let selected: Terminal
-        if isWorker, case .clean = proposed {
-          selected = .unknown(.sdkClosureUnproven)
-        } else if case .clean = proposed, DispatchTime.now().uptimeNanoseconds >= deadline {
+        if !isWorker, case .clean = proposed, DispatchTime.now().uptimeNanoseconds >= deadline {
           selected = .unknown(.deadline)
         } else {
           selected = proposed
@@ -647,7 +652,9 @@ public final class OwnedChildRetirement: @unchecked Sendable {
     }
     func permit(_ effect: Effect) -> Bool {
       guard withinDeadline() else { return false }
-      if isWorker, lock.withLock({ revoked }) { return false }
+      if isWorker, lock.withLock({ revoked }) {
+        switch effect { case .close, .wait: break; default: return false }
+      }
       if runsUntilRevoked, lock.withLock({ revoked }) {
         switch effect {
         case .pipe, .socket, .duplicate, .namespace, .spawn: return false
@@ -655,7 +662,9 @@ public final class OwnedChildRetirement: @unchecked Sendable {
         }
       }
       hooks.before(effect)
-      if isWorker, lock.withLock({ revoked }) { return false }
+      if isWorker, lock.withLock({ revoked }) {
+        switch effect { case .close, .wait: break; default: return false }
+      }
       if runsUntilRevoked, lock.withLock({ revoked }) {
         switch effect {
         case .pipe, .socket, .duplicate, .namespace, .spawn: return false
@@ -686,7 +695,7 @@ public final class OwnedChildRetirement: @unchecked Sendable {
       guard permit(.close) else { return false }
       let target: Int32 = hooks.closeFault() ? -1 : descriptor
       guard withinDeadline() else { return false }
-      if isWorker, !allowsIO { return false }
+      if isWorker, !allowsIO, !workerProcessesRetired { return false }
       // No retry, including EINTR: uncertain descriptor identity remains rooted.
       guard Darwin.close(target) == 0, target == descriptor else {
         lock.withLock { _ = uncertainCloses.insert(descriptor) }
@@ -704,7 +713,7 @@ public final class OwnedChildRetirement: @unchecked Sendable {
     // The terminal lane can seal unknown while any operation below is blocked.
     var controlPermitted: Bool {
       lock.withLock {
-        terminal == nil && (isWorker && revoked || DispatchTime.now().uptimeNanoseconds < deadline)
+        terminal == nil && !workerProcessesRetired && (isWorker && revoked || DispatchTime.now().uptimeNanoseconds < deadline)
       }
     }
     func armControl(_ fd: Int32) {
@@ -915,7 +924,17 @@ public final class OwnedChildRetirement: @unchecked Sendable {
           let status = ProviderRPC.exactUInt64(message["waitStatus"])
         else { throw Failure.control }
         brokerWaitStatus = status
-        select(.unknown(.sdkClosureUnproven))
+        // CLI and broker waits have completed. End the retained SDK worker without
+        // running uncertain SDK destructors; the actual parent wait below is proof.
+        guard let child = lock.withLock({ self.child }), kill(child, SIGKILL) == 0 else {
+          throw Failure.wait
+        }
+        lock.withLock { workerProcessesRetired = true }
+        for source in controlSources.values { source.cancel() }
+        for source in controlWrites.values { source.cancel() }
+        controlSources.removeAll()
+        controlWrites.removeAll()
+        beginRunningCleanup()
       default: throw Failure.control
       }
     }
@@ -1256,7 +1275,11 @@ public final class OwnedChildRetirement: @unchecked Sendable {
         }
         guard allowsIO else { return }
         let source = DispatchSource.makeReadSource(fileDescriptor: stderr, queue: operation)
-        lock.withLock { stderrSource = source }
+        lock.withLock { stderrSource = source; stderrJoined = false }
+        source.setCancelHandler { [self] in
+          lock.withLock { stderrSource = nil; stderrJoined = true }
+          beginRunningCleanup()
+        }
         source.setEventHandler { [self] in
           var bytes = [UInt8](repeating: 0, count: 4096)
           for _ in 0..<4 {

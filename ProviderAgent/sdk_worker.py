@@ -410,7 +410,8 @@ class OfficialSDKWorker:
             # Actual local broker wait only; never SDK FileObject closure or purge.
             self._send_control('brokerReaped', retirementID=self.retirement_id,
                                waitStatus=self.reap_record.wait_status)
-            self.select_unknown('sdkClosureUnproven')
+            # Native now terminates and waitpid-reaps this exclusively owned worker.
+            # Never run SDK destructors or present this local wait as namespace purge.
         except BaseException as error:
             self.failure = self.failure or error
             self.select_unknown('brokerRetirementUncertain')

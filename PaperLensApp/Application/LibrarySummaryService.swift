@@ -5,6 +5,7 @@ import ProviderRequest
 
 public enum LibrarySummaryError: Error, Equatable {
   case providerUnavailable, geometryUnavailable, staleIdentity, invalidGrounding, invalidResult
+  case requestInProgress, cleanupUnavailable
 }
 
 /// Decoder must validate canonical geometry and full quote extent, not merely decode a BLOB.
@@ -81,7 +82,7 @@ public struct LibrarySummaryService: Sendable {
   }
 
   /// Caller applies .dispatch first. Durable intent and frozen input precede the only send.
-  public func dispatch(_ request: AuthorizedProviderRequest, identity: LibrarySummaryIdentity,
+  @MainActor public func dispatch(_ request: AuthorizedProviderRequest, identity: LibrarySummaryIdentity,
     snapshot: JobRecoveryPolicy.Snapshot) async throws -> ValidatedProviderResult {
     guard let provider else { throw LibrarySummaryError.providerUnavailable }
     guard let geometry else { throw LibrarySummaryError.geometryUnavailable }

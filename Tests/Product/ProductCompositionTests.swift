@@ -2,6 +2,7 @@ import Darwin
 import Foundation
 import GRDB
 import XCTest
+import PDFKit
 import ProviderRequest
 @testable import PaperLensProduct
 
@@ -22,6 +23,48 @@ private final class CompositionProbe: NativeConnectionTestTransport {
 
 @MainActor
 final class ProductCompositionTests: XCTestCase {
+  func testProductionServicesImportOpenAndDeletePreserveOriginalWithoutNetwork() async throws {
+    let root = try privateRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let database = try ProductDatabase.open(at: root.appendingPathComponent("database"))
+    // Private fixture selection only; this does not test or claim real authentication.
+    do {
+      let slots = try APIKeySlotStore(directory: root.appendingPathComponent("api-key-slots"))
+      let slot = try slots.create(key: "synthetic-local-selection")
+      _ = try database.compareAndSwapProviderConfiguration(
+        expected: database.providerConfiguration(), replacementKind: .openAIAPIKey,
+        replacementSlotID: slot, replacementModel: "fixture-model")
+    }
+    let transport = CompositionProbe()
+    let composition = ProductAppComposition(root: root, transport: transport, productionServices: true)
+    await composition.start()
+    XCTAssertNotNil(composition.parsing)
+    try composition.continueToLibrary()
+    let workspace = try XCTUnwrap(composition.workspace)
+    let source = root.appendingPathComponent("original.pdf")
+    let bytes = SyntheticPDFGeometryCalibration.fixturePDF()
+    try bytes.write(to: source)
+    let confirmation = try await workspace.imports.prepare(source: source)
+    let id = try await workspace.imports.continueImport(confirmation.id,
+      destinationFolderID: confirmation.destinationFolderID)
+    let snapshot = try await workspace.organization.snapshot(filter: .init(), facts: [])
+    let paper = try XCTUnwrap(snapshot.papers.first { $0.id == id })
+    try await workspace.open(paper)
+    let reader = try XCTUnwrap(workspace.reader)
+    let position = try reader.session.open(paperID: id, validateDocument: { url in
+      let document = try XCTUnwrap(PDFDocument(url: url))
+      XCTAssertEqual(document.pageCount, 8)
+      return document.pageCount
+    }, discard: {})
+    XCTAssertEqual(position.pageIndex, 0)
+    try await workspace.organization.delete(paper, retry: false)
+    XCTAssertNil(reader.session.currentPaper)
+    let remaining = try await workspace.organization.snapshot(filter: .init(), facts: [])
+    XCTAssertFalse(remaining.papers.contains { $0.id == id })
+    XCTAssertEqual(try Data(contentsOf: source), bytes)
+    XCTAssertEqual(transport.calls, 0)
+  }
+
   private func privateRoot() throws -> URL {
     let root = FileManager.default.temporaryDirectory.resolvingSymlinksInPath()
       .appendingPathComponent("paperlens-composition-fixture-\(UUID().uuidString)", isDirectory: true)

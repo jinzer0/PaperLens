@@ -28,6 +28,7 @@ public final class ProductAppComposition: ObservableObject {
   @Published public private(set) var codex: NativeCodexConnection?
   public private(set) var parsing: MainPDFiumParsingComposition?
   private let geometryBinding: PDFiumGeometryBinding?
+  private let productionServices: Bool
   private var codexObservation: AnyCancellable?
   private let root: URL
   private let transport: any NativeConnectionTestTransport
@@ -39,10 +40,11 @@ public final class ProductAppComposition: ObservableObject {
   private var started = false
 
   public init(root: URL, transport: any NativeConnectionTestTransport,
-    geometryBinding: PDFiumGeometryBinding? = nil) {
+    geometryBinding: PDFiumGeometryBinding? = nil, productionServices: Bool = false) {
     self.root = root
     self.transport = transport
     self.geometryBinding = geometryBinding
+    self.productionServices = productionServices
   }
 
   public static func production() throws -> ProductAppComposition {
@@ -55,7 +57,7 @@ public final class ProductAppComposition: ObservableObject {
     let instance = ProductAppComposition(
       root: home.appendingPathComponent(
         "Library/Application Support/PaperLensProduct", isDirectory: true),
-      transport: URLSessionOpenAIConnectionTransport())
+      transport: URLSessionOpenAIConnectionTransport(), productionServices: true)
     productionInstance = instance
     return instance
   }
@@ -70,10 +72,12 @@ public final class ProductAppComposition: ObservableObject {
       let slots = try APIKeySlotStore(
         directory: root.appendingPathComponent("api-key-slots", isDirectory: true))
       let authority = try ProviderRequest()
-      // No Agent receipt is invented. Deletion remains failed/debt until a real peer is bound.
       // open binds startup recovery to this retained Main owner before any connection,
       // workspace command or producer can obtain the library/read-lease owners.
-      let lifecycle = try await LocalLibraryLifecycle.open(database: database, agentPurge: nil)
+      let purge: (any AgentLibraryPurging)? = productionServices
+        ? NativeOnlyAgentLibraryPurge(unsupportedPaperRoot:
+          root.appendingPathComponent("agent-paper-data", isDirectory: true)) : nil
+      let lifecycle = try await LocalLibraryLifecycle.open(database: database, agentPurge: purge)
       self.database = database
       self.slots = slots
       self.authority = authority
@@ -81,6 +85,8 @@ public final class ProductAppComposition: ObservableObject {
       if let geometryBinding {
         parsing = try MainPDFiumParsingComposition(lifecycle: lifecycle,
           authority: authority, geometryBinding: geometryBinding)
+      } else if productionServices {
+        parsing = try MainPDFiumParsingComposition(lifecycle: lifecycle, authority: authority)
       }
       let persisted = try database.providerConfiguration()
       if persisted.slotID != nil, let model = persisted.model {

@@ -42,11 +42,11 @@ import XCTest
     func open() { release?.resume(); release = nil }
   }
 
-  private func fixture(reserve: Bool = true) async throws -> Fixture {
+  private func fixture(reserve: Bool = true, pdfBytes: Data? = nil) async throws -> Fixture {
     let temporary = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
     let source = temporary.appendingPathComponent("owned.pdf")
-    try Data("%PDF-1.7\nowned composition fixture\n%%EOF\n".utf8).write(to: source)
+    try (pdfBytes ?? Data("%PDF-1.7\nowned composition fixture\n%%EOF\n".utf8)).write(to: source)
     let database = try ProductDatabase.open(at: temporary.appendingPathComponent("library"))
     let lifecycle = try await LocalLibraryLifecycle.open(database: database)
     let paper = try await lifecycle.importPDF(from: source)
@@ -89,6 +89,38 @@ import XCTest
     input.recordConsumerDisposal()
     try await input.releasePinAfterConfirmedDrain()
     try await input.finishAfterDisposal()
+  }
+
+  func testProductionWitnessReadsOnlyAdmittedOriginalAndRejectsChangedBytes() async throws {
+    let f = try await fixture(pdfBytes: SyntheticPDFGeometryCalibration.fixturePDF())
+    defer { try? FileManager.default.removeItem(at: f.temporary) }
+    let quad = try PDFiumRawQuad(topLeftX: 0, topLeftY: 300,
+      topRightX: 200, topRightY: 300, bottomRightX: 200, bottomRightY: 0,
+      bottomLeftX: 0, bottomLeftY: 0)
+    let raw = try PDFiumRawPage(pageIndex: 0, boundingBox: quad, mediaBox: nil,
+      cropBox: quad, rotationQuarterTurns: 0)
+    let authority = try ProviderRequest()
+    let binding = try OriginalPDFKitPageWitness.capture(identity: f.identity, rawPages: [0: raw],
+      lifecycle: f.lifecycle, authority: authority, checkBudget: {})
+    XCTAssertEqual(try binding.mapPage(raw).page, try SyntheticPDFGeometryCalibration.pages[0].geometry())
+    let otherPage = try PDFiumRawPage(pageIndex: 1, boundingBox: quad, mediaBox: nil,
+      cropBox: quad, rotationQuarterTurns: 0)
+    XCTAssertThrowsError(try binding.mapPage(otherPage))
+    // Only this test's owned synthetic copy is mutated. A matching DB identity
+    // cannot relabel changed bytes as the original observed document.
+    let owned = f.database.root.appendingPathComponent(f.identity.pdfReference)
+    var changed = try Data(contentsOf: owned)
+    changed[changed.count - 1] ^= 1
+    // The product correctly imports an immutable 0400 copy. Explicitly grant
+    // write access only to this synthetic fault fixture, then restore its mode.
+    try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: owned.path)
+    defer { try? FileManager.default.setAttributes([.posixPermissions: 0o400], ofItemAtPath: owned.path) }
+    try changed.write(to: owned)
+    try FileManager.default.setAttributes([.posixPermissions: 0o400], ofItemAtPath: owned.path)
+    XCTAssertThrowsError(try OriginalPDFKitPageWitness.capture(identity: f.identity,
+      rawPages: [0: raw], lifecycle: f.lifecycle, authority: authority, checkBudget: {})) { error in
+      XCTAssertEqual(error as? ExtractionError, .invalidBatch)
+    }
   }
 
   func testInitialAdmissionCapturesFreshLineageAndNeverActsAsRetry() async throws {
