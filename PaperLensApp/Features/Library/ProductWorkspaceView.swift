@@ -201,6 +201,7 @@ public final class ProductWorkspace: ObservableObject {
     picker.allowedContentTypes = [.pdf]
     picker.canChooseDirectories = false
     picker.allowsMultipleSelection = false
+    if let diagnosticSource { picker.directoryURL = diagnosticSource.deletingLastPathComponent() }
     guard picker.runModal() == .OK, let source = picker.url else { return nil }
     return Task {
       do { return try await prepareImport(source: source) } catch {
@@ -255,6 +256,7 @@ public final class ProductWorkspace: ObservableObject {
     picker.allowedContentTypes = [.pdf]
     picker.canChooseDirectories = false
     picker.allowsMultipleSelection = false
+    if let diagnosticSource { picker.directoryURL = diagnosticSource.deletingLastPathComponent() }
     guard picker.runModal() == .OK, let source = picker.url else { return }
     Task {
       do { try await prepareRetry(source: source, paperID: paperID, generation: generation) } catch

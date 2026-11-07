@@ -225,6 +225,8 @@ class PackagingTests(unittest.TestCase):
         self.file("ProviderAgent/sdk_worker.py", b"# official worker fixture\n")
         self.file("Contracts/ProviderRPC/provider_rpc.py")
         self.file("Contracts/ProviderRPC/contract.json", b"{}")
+        self.file("Contracts/ProviderRequest/provider_request.py")
+        self.file("Contracts/ProviderRequest/contract.json", b"{}")
         framework = package.install_runtime(app, runtime, cli.relative_to(runtime), self.root)
         version = framework / "Versions/3.13"
         agent = app / "Contents/XPCServices/ProviderAgent.xpc/Contents"
@@ -254,7 +256,8 @@ class PackagingTests(unittest.TestCase):
         repository = MODULE_PATH.parents[2]
         for relative in ("ProviderAgent/agent.py", "ProviderAgent/account_login.py", "ProviderAgent/broker.py",
                          "ProviderAgent/broker_control.py", "ProviderAgent/sdk_worker.py",
-                         "Contracts/ProviderRPC/provider_rpc.py", "Contracts/ProviderRPC/contract.json"):
+                         "Contracts/ProviderRPC/provider_rpc.py", "Contracts/ProviderRPC/contract.json",
+                         "Contracts/ProviderRequest/provider_request.py", "Contracts/ProviderRequest/contract.json"):
             self.file(relative, (repository / relative).read_bytes())
         package.install_runtime(app, runtime, cli.relative_to(runtime), self.root)
         resources = app / "Contents/XPCServices/ProviderAgent.xpc/Contents/Resources"
@@ -263,6 +266,9 @@ class PackagingTests(unittest.TestCase):
                          "Contracts/ProviderRPC/provider_rpc.py", "Contracts/ProviderRPC/contract.json"):
             self.assertEqual((resources / Path(relative).name).read_bytes(),
                              (repository / relative).read_bytes())
+        for name in ("provider_request.py", "contract.json"):
+            self.assertEqual((resources / "provider_request" / name).read_bytes(),
+                             (repository / "Contracts/ProviderRequest" / name).read_bytes())
         rpc_spec = importlib.util.spec_from_file_location("_packaged_rpc_fixture", resources / "provider_rpc.py")
         rpc = importlib.util.module_from_spec(rpc_spec)
         rpc_spec.loader.exec_module(rpc)
@@ -350,6 +356,8 @@ class PackagingTests(unittest.TestCase):
                         self.file("ProviderAgent/" + other)
                 self.file("Contracts/ProviderRPC/provider_rpc.py")
                 self.file("Contracts/ProviderRPC/contract.json", b"{}")
+                self.file("Contracts/ProviderRequest/provider_request.py")
+                self.file("Contracts/ProviderRequest/contract.json", b"{}")
                 marker = self.file("untouched-marker", b"private fixture, not a credential")
                 source = self.root / "ProviderAgent" / resource
                 if kind == "directory":
@@ -426,6 +434,38 @@ class PackagingTests(unittest.TestCase):
         self.assertEqual(package.code_policy(helper, "executable")[1], package.CHILD_RIGHTS)
         with self.assertRaisesRegex(package.Failure, "unexpected_nested_code"):
             package.code_policy("Contents/MacOS/unknown", "executable")
+
+    def test_user_selected_pdf_read_permission_is_main_only(self):
+        rights = {package.SANDBOX: True, package.NETWORK: True,
+                  "com.apple.security.files.user-selected.read-only": True}
+        self.assertEqual(package.code_policy("Contents/MacOS/PaperLens", "executable"),
+                         (package.IDENTITY, rights))
+        for bundle, _, _, nested_rights, entitlement_source in package.BUNDLES:
+            source = MODULE_PATH.parents[2] / entitlement_source
+            self.assertEqual(plistlib.loads(source.read_bytes()), nested_rights)
+            if bundle:
+                self.assertNotIn(package.USER_SELECTED_READ, nested_rights)
+        self.assertNotIn(package.USER_SELECTED_READ, package.CHILD_RIGHTS)
+        manifest = self.manifest()
+        manifest["files"][0]["entitlements"] = rights
+        package.safe_manifest(manifest)
+        for path, identifier in (
+            ("Contents/XPCServices/ProviderAgent.xpc/Contents/MacOS/ProviderAgent", package.IDENTITY + ".ProviderAgent"),
+            ("Contents/XPCServices/PDFiumXPC.xpc/Contents/MacOS/PDFiumXPC", package.IDENTITY + ".PDFiumXPC"),
+            ("Contents/MacOS/PaperLens", package.IDENTITY + ".ProviderAgent"),
+        ):
+            with self.subTest(path=path, identifier=identifier):
+                modified = copy.deepcopy(manifest)
+                modified["files"][0].update(path=path, identifier=identifier)
+                with self.assertRaisesRegex(package.Failure, "unsafe_manifest_entitlements"):
+                    package.safe_manifest(modified)
+        for forbidden in ("com.apple.security.files.user-selected.read-write",
+                          "com.apple.security.files.downloads.read-only"):
+            with self.subTest(forbidden=forbidden):
+                modified = copy.deepcopy(manifest)
+                modified["files"][0]["entitlements"][forbidden] = True
+                with self.assertRaisesRegex(package.Failure, "unsafe_manifest_entitlements"):
+                    package.safe_manifest(modified)
 
     def test_sign_command_has_hardened_runtime_without_deep_or_exceptions(self):
         with patch.object(package, "command", return_value=(b"", b"")) as command:
@@ -660,6 +700,8 @@ class PackagingTests(unittest.TestCase):
         self.file("ProviderAgent/sdk_worker.py")
         self.file("Contracts/ProviderRPC/provider_rpc.py")
         self.file("Contracts/ProviderRPC/contract.json", b"{}")
+        self.file("Contracts/ProviderRequest/provider_request.py")
+        self.file("Contracts/ProviderRequest/contract.json", b"{}")
         order = []
         self.file("Tests/Topology/fixture-map.json", b"{}")
 

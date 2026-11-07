@@ -26,6 +26,8 @@ IDENTITY = "io.github.jinzer0.PaperLens"
 SANDBOX = "com.apple.security.app-sandbox"
 INHERIT = "com.apple.security.inherit"
 NETWORK = "com.apple.security.network.client"
+USER_SELECTED_READ = "com.apple.security.files.user-selected.read-only"
+MAIN_RIGHTS = {SANDBOX: True, NETWORK: True, USER_SELECTED_READ: True}
 CHILD_RIGHTS = {SANDBOX: True, INHERIT: True}
 ARCHES = ("arm64",)
 PREPARED_ACQUISITION = "full-acquisition-arm64-ae7a27c9-e584-40ef-a164-e9631d68d11a"
@@ -43,7 +45,7 @@ PINS = {
 # additional wheel download. Preserve the complete approved interpreter prefix.
 PYTHON_BUNDLED_DISTRIBUTIONS = {"pip": "26.2.1"}
 BUNDLES = (
-    ("", IDENTITY, "PaperLens", {SANDBOX: True, NETWORK: True}, "PaperLensApp/App/PaperLens.entitlements"),
+    ("", IDENTITY, "PaperLens", MAIN_RIGHTS, "PaperLensApp/App/PaperLens.entitlements"),
     ("Contents/XPCServices/PDFiumXPC.xpc", IDENTITY + ".PDFiumXPC", "PDFiumXPC", {SANDBOX: True}, "PDFiumXPC/PDFiumXPC.entitlements"),
     ("Contents/XPCServices/ProviderAgent.xpc", IDENTITY + ".ProviderAgent", "ProviderAgent", {SANDBOX: True, NETWORK: True}, "ProviderAgent/ProviderAgent.entitlements"),
 )
@@ -482,7 +484,11 @@ def safe_manifest(manifest):
             require("identifier" in entry and "entitlements" in entry, "manifest_code_mismatch")
         if "identifier" in entry:
             require(re.fullmatch(r"io\.github\.jinzer0\.PaperLens(?:\.[A-Za-z0-9_-]+)*", entry["identifier"]), "unsafe_manifest_identity")
-            require(entry["entitlements"] in ({}, CHILD_RIGHTS, {SANDBOX: True}, {SANDBOX: True, NETWORK: True}), "unsafe_manifest_entitlements")
+            allowed_rights = ({}, CHILD_RIGHTS, {SANDBOX: True}, {SANDBOX: True, NETWORK: True})
+            if (entry["path"] == "Contents/MacOS/PaperLens" and entry["kind"] == "executable"
+                    and entry["identifier"] == IDENTITY):
+                allowed_rights += (MAIN_RIGHTS,)
+            require(entry["entitlements"] in allowed_rights, "unsafe_manifest_entitlements")
     # Explicit schema prevents accidentally serializing stdout, paths, or secrets.
     allowed = {"schemaRevision", "arch", "team", "sourceBaseCommit", "sourceDirty", "sourceTreeHash", "artifactHash", "acquisitionHash", "dependencyLockHash", "files", "notarization", "storyDone"}
     require(set(manifest) == allowed and manifest["notarization"] == "not_performed" and manifest["storyDone"] is False, "unsafe_manifest_fields")
