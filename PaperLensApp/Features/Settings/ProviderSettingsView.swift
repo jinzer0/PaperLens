@@ -123,7 +123,7 @@ public struct NativeCodexConnectionView: View {
   public var body: some View {
     VStack(alignment: .leading, spacing: 12) {
       Text("ChatGPT 연결").font(.headline)
-      Text("공식 로그인 후 실제 생성 응답을 검사합니다. 사용량이 발생할 수 있습니다. 논문 요약은 OpenAI API 연결에서 사용할 수 있습니다.")
+      Text("공식 로그인 후 실제 생성 응답을 검사합니다. 사용량이 발생할 수 있습니다. 연결한 ChatGPT 계정으로 API 키 없이 논문 요약을 생성할 수 있습니다.")
         .font(.callout)
       HStack {
         Button("브라우저로 로그인") { connection.connect(mode: "browser") }

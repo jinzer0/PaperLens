@@ -5,7 +5,7 @@ import SwiftUI
 @MainActor final class ReaderPresentation: NSObject, ObservableObject {
   enum SearchState: Equatable { case idle, searching, matches(Int), noResults }
   let session: ReaderSession
-  let pdfView = PDFView()
+  let pdfView: PDFView
   @Published var pageIndex = 0
   @Published var pageCount = 0
   @Published var zoom: Double = 1
@@ -32,8 +32,9 @@ import SwiftUI
 
   init(session: ReaderSession, annotationIdentity: AnnotationPaperIdentity,
     annotationService: AnnotationService, metadataService: ReaderMetadataService,
-    metadataIdentity: ReaderMetadataIdentity?) {
+    metadataIdentity: ReaderMetadataIdentity?, pdfView: PDFView = PDFView()) {
     self.session = session
+    self.pdfView = pdfView
     self.annotationIdentity = annotationIdentity
     self.annotationService = annotationService
     self.metadataService = metadataService
@@ -131,7 +132,7 @@ import SwiftUI
         } catch {
           try checkpoint()
           guard metadataBinding === binding else { return }
-          metadataFailure = (error as? ReaderMetadataError)?.message ?? "읽기 위치 미확인"
+          reportMetadataPositionFailure(error)
         }
       }
     } catch is RestorationInterrupted {
@@ -290,7 +291,18 @@ import SwiftUI
     // Normal navigation is confirmed by actual PDFKit position notifications.
     guard opened, let binding = metadataBinding else { return }
     do { try binding.observePosition(); metadataFailure = nil }
-    catch { metadataFailure = (error as? ReaderMetadataError)?.message ?? "읽기 위치 미확인" }
+    catch { reportMetadataPositionFailure(error) }
+  }
+
+  private func reportMetadataPositionFailure(_ error: Error) {
+    // PDFKit can report no destination or a point outside the crop while laying out or
+    // scrolling. The binding rejects that point without saving it. This passive miss
+    // is not a failed Contents action; explicit navigation has its own error display.
+    if error as? ReaderMetadataError == .invalidDestination {
+      metadataFailure = nil
+    } else {
+      metadataFailure = (error as? ReaderMetadataError)?.message ?? "읽기 위치 미확인"
+    }
   }
 
   func navigate(delta: Int) {

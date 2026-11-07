@@ -1191,6 +1191,81 @@ private final class MetadataObservedPDFDocument: PDFDocument {
     XCTAssertNil(document)
   }
 
+  func testPassivePositionMissDoesNotShowNavigationErrorOrReplaceSavedContext() async throws {
+    let (db, lifecycle, identity, owner) = try await fixture()
+    owner.session.close()
+    let session = ReaderSession(database: db,
+      leaseProvider: LibraryReadLeaseProvider(lifecycle: lifecycle))
+    let view = MetadataObservedPDFView()
+    let presentation = ReaderPresentation(session: session,
+      annotationIdentity: try db.annotationIdentity(paperID: identity.paperID),
+      annotationService: AnnotationService(database: db),
+      metadataService: ReaderMetadataService(database: db), metadataIdentity: identity,
+      pdfView: view)
+    defer { session.close() }
+    presentation.open(paperID: identity.paperID)
+    let binding = try XCTUnwrap(presentation.metadataBinding)
+    let page = try XCTUnwrap(view.document?.page(at: 0))
+    // A missing destination is normal before PDFKit finishes laying out the page.
+    NotificationCenter.default.post(name: .PDFViewVisiblePagesChanged, object: view)
+    XCTAssertNil(presentation.metadataFailure)
+    XCTAssertNil(binding.state?.observedLocation)
+    view.observedDestination = PDFDestination(page: page, at: CGPoint(x: 20, y: 150))
+    NotificationCenter.default.post(name: .PDFViewPageChanged, object: view)
+    XCTAssertEqual(binding.state?.observedLocation, .init(pageIndex: 0, x: 20, y: 150))
+    let saved = try XCTUnwrap(db.adapterRead {
+      try Data.fetchOne($0, sql: "SELECT payload FROM readerMetadataContext WHERE paperID = ?",
+        arguments: [identity.paperID.uuidString])
+    })
+    // Scrolling can also yield a destination outside the actual crop. Neither miss
+    // may fabricate a confirmed point or overwrite the previous durable context.
+    for destination: PDFDestination? in [nil,
+      PDFDestination(page: page, at: CGPoint(x: -100, y: -100))] {
+      view.observedDestination = destination
+      NotificationCenter.default.post(name: .PDFViewPageChanged, object: view)
+      XCTAssertNil(presentation.metadataFailure)
+      XCTAssertNil(binding.state?.observedLocation)
+      XCTAssertEqual(try db.adapterRead {
+        try Data.fetchOne($0, sql: "SELECT payload FROM readerMetadataContext WHERE paperID = ?",
+          arguments: [identity.paperID.uuidString])
+      }, saved)
+    }
+    // Explicit Contents intent still throws the error used by its own visible feedback.
+    XCTAssertThrowsError(try binding.navigate(sectionID: "/missing")) {
+      XCTAssertEqual($0 as? ReaderMetadataError, .invalidDestination)
+      XCTAssertEqual(($0 as? ReaderMetadataError)?.message,
+        "이 목차 위치로 이동할 수 없습니다. PDF는 계속 읽을 수 있습니다.")
+    }
+  }
+
+  func testUnconfirmedSavedPositionArrivalDoesNotShowContentsFailure() async throws {
+    let (db, lifecycle, identity, owner) = try await fixture()
+    owner.session.close()
+    let service = ReaderMetadataService(database: db)
+    let location = ReaderConfirmedLocation(pageIndex: 0, x: 20, y: 150)
+    let context = try service.beginSession(for: identity)
+    let saved = try service.saveConfirmed(location, sectionID: nil,
+      expected: context, for: identity)
+    let session = ReaderSession(database: db,
+      leaseProvider: LibraryReadLeaseProvider(lifecycle: lifecycle))
+    let view = MetadataObservedPDFView()
+    let presentation = ReaderPresentation(session: session,
+      annotationIdentity: try db.annotationIdentity(paperID: identity.paperID),
+      annotationService: AnnotationService(database: db), metadataService: service,
+      metadataIdentity: identity, pdfView: view)
+    defer { session.close() }
+    presentation.open(paperID: identity.paperID)
+    XCTAssertTrue(presentation.opened)
+    XCTAssertEqual(view.requestedLocation, location)
+    XCTAssertNil(presentation.metadataFailure)
+    XCTAssertNil(presentation.metadataBinding?.state?.observedLocation)
+    // Dispatching restoration is not proof of arrival, and an unconfirmed arrival
+    // must retain the prior durable candidate without incrementing its sequence.
+    let stored = try service.beginSession(for: identity)
+    XCTAssertEqual(stored.location, location)
+    XCTAssertEqual(stored.sequence, saved.sequence)
+  }
+
   func testActualReaderPositionNotificationRejectsRemovedRevision() async throws {
     let (db, lifecycle, identity, owner) = try await fixture()
     owner.session.close()
