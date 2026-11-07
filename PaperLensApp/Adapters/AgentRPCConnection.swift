@@ -187,7 +187,7 @@ public final class AgentRPCConnection {
           // Schema validity alone does not correlate a stale product intent/selector.
           for key in [
             "stageID", "intentID", "expectedSelector", "cleanupID", "paperID",
-            "generation", "correlationID",
+            "generation", "correlationID", "requestID", "paperGeneration", "configGeneration", "model",
           ] where record.params[key] != nil && result[key] != nil {
             guard let expected = record.params[key], let actual = result[key],
               NSDictionary(dictionary: [key: expected]).isEqual(to: [key: actual])

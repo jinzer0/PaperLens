@@ -38,6 +38,45 @@ public actor NativeOnlyAgentLibraryPurge: AgentLibraryPurging {
   }
 }
 
+/// Summary workers are Main-owned and retire before their read lease closes. The
+/// peer also fences legacy Agent data and unowned scopes left by an earlier run.
+@MainActor
+public final class IsolatedAgentLibraryPurge: AgentLibraryPurging {
+  private let legacy: NativeOnlyAgentLibraryPurge
+  private let summaryRoot: URL
+  private var connection: NativeCodexConnection?
+
+  public init(unsupportedPaperRoot: URL, summaryRoot: URL) {
+    legacy = NativeOnlyAgentLibraryPurge(unsupportedPaperRoot: unsupportedPaperRoot)
+    self.summaryRoot = summaryRoot
+  }
+
+  public func bind(_ connection: NativeCodexConnection) { self.connection = connection }
+
+  public func purgeLibraryPaper(paperID: UUID, deletionID: UUID) async throws -> AgentLibraryPurgeReceipt {
+    _ = try await legacy.purgeLibraryPaper(paperID: paperID, deletionID: deletionID)
+    if let connection {
+      return try await connection.purgeSummaryPaper(paperID: paperID, deletionID: deletionID)
+    }
+    // Startup recovery has no live owner to vouch for remnants. Do not adopt/delete them.
+    try Self.requireEmptySummaryRoot(summaryRoot)
+    return AgentLibraryPurgeReceipt(paperID: paperID, deletionID: deletionID)
+  }
+
+  internal static func requireEmptySummaryRoot(_ root: URL) throws {
+    guard root.isFileURL else { throw LocalLibraryError.cleanupFailed }
+    var info = stat()
+    if lstat(root.path, &info) != 0 {
+      guard errno == ENOENT else { throw LocalLibraryError.producerClosureUnknown }
+      return
+    }
+    guard info.st_mode & S_IFMT == S_IFDIR, info.st_uid == getuid(),
+      info.st_mode & 0o077 == 0,
+      try FileManager.default.contentsOfDirectory(atPath: root.path).isEmpty
+    else { throw LocalLibraryError.producerClosureUnknown }
+  }
+}
+
 public enum LocalLibraryError: Error, Equatable, Sendable {
   case invalidPDF, cancelled, agentPurgeUnavailable, invalidPurgeReceipt
   case deletionInProgress, cleanupFailed, producerClosureUnknown, importCapacity

@@ -109,6 +109,7 @@ let package = Package(
         "ExtractionFixtureBudget.swift", "LibraryExtractionReadPinTests.swift",
         "PDFiumExtractionResourceOwnerTests.swift", "LibraryPDFiumInputAcquirerTests.swift",
         "OwnedPipeAgentRPCChannelTests.swift", "OwnedChildRetirementTests.swift",
+        "NativeCodexSummaryScopeTests.swift",
         "NativeBrokerABITests.swift", "AgentPrivateBackupTests.swift",
         "MainPDFiumParsingCompositionTests.swift",
         "ImportRecoveryJournalTests.swift", "ImportRecoveryPersistenceTests.swift",

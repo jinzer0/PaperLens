@@ -28,6 +28,15 @@ _MARKER_SCHEMA = {
     'type': 'object', 'properties': {'text': {'type': 'string', 'const': _MARKER}},
     'required': ['text'], 'additionalProperties': False,
 }
+_SUMMARY_SCHEMA = {
+    'type': 'object', 'additionalProperties': False,
+    'required': ['summary', 'insufficiency'], 'properties': {
+        'summary': {'type': 'object', 'additionalProperties': False,
+            'required': ['text', 'kind', 'evidenceIndices'], 'properties': {
+                'text': {'type': 'string'},
+                'kind': {'type': 'string', 'enum': ['paper', 'analysis', 'insufficient']},
+                'evidenceIndices': {'type': 'array', 'items': {'type': 'integer'}}}},
+        'insufficiency': {'type': 'string', 'enum': ['none', 'noEvidence', 'budgetLimited']}}}
 
 
 def ProtocolError(code):
@@ -144,6 +153,7 @@ class OfficialSDKWorker:
         self.transport_output = None
         self.failure = None
         self.state_lock = threading.RLock()
+        self.summary_admitted = False
 
     def own(self, name, fd):
         self.fds[name] = fd
@@ -719,6 +729,95 @@ class OfficialSDKWorker:
                        stage.thread_ids[-1], stage.turn_ids[-1])
         return {'stageID': stage.stage_id, 'intentID': stage.intent_id, 'accepted': True}
 
+    @staticmethod
+    def _summary_config_allowed(config):
+        # Empty table overlays do not erase inherited TOML tables. Inspect the
+        # effective configuration before a thread can receive any paper bytes.
+        if any(config.get(key) for key in ('mcp_servers', 'hooks', 'model_providers',
+                'instructions', 'developer_instructions', 'compact_prompt',
+                'browser_use', 'computer_use', 'desktop', 'permissions',
+                'model_catalog_json',
+                'model_instructions_file', 'skills', 'notify', 'apps', 'plugins', 'tools')):
+            return False
+        if config.get('model_provider') not in (None, 'openai'):
+            return False
+        if (config.get('chatgpt_base_url') not in (None, 'https://chatgpt.com/backend-api/')
+                or config.get('openai_base_url') not in (None, '')
+                or config.get('respect_system_proxy') not in (None, False)):
+            return False
+        if config.get('cli_auth_credentials_store') != 'file' or config.get('web_search') != 'disabled':
+            return False
+        features = config.get('features', {})
+        return (isinstance(features, dict) and all(value is None or value is False for value in features.values())
+                and all(features.get(key) is False for key in
+                    ('apps', 'plugins', 'multi_agent', 'shell_tool', 'view_image')))
+
+    def _library_summary(self, request_id, params):
+        authority = self._sdk_module('provider_request.provider_request')
+        wire = authority.parse_request(params['requestJSON'].encode('utf-8'))
+        if (wire.operation != 'librarySummary' or wire.requestID != params['requestID']
+                or wire.input['evidence']['paperID'] != params['paperID']
+                or wire.input['evidence']['paperGeneration'] != params['paperGeneration']):
+            raise ProtocolError('invalidParams')
+        if authority.input_charge(wire) > 8192:
+            raise ProtocolError('invalidParams')
+        m = self.models
+        config = self._call(request_id, lambda: self.client.request('config/read',
+            {'cwd': str(self.cwd / 'work'), 'includeLayers': False},
+            response_model=m.ConfigReadResponse))
+        if not self._summary_config_allowed(_projection(config.config)):
+            raise ProtocolError('unavailable')
+        messages = authority.render_messages(wire)
+        work = str(self.cwd / 'work')
+        thread = self._call(request_id, self.client.thread_start, {
+            'model': params['model'], 'cwd': work, 'ephemeral': True,
+            'approvalPolicy': 'never', 'environments': [],
+            'baseInstructions': messages[0].content,
+            'config': {'default_permissions': 'paperlens', 'permissions': {
+                'paperlens': {'filesystem': {work: 'read'}, 'network': {'enabled': False}}}}})
+        thread_id = thread.thread.id
+        if type(thread_id) is not str or not thread_id:
+            raise ProtocolError('unavailable')
+        turn = self._call(request_id, self.client.turn_start, thread_id,
+            [{'type': 'text', 'text': messages[-1].content, 'text_elements': []}], {
+                'threadId': thread_id, 'model': params['model'], 'cwd': work,
+                'approvalPolicy': 'never', 'environments': [], 'outputSchema': _SUMMARY_SCHEMA})
+        turn_id = turn.turn.id
+        if type(turn_id) is not str or not turn_id:
+            raise ProtocolError('unavailable')
+        for _ in range(256):
+            notification = self._notification(lambda: self.client.next_turn_notification(turn_id),
+                                              request_id=request_id)
+            method = notification.method
+            # No execution event is permissible even if an upstream runtime
+            # unexpectedly exposes a tool despite the disabled environment.
+            if method in ('item/started', 'item/completed'):
+                item = getattr(notification.payload, 'item', None)
+                item = getattr(item, 'root', item)
+                if getattr(item, 'type', None) not in ('userMessage', 'agentMessage', 'reasoning'):
+                    raise ProtocolError('unavailable')
+            if method != 'turn/completed':
+                continue
+            payload = notification.payload
+            completed = payload.turn
+            if (payload.thread_id != thread_id or completed.id != turn_id
+                    or _value(completed.status) != 'completed' or completed.error is not None
+                    or _value(completed.items_view) != 'full'):
+                raise ProtocolError('unavailable')
+            items = [item.root for item in completed.items]
+            if any(getattr(item, 'type', None) not in ('userMessage', 'agentMessage', 'reasoning') for item in items):
+                raise ProtocolError('unavailable')
+            final = [item.text for item in items if getattr(item, 'type', None) == 'agentMessage'
+                     and _value(getattr(item, 'phase', None)) == 'final_answer']
+            if len(final) != 1 or len(final[0].encode('utf-8')) > 2048:
+                raise ProtocolError('unavailable')
+            # The native authority validates the result against its original
+            # unforgeable authorization and immutable grounding after drainage.
+            self._check(request_id)
+            return {key: params[key] for key in ('requestID', 'paperID', 'paperGeneration',
+                'configGeneration', 'model')} | {'resultJSON': final[0]}
+        raise ProtocolError('unavailable')
+
     async def dispatch(self, method, params, *, request_id, deadline):
         self._check(request_id)
         self.loop = asyncio.get_running_loop()
@@ -738,6 +837,13 @@ class OfficialSDKWorker:
             return {'major': 2, 'minor': 0, 'capabilities': ['product-v1']}
         if not self.initialized:
             raise ProtocolError('handshakeRequired')
+        if method == 'product.librarySummary':
+            with self.state_lock:
+                if self.stage is not None or self.summary_admitted or self.occupied:
+                    raise ProtocolError('busy')
+                self.summary_admitted = True
+            return await self._job(request_id, deadline,
+                lambda: self._library_summary(request_id, params))
         if method == 'product.loginStart':
             from account_login import AccountLoginController
             if self.stage is not None or self.occupied:

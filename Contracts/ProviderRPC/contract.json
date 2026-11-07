@@ -7,6 +7,9 @@
     "maxArrayItems": 32,
     "maxStringBytes": 256,
     "maxAuthURLBytes": 4096,
+    "maxSummaryRequestBytes": 49152,
+    "maxSummaryResultBytes": 32768,
+    "maxGenerationTimeoutMs": 120000,
     "minTimeoutMs": 1,
     "maxTimeoutMs": 10000,
     "handshakeTimeoutMs": 5000,
@@ -48,7 +51,7 @@
         "kind": {"type": "string", "const": "request"},
         "id": {"ref": "uuid"},
         "method": {"type": "string"},
-        "timeoutMs": {"type": "integer", "minimumLimit": "minTimeoutMs", "maximumLimit": "maxTimeoutMs"},
+        "timeoutMs": {"type": "integer", "minimumLimit": "minTimeoutMs", "maximumLimit": "maxGenerationTimeoutMs"},
         "params": {"type": "object"}
       }
     },
@@ -70,6 +73,7 @@
     }
   },
   "methods": {
+    "product.librarySummary": {"maxTimeoutMs": 120000, "params": {"type": "object", "fields": {"requestID": {"ref": "uuid"}, "paperID": {"ref": "uuid"}, "paperGeneration": {"ref": "generation"}, "configGeneration": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807}, "model": {"ref": "model"}, "requestJSON": {"type": "string", "minBytes": 2, "maxBytesLimit": "maxSummaryRequestBytes"}}}, "result": {"type": "object", "fields": {"requestID": {"ref": "uuid"}, "paperID": {"ref": "uuid"}, "paperGeneration": {"ref": "generation"}, "configGeneration": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807}, "model": {"ref": "model"}, "resultJSON": {"type": "string", "minBytes": 2, "maxBytesLimit": "maxSummaryResultBytes"}}}},
     "product.hello": {
       "params": {"type": "object", "fields": {"major": {"type": "integer", "const": 2}, "minor": {"type": "integer", "const": 0}, "capabilities": {"type": "array", "items": {"type": "string"}, "const": ["product-v1"]}}},
       "result": {"type": "object", "fields": {"major": {"type": "integer", "const": 2}, "minor": {"type": "integer", "const": 0}, "capabilities": {"type": "array", "items": {"type": "string"}, "const": ["product-v1"]}}}

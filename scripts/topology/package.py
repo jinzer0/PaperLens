@@ -283,6 +283,8 @@ def install_runtime(app, runtime, cli_relative, root):
         (root / "ProviderAgent/sdk_worker.py", "sdk_worker.py"),
         (root / "Contracts/ProviderRPC/provider_rpc.py", "provider_rpc.py"),
         (root / "Contracts/ProviderRPC/contract.json", "contract.json"),
+        (root / "Contracts/ProviderRequest/provider_request.py", "provider_request/provider_request.py"),
+        (root / "Contracts/ProviderRequest/contract.json", "provider_request/contract.json"),
     )
     for source, name in sources:
         require(source.is_file() and not source.is_symlink(), "agent_resource_missing")
@@ -315,7 +317,10 @@ def install_runtime(app, runtime, cli_relative, root):
         require(source.is_file() and not source.is_symlink(), "agent_resource_missing")
         target = agent / "Resources" / name
         require(not target.is_symlink(), "resource_symlink_collision")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        require(not target.parent.is_symlink(), "resource_symlink_collision")
         shutil.copy2(source, target)
+        require(digest(target) == digest(source), "agent_resource_mismatch")
     check_tree(app)
     return framework
 

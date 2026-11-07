@@ -1791,6 +1791,7 @@ final class TopologyOwnedFixtures: @unchecked Sendable {
   }
   private var cleaned = false
   private var runtimeCleanupDescriptors: Set<Int32> = []
+  private let runtimeAdmission = NSRecursiveLock()
 
   init?(root: URL, runID: String, hooks: Hooks = Hooks()) {
     guard TopologyFixtures.validRunID(runID),
@@ -1856,6 +1857,81 @@ final class TopologyOwnedFixtures: @unchecked Sendable {
   func prepareRuntimeDirectories() -> Bool {
     guard permitsNamespaceMutation else { return false }
     return prepareDirectories(permit: { self.permitsNamespaceMutation })
+  }
+
+  /// Copy only our current file-backed login credential into a newly owned request
+  /// namespace. Neither caller receives its contents. SDK configuration and history
+  /// are deliberately excluded; unknown files, links and changed snapshots fail closed.
+  func copyLoginAuthentication(to destination: TopologyOwnedFixtures) -> Bool {
+    let first = directoryURL.path < destination.directoryURL.path ? self : destination
+    let second = first === self ? destination : self
+    first.runtimeAdmission.lock(); second.runtimeAdmission.lock()
+    defer { second.runtimeAdmission.unlock(); first.runtimeAdmission.unlock() }
+    guard self !== destination, !cleaned, !destination.cleaned,
+      destination.permitsNamespaceMutation,
+      matchesOwnedNamespace(), destination.matchesOwnedNamespace(),
+      let source = ownedDirectories.first(where: { $0.name == "codex" }),
+      let target = destination.ownedDirectories.first(where: { $0.name == "codex" }),
+      let sourceIdentity = source.identity, let targetIdentity = target.identity,
+      TopologyFixtures.matches(directory: descriptor, name: "codex", info: sourceIdentity),
+      TopologyFixtures.matches(directory: destination.descriptor, name: "codex", info: targetIdentity)
+    else { return false }
+    let input = openat(source.descriptor, "auth.json", O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)
+    guard input >= 0 else { return false }
+    runtimeCleanupDescriptors.insert(input)
+    var before = stat()
+    guard fstat(input, &before) == 0, before.st_mode & S_IFMT == S_IFREG,
+      before.st_uid == getuid(), before.st_nlink == 1, before.st_size > 0,
+      before.st_size <= 65_536, before.st_mode & 0o077 == 0,
+      TopologyFixtures.matches(directory: source.descriptor, name: "auth.json", info: before)
+    else { return closeRuntimeDescriptor(input) && false }
+    let output = openat(target.descriptor, "auth.json",
+      O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
+    guard output >= 0 else { return closeRuntimeDescriptor(input) && false }
+    destination.runtimeCleanupDescriptors.insert(output)
+    var buffer = [UInt8](repeating: 0, count: 4096)
+    var total = 0
+    var succeeded = true
+    while total < before.st_size {
+      let count = read(input, &buffer, min(buffer.count, Int(before.st_size) - total))
+      if count <= 0 { succeeded = false; break }
+      var offset = 0
+      while offset < count {
+        let written = buffer.withUnsafeBytes {
+          write(output, $0.baseAddress!.advanced(by: offset), count - offset)
+        }
+        if written <= 0 { succeeded = false; break }
+        offset += written
+      }
+      total += count
+      if !succeeded { break }
+    }
+    _ = buffer.withUnsafeMutableBytes { $0.initializeMemory(as: UInt8.self, repeating: 0) }
+    var after = stat()
+    succeeded = succeeded && fstat(input, &after) == 0
+      && before.st_ino == after.st_ino && before.st_dev == after.st_dev
+      && before.st_size == after.st_size
+      && before.st_mtimespec.tv_sec == after.st_mtimespec.tv_sec
+      && before.st_mtimespec.tv_nsec == after.st_mtimespec.tv_nsec
+      && before.st_ctimespec.tv_sec == after.st_ctimespec.tv_sec
+      && before.st_ctimespec.tv_nsec == after.st_ctimespec.tv_nsec
+      && TopologyFixtures.matches(directory: source.descriptor, name: "auth.json", info: before)
+    let outputClosed = destination.closeRuntimeDescriptor(output)
+    let inputClosed = closeRuntimeDescriptor(input)
+    return succeeded && outputClosed && inputClosed
+  }
+
+  private func closeRuntimeDescriptor(_ fd: Int32) -> Bool {
+    guard close(fd) == 0 else { return false }
+    runtimeCleanupDescriptors.remove(fd)
+    return true
+  }
+
+  /// Used only before a worker launch has been constructed/admitted.
+  func cleanupUnlaunchedWorkerNamespace() -> Bool {
+    let owner = UUID()
+    guard beginMetadataMutation(owner: owner) else { return false }
+    return cleanupWorkerNamespace(owner: owner)
   }
 
   func prepareWorkerDirectories(owner: UUID, permit: () -> Bool) -> Bool {
@@ -2114,7 +2190,10 @@ final class TopologyOwnedFixtures: @unchecked Sendable {
   /// Only called by the retained native worker owner after CLI, broker and worker
   /// waits and checked pipe closure. No pre-existing run is ever adopted.
   func cleanupWorkerNamespace(owner: UUID) -> Bool {
-    guard backupAdmission.withLock({ metadataLease == owner }), matchesOwnedNamespace() else {
+    runtimeAdmission.lock()
+    defer { runtimeAdmission.unlock() }
+    guard runtimeCleanupDescriptors.isEmpty,
+      backupAdmission.withLock({ metadataLease == owner }), matchesOwnedNamespace() else {
       return false
     }
     for record in ownedDirectories {
@@ -2176,6 +2255,9 @@ final class TopologyOwnedFixtures: @unchecked Sendable {
   }
 
   @discardableResult func cleanup() -> Bool {
+    runtimeAdmission.lock()
+    defer { runtimeAdmission.unlock() }
+    guard runtimeCleanupDescriptors.isEmpty else { return false }
     guard permitsNamespaceMutation else { return false }
     guard !cleaned else { return true }
     var success = true

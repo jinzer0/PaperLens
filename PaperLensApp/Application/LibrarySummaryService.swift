@@ -13,8 +13,9 @@ public protocol LibrarySummaryGeometryValidating: Sendable {
   func resolve(_ hit: ExtractionSearchHit, identity: PDFSentenceIdentity) throws -> PDFSentenceAnchor
 }
 
-/// Implement only with the existing certified provider enforcement (authorization, resource
-/// accounting, exact request copy, typed validation and actual closure). No SDK calls here.
+/// Adapters enforce the authorized request and typed result boundaries. They return
+/// only after producer drainage, or throw cleanupUnavailable while retaining unknown
+/// producer ownership; the coordinator then retains the paper lease.
 public protocol LibrarySummaryProviding: Sendable {
   func execute(_ request: AuthorizedProviderRequest, identity: LibrarySummaryIdentity) async throws
     -> ValidatedProviderResult

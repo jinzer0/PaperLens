@@ -446,7 +446,16 @@ class BrokerValidationTests(unittest.TestCase):
             cli.chmod(0o700)
             with patch.object(broker, '__file__', str(script)):
                 self.assertEqual(broker._production_command(),
-                                 (str(cli), 'app-server', '--listen', 'stdio://'))
+                                 (str(cli), *(part for value in (
+                                     'cli_auth_credentials_store="file"', 'web_search="disabled"',
+                                     'chatgpt_base_url="https://chatgpt.com/backend-api/"',
+                                     'openai_base_url=""', 'model_provider="openai"', 'respect_system_proxy=false',
+                                     'features.apps=false', 'features.plugins=false',
+                                     'features.multi_agent=false', 'features.shell_tool=false',
+                                     'features.view_image=false', 'features.auth_elicitation=false',
+                                     'features.mentions_v2=false', 'features.remote_plugin=false',
+                                     'features.tool_suggest=false') for part in ('-c', value)),
+                                  'app-server', '--listen', 'stdio://'))
                 cli.unlink()
                 internal = root / 'Frameworks/PythonRuntime.framework/codex'
                 internal.parent.mkdir(parents=True)
@@ -454,7 +463,16 @@ class BrokerValidationTests(unittest.TestCase):
                 internal.chmod(0o700)
                 cli.symlink_to(os.path.relpath(internal, cli.parent))
                 self.assertEqual(broker._production_command(),
-                                 (str(cli), 'app-server', '--listen', 'stdio://'))
+                                 (str(cli), *(part for value in (
+                                     'cli_auth_credentials_store="file"', 'web_search="disabled"',
+                                     'chatgpt_base_url="https://chatgpt.com/backend-api/"',
+                                     'openai_base_url=""', 'model_provider="openai"', 'respect_system_proxy=false',
+                                     'features.apps=false', 'features.plugins=false',
+                                     'features.multi_agent=false', 'features.shell_tool=false',
+                                     'features.view_image=false', 'features.auth_elicitation=false',
+                                     'features.mentions_v2=false', 'features.remote_plugin=false',
+                                     'features.tool_suggest=false') for part in ('-c', value)),
+                                  'app-server', '--listen', 'stdio://'))
 
 
 @unittest.skipUnless(sys.platform == 'darwin', 'public Darwin spawn/kqueue fixtures')

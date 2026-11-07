@@ -6,6 +6,57 @@ import GRDB
 import ProviderRequest
 #endif
 
+/// The ChatGPT adapter uses the app-owned isolated execution scope. A missing
+/// connection remains unavailable and never falls back to a different provider.
+@MainActor public final class NativeCodexSummaryProvider: LibrarySummaryProviding {
+  private let connection: NativeCodexConnection?
+  private let authority: ProviderRequest
+
+  public init(connection: NativeCodexConnection?, authority: ProviderRequest) {
+    self.connection = connection; self.authority = authority
+  }
+
+  public func execute(_ request: AuthorizedProviderRequest, identity: LibrarySummaryIdentity) async throws
+    -> ValidatedProviderResult {
+    guard let connection else { throw LibrarySummaryError.providerUnavailable }
+    return try await connection.executeLibrarySummary(request, identity: identity, authority: authority)
+  }
+}
+
+/// Select from the durable configuration at dispatch, and fence a result if any
+/// selector field changed while the selected adapter was running.
+@MainActor public final class SelectedLibrarySummaryProvider: LibrarySummaryProviding {
+  private let database: ProductDatabase
+  private let apiKey: any LibrarySummaryProviding
+  private let chatGPT: any LibrarySummaryProviding
+
+  public init(database: ProductDatabase, apiKey: any LibrarySummaryProviding,
+    chatGPT: any LibrarySummaryProviding) {
+    self.database = database; self.apiKey = apiKey; self.chatGPT = chatGPT
+  }
+
+  public func execute(_ request: AuthorizedProviderRequest, identity: LibrarySummaryIdentity) async throws
+    -> ValidatedProviderResult {
+    let selection = try database.providerConfiguration()
+    guard selection.generation == identity.configurationGeneration,
+      selection.slotID != nil, let model = selection.model, !model.isEmpty else {
+      throw LibrarySummaryError.staleIdentity
+    }
+    let selected: any LibrarySummaryProviding
+    switch selection.kind {
+    case .openAIAPIKey: selected = apiKey
+    case .codexChatGPT: selected = chatGPT
+    case nil: throw LibrarySummaryError.providerUnavailable
+    }
+    let result = try await selected.execute(request, identity: identity)
+    try Task.checkCancellation()
+    guard try database.providerConfiguration() == selection else {
+      throw LibrarySummaryError.staleIdentity
+    }
+    return result
+  }
+}
+
 /// The selected Main-owned HTTP adapter. A return, including a thrown return, occurs
 /// after the transport has drained its task, session and delegate consumer.
 @MainActor public final class NativeAPIKeySummaryProvider: LibrarySummaryProviding {
@@ -53,6 +104,7 @@ import ProviderRequest
   private var active: Task<LibrarySummaryRecord, any Error>?
   // Unknown physical staging closure keeps its exact owners alive and blocks replacement.
   private var cleanupDebt: [(SummaryStage, any ReaderReadLease)] = []
+  private var producerCleanupDebt: [any ReaderReadLease] = []
 
   public init(database: ProductDatabase, epoch: UUID, leases: any ReaderLeaseProvider,
     authority: ProviderRequest, provider: any LibrarySummaryProviding) {
@@ -64,7 +116,9 @@ import ProviderRequest
 
   @discardableResult public func generate(paperID: UUID, generation: UUID,
     outputLanguage: String) async throws -> LibrarySummaryRecord {
-    guard active == nil, cleanupDebt.isEmpty else { throw LibrarySummaryError.requestInProgress }
+    guard active == nil, cleanupDebt.isEmpty, producerCleanupDebt.isEmpty else {
+      throw LibrarySummaryError.requestInProgress
+    }
     activePaperID = paperID
     let task = Task { try await self.execute(paperID: paperID, generation: generation,
       outputLanguage: outputLanguage) }
@@ -102,6 +156,7 @@ import ProviderRequest
     let lease = try leases.acquireReadLease(for: paper, onRevoked: { [weak self] in self?.cancel() })
     var stage: SummaryStage?
     var reserved = false
+    var awaitingProducer = false
     let service = LibrarySummaryService(database: database, provider: provider, geometry: geometry)
     do {
       try lease.validate()
@@ -122,7 +177,9 @@ import ProviderRequest
       try apply(.claim(line)); try apply(.acquireWriter(line, permit: writer)); try apply(.dispatch(line))
       // Reserve succeeds before provider execution; failure cleanup below targets exact identity only.
       reserved = true
+      awaitingProducer = true
       let result = try await service.dispatch(request, identity: identity, snapshot: policy)
+      awaitingProducer = false
       try Task.checkCancellation()
       try lease.validate()
       // Actual closed file + actual rename satisfy the publication policy; no closure
@@ -146,6 +203,12 @@ import ProviderRequest
     } catch {
       let cause = error
       if reserved { try? database.failLibrarySummary(identity) }
+      // An isolated producer may report unknown physical retirement. Keep the
+      // paper lease held so deletion cannot remove a producer's remaining input.
+      if awaitingProducer, cause as? LibrarySummaryError == .cleanupUnavailable {
+        producerCleanupDebt.append(lease)
+        throw cause
+      }
       if let stage {
         do { try stage.remove() } catch {
           cleanupDebt.append((stage, lease))
@@ -173,7 +236,8 @@ import ProviderRequest
         JOIN extractionRevision r ON r.id = v.revision CROSS JOIN providerConfig c
         WHERE p.id = ? AND p.generation = ? AND p.status = 'ready' AND p.deletionID IS NULL
           AND r.paperID = p.id AND r.generation = p.generation AND r.pdfSHA256 = p.pdfSHA256
-          AND r.pdfReference = p.pdfReference AND c.singleton = 1 AND c.kind = 'openAIAPIKey'
+          AND r.pdfReference = p.pdfReference AND c.singleton = 1
+          AND c.kind IN ('openAIAPIKey', 'codexChatGPT')
           AND c.slotID IS NOT NULL AND c.model IS NOT NULL
         """, arguments: [paperID.uuidString, generation.uuidString]),
         let revision = UUID(uuidString: row["revision"]) else { throw LibrarySummaryError.providerUnavailable }

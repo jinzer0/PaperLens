@@ -140,6 +140,25 @@ final class ProviderRPCTests: XCTestCase {
     ]
   }
 
+  func testSummaryPayloadAndDeadlineExceptionsStayScoped() throws {
+    let identity: [String: Any] = ["requestID": id, "paperID": stage,
+      "paperGeneration": 1, "configGeneration": 1, "model": "test-model"]
+    let params = merging(identity, ["requestJSON": String(repeating: "x", count: 49152)])
+    let packet = merging(request("product.librarySummary", params: params), ["timeoutMs": 120000])
+    try ProviderRPC.validateRequest(ProviderRPC.decode(ProviderRPC.encode(packet)))
+    rejects { try ProviderRPC.validateRequest(merging(request(), ["timeoutMs": 10001])) }
+    rejects { try ProviderRPC.validateRequest(merging(packet, ["timeoutMs": 120001])) }
+    rejects { try ProviderRPC.encode(request("product.librarySummary", params:
+      merging(params, ["requestJSON": String(repeating: "x", count: 49153)]))) }
+    rejects { try ProviderRPC.encode(request("product.librarySummary", params:
+      merging(params, ["model": String(repeating: "x", count: 257)]))) }
+    rejects { try ProviderRPC.encode(request("product.loginObserve", params:
+      merging(login, ["requestJSON": String(repeating: "x", count: 4097)]))) }
+    let result = terminal(merging(identity, ["resultJSON": String(repeating: "x", count: 32768)]))
+    try ProviderRPC.validateTerminal(ProviderRPC.decode(ProviderRPC.encode(result)), method: "product.librarySummary")
+    rejects { try ProviderRPC.validateTerminal(result, method: "product.connectionTest") }
+  }
+
   func testProductSelectorsCorrelationsAndGenerations() throws {
     for (method, params, result) in productCases {
       for key in ["stageID", "intentID", "cleanupID", "paperID", "correlationID"]

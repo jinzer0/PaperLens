@@ -48,7 +48,7 @@ def _check_string(value, maximum=None):
         _violation()
 
 
-def _check_structure(value, depth=0, path=(), browser=False):
+def _check_structure(value, depth=0, path=(), browser=False, summary=False):
     if type(value) is dict:
         depth += 1
         if depth > _LIMITS["maxDepth"] or len(value) > _LIMITS["maxObjectKeys"]:
@@ -57,15 +57,19 @@ def _check_structure(value, depth=0, path=(), browser=False):
             if type(key) is not str:
                 _violation()
             _check_string(key)
-            _check_structure(item, depth, path + (key,), browser)
+            _check_structure(item, depth, path + (key,), browser, summary)
     elif type(value) is list:
         depth += 1
         if depth > _LIMITS["maxDepth"] or len(value) > _LIMITS["maxArrayItems"]:
             _violation()
         for item in value:
-            _check_structure(item, depth, path + (None,), browser)
+            _check_structure(item, depth, path + (None,), browser, summary)
     elif type(value) is str:
         maximum = _LIMITS["maxAuthURLBytes"] if browser and path == ("result", "instructions", "authUrl") else None
+        if summary and path == ("params", "requestJSON"):
+            maximum = _LIMITS["maxSummaryRequestBytes"]
+        elif summary and path == ("result", "resultJSON"):
+            maximum = _LIMITS["maxSummaryResultBytes"]
         _check_string(value, maximum)
     elif type(value) is float:
         if not math.isfinite(value):
@@ -82,7 +86,16 @@ def _check_root(value):
         and _matches(value["result"], CONTRACT["methods"]["product.loginStart"]["result"])
         and value["result"]["instructions"]["mode"] == "browser"
     )
-    _check_structure(value, browser=browser)
+    definition = CONTRACT["methods"]["product.librarySummary"]
+    summary = (
+        value.get("method") == "product.librarySummary"
+        and _matches(value, CONTRACT["envelopes"]["request"])
+        and _matches(value["params"], definition["params"])
+    ) or (
+        _matches(value, CONTRACT["envelopes"]["result"])
+        and _matches(value["result"], definition["result"])
+    )
+    _check_structure(value, browser=browser, summary=summary)
 
 
 def _check_raw_depth(text):
@@ -283,6 +296,8 @@ def validate_request(object: dict) -> None:
     method = CONTRACT["methods"].get(object["method"])
     if method is None:
         raise ProtocolError("unknownMethod")
+    if object["timeoutMs"] > method.get("maxTimeoutMs", _LIMITS["maxTimeoutMs"]):
+        _violation()
     if not _matches(object["params"], method["params"]):
         raise ProtocolError("invalidParams")
 

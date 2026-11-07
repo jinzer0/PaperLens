@@ -994,6 +994,71 @@ final class LibrarySummaryServiceTests: XCTestCase {
     }
   }
 
+  @MainActor func testDurableSelectorRoutesChatGPTWithoutAPIKeyAdapter() async throws {
+    for kind in [ProviderKind.codexChatGPT, .openAIAPIKey] {
+      let f = try fixture()
+      defer { try? FileManager.default.removeItem(at: f.root) }
+      try prepareCoordinator(f)
+      _ = try f.db.compareAndSwapProviderConfiguration(expected: f.db.providerConfiguration(),
+        replacementKind: kind, replacementSlotID: UUID(), replacementModel: "fixture-model")
+      let apiKey = SummaryProvider(), chatGPT = SummaryProvider()
+      let selected = SelectedLibrarySummaryProvider(database: f.db, apiKey: apiKey, chatGPT: chatGPT)
+      let leases = SummaryLeases()
+      let coordinator = LibrarySummaryCoordinator(database: f.db, epoch: UUID(), leases: leases,
+        authority: try ProviderRequest(), provider: selected)
+      let saved = try await coordinator.generate(paperID: f.identity.paperID,
+        generation: f.identity.generation, outputLanguage: "ko")
+      XCTAssertEqual(apiKey.calls, kind == .openAIAPIKey ? 1 : 0)
+      XCTAssertEqual(chatGPT.calls, kind == .codexChatGPT ? 1 : 0)
+      XCTAssertEqual(saved.claimAnchors.count, 1)
+      XCTAssertTrue(leases.lease.closed)
+    }
+  }
+
+  @MainActor func testUnknownProducerRetirementRetainsPaperLeaseAndBlocksReplacement() async throws {
+    let f = try fixture()
+    defer { try? FileManager.default.removeItem(at: f.root) }
+    try prepareCoordinator(f)
+    let provider = SummaryProvider(), leases = SummaryLeases()
+    provider.beforeResult = { _ in throw LibrarySummaryError.cleanupUnavailable }
+    let coordinator = LibrarySummaryCoordinator(database: f.db, epoch: UUID(), leases: leases,
+      authority: try ProviderRequest(), provider: provider)
+    do {
+      _ = try await coordinator.generate(paperID: f.identity.paperID,
+        generation: f.identity.generation, outputLanguage: "ko")
+      XCTFail("Unknown physical retirement must not publish")
+    } catch { XCTAssertEqual(error as? LibrarySummaryError, .cleanupUnavailable) }
+    XCTAssertFalse(leases.lease.closed)
+    do {
+      _ = try await coordinator.generate(paperID: f.identity.paperID,
+        generation: f.identity.generation, outputLanguage: "ko")
+      XCTFail("Unknown producer ownership must block replacement")
+    } catch { XCTAssertEqual(error as? LibrarySummaryError, .requestInProgress) }
+    XCTAssertEqual(provider.calls, 1)
+    XCTAssertNil(try LibrarySummaryService(database: f.db).restore(paperID: f.identity.paperID))
+  }
+
+  @MainActor func testMissingChatGPTConnectionDoesNotFallBackToAPIKey() async throws {
+    let f = try fixture()
+    defer { try? FileManager.default.removeItem(at: f.root) }
+    try prepareCoordinator(f)
+    _ = try f.db.compareAndSwapProviderConfiguration(expected: f.db.providerConfiguration(),
+      replacementKind: .codexChatGPT, replacementSlotID: UUID(), replacementModel: "fixture-model")
+    let authority = try ProviderRequest(), apiKey = SummaryProvider(), leases = SummaryLeases()
+    let selected = SelectedLibrarySummaryProvider(database: f.db, apiKey: apiKey,
+      chatGPT: NativeCodexSummaryProvider(connection: nil, authority: authority))
+    let coordinator = LibrarySummaryCoordinator(database: f.db, epoch: UUID(), leases: leases,
+      authority: authority, provider: selected)
+    do {
+      _ = try await coordinator.generate(paperID: f.identity.paperID,
+        generation: f.identity.generation, outputLanguage: "ko")
+      XCTFail("An unavailable selected provider must not publish")
+    } catch { XCTAssertEqual(error as? LibrarySummaryError, .providerUnavailable) }
+    XCTAssertEqual(apiKey.calls, 0)
+    XCTAssertTrue(leases.lease.closed)
+    XCTAssertNil(try LibrarySummaryService(database: f.db).restore(paperID: f.identity.paperID))
+  }
+
   @MainActor func testSummaryStageRejectsReplacedFileBeforeRenameOrUnlink() throws {
     let f = try fixture()
     defer { try? FileManager.default.removeItem(at: f.root) }

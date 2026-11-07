@@ -624,6 +624,58 @@ final class OwnedChildRetirementTests: XCTestCase {
     XCTAssertFalse(child.testingRetained)
   }
 
+  func testRequestAuthenticationCopyIncludesOnlyOwnedCredentialAndCleansBothNamespaces() throws {
+    let (sourceRoot, source, _) = try workerFixture()
+    let (targetRoot, target, _) = try workerFixture()
+    defer {
+      try? FileManager.default.removeItem(at: sourceRoot)
+      try? FileManager.default.removeItem(at: targetRoot)
+    }
+    XCTAssertTrue(source.prepareRuntimeDirectories())
+    XCTAssertTrue(target.prepareRuntimeDirectories())
+    let synthetic = Data("{\"synthetic\":\"not-a-credential\"}".utf8)
+    let auth = source.directoryURL.appendingPathComponent("codex/auth.json")
+    try synthetic.write(to: auth)
+    XCTAssertEqual(chmod(auth.path, 0o600), 0)
+    try Data("must-not-copy".utf8).write(to: source.directoryURL.appendingPathComponent("codex/config.toml"))
+    XCTAssertTrue(source.copyLoginAuthentication(to: target))
+    XCTAssertEqual(try Data(contentsOf: target.directoryURL.appendingPathComponent("codex/auth.json")), synthetic)
+    XCTAssertFalse(FileManager.default.fileExists(atPath:
+      target.directoryURL.appendingPathComponent("codex/config.toml").path))
+    XCTAssertFalse(source.copyLoginAuthentication(to: target)) // exclusive destination
+    XCTAssertTrue(target.cleanupUnlaunchedWorkerNamespace())
+    XCTAssertTrue(source.cleanupUnlaunchedWorkerNamespace())
+  }
+
+  func testRequestAuthenticationCopyRejectsLinksAndPreservesExternalData() throws {
+    for hardLink in [false, true] {
+      let (sourceRoot, source, _) = try workerFixture()
+      let (targetRoot, target, _) = try workerFixture()
+      defer {
+        try? FileManager.default.removeItem(at: sourceRoot)
+        try? FileManager.default.removeItem(at: targetRoot)
+      }
+      XCTAssertTrue(source.prepareRuntimeDirectories())
+      XCTAssertTrue(target.prepareRuntimeDirectories())
+      let external = sourceRoot.appendingPathComponent("external-synthetic")
+      let bytes = Data("unrelated-synthetic-data".utf8)
+      try bytes.write(to: external)
+      XCTAssertEqual(chmod(external.path, 0o600), 0)
+      let auth = source.directoryURL.appendingPathComponent("codex/auth.json")
+      if hardLink { XCTAssertEqual(link(external.path, auth.path), 0) }
+      else { XCTAssertEqual(symlink(external.path, auth.path), 0) }
+      XCTAssertFalse(source.copyLoginAuthentication(to: target))
+      XCTAssertFalse(FileManager.default.fileExists(atPath:
+        target.directoryURL.appendingPathComponent("codex/auth.json").path))
+      XCTAssertEqual(try Data(contentsOf: external), bytes)
+      // The test created this link. Production never adopts/removes an unknown hardlink.
+      XCTAssertEqual(unlink(auth.path), 0)
+      XCTAssertTrue(source.cleanupUnlaunchedWorkerNamespace())
+      XCTAssertTrue(target.cleanupUnlaunchedWorkerNamespace())
+      XCTAssertEqual(try Data(contentsOf: external), bytes)
+    }
+  }
+
   private final class LoginNoNetworkTransport: NativeConnectionTestTransport {
     private(set) var calls = 0
     func probe(

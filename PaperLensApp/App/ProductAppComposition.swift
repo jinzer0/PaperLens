@@ -29,6 +29,7 @@ public final class ProductAppComposition: ObservableObject {
   public private(set) var parsing: MainPDFiumParsingComposition?
   private let geometryBinding: PDFiumGeometryBinding?
   private let productionServices: Bool
+  private var summaryPurge: IsolatedAgentLibraryPurge?
   private var codexObservation: AnyCancellable?
   private let root: URL
   private let transport: any NativeConnectionTestTransport
@@ -74,9 +75,11 @@ public final class ProductAppComposition: ObservableObject {
       let authority = try ProviderRequest()
       // open binds startup recovery to this retained Main owner before any connection,
       // workspace command or producer can obtain the library/read-lease owners.
-      let purge: (any AgentLibraryPurging)? = productionServices
-        ? NativeOnlyAgentLibraryPurge(unsupportedPaperRoot:
-          root.appendingPathComponent("agent-paper-data", isDirectory: true)) : nil
+      let purge: IsolatedAgentLibraryPurge? = productionServices
+        ? IsolatedAgentLibraryPurge(unsupportedPaperRoot:
+          root.appendingPathComponent("agent-paper-data", isDirectory: true),
+          summaryRoot: root.appendingPathComponent("codex-summary-scopes", isDirectory: true)) : nil
+      summaryPurge = purge
       let lifecycle = try await LocalLibraryLifecycle.open(database: database, agentPurge: purge)
       self.database = database
       self.slots = slots
@@ -119,6 +122,7 @@ public final class ProductAppComposition: ObservableObject {
       database: database,
       root: root.appendingPathComponent("codex-scopes", isDirectory: true), apiKey: connection)
     self.codex = codex
+    summaryPurge?.bind(codex)
     codexObservation = codex.objectWillChange.sink { [weak self] in
       self?.objectWillChange.send()
     }

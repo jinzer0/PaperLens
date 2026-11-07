@@ -241,6 +241,26 @@ final class AgentRPCConnectionTests: XCTestCase {
     }
   }
 
+  func testSummaryResultRequiresExactRequestProviderAndPaperIdentity() throws {
+    for changed in ["requestID", "paperID", "paperGeneration", "configGeneration", "model"] {
+      let now = ContinuousClock().now
+      let connection = try productReady(now: now)
+      let identity: [String: Any] = ["requestID": UUID().uuidString.lowercased(),
+        "paperID": UUID().uuidString.lowercased(), "paperGeneration": 1,
+        "configGeneration": 1, "model": "test-model"]
+      var params = identity; params["requestJSON"] = "{}"
+      let id = try connection.request(method: "product.librarySummary", params: params,
+        timeoutMs: 120000, now: now)
+      _ = connection.takeOutbound()
+      var response = identity; response["resultJSON"] = "{}"
+      if changed == "model" { response[changed] = "other-model" }
+      else if changed.hasSuffix("Generation") { response[changed] = 2 }
+      else { response[changed] = UUID().uuidString.lowercased() }
+      connection.receive(try result(id, response), now: now)
+      XCTAssertEqual(connection.state, .poisoned, changed)
+    }
+  }
+
   /// Legal JSON whitespace changes wire length without weakening the closed result schema.
   private func padded(_ frame: Data, count: Int) throws -> Data {
     XCTAssertGreaterThanOrEqual(count, frame.count)

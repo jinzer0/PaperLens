@@ -76,6 +76,9 @@ public enum ProviderRPC {
     guard let method = contract.methods[name] as? [String: Any] else {
       throw ProviderRPCError.unknownMethod
     }
+    let ceiling = try method["maxTimeoutMs"] as? Int ?? contract.limit("maxTimeoutMs")
+    guard let timeout = exactUInt64(object["timeoutMs"]), timeout <= UInt64(ceiling)
+    else { throw ProviderRPCError.protocolViolation }
     guard let params = method["params"] as? [String: Any],
       let value = object["params"], try contract.matches(value, schema: params)
     else {
@@ -249,10 +252,21 @@ private struct Contract {
     {
       browser = instructions["mode"] as? String == "browser"
     }
-    try checkStructure(value, depth: 0, path: [], browser: browser)
+    var summary = false
+    if let object = value as? [String: Any],
+      let definition = methods["product.librarySummary"] as? [String: Any],
+      let params = definition["params"] as? [String: Any],
+      let result = definition["result"] as? [String: Any] {
+      summary = try (object["method"] as? String == "product.librarySummary"
+        && (try matches(object, schema: envelope("request")))
+        && (try matches(object["params"] as Any, schema: params)))
+        || ((try matches(object, schema: envelope("result")))
+        && (try matches(object["result"] as Any, schema: result)))
+    }
+    try checkStructure(value, depth: 0, path: [], browser: browser, summary: summary)
   }
 
-  private func checkStructure(_ value: Any, depth: Int, path: [String], browser: Bool) throws {
+  private func checkStructure(_ value: Any, depth: Int, path: [String], browser: Bool, summary: Bool) throws {
     if value is JSONInteger {
       return
     } else if let object = value as? [String: Any] {
@@ -261,19 +275,24 @@ private struct Contract {
       }
       for (key, item) in object {
         try checkString(key)
-        try checkStructure(item, depth: depth + 1, path: path + [key], browser: browser)
+        try checkStructure(item, depth: depth + 1, path: path + [key], browser: browser, summary: summary)
       }
     } else if let array = value as? [Any] {
       guard try depth < limit("maxDepth"), try array.count <= limit("maxArrayItems") else {
         throw ProviderRPCError.protocolViolation
       }
       for item in array {
-        try checkStructure(item, depth: depth + 1, path: path + [""], browser: browser)
+        try checkStructure(item, depth: depth + 1, path: path + [""], browser: browser, summary: summary)
       }
     } else if let string = value as? String {
       var maximum: Int?
       if browser && path == ["result", "instructions", "authUrl"] {
         maximum = try limit("maxAuthURLBytes")
+      }
+      if summary && path == ["params", "requestJSON"] {
+        maximum = try limit("maxSummaryRequestBytes")
+      } else if summary && path == ["result", "resultJSON"] {
+        maximum = try limit("maxSummaryResultBytes")
       }
       try checkString(string, maximum: maximum)
     } else if let number = value as? NSNumber {
@@ -570,7 +589,7 @@ private struct JSONParser {
           guard let string = value as? String else { throw ProviderRPCError.protocolViolation }
           // Bounded lexical retention only; parse() validates the exact root/path before export.
           try contract.checkString(
-            string, maximum: contract.limit(isKey ? "maxStringBytes" : "maxAuthURLBytes"))
+            string, maximum: contract.limit(isKey ? "maxStringBytes" : "maxSummaryRequestBytes"))
           return string
         } catch { throw ProviderRPCError.protocolViolation }
       }

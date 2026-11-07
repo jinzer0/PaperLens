@@ -80,7 +80,18 @@ def _production_command():
     info = command.stat()
     if not stat.S_ISREG(info.st_mode) or not info.st_mode & 0o111:
         raise PermissionError('invalidPackagedCLI')
-    return (str(command), 'app-server', '--listen', 'stdio://')
+    # Every app-owned account uses a private file store; never adopt the user's
+    # keychain, shell environment, extensions or executable tools.
+    overrides = ('cli_auth_credentials_store="file"', 'web_search="disabled"',
+                 'chatgpt_base_url="https://chatgpt.com/backend-api/"',
+                 'openai_base_url=""', 'model_provider="openai"', 'respect_system_proxy=false',
+                 'features.apps=false', 'features.plugins=false',
+                 'features.multi_agent=false', 'features.shell_tool=false',
+                 'features.view_image=false', 'features.auth_elicitation=false',
+                 'features.mentions_v2=false', 'features.remote_plugin=false',
+                 'features.tool_suggest=false')
+    return (str(command), *(part for value in overrides for part in ('-c', value)),
+            'app-server', '--listen', 'stdio://')
 
 
 def production(cwd_fd, environment):

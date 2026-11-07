@@ -48,6 +48,9 @@ CASES = [
     ("cancel", {"targetID": ID}, {"accepted": False}),
 ]
 
+SUMMARY_IDENTITY = {"requestID": ID, "paperID": STAGE, "paperGeneration": 1, "configGeneration": 1, "model": "test-model"}
+CASES.append(("product.librarySummary", {**SUMMARY_IDENTITY, "requestJSON": "{}"}, {**SUMMARY_IDENTITY, "resultJSON": "{}"}))
+
 
 def request(method="topology.runtime", params=None, **changes):
     value = {"kind": "request", "id": ID, "method": method, "timeoutMs": 10000,
@@ -63,6 +66,19 @@ def raw(body):
 
 
 class ProviderRPCTests(unittest.TestCase):
+    def test_summary_bounds_are_method_and_path_scoped(self):
+        payload = {**SUMMARY_IDENTITY, "requestJSON": "x" * 49152}
+        packet = request("product.librarySummary", payload, timeoutMs=120000)
+        rpc.validate_request(rpc.decode_frame(rpc.encode_frame(packet)))
+        self.rejects(lambda: rpc.validate_request(request(timeoutMs=10001)))
+        self.rejects(lambda: rpc.validate_request({**packet, "timeoutMs": 120001}))
+        self.rejects(lambda: rpc.encode_frame(request("product.librarySummary", {**payload, "requestJSON": "x" * 49153})))
+        self.rejects(lambda: rpc.encode_frame(request("product.librarySummary", {**payload, "model": "x" * 257})))
+        self.rejects(lambda: rpc.encode_frame(request("product.loginObserve", {**LOGIN, "requestJSON": "x" * 4097})))
+        result = {"kind": "result", "id": ID, "result": {**SUMMARY_IDENTITY, "resultJSON": "x" * 32768}}
+        rpc.validate_terminal(rpc.decode_frame(rpc.encode_frame(result)), "product.librarySummary")
+        self.rejects(lambda: rpc.validate_terminal(result, "product.connectionTest"))
+
     # Typed wire fixtures only: none represents an SDK call or cleanup observation.
     def product_terminal(self, result):
         return {"kind": "result", "id": ID, "result": result}

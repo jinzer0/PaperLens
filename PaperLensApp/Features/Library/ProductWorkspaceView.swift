@@ -120,7 +120,9 @@ public final class ProductWorkspace: ObservableObject {
     let summaryAuthority = try ProviderRequest()
     summaries = LibrarySummaryCoordinator(database: database, epoch: lifecycle.epoch,
       leases: readLeases, authority: summaryAuthority,
-      provider: NativeAPIKeySummaryProvider(connection: connection, authority: summaryAuthority))
+      provider: SelectedLibrarySummaryProvider(database: database,
+        apiKey: NativeAPIKeySummaryProvider(connection: connection, authority: summaryAuthority),
+        chatGPT: NativeCodexSummaryProvider(connection: codex, authority: summaryAuthority)))
   }
 
   public func generateSummary(for paper: OrganizedPaper, outputLanguage: String) async throws {

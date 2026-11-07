@@ -1,5 +1,8 @@
 import Combine
 import Foundation
+#if SWIFT_PACKAGE
+import ProviderRequest
+#endif
 
 /// One user-triggered private SDK scope. SQLite remains the only provider selector.
 @MainActor
@@ -30,6 +33,64 @@ public final class NativeCodexConnection: ObservableObject {
   private var results: [UUID: AgentRPCConnection.Terminal] = [:]
   private var cancelled = false
   private var retirementRequested = false
+  private var summaryScopes: [UUID: NativeCodexSummaryScope] = [:]
+  private var summaryNamespaceDebt: [TopologyOwnedFixtures] = []
+
+  public var summaryRoot: URL { root.deletingLastPathComponent().appendingPathComponent("codex-summary-scopes") }
+
+  public func executeLibrarySummary(_ request: AuthorizedProviderRequest,
+    identity: LibrarySummaryIdentity, authority: ProviderRequest) async throws -> ValidatedProviderResult {
+    try Task.checkCancellation()
+    guard eligibleForEntry, let loginNamespace = namespace, let selected = committed,
+      selected.generation == identity.configurationGeneration, let model = selected.model,
+      request.wire.operation == .librarySummary, summaryScopes.isEmpty,
+      summaryNamespaceDebt.isEmpty else { throw LibrarySummaryError.providerUnavailable }
+    let raw = try authority.encodeRequest(request)
+    guard raw.count <= 49_152 else { throw LibrarySummaryError.invalidResult }
+    try IsolatedAgentLibraryPurge.requireEmptySummaryRoot(summaryRoot)
+    let requestID = UUID()
+    guard let target = TopologyOwnedFixtures(root: summaryRoot, runID: requestID.uuidString.lowercased())
+    else { throw LibrarySummaryError.cleanupUnavailable }
+    guard let launch = prepareWorker(target), target.prepareRuntimeDirectories(),
+      loginNamespace.copyLoginAuthentication(to: target) else {
+      if !target.cleanupUnlaunchedWorkerNamespace() {
+        summaryNamespaceDebt.append(target)
+        throw LibrarySummaryError.cleanupUnavailable
+      }
+      throw LibrarySummaryError.providerUnavailable
+    }
+    let params: [String: Any] = ["requestID": request.wire.requestID,
+      "paperID": identity.paperID.uuidString.lowercased(),
+      "paperGeneration": identity.requestPaperGeneration,
+      "configGeneration": identity.configurationGeneration, "model": model,
+      "requestJSON": String(decoding: raw, as: UTF8.self)]
+    let scope = NativeCodexSummaryScope(launch: launch, paperID: identity.paperID, params: params)
+    summaryScopes[requestID] = scope
+    do {
+      let result = try await scope.execute()
+      summaryScopes.removeValue(forKey: requestID)
+      guard currentConfiguration == selected, eligibleForEntry else {
+        throw LibrarySummaryError.staleIdentity
+      }
+      try Task.checkCancellation()
+      return try authority.wrapModelResult(result, request: request)
+    } catch {
+      if scope.clean { summaryScopes.removeValue(forKey: requestID) }
+      throw error
+    }
+  }
+
+  public func purgeSummaryPaper(paperID: UUID, deletionID: UUID) async throws -> AgentLibraryPurgeReceipt {
+    guard summaryNamespaceDebt.isEmpty else { throw LocalLibraryError.producerClosureUnknown }
+    let scopes = summaryScopes.filter { $0.value.paperID == paperID }
+    for (id, scope) in scopes {
+      await scope.retireAndWait()
+      guard scope.clean else { throw LocalLibraryError.producerClosureUnknown }
+      summaryScopes.removeValue(forKey: id)
+    }
+    try IsolatedAgentLibraryPurge.requireEmptySummaryRoot(summaryRoot)
+    return AgentLibraryPurgeReceipt(paperID: paperID, deletionID: deletionID)
+  }
 
   public convenience init(database: ProductDatabase, root: URL, apiKey: NativeAPIKeyConnection) {
     self.init(
@@ -52,7 +113,9 @@ public final class NativeCodexConnection: ObservableObject {
   public var currentConfiguration: ProviderConfiguration? { try? database.providerConfiguration() }
   internal var testingOwner: OwnedChildRetirement? { owner }
   /// Even a successful login cannot authorize a second SDK scope or a provider switch.
-  public var blocksReplacement: Bool { namespace != nil || owner != nil }
+  public var blocksReplacement: Bool {
+    namespace != nil || owner != nil || !summaryScopes.isEmpty || !summaryNamespaceDebt.isEmpty
+  }
   public var canStart: Bool { !blocksReplacement && apiKey.canReplaceOwner }
   public var eligibleForEntry: Bool {
     guard phase == .connected, !cancelled, !retirementRequested,
@@ -169,6 +232,7 @@ public final class NativeCodexConnection: ObservableObject {
     phase = .retiring
     message = "로그인 취소와 종료를 요청했습니다. 실제 정리는 아직 입증되지 않았습니다."
     retirementRequested = true
+    for scope in summaryScopes.values { scope.cancel() }
     // Only the final cancel frame retains bounded owner admission. Local publication
     // is fenced already; SDK cancellation acceptance is never retirement proof.
     if let lifecycle, lifecycle.connection.state == .ready, stageID != nil {
@@ -264,7 +328,7 @@ public final class NativeCodexConnection: ObservableObject {
         try apiKey.retireSupersededSelection()
         phase = .connected
         message =
-          "ChatGPT 생성 검사와 선택 저장이 완료되었습니다. 일반 논문 추론은 아직 제공되지 않습니다."
+          "ChatGPT 연결이 완료되었습니다. Library에서 논문 요약을 생성할 수 있습니다."
       } catch { failClosed() }
     }
   }
@@ -287,6 +351,99 @@ extension String {
 }
 
 /// Safe projection of the shared owners, never a second selector or credential store.
+/// Each request owns a real worker. A wire result is retained until native
+/// termination, waitpid, transport closure and namespace removal have completed.
+@MainActor
+internal final class NativeCodexSummaryScope {
+  let paperID: UUID
+  private let owner: OwnedChildRetirement
+  private let params: [String: Any]
+  private var lifecycle: AgentConnectionLifecycle?
+  private var requestID: UUID?
+  private var outcome: Result<Data, any Error>?
+  private var continuation: CheckedContinuation<Data, any Error>?
+  private var waiters: [CheckedContinuation<Void, Never>] = []
+  private var terminalReceived = false
+  private(set) var clean = false
+
+  init(launch: OwnedChildRetirement.WorkerLaunch, paperID: UUID, params: [String: Any]) {
+    self.paperID = paperID; self.params = params
+    owner = OwnedChildRetirement(worker: launch,
+      deadlineUptimeNanoseconds: DispatchTime.now().uptimeNanoseconds + 5_000_000_000)
+  }
+
+  func execute() async throws -> Data {
+    try await withTaskCancellationHandler {
+      try await withCheckedThrowingContinuation { continuation in
+        self.continuation = continuation
+        owner.observeTerminal { [weak self] terminal in
+          Task { @MainActor in self?.finished(terminal) }
+        }
+        owner.startProduct(startDeadlineUptimeNanoseconds:
+          DispatchTime.now().uptimeNanoseconds + 5_000_000_000) { [self] result in
+          switch result {
+          case .failure: fail(LibrarySummaryError.providerUnavailable)
+          case .success(let lifecycle):
+            guard outcome == nil, !terminalReceived else { owner.retire(); return }
+            self.lifecycle = lifecycle
+            lifecycle.onTerminal = { [self] id, terminal in receive(id, terminal: terminal) }
+            do {
+              requestID = try lifecycle.request(method: "product.librarySummary", params: params,
+                timeoutMs: 120_000)
+            } catch { fail(error) }
+          }
+        }
+      }
+    } onCancel: {
+      Task { @MainActor [self] in cancel() }
+    }
+  }
+
+  private func receive(_ id: UUID, terminal: AgentRPCConnection.Terminal) {
+    guard id == requestID, outcome == nil else { return }
+    guard case .result(let result) = terminal,
+      let json = result["resultJSON"] as? String, json.utf8.count <= 32_768 else {
+      fail(LibrarySummaryError.invalidResult); return
+    }
+    var expected = params
+    expected.removeValue(forKey: "requestJSON")
+    var actual = result
+    actual.removeValue(forKey: "resultJSON")
+    guard NSDictionary(dictionary: expected).isEqual(to: actual) else {
+      fail(LibrarySummaryError.staleIdentity); return
+    }
+    outcome = .success(Data(json.utf8))
+    owner.retire()
+  }
+
+  private func fail(_ error: any Error) {
+    if outcome == nil { outcome = .failure(error) }
+    owner.retire()
+  }
+
+  func cancel() { fail(CancellationError()) }
+
+  func retireAndWait() async {
+    cancel()
+    if terminalReceived { return }
+    await withCheckedContinuation { waiters.append($0) }
+  }
+
+  private func finished(_ terminal: OwnedChildRetirement.Terminal) {
+    guard !terminalReceived else { return }
+    terminalReceived = true
+    if case .clean = terminal { clean = true }
+    let result: Result<Data, any Error> = clean
+      ? outcome ?? .failure(LibrarySummaryError.providerUnavailable)
+      : .failure(LibrarySummaryError.cleanupUnavailable)
+    lifecycle = nil
+    let pending = continuation; continuation = nil
+    pending?.resume(with: result)
+    let waiting = waiters; waiters.removeAll()
+    for waiter in waiting { waiter.resume() }
+  }
+}
+
 @MainActor
 public final class ProviderSettingsService: ObservableObject {
   private let connection: NativeAPIKeyConnection

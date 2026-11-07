@@ -1069,5 +1069,88 @@ raise AssertionError('unpackaged source or missing namespace admitted')
                     parent_socket.close()
 
 
+class IsolatedSummaryTests(unittest.TestCase):
+    def setUp(self):
+        spec = importlib.util.spec_from_file_location('summary_contract_fixture',
+            ROOT / 'Contracts/ProviderRequest/provider_request.py')
+        self.authority = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = self.authority
+        spec.loader.exec_module(self.authority)
+        contract = json.loads((ROOT / 'Contracts/ProviderRequest/contract.json').read_text())
+        fixture = next(case for case in contract['conformance']['results']
+            if case.get('accepted') and case['request']['operation'] == 'librarySummary')
+        wire = fixture['request']
+        self.result = json.dumps(fixture['value']['result'])
+        self.params = {'requestID': wire['requestID'], 'paperID': wire['input']['evidence']['paperID'],
+            'paperGeneration': 1, 'configGeneration': 3, 'model': 'synthetic',
+            'requestJSON': json.dumps(wire)}
+        self.config = {'cli_auth_credentials_store': 'file', 'web_search': 'disabled',
+            'features': {key: False for key in
+                ('apps', 'plugins', 'multi_agent', 'shell_tool', 'view_image')},
+            'mcp_servers': {}, 'model_providers': {}}
+        self.owner = sdk_worker.OfficialSDKWorker()
+        self.owner.cwd = Path('/synthetic/request')
+        self.owner.models = SimpleNamespace(ConfigReadResponse=object)
+        self.owner.client = Mock()
+        self.owner.client.request.return_value = SimpleNamespace(
+            config=public_model(payload=self.config))
+        self.owner.client.thread_start.return_value = SimpleNamespace(thread=SimpleNamespace(id='thread-actual'))
+        self.owner.client.turn_start.return_value = SimpleNamespace(turn=SimpleNamespace(id='turn-actual'))
+        self.owner.client.next_turn_notification.return_value = completion(text=self.result)
+        self.owner._sdk_module = Mock(return_value=self.authority)
+
+    def test_summary_uses_empty_environments_and_private_read_only_permissions(self):
+        complete = completion(text=self.result)
+        complete.payload.turn.items[:0] = [SimpleNamespace(root=SimpleNamespace(type='userMessage')),
+            SimpleNamespace(root=SimpleNamespace(type='reasoning'))]
+        self.owner.client.next_turn_notification.return_value = complete
+        result = self.owner._library_summary('wire-summary', self.params)
+        self.assertEqual(result['resultJSON'], self.result)
+        self.assertEqual(result['paperID'], self.params['paperID'])
+        start = self.owner.client.thread_start.call_args.args[0]
+        self.assertEqual(start['environments'], [])
+        self.assertEqual(start['approvalPolicy'], 'never')
+        self.assertTrue(start['ephemeral'])
+        self.assertEqual(start['config']['permissions']['paperlens'], {
+            'filesystem': {'/synthetic/request/work': 'read'}, 'network': {'enabled': False}})
+        self.assertEqual(self.owner.client.turn_start.call_args.args[2]['environments'], [])
+        self.assertEqual(self.owner.client.turn_start.call_args.args[2]['outputSchema'], sdk_worker._SUMMARY_SCHEMA)
+        self.assertEqual(self.owner.client.turn_start.call_args.args[1][0]['type'], 'text')
+        self.assertNotIn(self.params['paperID'], start['baseInstructions'])
+
+    def test_inherited_extensions_or_configuration_fail_before_any_paper_thread(self):
+        for key, value in [('mcp_servers', {'inherited': {'command': '/usr/bin/true'}}),
+                ('hooks', {'SessionStart': [{}]}), ('model_providers', {'external': {}}),
+                ('instructions', 'inherited data'), ('browser_use', {'enabled': True}),
+                ('permissions', {'paperlens': {'filesystem': {':root': 'write'}}}),
+                ('chatgpt_base_url', 'https://example.invalid/'), ('notify', ['/usr/bin/true']),
+                ('model_instructions_file', '/synthetic/private'), ('skills', {'config': [{}]})]:
+            with self.subTest(key=key):
+                config = dict(self.config, **{key: value})
+                self.owner.client.request.return_value = SimpleNamespace(config=public_model(payload=config))
+                with self.assertRaises(ProtocolError):
+                    self.owner._library_summary('wire-summary', self.params)
+                self.owner.client.thread_start.assert_not_called()
+
+    def test_unknown_enabled_feature_is_refused_before_paper_thread(self):
+        self.config['features']['js_repl'] = True
+        with self.assertRaises(ProtocolError):
+            self.owner._library_summary('wire-summary', self.params)
+        self.owner.client.thread_start.assert_not_called()
+
+    def test_identity_mismatch_is_refused_before_configuration_or_turn(self):
+        with self.assertRaises(ProtocolError):
+            self.owner._library_summary('wire-summary', dict(self.params, paperGeneration=2))
+        self.owner.client.request.assert_not_called()
+
+    def test_unexpected_tool_completion_or_oversized_model_text_is_not_published(self):
+        tool = completion(text=self.result)
+        tool.payload.turn.items.append(SimpleNamespace(root=SimpleNamespace(type='commandExecution')))
+        for notification_value in [tool, completion(text='x' * 2049)]:
+            self.owner.client.next_turn_notification.return_value = notification_value
+            with self.assertRaises(ProtocolError):
+                self.owner._library_summary('wire-summary', self.params)
+
+
 if __name__ == '__main__':
     unittest.main()
