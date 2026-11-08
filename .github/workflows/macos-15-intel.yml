@@ -2,6 +2,11 @@ name: macOS 15 Intel compatibility
 
 on:
   workflow_dispatch:
+    inputs:
+      product_filter:
+        description: "Optional exact ProductTests.Class or ProductTests.Class/testCase; empty runs all"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -36,6 +41,7 @@ jobs:
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
       PYTHONDONTWRITEBYTECODE: "1"
+      PAPERLENS_PRODUCT_FILTER: ${{ inputs.product_filter }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:

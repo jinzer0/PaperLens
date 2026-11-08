@@ -58,7 +58,7 @@ def stage(destination):
     print(json.dumps(metadata, indent=2))
 
 
-def run(source, reports):
+def run(source, reports, product_filter=None):
     reports.mkdir(parents=True, exist_ok=True)
     version = command("sw_vers", "-productVersion")
     machine = platform.machine()
@@ -94,9 +94,12 @@ def run(source, reports):
                        PAPERLENS_FIXTURE_PYTHON=sys.executable,
                        SWIFT_TESTING_ENABLED="0")
     statuses = []
-    product = subprocess.run([sys.executable, str(ROOT / "scripts/product/verify-isolated-tests.py"),
-                              str(PRODUCTS / "ProductTests.xctest"), "--xctest-helper", str(helper),
-                              "--report", str(reports / "product-tests.json")],
+    product_argv = [sys.executable, str(ROOT / "scripts/product/verify-isolated-tests.py"),
+                    str(PRODUCTS / "ProductTests.xctest"), "--xctest-helper", str(helper),
+                    "--report", str(reports / "product-tests.json")]
+    if product_filter:
+        product_argv += ["--filter", product_filter]
+    product = subprocess.run(product_argv,
                              cwd=ROOT, env=environment, check=False)
     statuses.append(product.returncode == 0)
     for name in BUNDLES[1:]:
@@ -121,9 +124,11 @@ if __name__ == "__main__":
     parser.add_argument("mode", choices=["stage", "run"])
     parser.add_argument("artifact", type=Path)
     parser.add_argument("--reports", type=Path, default=ROOT / ".build/ci-reports")
+    parser.add_argument("--filter", default=os.environ.get("PAPERLENS_PRODUCT_FILTER") or None,
+                        help="optional exact product class/case for targeted compatibility checks")
     args = parser.parse_args()
     try:
-        stage(args.artifact) if args.mode == "stage" else run(args.artifact, args.reports)
+        stage(args.artifact) if args.mode == "stage" else run(args.artifact, args.reports, args.filter)
     except (OSError, ValueError, subprocess.SubprocessError) as error:
         print(f"ERROR: {error}", file=sys.stderr)
         sys.exit(1)

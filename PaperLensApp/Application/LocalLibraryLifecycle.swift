@@ -552,7 +552,8 @@ public actor LocalLibraryLifecycle {
     cancellations[identity.paperID] = cancellation
     do {
       // Source title metadata is not accessed here; only the picker-supplied URL spelling.
-      let title = String(source.deletingPathExtension().lastPathComponent.prefix(240))
+      let title = source.absoluteString.contains("%00")
+        ? "PDF" : String(source.deletingPathExtension().lastPathComponent.prefix(240))
       try await reserve(identity, title: title,
         facts: .init(expectedSHA256: expectedSHA256, destinationFolderID: destinationFolderID))
     } catch {
