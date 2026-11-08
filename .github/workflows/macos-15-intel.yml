@@ -1,0 +1,62 @@
+name: macOS 15 Intel compatibility
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build Intel tests with pinned Xcode
+    runs-on: xcode-27
+    timeout-minutes: 20
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Cross-compile without executing Intel binaries
+        run: swift build --build-tests --triple x86_64-apple-macosx15.0 --scratch-path .build/ci-intel --disable-automatic-resolution
+      - name: Verify pins and archive test bundles
+        run: python3 scripts/product/ci-intel.py stage .build/intel-artifact
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: intel-test-bundles
+          path: .build/intel-artifact/*
+          if-no-files-found: error
+          retention-days: 7
+
+  test:
+    name: Execute natively on macOS 15 Intel
+    needs: build
+    runs-on: macos-15-intel
+    timeout-minutes: 45
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.13.16"
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: intel-test-bundles
+          path: .build/intel-artifact
+      - name: Execute product and contract tests on the actual target OS
+        run: python3 scripts/product/ci-intel.py run .build/intel-artifact
+      - name: Verify offline test driver regressions
+        if: ${{ !cancelled() }}
+        run: python3 -m unittest discover -s Tests/Topology -p test_isolated_product_tests.py -v
+      - name: Upload actual host and test results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: macos-15-intel-results
+          path: .build/ci-reports/
+          if-no-files-found: error
+          retention-days: 14

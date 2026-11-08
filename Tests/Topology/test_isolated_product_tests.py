@@ -87,6 +87,51 @@ class IsolatedProductTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     driver.parse_listing(fixture)
 
+    def native_listing(self, cases=(CASE, SECOND)):
+        return {"name": "All Tests", "tests": [{"name": "ProductTests.xctest", "tests": [
+            {"name": "ProductTests.LocalLibraryLifecycleTests", "tests": [
+                {"name": case.split("/")[1]} for case in cases]}]}]}
+
+    def test_native_helper_discovers_bundle_without_loading_package_manifest(self):
+        helper = self.root / "swiftpm-xctest-helper"
+        helper.touch()
+
+        def helper_run(argv, **kwargs):
+            self.assertEqual(argv[:2], [str(helper), str(self.bundle)])
+            Path(argv[2]).write_text(json.dumps(self.native_listing()))
+            return subprocess.CompletedProcess(argv, 0, "", "native diagnostics")
+
+        self.list_run.side_effect = helper_run
+        child, launch = self.fake_child(output())
+        with mock.patch.object(driver.subprocess, "Popen", side_effect=launch):
+            self.assertEqual(self.invoke("--xctest-helper", str(helper), "--filter", CASE), 0)
+        discovery = json.loads(self.report.read_text())["discovery"]
+        self.assertEqual(discovery["stderr"], "native diagnostics")
+        self.assertEqual(discovery["tests"], self.native_listing())
+        self.assertFalse(Path(self.list_run.call_args.args[0][2]).exists())
+
+    def test_native_helper_rejects_wrong_suite_empty_duplicate_or_injected_cases(self):
+        fixtures = [None, {}, {"name": "All Tests", "tests": [None]},
+                    {"name": "All Tests", "tests": []},
+                    {"name": "All Tests", "tests": [{"name": "OtherTests.xctest"}]},
+                    self.native_listing(()), self.native_listing((CASE, CASE)),
+                    self.native_listing((CASE + ",Other/testBad",))]
+        for fixture in fixtures:
+            with self.subTest(fixture=fixture), self.assertRaises(ValueError):
+                driver.parse_native_listing(fixture)
+
+    def test_native_helper_failure_never_executes_cases(self):
+        helper = self.root / "swiftpm-xctest-helper"
+        helper.touch()
+        for result in [subprocess.CompletedProcess([], 1, "", "cannot load bundle"),
+                       subprocess.TimeoutExpired("helper", 120)]:
+            self.list_run.side_effect = result if isinstance(result, Exception) else None
+            self.list_run.return_value = result
+            with mock.patch.object(driver.subprocess, "Popen") as launch:
+                self.assertEqual(self.invoke("--xctest-helper", str(helper)), 2)
+                launch.assert_not_called()
+                self.assertFalse(json.loads(self.report.read_text())["success"])
+
     def test_filter_injection_and_no_match_rejected_without_process(self):
         for requested in ["-XCTest All", CASE + "," + SECOND, "ProductTests.*",
                           CASE + ";touch file", CASE + "\n", "ProductTests.Missing"]:
