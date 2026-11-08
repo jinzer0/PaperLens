@@ -273,6 +273,12 @@ class IsolatedProductTests(unittest.TestCase):
                 launch.assert_not_called()
         self.assertEqual(manifest.read_text(), "synthetic manifest")
         self.assertFalse((self.bundle / "output.json").exists())
+        helper = self.root / "swiftpm-xctest-helper"
+        helper.write_text("synthetic helper executable")
+        with mock.patch.object(driver.subprocess, "Popen") as launch:
+            self.assertEqual(self.invoke("--xctest-helper", str(helper), "--report", str(helper)), 2)
+            launch.assert_not_called()
+        self.assertEqual(helper.read_text(), "synthetic helper executable")
 
     def test_report_write_failure_is_not_success(self):
         child, launch = self.fake_child(output())

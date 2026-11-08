@@ -204,8 +204,11 @@ def main(argv=None):
     try:
         # Never overwrite caller input, including paths inside the built bundle.
         report_path = args.report.resolve()
-        if report_path == (args.package_path / "Package.swift").resolve() or report_path == (args.package_path / "Package.resolved").resolve() or report_path == args.bundle.resolve() or args.bundle.resolve() in report_path.parents:
-            raise ValueError("report must not overwrite package manifests or the built bundle")
+        if (report_path == (args.package_path / "Package.swift").resolve()
+                or report_path == (args.package_path / "Package.resolved").resolve()
+                or report_path == args.bundle.resolve() or args.bundle.resolve() in report_path.parents
+                or (args.xctest_helper and report_path == args.xctest_helper.resolve())):
+            raise ValueError("report must not overwrite package manifests, discovery helper or the built bundle")
         report_allowed = True
         if args.bundle.name != "ProductTests.xctest" or not args.bundle.is_dir():
             raise ValueError("bundle must be an existing ProductTests.xctest directory")
