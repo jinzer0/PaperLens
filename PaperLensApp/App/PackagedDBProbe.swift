@@ -1,6 +1,9 @@
 import Darwin
 import Foundation
 import GRDB
+import CryptoKit
+import MachO
+import SQLite3
 
 // Verification-only. Explicit synthetic mode only; never normal product startup.
 enum PackagedDBFault: Equatable, Sendable { case none, m1, m2 }
@@ -43,6 +46,189 @@ struct PackagedDBDiagnostics: Sendable {
   let version: String
   let sourceID: String
   let compileOptions: [String]
+}
+
+/// Contentless observations only. An image match does not waive source-identity validation.
+struct PackagedDBProvenance: Encodable, Equatable, Sendable {
+  let sameConnection: Bool
+  let symbolsBoundToImage: Bool
+  let sharedCacheImage: Bool
+  let metadataMatches: Bool
+  let osBuild: String?
+  let imageIdentity: String?
+  let sqliteVersion: String?
+  let sqliteSourceId: String?
+  let compileOptions: [String]
+  let inspectedEntries: Int
+  let maxEntryBytes: Int
+
+  var verified: Bool {
+    sameConnection && symbolsBoundToImage && sharedCacheImage && metadataMatches
+      && osBuild != nil && imageIdentity != nil && sqliteVersion != nil && sqliteSourceId != nil
+      && compileOptions.contains("ENABLE_FTS5")
+  }
+}
+
+enum PackagedDBImageBinding {
+  // The existing offline consumer's complete allowlist, in its canonical order.
+  static let facts = ["ENABLE_FTS5", "THREADSAFE=1", "ENABLE_COLUMN_METADATA", "ENABLE_RTREE",
+    "ENABLE_JSON1", "ENABLE_FTS3", "ENABLE_FTS4", "ENABLE_FTS3_PARENTHESIS",
+    "ENABLE_UNLOCK_NOTIFY", "SECURE_DELETE", "DEFAULT_AUTOVACUUM", "ENABLE_DBSTAT_VTAB",
+    "ENABLE_MATH_FUNCTIONS", "OMIT_LOAD_EXTENSION", "USE_URI", "ENABLE_SESSION"]
+
+  // Never serialize a timestamp prefix, substitute a digest, or silently normalize alt1/alt2.
+  static func sourceSuffix(_ source: String) -> String? {
+    guard source.utf8.count <= 256 else { return nil }
+    let parts = source.split(separator: " ", omittingEmptySubsequences: false)
+    guard parts.count == 3, parts[0].range(of: #"\A[0-9]{4}-[0-9]{2}-[0-9]{2}\z"#,
+      options: .regularExpression) != nil,
+      parts[1].range(of: #"\A[0-9]{2}:[0-9]{2}:[0-9]{2}\z"#,
+      options: .regularExpression) != nil else { return nil }
+    let suffix = String(parts[2])
+    guard [40, 64].contains(suffix.utf8.count), suffix.utf8.allSatisfy({
+      (48...57).contains($0) || (97...102).contains($0)
+    }) else { return nil }
+    return suffix
+  }
+
+  private static func osBuild() -> String? {
+    var size = 0
+    guard sysctlbyname("kern.osversion", nil, &size, nil, 0) == 0, (2...64).contains(size)
+    else { return nil }
+    var bytes = [CChar](repeating: 0, count: size)
+    guard sysctlbyname("kern.osversion", &bytes, &size, nil, 0) == 0,
+      (2...bytes.count).contains(size), bytes[size - 1] == 0 else { return nil }
+    let value = String(cString: bytes)
+    return value.range(of: #"\A[0-9]{1,3}[A-Z][0-9]{1,6}[a-z]?\z"#,
+      options: .regularExpression) != nil ? value : nil
+  }
+
+  private static func imageUUID(_ base: UnsafeMutableRawPointer) -> Data? {
+    let header = base.load(as: mach_header_64.self)
+    guard header.magic == MH_MAGIC_64, header.filetype == MH_DYLIB,
+      header.flags & UInt32(MH_DYLIB_IN_CACHE) != 0,
+      (1...4096).contains(header.ncmds), header.sizeofcmds <= 1_048_576 else { return nil }
+    let start = MemoryLayout<mach_header_64>.size
+    let end = start + Int(header.sizeofcmds)
+    var offset = start
+    var uuid: Data?
+    for _ in 0..<header.ncmds {
+      guard offset <= end - MemoryLayout<load_command>.size else { return nil }
+      let command = base.load(fromByteOffset: offset, as: load_command.self)
+      guard command.cmdsize >= MemoryLayout<load_command>.size,
+        Int(command.cmdsize) <= end - offset else { return nil }
+      if command.cmd == LC_UUID {
+        guard uuid == nil, command.cmdsize == MemoryLayout<uuid_command>.size else { return nil }
+        uuid = Data(bytes: base.advanced(by: offset + MemoryLayout<load_command>.size), count: 16)
+      }
+      offset += Int(command.cmdsize)
+    }
+    return offset == end ? uuid : nil
+  }
+
+  private final class Witness {
+    let connection: OpaquePointer
+    let image: UnsafeMutableRawPointer?
+    var calls = 0
+    var sameConnection = false
+    var executingImage = false
+    init(connection: OpaquePointer, image: UnsafeMutableRawPointer?) {
+      self.connection = connection; self.image = image
+    }
+    func observe(_ context: OpaquePointer) {
+      calls += 1
+      sameConnection = sqlite3_context_db_handle(context) == connection
+      // Return PCs prove execution through this image, rather than merely its presence.
+      // Raw stack addresses and dladdr paths never leave this synchronous callback.
+      let addresses = Thread.callStackReturnAddresses
+      guard let image, addresses.count < 128 else { return }
+      executingImage = addresses.contains { address in
+        guard let pointer = UnsafeRawPointer(bitPattern: address.uintValue) else { return false }
+        var info = Dl_info()
+        return dladdr(pointer, &info) != 0 && info.dli_fbase == image
+      }
+    }
+  }
+
+  static func observe(_ db: Database, diagnostics: PackagedDBDiagnostics) throws -> PackagedDBProvenance {
+    guard let connection = db.sqliteConnection else { throw PackagedDBFailure(.unexpectedFailure) }
+    let step: @convention(c) (OpaquePointer?) -> Int32 = sqlite3_step
+    let prepare: @convention(c) (OpaquePointer?, UnsafePointer<CChar>?, Int32, UInt32,
+      UnsafeMutablePointer<OpaquePointer?>?, UnsafeMutablePointer<UnsafePointer<CChar>?>?) -> Int32
+      = sqlite3_prepare_v3
+    let version: @convention(c) () -> UnsafePointer<CChar>? = sqlite3_libversion
+    let source: @convention(c) () -> UnsafePointer<CChar>? = sqlite3_sourceid
+    let compile: @convention(c) (Int32) -> UnsafePointer<CChar>? = sqlite3_compileoption_get
+    let addresses = [unsafeBitCast(step, to: UnsafeRawPointer.self),
+      unsafeBitCast(prepare, to: UnsafeRawPointer.self), unsafeBitCast(version, to: UnsafeRawPointer.self),
+      unsafeBitCast(source, to: UnsafeRawPointer.self), unsafeBitCast(compile, to: UnsafeRawPointer.self)]
+    var first = Dl_info()
+    let found = dladdr(addresses[0], &first) != 0
+    var sharedCache = false
+    var identity: String?
+    let build = osBuild()
+    var bound = false
+    if found, let base = first.dli_fbase, let path = first.dli_fname,
+      ["/usr/lib/libsqlite3.dylib", "/usr/lib/libsqlite3.0.dylib"].contains(String(cString: path)),
+      _dyld_shared_cache_contains_path(path),
+      let handle = dlopen(path, RTLD_NOW | RTLD_NOLOAD | RTLD_FIRST) {
+      defer { dlclose(handle) }
+      if let header = _dyld_get_dlopen_image_header(handle), UnsafeRawPointer(header) == UnsafeRawPointer(base),
+        let uuid = imageUUID(base) {
+        sharedCache = true
+        bound = addresses.allSatisfy { address in
+          var info = Dl_info()
+          return dladdr(address, &info) != 0 && info.dli_fbase == base
+        }
+        if let build {
+          identity = SHA256.hash(data: Data("apple-system-sqlite-image-v1\n\(build)\n".utf8) + uuid)
+            .map { String(format: "%02x", $0) }.joined()
+        }
+      }
+    }
+    let witness = Witness(connection: connection, image: bound ? first.dli_fbase : nil)
+    let retained = Unmanaged.passRetained(witness).toOpaque()
+    let name = "paperlens_sqlite_provenance_v1"
+    let registered = sqlite3_create_function_v2(connection, name, 0, SQLITE_UTF8 | SQLITE_DIRECTONLY,
+      retained, { context, _, _ in
+        guard let context, let user = sqlite3_user_data(context) else { return }
+        Unmanaged<Witness>.fromOpaque(user).takeUnretainedValue().observe(context)
+        sqlite3_result_int(context, 1)
+      }, nil, nil, { user in
+        if let user { Unmanaged<Witness>.fromOpaque(user).release() }
+      })
+    // SQLite invokes the destructor even when registration fails.
+    guard registered == SQLITE_OK else { throw PackagedDBFailure(.unexpectedFailure) }
+    var queryFailure: Error?
+    do {
+      guard try Int.fetchOne(db, sql: "SELECT paperlens_sqlite_provenance_v1()") == 1
+      else { throw PackagedDBFailure(.unexpectedFailure) }
+    } catch { queryFailure = error }
+    let removed = sqlite3_create_function_v2(connection, name, 0, SQLITE_UTF8 | SQLITE_DIRECTONLY,
+      nil, nil, nil, nil, nil)
+    guard removed == SQLITE_OK else { throw PackagedDBFailure(.unexpectedFailure) }
+    if let queryFailure { throw queryFailure }
+    let options = diagnostics.compileOptions
+    var directOptions: [String] = []
+    for index in 0...256 {
+      guard let value = compile(Int32(index)) else { break }
+      guard index < 256, strnlen(value, 257) <= 256 else {
+        throw PackagedDBFailure(.provenanceOverflow)
+      }
+      directOptions.append(String(cString: value))
+    }
+    let metadataMatches = version().map { String(cString: $0) } == diagnostics.version
+      && source().map { String(cString: $0) } == diagnostics.sourceID
+      && directOptions == options
+    let validVersion = diagnostics.version.range(of: #"\A[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\z"#,
+      options: .regularExpression) != nil
+    return PackagedDBProvenance(sameConnection: witness.calls == 1 && witness.sameConnection,
+      symbolsBoundToImage: bound && witness.executingImage, sharedCacheImage: sharedCache,
+      metadataMatches: metadataMatches, osBuild: build, imageIdentity: identity,
+      sqliteVersion: validVersion ? diagnostics.version : nil,
+      sqliteSourceId: sourceSuffix(diagnostics.sourceID), compileOptions: facts.filter(options.contains),
+      inspectedEntries: options.count, maxEntryBytes: options.map { $0.utf8.count }.max() ?? 0)
+  }
 }
 
 final class PackagedDBProbe: @unchecked Sendable {
@@ -416,13 +602,23 @@ final class PackagedDBProbe: @unchecked Sendable {
 
   func diagnostics() throws -> PackagedDBDiagnostics {
     try operation { queue in
+      try queue.read { db in try Self.diagnostics(db) }
+    }
+  }
+
+  private static func diagnostics(_ db: Database) throws -> PackagedDBDiagnostics {
+    guard let version = try String.fetchOne(db, sql: "SELECT sqlite_version()"),
+      let sourceID = try String.fetchOne(db, sql: "SELECT sqlite_source_id()"),
+      version.utf8.count <= 256, sourceID.utf8.count <= 256
+    else { throw PackagedDBFailure(.provenanceOverflow) }
+    let options = try boundedStrings(db, sql: "PRAGMA compile_options", limit: 256)
+    return PackagedDBDiagnostics(version: version, sourceID: sourceID, compileOptions: options)
+  }
+
+  func provenance() throws -> PackagedDBProvenance {
+    try operation { queue in
       try queue.read { db in
-        guard let version = try String.fetchOne(db, sql: "SELECT sqlite_version()"),
-          let sourceID = try String.fetchOne(db, sql: "SELECT sqlite_source_id()"),
-          version.utf8.count <= 256, sourceID.utf8.count <= 256
-        else { throw PackagedDBFailure(.provenanceOverflow) }
-        let options = try Self.boundedStrings(db, sql: "PRAGMA compile_options", limit: 256)
-        return PackagedDBDiagnostics(version: version, sourceID: sourceID, compileOptions: options)
+        try PackagedDBImageBinding.observe(db, diagnostics: Self.diagnostics(db))
       }
     }
   }

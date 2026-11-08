@@ -20,11 +20,13 @@ enum SyntheticPackagedDBSmoke {
     let primary: Int32?
     let extended: Int32?
   }
-  struct CaseResult: Codable, Sendable {
+  struct CaseResult: Encodable, Sendable {
     let kind: Kind
     var checks: [Check] = []
     var failures: [SQLiteFailure] = []
     var reason: String?
+    var initialProvenance: PackagedDBProvenance?
+    var reopenedProvenance: PackagedDBProvenance?
     var passed: Bool {
       let expected: [Phase] = kind == .normal
         ? [.initial, .base, .migrations, .fts, .deletion, .closeBeforeReopen,
@@ -37,9 +39,9 @@ enum SyntheticPackagedDBSmoke {
     }
   }
   struct Report: Encodable, Sendable {
-    let schema = "paperlens-synthetic-packaged-db-v1"
-    let scope = "synthetic_sql_behavior_only"
-    let sqliteOrigin = "sqlite_origin_unverified"
+    let schema = "paperlens-synthetic-packaged-db-v2"
+    let scope = "synthetic_sql_behavior_and_loaded_image"
+    let sqliteOrigin: String
     let storyDone = false
     let p2Passed = false
     let runID: String
@@ -50,6 +52,9 @@ enum SyntheticPackagedDBSmoke {
     init(runID: String, cases: [CaseResult]) {
       self.runID = runID
       self.cases = cases
+      sqliteOrigin = cases.count == Kind.allCases.count && cases.allSatisfy {
+        $0.initialProvenance?.verified == true && $0.reopenedProvenance?.verified == true
+      } ? "apple-system" : "sqlite_origin_unverified"
       behaviorPassed = cases.map(\.kind) == Kind.allCases && cases.allSatisfy(\.passed)
       cleanupConfirmed = cases.count == Kind.allCases.count
         && cases.allSatisfy { $0.checks.last?.phase == .cleanup && $0.checks.last?.passed == true }
@@ -110,6 +115,7 @@ enum SyntheticPackagedDBSmoke {
       try check(.initial, initial.version == 0 && initial.migrations.isEmpty
         && initial.identifiers.isEmpty && initial.registryRows == 0
         && initial.probeObjects.isEmpty && initial.ftsRows == 0)
+      result.initialProvenance = try opened.provenance()
       if kind == .normal {
         let base = try opened.migrateBase()
         try check(.base, base.version == 1 && base.migrations == [PackagedDBProbe.migrationNames[0]]
@@ -126,6 +132,7 @@ enum SyntheticPackagedDBSmoke {
         try check(.closeBeforeReopen, opened.closeAndDrain() && opened.hasObservedClose && owner.validate())
         try opened.reopen()
         let reopened = try opened.migrate()
+        result.reopenedProvenance = try opened.provenance()
         try check(.reopen, reopened == deleted && owner.validate() && opened.isReady
           && opened.failureHistory.isEmpty)
       } else {
@@ -143,6 +150,7 @@ enum SyntheticPackagedDBSmoke {
         try check(.closeBeforeReopen, opened.closeAndDrain() && opened.hasObservedClose && owner.validate())
         try opened.reopen()
         let reopened = try opened.snapshot()
+        result.reopenedProvenance = try opened.provenance()
         try check(.reopen, reopened == rolledBack && owner.validate() && !opened.isReady)
         try constraint(.repeatedFailure, opened)
         let repeated = try opened.snapshot()

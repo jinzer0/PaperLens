@@ -47,6 +47,22 @@ final class SyntheticPackagedDBSmokeTests: XCTestCase {
     XCTAssertEqual(report.cases.map(\.kind), [.normal, .m1, .m2])
     XCTAssertTrue(report.cases.allSatisfy(\.passed))
     XCTAssertEqual(report.cases.map { $0.checks.count }, [9, 8, 8])
+    for result in report.cases {
+      let initial = try XCTUnwrap(result.initialProvenance)
+      let reopened = try XCTUnwrap(result.reopenedProvenance)
+      XCTAssertEqual(initial, reopened)
+      XCTAssertTrue(initial.sameConnection)
+      XCTAssertTrue(initial.symbolsBoundToImage)
+      XCTAssertTrue(initial.sharedCacheImage)
+      XCTAssertTrue(initial.metadataMatches)
+      XCTAssertNotNil(initial.osBuild)
+      XCTAssertEqual(initial.imageIdentity?.count, 64)
+      XCTAssertNotNil(initial.sqliteVersion)
+      XCTAssertLessThanOrEqual(initial.inspectedEntries, 256)
+      XCTAssertLessThanOrEqual(initial.maxEntryBytes, 256)
+      XCTAssertLessThanOrEqual(initial.compileOptions.count, 16)
+      XCTAssertTrue(initial.compileOptions.contains("ENABLE_FTS5"))
+    }
     for result in report.cases.dropFirst() {
       XCTAssertEqual(result.failures.count, 2)
       XCTAssertTrue(result.failures.allSatisfy { $0.primary == 19 && $0.extended == 1555 })
@@ -58,16 +74,17 @@ final class SyntheticPackagedDBSmokeTests: XCTestCase {
     let bytes = try Data(contentsOf: reportURL)
     XCTAssertLessThanOrEqual(bytes.count, 16_384)
     let object = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
-    XCTAssertEqual(object["schema"] as? String, "paperlens-synthetic-packaged-db-v1")
-    XCTAssertEqual(object["scope"] as? String, "synthetic_sql_behavior_only")
+    XCTAssertEqual(object["schema"] as? String, "paperlens-synthetic-packaged-db-v2")
+    XCTAssertEqual(object["scope"] as? String, "synthetic_sql_behavior_and_loaded_image")
     XCTAssertEqual(object["runID"] as? String, id)
     XCTAssertEqual(object["behaviorPassed"] as? Bool, true)
     XCTAssertEqual(object["cleanupConfirmed"] as? Bool, true)
-    XCTAssertEqual(object["sqliteOrigin"] as? String, "sqlite_origin_unverified")
+    XCTAssertEqual(object["sqliteOrigin"] as? String, report.sqliteOrigin)
     XCTAssertEqual(object["storyDone"] as? Bool, false)
     XCTAssertEqual(object["p2Passed"] as? Bool, false)
     let text = try XCTUnwrap(String(data: bytes, encoding: .utf8))
-    for excluded in PackagedDBProbe.corpus + [root.path, "SELECT", "CREATE", "sourceID", "db.sqlite"] {
+    for excluded in PackagedDBProbe.corpus + [root.path, "SELECT", "CREATE", "sourceID", "db.sqlite",
+      "/usr/lib/", "dli_fbase", "callStackReturnAddresses"] {
       XCTAssertFalse(text.contains(excluded))
     }
     var info = stat()
@@ -77,6 +94,38 @@ final class SyntheticPackagedDBSmokeTests: XCTestCase {
     // A completed run is immutable: no SQL, file adoption, or report overwrite on a second invocation.
     XCTAssertThrowsError(try SyntheticPackagedDBSmoke.run(parentURL: parent, runID: id))
     XCTAssertEqual(try Data(contentsOf: reportURL), bytes)
+  }
+
+  func testSourceIdentityProjectionPreservesStrictConsumerFormat() {
+    let sha1 = String(repeating: "a", count: 40)
+    let sha3 = String(repeating: "b", count: 64)
+    for suffix in [sha1, sha3] {
+      XCTAssertEqual(PackagedDBImageBinding.sourceSuffix("2026-01-01 12:34:56 " + suffix), suffix)
+    }
+    for source in [sha3, "2026-01-01 12:34:56 " + sha3.uppercased(),
+      "2026-01-01 12:34:56 " + String(repeating: "a", count: 60) + "alt1",
+      "2026-01-01 12:34:56 " + String(repeating: "a", count: 60) + "alt2",
+      "2026-01-01 12:34:56 " + sha3 + "\n", "2026-01-01 12:34:56  " + sha3,
+      "2026-01-01 12:34:56 " + String(repeating: "a", count: 257)] {
+      XCTAssertNil(PackagedDBImageBinding.sourceSuffix(source))
+    }
+  }
+
+  func testUnknownSourceDoesNotBecomeVerifiedFromSuccessfulImageBinding() {
+    let observations = PackagedDBProvenance(sameConnection: true, symbolsBoundToImage: true,
+      sharedCacheImage: true, metadataMatches: true, osBuild: "25G241",
+      imageIdentity: String(repeating: "a", count: 64), sqliteVersion: "3.50.4",
+      sqliteSourceId: nil, compileOptions: ["ENABLE_FTS5"], inspectedEntries: 1, maxEntryBytes: 11)
+    XCTAssertFalse(observations.verified)
+    var cases = SyntheticPackagedDBSmoke.Kind.allCases.map { kind in
+      SyntheticPackagedDBSmoke.CaseResult(kind: kind, initialProvenance: observations,
+        reopenedProvenance: observations)
+    }
+    XCTAssertEqual(SyntheticPackagedDBSmoke.Report(runID: UUID().uuidString.lowercased(), cases: cases)
+      .sqliteOrigin, "sqlite_origin_unverified")
+    cases[0].initialProvenance = nil
+    XCTAssertEqual(SyntheticPackagedDBSmoke.Report(runID: UUID().uuidString.lowercased(), cases: cases)
+      .sqliteOrigin, "sqlite_origin_unverified")
   }
 
   func testExistingOrSymlinkRunAndSymlinkParentPreserveUnrelatedFiles() throws {
