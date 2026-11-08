@@ -308,44 +308,52 @@ import SwiftUI
         }
       }
       if records.isEmpty { Text("저장된 하이라이트나 노트가 없습니다").foregroundStyle(.secondary) }
-      List(records) { record in
-        VStack(alignment: .leading) {
-          Text(record.kind == .note ? "개인 노트" : "하이라이트").font(.headline)
-          Text(record.selection.originalText).lineLimit(3)
-          if let note = record.note { Text(note).textSelection(.enabled) }
-          Text(record.selection.locations.map { "\($0.pageIndex + 1)쪽" }.joined(separator: ", "))
-            .font(.caption)
-          HStack {
-            Button("PDF에서 보기") { perform {
-              try context.reveal(record)
-              try context.publishEditor { feedback = "저장된 주석의 원본 PDF 위치를 표시했습니다." }
-            } }
-            .accessibilityHint("저장된 원문 위치로 이동합니다")
-            if record.kind == .note {
-              Button("편집") {
-                perform {
-                  guard try context.records().contains(record) else { throw AnnotationError.staleRecord }
-                  guard draft == nil && editing == nil else {
-                    try context.beginNote(); return
+      ScrollView {
+        LazyVStack(alignment: .leading, spacing: 0) {
+          ForEach(records) { record in
+            VStack(alignment: .leading) {
+              Text(record.kind == .note ? "개인 노트" : "하이라이트").font(.headline)
+              Text(record.selection.originalText).lineLimit(3)
+              if let note = record.note { Text(note).textSelection(.enabled) }
+              Text(record.selection.locations.map { "\($0.pageIndex + 1)쪽" }.joined(separator: ", "))
+                .font(.caption)
+              HStack {
+                Button("PDF에서 보기") { perform {
+                  try context.reveal(record)
+                  try context.publishEditor { feedback = "저장된 주석의 원본 PDF 위치를 표시했습니다." }
+                } }
+                .accessibilityHint("저장된 원문 위치로 이동합니다")
+                if record.kind == .note {
+                  Button("편집") {
+                    perform {
+                      guard try context.records().contains(record) else { throw AnnotationError.staleRecord }
+                      guard draft == nil && editing == nil else {
+                        try context.beginNote(); return
+                      }
+                      try context.publishEditor { text = record.note ?? "" }
+                      try context.publishEditor { editing = record }
+                      try context.publishEditor { feedback = "노트 편집 중" }
+                      try context.publishEditor { editor.noteFocusRequest = UUID() }
+                    }
                   }
-                  try context.publishEditor { text = record.note ?? "" }
-                  try context.publishEditor { editing = record }
-                  try context.publishEditor { feedback = "노트 편집 중" }
-                  try context.publishEditor { editor.noteFocusRequest = UUID() }
+                }
+                Button("삭제", role: .destructive) {
+                  perform {
+                    try context.delete(record)
+                    if editing?.id == record.id { try resetEditor() }
+                    let refreshed = try context.records()
+                    try context.publishEditor { records = refreshed }
+                    try context.publishEditor { feedback = "주석 기록이 삭제되었습니다." }
+                  }
                 }
               }
             }
-            Button("삭제", role: .destructive) {
-              perform {
-                try context.delete(record)
-                if editing?.id == record.id { try resetEditor() }
-                let refreshed = try context.records()
-                try context.publishEditor { records = refreshed }
-                try context.publishEditor { feedback = "주석 기록이 삭제되었습니다." }
-              }
-            }
+            .accessibilityElement(children: .contain)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Divider()
           }
-        }.padding(.vertical, 4)
+        }
       }
       Text(feedback).font(.caption).accessibilityLabel("주석 상태: \(feedback)")
       Button("새로고침") { perform {

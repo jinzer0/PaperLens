@@ -133,7 +133,16 @@ public struct LibraryBrowserView: View {
           Button("검색·조건 지우기") { filter = clearedConditions }
             .focused($organizationFocus, equals: .clearNoMatch)
         } else if snapshot.preferences.presentation == .list {
-          List(snapshot.papers) { paper in paperContent(paper) }
+          ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0) {
+              ForEach(snapshot.papers) { paper in
+                paperContent(paper)
+                  .padding(12)
+                  .frame(maxWidth: .infinity, alignment: .leading)
+                Divider()
+              }
+            }
+          }
         } else {
           ScrollView {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 260), alignment: .top)]) {
@@ -398,7 +407,8 @@ public struct LibraryBrowserView: View {
       Text("출처 주제 (사용자 태그 아님) · \(LibraryMetadataPresentation.preview(fact?.metadata?.topics, limit: 120))")
         .font(.caption).textSelection(.enabled)
       if paper.status == .importing { ProgressView(); Text("\(paper.bytesCopied) bytes 복사됨") }
-    }.accessibilityElement(children: .contain)
+    }
+    .accessibilityElement(children: .contain)
   }
 
   private func paperActions(_ paper: OrganizedPaper) -> some View {
