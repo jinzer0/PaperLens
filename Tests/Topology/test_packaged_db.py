@@ -292,8 +292,9 @@ class PackagedDBTests(unittest.TestCase):
             self.check_result(self.validate(expected=replace(self.expected,
                 sqlite=replace(self.expected.sqlite, compileOptions=facts))))
 
-    def test_approved_fact_limit_and_both_timestamp_free_suffix_sizes(self):
-        for suffix in ("ab" * 20, "ab" * 32):
+    def test_approved_fact_limit_and_timestamp_free_source_identities(self):
+        for suffix in ("ab" * 20, "ab" * 32, "ab" * 30 + "alt1", "ab" * 30 + "alt2",
+                       "ab" * 30 + "aapl"):
             projection = replace(self.expected.sqlite, compileOptions=dependency_lock.COMPILE_FACTS,
                                  sqliteSourceId=suffix)
             expected = replace(self.expected, sqlite=projection)
@@ -306,7 +307,10 @@ class PackagedDBTests(unittest.TestCase):
             self.check_result(self.validate(changed, expected=expected), True)
             changed["sqlite"]["inspection"]["maxEntryBytes"] = maximum - 1
             self.check_result(self.validate(changed, expected=expected))
-        for suffix in ("ab" * 21, "ab" * 33, "2026-10-08 01:00:00 " + "ab" * 20):
+        for suffix in ("ab" * 21, "ab" * 33, "2026-10-08 01:00:00 " + "ab" * 20,
+                       "ab" * 30 + "alt0", "ab" * 30 + "alt3", "ab" * 18 + "alt2",
+                       "ab" * 30 + "ALT2", "ab" * 30 + "alt2\n",
+                       "ab" * 30 + "AAPL", "ab" * 30 + "aap1"):
             self.check_result(self.validate(expected=replace(self.expected,
                 sqlite=replace(self.expected.sqlite, sqliteSourceId=suffix))))
 

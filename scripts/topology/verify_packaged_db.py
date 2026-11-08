@@ -190,7 +190,7 @@ def _owner(expected, supplied):
     projection = expected.sqlite
     require(type(projection) is SQLiteProjection)
     _hex(projection.imageIdentity)
-    _hex(projection.sqliteSourceId, (40, 64))
+    require(dependency_lock.sqlite_source_identity(projection.sqliteSourceId))
     require(type(projection.sqliteVersion) is str and
             re.fullmatch(r"[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}", projection.sqliteVersion) is not None)
     require(type(projection.compileOptions) is tuple and 0 < len(projection.compileOptions) <= 16)

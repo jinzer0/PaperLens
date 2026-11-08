@@ -359,6 +359,24 @@ class DependencyLockTests(unittest.TestCase):
             self.invalid(result, "IDENTITY_MISMATCH")
             self.assertNotIn(source_id, json.dumps(result))
 
+    def test_modified_amalgamation_identity_is_preserved_in_bound_receipt(self):
+        for suffix in ("ab" * 30 + "alt1", "ab" * 30 + "alt2", "ab" * 30 + "aapl"):
+            matrix, artifacts, evidence = self.complete_fixture()
+            cell = matrix["cells"][1]
+            cell["sqlite"]["sqliteSourceId"] = suffix
+            receipt = json.loads(evidence["current/arm64"])
+            receipt["sqlite"] = cell["sqlite"]
+            evidence["current/arm64"] = lock_validator.json_bytes(receipt)
+            cell["evidence"]["sha256"] = lock_validator.digest(evidence["current/arm64"])
+            status, output = self.validate(matrix, artifacts=artifacts, evidence=evidence)
+            self.assertEqual(status, 2)
+            self.assertTrue(output["conformant"])
+            self.assertEqual(output["promotion"], "not_promoted")
+        for value in ("ab" * 30 + "alt0", "ab" * 30 + "alt3", "ab" * 18 + "alt2",
+                      "ab" * 30 + "ALT2", "ab" * 30 + "alt2\n",
+                      "ab" * 30 + "AAPL", "ab" * 30 + "aap1", None, 64):
+            self.assertFalse(lock_validator.sqlite_source_identity(value))
+
     def test_compile_fact_policy_in_rehashed_bound_receipts(self):
         cases = ((list(lock_validator.COMPILE_FACTS), True),
                  (list(lock_validator.COMPILE_FACTS) + ["PRIVATE_FACT"], False),

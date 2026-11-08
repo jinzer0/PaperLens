@@ -55,6 +55,7 @@ final class SyntheticPackagedDBSmokeTests: XCTestCase {
       XCTAssertTrue(initial.symbolsBoundToImage)
       XCTAssertTrue(initial.sharedCacheImage)
       XCTAssertTrue(initial.metadataMatches)
+      XCTAssertTrue(initial.verified)
       XCTAssertNotNil(initial.osBuild)
       XCTAssertEqual(initial.imageIdentity?.count, 64)
       XCTAssertNotNil(initial.sqliteVersion)
@@ -79,7 +80,7 @@ final class SyntheticPackagedDBSmokeTests: XCTestCase {
     XCTAssertEqual(object["runID"] as? String, id)
     XCTAssertEqual(object["behaviorPassed"] as? Bool, true)
     XCTAssertEqual(object["cleanupConfirmed"] as? Bool, true)
-    XCTAssertEqual(object["sqliteOrigin"] as? String, report.sqliteOrigin)
+    XCTAssertEqual(object["sqliteOrigin"] as? String, "apple-system")
     XCTAssertEqual(object["storyDone"] as? Bool, false)
     XCTAssertEqual(object["p2Passed"] as? Bool, false)
     let text = try XCTUnwrap(String(data: bytes, encoding: .utf8))
@@ -96,15 +97,20 @@ final class SyntheticPackagedDBSmokeTests: XCTestCase {
     XCTAssertEqual(try Data(contentsOf: reportURL), bytes)
   }
 
-  func testSourceIdentityProjectionPreservesStrictConsumerFormat() {
+  func testSourceIdentityProjectionPreservesTimestampFreeHashAndOfficialMarkers() {
     let sha1 = String(repeating: "a", count: 40)
     let sha3 = String(repeating: "b", count: 64)
-    for suffix in [sha1, sha3] {
+    for suffix in [sha1, sha3, String(repeating: "a", count: 60) + "alt1",
+      String(repeating: "b", count: 60) + "alt2", String(repeating: "c", count: 60) + "aapl"] {
       XCTAssertEqual(PackagedDBImageBinding.sourceSuffix("2026-01-01 12:34:56 " + suffix), suffix)
     }
     for source in [sha3, "2026-01-01 12:34:56 " + sha3.uppercased(),
-      "2026-01-01 12:34:56 " + String(repeating: "a", count: 60) + "alt1",
-      "2026-01-01 12:34:56 " + String(repeating: "a", count: 60) + "alt2",
+      "2026-01-01 12:34:56 " + String(repeating: "a", count: 60) + "alt0",
+      "2026-01-01 12:34:56 " + String(repeating: "a", count: 60) + "alt3",
+      "2026-01-01 12:34:56 " + String(repeating: "a", count: 36) + "alt2",
+      "2026-01-01 12:34:56 " + String(repeating: "a", count: 60) + "ALT2",
+      "2026-01-01 12:34:56 " + String(repeating: "a", count: 60) + "AAPL",
+      "2026-01-01 12:34:56 " + String(repeating: "a", count: 60) + "aap1",
       "2026-01-01 12:34:56 " + sha3 + "\n", "2026-01-01 12:34:56  " + sha3,
       "2026-01-01 12:34:56 " + String(repeating: "a", count: 257)] {
       XCTAssertNil(PackagedDBImageBinding.sourceSuffix(source))

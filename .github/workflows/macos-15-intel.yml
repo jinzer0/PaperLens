@@ -55,9 +55,12 @@ jobs:
           path: .build/intel-artifact
       - name: Execute product and contract tests on the actual target OS
         run: python3 scripts/product/ci-intel.py run .build/intel-artifact
-      - name: Verify offline test driver regressions
+      - name: Verify offline test driver and database regressions
         if: ${{ !cancelled() }}
-        run: python3 -m unittest discover -s Tests/Topology -p test_isolated_product_tests.py -v
+        run: |
+          python3 -m unittest discover -s Tests/Topology -p test_isolated_product_tests.py -v
+          python3 -m unittest discover -s Tests/Topology -p test_dependency_lock.py -v
+          python3 -m unittest discover -s Tests/Topology -p test_packaged_db.py -v
       - name: Upload actual host and test results
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6

@@ -160,6 +160,13 @@ COMPILE_FACTS = ("ENABLE_FTS5", "THREADSAFE=1", "ENABLE_COLUMN_METADATA",
                  "OMIT_LOAD_EXTENSION", "USE_URI", "ENABLE_SESSION")
 
 
+def sqlite_source_identity(value):
+    # Preserve upstream alt markers and Apple's public SDK sqlite3.h "aapl" marker.
+    # https://www.sqlite.org/releaselog/3_21_0.html . Image origin is checked separately.
+    return type(value) is str and re.fullmatch(
+        r"(?:[0-9a-f]{40}|[0-9a-f]{64}|[0-9a-f]{60}(?:alt[12]|aapl))", value) is not None
+
+
 def sqlite_proof(value, build, point):
     keys(value, SQLITE_KEYS, point)
     require(value["origin"] == "apple-system" and value["osBuild"] == build and
@@ -170,9 +177,7 @@ def sqlite_proof(value, build, point):
             re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", value["sqliteVersion"]),
             "IDENTITY_MISMATCH", point)
     # Only SQLite's source-code identity suffix is durable; its date stays in RAM.
-    require(type(value["sqliteSourceId"]) is str and
-            re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})",
-                         value["sqliteSourceId"]), "IDENTITY_MISMATCH", point)
+    require(sqlite_source_identity(value["sqliteSourceId"]), "IDENTITY_MISMATCH", point)
     options = value["compileOptions"]
     require(type(options) is list and 0 < len(options) <= 16 and all(
         type(item) is str and item in COMPILE_FACTS

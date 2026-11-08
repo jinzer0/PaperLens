@@ -76,7 +76,8 @@ enum PackagedDBImageBinding {
     "ENABLE_UNLOCK_NOTIFY", "SECURE_DELETE", "DEFAULT_AUTOVACUUM", "ENABLE_DBSTAT_VTAB",
     "ENABLE_MATH_FUNCTIONS", "OMIT_LOAD_EXTENSION", "USE_URI", "ENABLE_SESSION"]
 
-  // Never serialize a timestamp prefix, substitute a digest, or silently normalize alt1/alt2.
+  // Preserve SQLite's documented alt markers and Apple's public sqlite3.h "aapl" marker.
+  // https://www.sqlite.org/releaselog/3_21_0.html . Neither marker proves image origin.
   static func sourceSuffix(_ source: String) -> String? {
     guard source.utf8.count <= 256 else { return nil }
     let parts = source.split(separator: " ", omittingEmptySubsequences: false)
@@ -85,9 +86,13 @@ enum PackagedDBImageBinding {
       parts[1].range(of: #"\A[0-9]{2}:[0-9]{2}:[0-9]{2}\z"#,
       options: .regularExpression) != nil else { return nil }
     let suffix = String(parts[2])
-    guard [40, 64].contains(suffix.utf8.count), suffix.utf8.allSatisfy({
-      (48...57).contains($0) || (97...102).contains($0)
-    }) else { return nil }
+    func hex(_ bytes: some Sequence<UInt8>) -> Bool {
+      bytes.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
+    }
+    let canonical = [40, 64].contains(suffix.utf8.count) && hex(suffix.utf8)
+    let modified = suffix.utf8.count == 64 && hex(suffix.utf8.prefix(60))
+      && ["alt1", "alt2", "aapl"].contains(String(suffix.suffix(4)))
+    guard canonical || modified else { return nil }
     return suffix
   }
 
@@ -98,7 +103,7 @@ enum PackagedDBImageBinding {
     var bytes = [CChar](repeating: 0, count: size)
     guard sysctlbyname("kern.osversion", &bytes, &size, nil, 0) == 0,
       (2...bytes.count).contains(size), bytes[size - 1] == 0 else { return nil }
-    let value = String(cString: bytes)
+    let value = String(decoding: bytes.prefix(size - 1).map { UInt8(bitPattern: $0) }, as: UTF8.self)
     return value.range(of: #"\A[0-9]{1,3}[A-Z][0-9]{1,6}[a-z]?\z"#,
       options: .regularExpression) != nil ? value : nil
   }
