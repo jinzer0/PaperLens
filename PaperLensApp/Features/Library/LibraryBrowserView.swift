@@ -698,9 +698,9 @@ public struct LibraryBrowserView: View {
       snapshot?.papers.contains(where: {
         $0.id == paper.id && $0.generation == paper.generation && $0.readable
       }) == true, deleting == nil, !operationFailed,
-      focusedPaper == nil, focusedIdentification == nil, focusedMovement == nil,
-      organizationFocus == nil || organizationFocus == origin,
       value != paper.organization else { return }
+    // A native click or menu action may leave keyboard focus in the search field.
+    // Focus controls asynchronous restoration below, not permission to save a current row.
     switch origin {
     case .favorite(let id), .reading(let id): guard id == paper.id else { return }
     default: return
