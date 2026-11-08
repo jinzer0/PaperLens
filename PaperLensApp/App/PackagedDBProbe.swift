@@ -2,7 +2,7 @@ import Darwin
 import Foundation
 import GRDB
 
-// Verification-only. No Codable/raw logging surface and no product startup wiring.
+// Verification-only. Explicit synthetic mode only; never normal product startup.
 enum PackagedDBFault: Equatable, Sendable { case none, m1, m2 }
 enum PackagedDBReason: String, Sendable {
   case bindingMismatch = "binding_mismatch"
