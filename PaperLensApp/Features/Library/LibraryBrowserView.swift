@@ -10,7 +10,7 @@ public struct LibraryBrowserView: View {
   private let importPDF: @MainActor () -> Void
   private let retryImportPDF: @MainActor (UUID, UUID) -> Void
   private let manageFolders: @MainActor () -> Void
-  private let generateSummary: (@MainActor (OrganizedPaper, String) async throws -> Void)?
+  @ObservedObject private var summaries: LibrarySummaryCoordinator
   private let refreshRevision: Int
   @State private var query = OrganizationQueryState()
   @State private var currentFacts: [UUID: OrganizationSortFacts] = [:]
@@ -20,11 +20,8 @@ public struct LibraryBrowserView: View {
   @State private var tagLoadFailed = false
   @Binding private var filter: OrganizationFilter
   @State private var operationFailed = false
-  @State private var summaryFailureMessage: String?
   @State private var busy = false
   @State private var deleting: OrganizedPaper?
-  @State private var summaryTask: Task<Void, Never>?
-  @State private var summaryPaperID: UUID?
   @State private var rootMount: UUID?
   @State private var sheetPresentation: LibrarySheetPresentation?
   @State private var organizationFocusToRestore: OrganizationActionReturn?
@@ -44,14 +41,14 @@ public struct LibraryBrowserView: View {
     importPDF: @escaping @MainActor () -> Void,
     retryImportPDF: @escaping @MainActor (UUID, UUID) -> Void,
     manageFolders: @escaping @MainActor () -> Void,
-    generateSummary: (@MainActor (OrganizedPaper, String) async throws -> Void)? = nil) {
+    summaries: LibrarySummaryCoordinator) {
     self.service = service; self.folderService = folderService; self.sortFacts = sortFacts
     self.readReadingRecords = readReadingRecords
     _filter = filter; self.refreshRevision = refreshRevision
     self.openPaper = openPaper; self.importPDF = importPDF
     self.retryImportPDF = retryImportPDF
     self.manageFolders = manageFolders
-    self.generateSummary = generateSummary
+    self.summaries = summaries
   }
 
   private var folderHeading: String {
@@ -279,11 +276,13 @@ public struct LibraryBrowserView: View {
     }
     .onDisappear {
       rootMount = nil
-      summaryTask?.cancel()
       if sheetPresentation?.slot.content.isTagEditor == true { sheetPresentation = nil }
       invalidateObservation()
     }
     .onChange(of: refreshRevision) { _, _ in refresh() }
+    .onChange(of: summaries.activePaperID) { previous, current in
+      if previous != nil, current == nil { refresh() }
+    }
     .onChange(of: filter) { _, _ in refresh() }
     .onChange(of: organizationFocus) { _, value in
       if let value, value != organizationFocusToRestore?.control { organizationFocusToRestore = nil }
@@ -306,7 +305,6 @@ public struct LibraryBrowserView: View {
     }
     .onChange(of: operationFailed) { _, value in
       if value { organizationFocusToRestore = nil; interruptSheetReturn(newerWork: true) }
-      else { summaryFailureMessage = nil }
     }
     .onChange(of: deleting?.id) { _, value in
       if value != nil { organizationFocusToRestore = nil }
@@ -318,10 +316,13 @@ public struct LibraryBrowserView: View {
       } message: { paper in
         Text("‘\(paper.title)’의 앱 소유 PDF와 읽기 위치·주석·조직 기록을 삭제합니다. 원본 파일은 유지되며 이 작업은 되돌릴 수 없습니다.")
       }
-    .alert("저장 또는 작업 실패", isPresented: $operationFailed) {
+    .alert("저장 또는 작업 실패", isPresented: Binding(
+      get: { operationFailed || summaries.requestFailure != nil },
+      set: { if !$0 { operationFailed = false; summaries.clearRequestFailure() } })) {
       Button("확인", role: .cancel) {}
     } message: {
-      Text(summaryFailureMessage ?? "성공으로 저장되지 않았습니다. 새로 불러온 현재 상태를 확인하세요.")
+      Text(summaries.requestFailure?.koreanMessage
+        ?? "성공으로 저장되지 않았습니다. 새로 불러온 현재 상태를 확인하세요.")
     }
     .background {
       if let presentation = sheetPresentation {
@@ -334,6 +335,7 @@ public struct LibraryBrowserView: View {
     let fact = currentFacts[paper.id].flatMap { $0.generation == paper.generation ? $0 : nil }
     VStack(alignment: .leading, spacing: 8) {
       Text(paper.title).font(.headline).textSelection(.enabled)
+      paperActions(paper)
       Text("출처 제목 · \(LibraryMetadataPresentation.preview(fact?.metadata?.title, limit: 160))")
         .font(.caption).textSelection(.enabled)
       Text(statusLabel(paper)).font(.caption)
@@ -378,17 +380,17 @@ public struct LibraryBrowserView: View {
         Text("최근 읽음 \(date.formatted())").font(.caption)
       }
       LibraryStoredSummary(paper: paper, observation: fact?.summary, showEvidence: false)
-      if summaryPaperID == paper.id {
+      if summaries.activePaperID == paper.id {
         HStack {
           ProgressView("요약 생성 중")
-          Button("요약 취소") { summaryTask?.cancel() }
+          Button("요약 취소") { summaries.cancel() }
         }
       } else {
         Menu(fact?.summary?.record == nil ? "요약 생성" : "요약 다시 생성") {
           Button("한국어") { beginSummary(paper, language: "ko") }
           Button("English") { beginSummary(paper, language: "en") }
         }
-        .disabled(!paper.readable || busy || loading || loadFailed || generateSummary == nil)
+        .disabled(!paper.readable || busy || loading || loadFailed || summaries.activePaperID != nil)
         .accessibilityLabel("\(paper.title) 근거 문장으로 요약 생성")
       }
       Text("초록 · \(LibraryMetadataPresentation.preview(fact?.metadata?.abstract, limit: 220))")
@@ -396,43 +398,46 @@ public struct LibraryBrowserView: View {
       Text("출처 주제 (사용자 태그 아님) · \(LibraryMetadataPresentation.preview(fact?.metadata?.topics, limit: 120))")
         .font(.caption).textSelection(.enabled)
       if paper.status == .importing { ProgressView(); Text("\(paper.bytesCopied) bytes 복사됨") }
-      HStack {
-        Button("열기") { perform { try await service.admitOpen(paper); try await openPaper(paper) } }
-          .disabled(!paper.readable || busy)
-          .focused($organizationFocus, equals: .open(paper.id))
-          .accessibilityLabel("\(paper.title) 열기")
-        Button("논문 정보·요약·읽기 기록 상세") {
-          beginIdentification(paper)
-        }.disabled(busy || loading || loadFailed)
-          .focused($focusedIdentification, equals: paper.id)
-          .accessibilityLabel("\(paper.title) 출처 제목·발행연도·요약·초록·출처 주제·저장된 읽기 기록 상세")
-        Button("폴더 이동") {
-          beginMovement(paper)
-        }.disabled(!paper.readable || busy || loading || loadFailed)
-          .focused($focusedMovement, equals: paper.id)
-          .accessibilityLabel("\(paper.title) 폴더 이동")
-        Menu("더 보기") {
-          if paper.status == .importFailed {
-            Button("새 PDF 선택 후 같은 작업 재시도") { requestRetry(paper) }
-              .disabled(busy || loading || loadFailed)
-          }
-          Button("태그·읽기 상태·즐겨찾기 편집") {
-            beginTagEdit(paper)
-          }.disabled(!paper.readable)
-          if paper.status == .deletionFailed {
-            Button("삭제 다시 시도") { perform { try await service.delete(paper, retry: true) } }
-          } else {
-            Button("삭제", role: .destructive) {
-              guard !nativeSheetPending, !busy else { return }
-              organizationFocusToRestore = nil
-              interruptSheetReturn(newerWork: true)
-              deleting = paper
-            }.disabled(paper.status == .deleting)
-          }
-        }.disabled(busy).focused($focusedPaper, equals: paper.id)
-          .accessibilityLabel("\(paper.title) 더 보기")
-      }
     }.accessibilityElement(children: .contain)
+  }
+
+  private func paperActions(_ paper: OrganizedPaper) -> some View {
+    HStack {
+      Button("열기") { perform { try await service.admitOpen(paper); try await openPaper(paper) } }
+        .disabled(!paper.readable || busy)
+        .focused($organizationFocus, equals: .open(paper.id))
+        .accessibilityLabel("\(paper.title) 열기")
+      Button("논문 상세") {
+        beginIdentification(paper)
+      }.disabled(busy || loading || loadFailed)
+        .focused($focusedIdentification, equals: paper.id)
+        .accessibilityLabel("\(paper.title) 출처 제목·발행연도·요약·초록·출처 주제·저장된 읽기 기록 상세")
+      Button("폴더 이동") {
+        beginMovement(paper)
+      }.disabled(!paper.readable || busy || loading || loadFailed)
+        .focused($focusedMovement, equals: paper.id)
+        .accessibilityLabel("\(paper.title) 폴더 이동")
+      Menu("더 보기") {
+        if paper.status == .importFailed {
+          Button("새 PDF 선택 후 같은 작업 재시도") { requestRetry(paper) }
+            .disabled(busy || loading || loadFailed)
+        }
+        Button("태그·읽기 상태·즐겨찾기 편집") {
+          beginTagEdit(paper)
+        }.disabled(!paper.readable)
+        if paper.status == .deletionFailed {
+          Button("삭제 다시 시도") { perform { try await service.delete(paper, retry: true) } }
+        } else {
+          Button("삭제", role: .destructive) {
+            guard !nativeSheetPending, !busy else { return }
+            organizationFocusToRestore = nil
+            interruptSheetReturn(newerWork: true)
+            deleting = paper
+          }.disabled(paper.status == .deleting)
+        }
+      }.disabled(busy).focused($focusedPaper, equals: paper.id)
+        .accessibilityLabel("\(paper.title) 더 보기")
+    }
   }
   private var nativeSheetPending: Bool {
     sheetPresentation.map { !$0.nativeDismissConsumed } ?? false
@@ -727,24 +732,9 @@ public struct LibraryBrowserView: View {
   }
 
   private func beginSummary(_ paper: OrganizedPaper, language: String) {
-    guard let generateSummary, !nativeSheetPending, !busy else { return }
-    busy = true
-    summaryFailureMessage = nil
-    summaryPaperID = paper.id
-    invalidateObservation()
-    summaryTask = Task {
-      do { try await generateSummary(paper, language) }
-      catch {
-        if !Task.isCancelled {
-          summaryFailureMessage = LibrarySummaryFailure.classify(error).koreanMessage
-          operationFailed = true
-        }
-      }
-      summaryPaperID = nil
-      summaryTask = nil
-      busy = false
-      if rootMount != nil { refresh() }
-    }
+    guard !nativeSheetPending, !busy else { return }
+    summaries.requestGeneration(paperID: paper.id, generation: paper.generation,
+      outputLanguage: language)
   }
   private func refresh(preservingEditor slotID: UUID? = nil,
     returningSheet slot: LibrarySheetSlot? = nil,

@@ -155,12 +155,14 @@ extension LibrarySummaryFailure {
 /// Library, restoring a result and refreshing facts never starts generation.
 @MainActor public final class LibrarySummaryCoordinator: ObservableObject {
   @Published public private(set) var activePaperID: UUID?
+  @Published public private(set) var requestFailure: LibrarySummaryFailure?
   private let database: ProductDatabase
   private let epoch: UUID
   private let leases: any ReaderLeaseProvider
   private let authority: ProviderRequest
   private let provider: any LibrarySummaryProviding
   private var active: Task<LibrarySummaryRecord, any Error>?
+  private var requested: Task<Void, Never>?
   // Unknown physical staging closure keeps its exact owners alive and blocks replacement.
   private var cleanupDebt: [(SummaryStage, any ReaderReadLease)] = []
   private var producerCleanupDebt: [any ReaderReadLease] = []
@@ -171,9 +173,37 @@ extension LibrarySummaryFailure {
     self.authority = authority; self.provider = provider
   }
 
-  public func cancel() { active?.cancel() }
+  public func cancel() { requested?.cancel(); active?.cancel() }
+
+  public func clearRequestFailure() { requestFailure = nil }
+
+  /// The retained application owner keeps generation alive when Library gives way
+  /// to Reader. Only an explicit cancel, revocation or shutdown cancels the request.
+  @discardableResult public func requestGeneration(paperID: UUID, generation: UUID,
+    outputLanguage: String) -> Bool {
+    guard requested == nil, active == nil else { return false }
+    requestFailure = nil
+    activePaperID = paperID
+    requested = Task {
+      defer { requested = nil; activePaperID = nil }
+      do {
+        _ = try await performGeneration(paperID: paperID, generation: generation,
+          outputLanguage: outputLanguage)
+      } catch {
+        if !Task.isCancelled { requestFailure = .classify(error) }
+      }
+    }
+    return true
+  }
 
   @discardableResult public func generate(paperID: UUID, generation: UUID,
+    outputLanguage: String) async throws -> LibrarySummaryRecord {
+    guard requested == nil else { throw LibrarySummaryError.requestInProgress }
+    return try await performGeneration(paperID: paperID, generation: generation,
+      outputLanguage: outputLanguage)
+  }
+
+  private func performGeneration(paperID: UUID, generation: UUID,
     outputLanguage: String) async throws -> LibrarySummaryRecord {
     guard active == nil, cleanupDebt.isEmpty, producerCleanupDebt.isEmpty else {
       throw LibrarySummaryError.requestInProgress

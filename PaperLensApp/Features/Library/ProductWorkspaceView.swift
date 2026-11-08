@@ -137,12 +137,6 @@ public final class ProductWorkspace: ObservableObject {
         chatGPT: NativeCodexSummaryProvider(connection: codex, authority: summaryAuthority)))
   }
 
-  public func generateSummary(for paper: OrganizedPaper, outputLanguage: String) async throws {
-    _ = try await summaries.generate(paperID: paper.id, generation: paper.generation,
-      outputLanguage: outputLanguage)
-    revision += 1
-  }
-
   public func sortFacts() async throws -> [OrganizationSortFacts] {
     let database = database
     return try await Task.detached { try database.librarySortFacts() }.value
@@ -729,9 +723,7 @@ public struct ProductWorkspaceView: View {
               invalidateDirectIntent()
               workspace.sheet = .folders
             },
-            generateSummary: { paper, language in
-              try await workspace.generateSummary(for: paper, outputLanguage: language)
-            })
+            summaries: workspace.summaries)
         }
         .onChange(of: urls.state) {
           if case .ready(let paper) = urls.state { workspace.imported(paper) }

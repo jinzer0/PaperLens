@@ -964,6 +964,85 @@ final class LibrarySummaryServiceTests: XCTestCase {
     XCTAssertEqual(try f.db.librarySortFacts().first?.summary?.recentAttempt?.failure, .cancelled)
   }
 
+  @MainActor func testLibraryRequestReturnsImmediatelyAndSurvivesPresentationLifetime() async throws {
+    let f = try fixture()
+    defer { try? FileManager.default.removeItem(at: f.root) }
+    try prepareCoordinator(f)
+    let leases = SummaryLeases(), provider = SummaryProvider()
+    provider.suspend = true
+    let coordinator = LibrarySummaryCoordinator(database: f.db, epoch: UUID(), leases: leases,
+      authority: try ProviderRequest(), provider: provider)
+    XCTAssertTrue(coordinator.requestGeneration(paperID: f.identity.paperID,
+      generation: f.identity.generation, outputLanguage: "ko"))
+    XCTAssertEqual(coordinator.activePaperID, f.identity.paperID)
+    XCTAssertFalse(coordinator.requestGeneration(paperID: UUID(), generation: UUID(), outputLanguage: "en"))
+    do {
+      _ = try await coordinator.generate(paperID: f.identity.paperID,
+        generation: f.identity.generation, outputLanguage: "en")
+      XCTFail("A queued Library request must retain exclusive generation ownership")
+    } catch { XCTAssertEqual(error as? LibrarySummaryError, .requestInProgress) }
+    for _ in 0..<1000 where provider.continuation == nil { await Task.yield() }
+    let completion = try XCTUnwrap(provider.continuation)
+    // No view task or awaiting caller owns this request. Presentation can end while
+    // the retained coordinator continues and the original PDF remains readable.
+    XCTAssertEqual(coordinator.activePaperID, f.identity.paperID)
+    XCTAssertFalse(leases.lease.closed)
+    let paper = try f.db.readerSnapshot(paperID: f.identity.paperID)
+    XCTAssertFalse(try Data(contentsOf: f.db.root.appendingPathComponent(paper.pdfReference)).isEmpty)
+    completion.resume(); provider.continuation = nil
+    for _ in 0..<1000 where coordinator.activePaperID != nil { await Task.yield() }
+    XCTAssertNil(coordinator.activePaperID)
+    XCTAssertNil(coordinator.requestFailure)
+    XCTAssertTrue(leases.lease.closed)
+    XCTAssertEqual(provider.calls, 1)
+    XCTAssertNotNil(try LibrarySummaryService(database: f.db).restore(paperID: f.identity.paperID))
+  }
+
+  @MainActor func testLibraryRequestCancellationWaitsForActualProducerReturn() async throws {
+    let f = try fixture()
+    defer { try? FileManager.default.removeItem(at: f.root) }
+    try prepareCoordinator(f)
+    let leases = SummaryLeases(), provider = SummaryProvider()
+    provider.suspend = true
+    let coordinator = LibrarySummaryCoordinator(database: f.db, epoch: UUID(), leases: leases,
+      authority: try ProviderRequest(), provider: provider)
+    XCTAssertTrue(coordinator.requestGeneration(paperID: f.identity.paperID,
+      generation: f.identity.generation, outputLanguage: "ko"))
+    for _ in 0..<1000 where provider.continuation == nil { await Task.yield() }
+    let completion = try XCTUnwrap(provider.continuation)
+    coordinator.cancel()
+    XCTAssertFalse(leases.lease.closed)
+    XCTAssertEqual(coordinator.activePaperID, f.identity.paperID)
+    XCTAssertFalse(coordinator.requestGeneration(paperID: UUID(), generation: UUID(), outputLanguage: "en"))
+    completion.resume(); provider.continuation = nil
+    for _ in 0..<1000 where coordinator.activePaperID != nil { await Task.yield() }
+    XCTAssertNil(coordinator.activePaperID)
+    XCTAssertNil(coordinator.requestFailure, "Explicit cancellation must not show a delayed failure alert")
+    XCTAssertTrue(leases.lease.closed)
+    XCTAssertNil(try LibrarySummaryService(database: f.db).restore(paperID: f.identity.paperID))
+    XCTAssertEqual(try f.db.librarySortFacts().first?.summary?.recentAttempt?.failure, .cancelled)
+  }
+
+  @MainActor func testLibraryRequestRetainsSafeFailureUntilDismissedWithoutRetry() async throws {
+    let f = try fixture()
+    defer { try? FileManager.default.removeItem(at: f.root) }
+    try prepareCoordinator(f)
+    let leases = SummaryLeases(), provider = SummaryProvider()
+    provider.beforeResult = { _ in throw APIKeyConnectionError.authentication }
+    let coordinator = LibrarySummaryCoordinator(database: f.db, epoch: UUID(), leases: leases,
+      authority: try ProviderRequest(), provider: provider)
+    XCTAssertTrue(coordinator.requestGeneration(paperID: f.identity.paperID,
+      generation: f.identity.generation, outputLanguage: "ko"))
+    for _ in 0..<1000 where coordinator.activePaperID != nil { await Task.yield() }
+    XCTAssertNil(coordinator.activePaperID)
+    XCTAssertEqual(coordinator.requestFailure, .authentication)
+    XCTAssertTrue(leases.lease.closed)
+    XCTAssertEqual(provider.calls, 1)
+    coordinator.clearRequestFailure()
+    XCTAssertNil(coordinator.requestFailure)
+    XCTAssertEqual(provider.calls, 1, "Dismissing a failure is never a new request")
+  }
+
   @MainActor func testActualSummaryFailuresPersistRedactedReasonsAcrossReopenWithoutRetry() async throws {
     let cases: [(any Error, LibrarySummaryFailure)] = [
       (APIKeyConnectionError.authentication, .authentication),
