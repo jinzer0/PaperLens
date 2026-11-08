@@ -106,12 +106,18 @@ def parse_native_listing(document):
 def select_cases(cases, requested):
     if requested is None:
         return cases
-    if not (CLASS.fullmatch(requested) or SELECTOR.fullmatch(requested)):
-        raise ValueError("filter must be an exact ProductTests.Class or ProductTests.Class/testCase")
-    selected = [case for case in cases if case == requested or case.split("/")[0] == requested]
-    if not selected:
-        raise ValueError("filter matched no discovered cases")
-    return selected
+    filters = requested if isinstance(requested, list) else [requested]
+    selected = set()
+    if not filters:
+        raise ValueError("empty filter list")
+    for item in filters:
+        if not (CLASS.fullmatch(item) or SELECTOR.fullmatch(item)):
+            raise ValueError("filter must be an exact ProductTests.Class or ProductTests.Class/testCase")
+        matches = [case for case in cases if case == item or case.split("/")[0] == item]
+        if not matches:
+            raise ValueError("filter matched no discovered cases")
+        selected.update(matches)
+    return [case for case in cases if case in selected]
 
 
 def event_selector(name):
@@ -191,7 +197,8 @@ def main(argv=None):
     parser.add_argument("bundle", type=Path, help="existing caller-built ProductTests.xctest directory")
     parser.add_argument("--package-path", type=Path, default=Path.cwd(),
                         help="caller-built Swift package directory (default: current directory)")
-    parser.add_argument("--filter", help="exact ProductTests.Class or ProductTests.Class/testCase")
+    parser.add_argument("--filter", action="append",
+                        help="exact ProductTests.Class or ProductTests.Class/testCase; repeat for a union")
     parser.add_argument("--xctest-helper", type=Path,
                         help="discover using this SwiftPM native helper instead of loading Package.swift")
     parser.add_argument("--timeout", type=positive_timeout, default=120.0, help="seconds per case (default: 120)")

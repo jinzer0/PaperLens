@@ -76,6 +76,11 @@ class IsolatedProductTests(unittest.TestCase):
         self.assertEqual(driver.select_cases(cases, CASE), [CASE])
         self.assertEqual(driver.select_cases(cases, "ProductTests.LocalLibraryLifecycleTests"), cases)
         self.assertEqual(driver.select_cases(cases, None), cases)
+        self.assertEqual(driver.select_cases(cases, [CASE, SECOND, CASE]), cases)
+        self.assertEqual(driver.select_cases(cases, ["ProductTests.LocalLibraryLifecycleTests", CASE]), cases)
+        for filters in [[], [CASE, "ProductTests.Missing"], [CASE, CASE + ",Other/testBad"]]:
+            with self.assertRaises(ValueError):
+                driver.select_cases(cases, filters)
 
     def test_bad_empty_duplicate_and_injected_listing(self):
         fixtures = ["", "\n", "OtherTests.Class/testOnly\n", CASE + "\n" + CASE,
@@ -202,6 +207,10 @@ class IsolatedProductTests(unittest.TestCase):
         self.assertEqual((report["passed"], report["failed"]), (1, 1))
         self.assertIn("failures", report["cases"][0]["output"])
         self.assertTrue(report["cases"][0]["reasons"])
+        launches.clear()
+        with mock.patch.object(driver.subprocess, "Popen", side_effect=launch):
+            self.assertEqual(self.invoke("--filter", CASE, "--filter", SECOND, "--filter", CASE), 1)
+        self.assertEqual([call[3] for call in launches], [SECOND, CASE])
 
     def test_timeout_kills_and_reaps_owned_child_with_progress(self):
         child, launch = self.fake_child(output())

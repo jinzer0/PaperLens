@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       product_filter:
-        description: "Optional exact ProductTests.Class or ProductTests.Class/testCase; empty runs all"
+        description: "Exact ProductTests.Class or Class/testCase, one per line; empty runs all"
         required: false
         type: string
 

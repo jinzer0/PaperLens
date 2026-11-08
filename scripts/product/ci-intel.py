@@ -98,7 +98,8 @@ def run(source, reports, product_filter=None):
                     str(PRODUCTS / "ProductTests.xctest"), "--xctest-helper", str(helper),
                     "--report", str(reports / "product-tests.json")]
     if product_filter:
-        product_argv += ["--filter", product_filter]
+        for selected in product_filter.splitlines():
+            product_argv += ["--filter", selected]
     product = subprocess.run(product_argv,
                              cwd=ROOT, env=environment, check=False)
     statuses.append(product.returncode == 0)
@@ -125,7 +126,7 @@ if __name__ == "__main__":
     parser.add_argument("artifact", type=Path)
     parser.add_argument("--reports", type=Path, default=ROOT / ".build/ci-reports")
     parser.add_argument("--filter", default=os.environ.get("PAPERLENS_PRODUCT_FILTER") or None,
-                        help="optional exact product class/case for targeted compatibility checks")
+                        help="optional exact product classes/cases, one per line")
     args = parser.parse_args()
     try:
         stage(args.artifact) if args.mode == "stage" else run(args.artifact, args.reports, args.filter)

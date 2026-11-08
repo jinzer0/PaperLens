@@ -1996,8 +1996,10 @@ final class TopologyOwnedFixtures: @unchecked Sendable {
   func prepareBackupExclusionFixture(
     agentScript: URL, interpreter: URL = URL(fileURLWithPath: "/usr/bin/python3")
   ) -> Bool {
-    prepareBackupExclusion(onFailure: { terminal in
-      print("Synthetic backup metadata preparation failed: \(String(describing: terminal))")
+    // Cold Python/CF startup on hosted Intel runners is not a retirement latency test.
+    // Keep the production deadline and all clean-proof requirements unchanged.
+    prepareBackupExclusion(budgetNanoseconds: 5_000_000_000, onFailure: { phase, terminal in
+      print("Synthetic backup metadata preparation failed at \(phase): \(String(describing: terminal))")
     }) { reference in
       OwnedChildRetirement.BackupLaunch(
         namespace: self, interpreter: interpreter,
@@ -2006,7 +2008,8 @@ final class TopologyOwnedFixtures: @unchecked Sendable {
   }
 
   private func prepareBackupExclusion(
-    onFailure: ((OwnedChildRetirement.Terminal?) -> Void)? = nil,
+    budgetNanoseconds: UInt64 = 300_000_000,
+    onFailure: ((String, OwnedChildRetirement.Terminal?) -> Void)? = nil,
     launch: (String) -> OwnedChildRetirement.BackupLaunch?
   ) -> Bool {
     guard
@@ -2017,10 +2020,10 @@ final class TopologyOwnedFixtures: @unchecked Sendable {
       }), files.isEmpty, ownedLinks.isEmpty, matchesOwnedNamespace(),
       referenceMatchesDescriptor(), matchesOwnedNamespace(),
       let reference = directoryReference
-    else { onFailure?(nil); return false }
+    else { onFailure?("namespace identity", nil); return false }
     let uri = CFURLGetString(reference) as String
     guard uri.utf8.count <= 256, let plan = launch(uri) else { return false }
-    let deadline = DispatchTime.now().uptimeNanoseconds + 300_000_000
+    let deadline = DispatchTime.now().uptimeNanoseconds + budgetNanoseconds
     let owner = OwnedChildRetirement(backup: plan, deadlineUptimeNanoseconds: deadline)
     let terminal = DispatchSemaphore(value: 0)
     owner.observeTerminal { _ in terminal.signal() }
@@ -2028,10 +2031,11 @@ final class TopologyOwnedFixtures: @unchecked Sendable {
     guard terminal.wait(timeout: DispatchTime(uptimeNanoseconds: deadline)) == .success,
       case .clean(let proof) = owner.terminal,
       proof.childReaped, proof.childExitStatus == 0, proof.checkedDescriptorCloses == 8
-    else { onFailure?(owner.terminal); return false }
+    else { onFailure?("metadata retirement", owner.terminal); return false }
     guard matchesOwnedNamespace(), referenceMatchesDescriptor(), referenceHasBackupExclusion(),
       matchesOwnedNamespace()
     else {
+      onFailure?("backup exclusion readback", owner.terminal)
       return false
     }
     backupAdmission.withLock { backupPrepared = true }
