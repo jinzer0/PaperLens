@@ -59,7 +59,8 @@ final class AgentPrivateBackupTests: XCTestCase {
   }
 
   private func prepare(_ owner: TopologyOwnedFixtures) -> Bool {
-    owner.prepareBackupExclusionFixture(agentScript: agentScript)
+    owner.prepareBackupExclusionFixture(
+      agentScript: agentScript, interpreter: SyntheticPython.metadataInterpreter)
   }
 
   private func attributes(_ descriptor: Int32) throws -> [String: Data] {

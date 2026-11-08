@@ -1993,15 +1993,20 @@ final class TopologyOwnedFixtures: @unchecked Sendable {
   }
 
   // Explicit controlled metadata fixture, never a production host-Python fallback.
-  func prepareBackupExclusionFixture(agentScript: URL) -> Bool {
-    prepareBackupExclusion { reference in
+  func prepareBackupExclusionFixture(
+    agentScript: URL, interpreter: URL = URL(fileURLWithPath: "/usr/bin/python3")
+  ) -> Bool {
+    prepareBackupExclusion(onFailure: { terminal in
+      print("Synthetic backup metadata preparation failed: \(String(describing: terminal))")
+    }) { reference in
       OwnedChildRetirement.BackupLaunch(
-        namespace: self, interpreter: URL(fileURLWithPath: "/usr/bin/python3"),
+        namespace: self, interpreter: interpreter,
         script: agentScript, reference: reference)
     }
   }
 
   private func prepareBackupExclusion(
+    onFailure: ((OwnedChildRetirement.Terminal?) -> Void)? = nil,
     launch: (String) -> OwnedChildRetirement.BackupLaunch?
   ) -> Bool {
     guard
@@ -2012,7 +2017,7 @@ final class TopologyOwnedFixtures: @unchecked Sendable {
       }), files.isEmpty, ownedLinks.isEmpty, matchesOwnedNamespace(),
       referenceMatchesDescriptor(), matchesOwnedNamespace(),
       let reference = directoryReference
-    else { return false }
+    else { onFailure?(nil); return false }
     let uri = CFURLGetString(reference) as String
     guard uri.utf8.count <= 256, let plan = launch(uri) else { return false }
     let deadline = DispatchTime.now().uptimeNanoseconds + 300_000_000
@@ -2023,7 +2028,7 @@ final class TopologyOwnedFixtures: @unchecked Sendable {
     guard terminal.wait(timeout: DispatchTime(uptimeNanoseconds: deadline)) == .success,
       case .clean(let proof) = owner.terminal,
       proof.childReaped, proof.childExitStatus == 0, proof.checkedDescriptorCloses == 8
-    else { return false }
+    else { onFailure?(owner.terminal); return false }
     guard matchesOwnedNamespace(), referenceMatchesDescriptor(), referenceHasBackupExclusion(),
       matchesOwnedNamespace()
     else {

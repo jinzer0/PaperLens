@@ -33,7 +33,8 @@ import ProviderRequest
     // Actual metadata helper, never a fabricated exclusion receipt or genuine SDK launch.
     XCTAssertTrue(
       namespace.prepareBackupExclusionFixture(
-        agentScript: resources.appendingPathComponent("agent.py")))
+        agentScript: resources.appendingPathComponent("agent.py"),
+        interpreter: SyntheticPython.metadataInterpreter))
     let worker = root.appendingPathComponent("synthetic_worker.py")
     let source =
       script ?? """
@@ -75,7 +76,7 @@ import ProviderRequest
     try resolver.run()
     resolver.waitUntilExit()
     XCTAssertEqual(resolver.terminationStatus, 0)
-    let launcher = try XCTUnwrap(
+    let launcher = try SyntheticPython.override?.path ?? XCTUnwrap(
       String(data: resolved.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
         .trimmingCharacters(in: .whitespacesAndNewlines))
     guard launcher.hasPrefix("/") else { throw OwnedChildRetirement.Failure.identity }

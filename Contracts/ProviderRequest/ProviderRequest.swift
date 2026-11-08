@@ -1577,7 +1577,8 @@ public final class ProviderRequest: Sendable {
       !location.unicodeScalars.contains(where: {
         $0.value <= 32 || $0.value == 127 || $0.value == 92
       }), let base = URL(string: current.value),
-      let target = URL(string: location, relativeTo: base)?.absoluteURL.absoluteString
+      let resolved = URL(string: location, relativeTo: base)?.absoluteURL,
+      var parts = URLComponents(url: resolved, resolvingAgainstBaseURL: false)
     else { throw RequestContractError("importRejected", "import") }
     // Check escapes before Foundation can quote a malformed '%' in the target.
     let raw = Array(location.utf8)
@@ -1586,6 +1587,25 @@ public final class ProviderRequest: Sendable {
         let byte = UInt8(String(decoding: raw[(i + 1)...(i + 2)], as: UTF8.self), radix: 16),
         byte >= 32, byte != 127, byte != 92
       else { throw RequestContractError("importRejected", "import") }
+    }
+    // Foundation on macOS 15 retains leading /../ segments. Apply RFC 3986's
+    // literal dot-segment removal explicitly; encoded dots remain ordinary bytes.
+    let path = parts.percentEncodedPath
+    var segments: [Substring] = []
+    for segment in path.split(separator: "/", omittingEmptySubsequences: false).dropFirst() {
+      if segment == ".." {
+        if !segments.isEmpty { segments.removeLast() }
+      } else if segment != "." {
+        segments.append(segment)
+      }
+    }
+    if !path.isEmpty {
+      let trailingDot = path.hasSuffix("/.") || path.hasSuffix("/..")
+      parts.percentEncodedPath = "/" + segments.joined(separator: "/")
+        + (trailingDot && !segments.isEmpty ? "/" : "")
+    }
+    guard let target = parts.string else {
+      throw RequestContractError("importRejected", "import")
     }
     return try validateImportURL(target, sourceKind: kind)
   }

@@ -91,6 +91,7 @@ def run(source, reports):
     libraries = developer / "Platforms/MacOSX.platform/Developer/usr/lib"
     environment = dict(os.environ, DYLD_FRAMEWORK_PATH=str(frameworks),
                        DYLD_LIBRARY_PATH=f"{libraries}:{toolchain}/lib/swift-6.2/macosx",
+                       PAPERLENS_FIXTURE_PYTHON=sys.executable,
                        SWIFT_TESTING_ENABLED="0")
     statuses = []
     product = subprocess.run([sys.executable, str(ROOT / "scripts/product/verify-isolated-tests.py"),

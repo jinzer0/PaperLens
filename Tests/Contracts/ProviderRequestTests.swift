@@ -1184,6 +1184,15 @@ final class ProviderRequestTests: XCTestCase {
     XCTAssertEqual(
       try api.resolveRedirectURL(approved, location: "//other.org/paper.pdf").value,
       "https://other.org/paper.pdf")
+    for (location, expected) in [
+      ("../../other.pdf", "https://example.org/other.pdf"),
+      ("/a/./b/../c.pdf?query=1#page", "https://example.org/a/c.pdf?query=1#page"),
+      ("/a/b/..", "https://example.org/a/"),
+      ("/a//b.pdf", "https://example.org/a//b.pdf"),
+      ("/%2E%2E/other.pdf", "https://example.org/%2E%2E/other.pdf"),
+    ] {
+      XCTAssertEqual(try api.resolveRedirectURL(approved, location: location).value, expected)
+    }
     for bad in [
       "http://example.org/x", "https://u:p@example.org/x", "https://@example.org/x", "https:///x",
       "https://example.org:/x", "https://example.org:0/x", "https://example.org:65536/x",

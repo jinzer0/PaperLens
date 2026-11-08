@@ -568,8 +568,8 @@ final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
     let db = try ProductDatabase.open(at: root)
     let effects = OwnedCopyEffects()
     let lifecycle = try await LocalLibraryLifecycle.openForOwnedCopyFixtures(database: db, effects: effects.effects)
-    let nul = URL(filePath: try source().path + "\0tail")
-    XCTAssertTrue(nul.path(percentEncoded: false).utf8.contains(0))
+    let nul = try XCTUnwrap(URL(string: try source().absoluteString + "%00tail"))
+    XCTAssertTrue(nul.absoluteString.contains("%00"))
     let remote = try XCTUnwrap(URL(string: "https://fixture.invalid/paper.pdf"))
     for candidate in [remote, nul] {
       let id = try await lifecycle.importPDF(from: candidate)

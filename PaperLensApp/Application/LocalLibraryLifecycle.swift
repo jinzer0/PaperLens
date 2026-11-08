@@ -1154,7 +1154,9 @@ public actor LocalLibraryLifecycle {
     let lease: RequestResourceLease
     do {
       try cancellation.check()
-      guard source.isFileURL, !source.path(percentEncoded: false).utf8.contains(0) else {
+      // Reject encoded NUL before asking older Foundation to decode a filesystem path.
+      guard source.isFileURL, !source.absoluteString.contains("%00"),
+        !source.path(percentEncoded: false).utf8.contains(0) else {
         throw LocalLibraryError.invalidPDF
       }
       authority = try ProviderRequest()
