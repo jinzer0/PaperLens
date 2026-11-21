@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import GRDB
 
@@ -68,8 +69,11 @@ public final class ProductDatabase: @unchecked Sendable {
     }
     for child in ["library.sqlite", "papers"] {
       let url = root.appendingPathComponent(child)
-      if fm.fileExists(atPath: url.path),
-        try url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink == true {
+      // A dangling symlink is still an occupied entry and SQLite must not open it.
+      var info = stat()
+      if lstat(url.path, &info) == 0 {
+        guard info.st_mode & S_IFMT != S_IFLNK else { throw ProductDatabaseError.unsafeRoot }
+      } else if errno != ENOENT {
         throw ProductDatabaseError.unsafeRoot
       }
     }

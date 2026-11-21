@@ -23,6 +23,36 @@ private final class CompositionProbe: NativeConnectionTestTransport {
 
 @MainActor
 final class ProductCompositionTests: XCTestCase {
+  func testStartupRefusesDanglingLibraryStoreEntries() async throws {
+    for entry in ["library.sqlite", "papers"] {
+      let root = try privateRoot()
+      defer { try? FileManager.default.removeItem(at: root) }
+      let store = root.appendingPathComponent("database", isDirectory: true)
+      try FileManager.default.createDirectory(at: store, withIntermediateDirectories: false,
+        attributes: [.posixPermissions: 0o700])
+      let missing = store.appendingPathComponent("missing")
+      let link = store.appendingPathComponent(entry)
+      try FileManager.default.createSymbolicLink(at: link, withDestinationURL: missing)
+
+      XCTAssertThrowsError(try ProductDatabase.open(at: store), entry) { error in
+        XCTAssertEqual(error as? ProductDatabaseError, .unsafeRoot)
+      }
+      let transport = CompositionProbe()
+      let composition = ProductAppComposition(root: root, transport: transport)
+      await composition.start()
+      guard case .failed = composition.phase else {
+        return XCTFail("Startup continued with an invalid \(entry) entry")
+      }
+      XCTAssertNil(composition.workspace)
+      XCTAssertEqual(transport.calls, 0)
+      XCTAssertFalse(FileManager.default.fileExists(atPath: missing.path))
+      XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: link.path), missing.path)
+      if entry == "papers" {
+        XCTAssertFalse(FileManager.default.fileExists(atPath: store.appendingPathComponent("library.sqlite").path))
+      }
+    }
+  }
+
   func testProductionServicesImportOpenAndDeletePreserveOriginalWithoutNetwork() async throws {
     let root = try privateRoot()
     defer { try? FileManager.default.removeItem(at: root) }
