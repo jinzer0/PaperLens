@@ -141,6 +141,9 @@ import SwiftUI
           reportMetadataPositionFailure(error)
         }
       }
+      session.registerPositionSaveForTermination { [weak self] in
+        try self?.saveCurrentPosition()
+      }
     } catch is RestorationInterrupted {
       // Published setters finish after their callbacks; repair any late stale write.
       discard()
@@ -459,8 +462,8 @@ import SwiftUI
   func leave(onReturn: () -> Void) {
     guard opened else { session.close(); onReturn(); return }
     do {
-      try saveLastMetadataPosition()
-      try session.leave(at: readCurrentPosition())
+      try saveCurrentPosition()
+      session.close()
       onReturn()
     } catch {
       guard opened else { onReturn(); return }
@@ -470,12 +473,15 @@ import SwiftUI
 
   func disappear(reportFailure: (Error) -> Void) {
     if opened {
-      do {
-        try saveLastMetadataPosition()
-        try session.save(readCurrentPosition())
-      } catch { reportFailure(error) }
+      do { try saveCurrentPosition() }
+      catch { reportFailure(error) }
     }
     session.close()
+  }
+
+  private func saveCurrentPosition() throws {
+    try saveLastMetadataPosition()
+    try session.save(readCurrentPosition())
   }
 
   private func saveLastMetadataPosition() throws {

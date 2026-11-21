@@ -1522,6 +1522,58 @@ private final class MetadataObservedPDFDocument: PDFDocument {
     }
   }
 
+  func testApplicationTerminationSavesMountedPositionAndAllowsRetryAfterFailure() async throws {
+    let (db, lifecycle, identity, owner) = try await fixture()
+    owner.session.close()
+    let session = ReaderSession(database: db,
+      leaseProvider: LibraryReadLeaseProvider(lifecycle: lifecycle))
+    defer { session.close() }
+    let view = MetadataObservedPDFView()
+    let presentation = ReaderPresentation(session: session,
+      annotationIdentity: try db.annotationIdentity(paperID: identity.paperID),
+      annotationService: AnnotationService(database: db),
+      metadataService: ReaderMetadataService(database: db), metadataIdentity: identity, pdfView: view)
+    presentation.open(paperID: identity.paperID)
+    let document = try XCTUnwrap(view.document)
+    let page = try XCTUnwrap(document.page(at: 1))
+    for name in [Notification.Name.PDFViewPageChanged, .PDFViewScaleChanged, .PDFViewVisiblePagesChanged] {
+      NotificationCenter.default.removeObserver(presentation, name: name, object: view)
+    }
+    presentation.changeZoom(factor: 2)
+    presentation.navigate(toPage: 2)
+    let location = ReaderConfirmedLocation(pageIndex: 1, x: 20, y: 220)
+    view.observedDestination = PDFDestination(page: page, at: CGPoint(x: location.x, y: location.y))
+    XCTAssertTrue(view.currentPage === page)
+    XCTAssertEqual(session.restoredPosition, .init(pageIndex: 0, zoom: 1))
+    XCTAssertNil(presentation.metadataBinding?.state?.observedLocation)
+
+    try db.adapterWrite { db in
+      try db.execute(sql: """
+        CREATE TRIGGER rejectQuitPosition BEFORE UPDATE ON readerMetadataContext
+        BEGIN SELECT RAISE(ABORT, 'synthetic position storage failure'); END;
+        """)
+    }
+    XCTAssertThrowsError(try session.savePositionBeforeApplicationTermination()) {
+      XCTAssertTrue($0 is DatabaseError)
+    }
+    XCTAssertTrue(presentation.opened)
+    XCTAssertTrue(view.document === document)
+    try db.adapterWrite { try $0.execute(sql: "DROP TRIGGER rejectQuitPosition") }
+    try session.savePositionBeforeApplicationTermination()
+    XCTAssertEqual(session.restoredPosition, .init(pageIndex: 1, zoom: 2))
+    XCTAssertTrue(presentation.opened)
+
+    // Quit saved the mounted Reader before onDisappear. Closing or revoking that
+    // session removes the callback, so it cannot later save through a stale owner.
+    session.close()
+    XCTAssertNil(view.document)
+    XCTAssertNoThrow(try session.savePositionBeforeApplicationTermination())
+    let reopened = try ProductDatabase.open(at: db.root)
+    let records = try reopened.libraryReadingRecords(paperID: identity.paperID, generation: identity.generation)
+    XCTAssertEqual(records.position, .init(pageIndex: 1, zoom: 2))
+    XCTAssertEqual(try ReaderMetadataService(database: reopened).beginSession(for: identity).location, location)
+  }
+
   func testReaderExitReportsWithinPageSaveFailureAndAllowsRetry() async throws {
     for returningToLibrary in [true, false] {
       let (db, lifecycle, identity, owner) = try await fixture()

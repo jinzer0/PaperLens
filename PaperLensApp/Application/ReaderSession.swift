@@ -75,6 +75,7 @@ public enum ReaderNavigation {
   private var sequence: Int64 = 0
   private var pageCount = 0
   private var discardContent: (@MainActor () -> Void)?
+  private var saveMountedPosition: (@MainActor () throws -> Void)?
   public private(set) var restoredPosition: ReaderPosition?
   public private(set) var currentPaper: ReaderPaperSnapshot?
   public private(set) var admissionState: ReaderSessionAdmissionState = .pending
@@ -173,10 +174,20 @@ public enum ReaderNavigation {
     close()
   }
 
+  func registerPositionSaveForTermination(_ save: @escaping @MainActor () throws -> Void) {
+    guard case .admitted = admissionState else { return }
+    saveMountedPosition = save
+  }
+
+  func savePositionBeforeApplicationTermination() throws {
+    try saveMountedPosition?()
+  }
+
   public func close() { revoke() }
 
   private func revoke() {
     admissionState = .closed
+    saveMountedPosition = nil
     let discard = discardContent
     discardContent = nil
     discard?()

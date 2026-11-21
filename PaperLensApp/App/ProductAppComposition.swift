@@ -68,6 +68,10 @@ public final class ProductAppComposition: ObservableObject {
     return productionInstance?.codex
   }
 
+  static func readerForApplicationTermination() -> ReaderSession? {
+    productionInstance?.workspace?.reader?.session
+  }
+
   public func start() async {
     guard !started else { return }
     started = true

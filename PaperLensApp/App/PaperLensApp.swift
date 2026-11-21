@@ -53,6 +53,7 @@ private final class TopologyApplicationDelegate: NSObject, NSApplicationDelegate
   let dbSmoke = SyntheticPackagedDBSmokeModel()
   private var waitingForProductTermination = false
   private var productTerminationReady = false
+  private var finishingProductTermination = false
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     if SyntheticPackagedDBSmoke.launch(CommandLine.arguments) != .absent {
@@ -69,10 +70,11 @@ private final class TopologyApplicationDelegate: NSObject, NSApplicationDelegate
   }
 
   func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-    if productTerminationReady { return .terminateNow }
+    if finishingProductTermination { return .terminateCancel }
+    if productTerminationReady { return finishProductTermination() }
     if waitingForProductTermination { return .terminateCancel }
     guard let codex = ProductAppComposition.codexForApplicationTermination(),
-      codex.blocksReplacement else { return .terminateNow }
+      codex.blocksReplacement else { return finishProductTermination() }
     waitingForProductTermination = true
     Task { @MainActor in
       let cleaned = await codex.retireForApplicationTermination()
@@ -98,6 +100,27 @@ private final class TopologyApplicationDelegate: NSObject, NSApplicationDelegate
     }
     // Keep the normal AppKit event loop available for MainActor retirement work.
     return .terminateCancel
+  }
+
+  private func finishProductTermination() -> NSApplication.TerminateReply {
+    finishingProductTermination = true
+    defer { finishingProductTermination = false }
+    let reader = ProductAppComposition.readerForApplicationTermination()
+    do {
+      // The Reader can remain mounted until AppKit terminates the process.
+      try reader?.savePositionBeforeApplicationTermination()
+    } catch {
+      let alert = NSAlert()
+      alert.alertStyle = .warning
+      alert.messageText = "읽기 위치를 저장하지 못했습니다."
+      alert.informativeText = "계속 사용해 저장을 다시 시도하거나 마지막 위치를 저장하지 않고 종료할 수 있습니다."
+      alert.addButton(withTitle: "계속 사용")
+      alert.addButton(withTitle: "저장하지 않고 종료")
+      guard alert.runModal() == .alertSecondButtonReturn else { return .terminateCancel }
+    }
+    // A later onDisappear must not override the final save or explicit discard.
+    reader?.close()
+    return .terminateNow
   }
 }
 
