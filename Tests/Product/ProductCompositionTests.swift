@@ -536,6 +536,49 @@ final class ProductCompositionTests: XCTestCase {
     XCTAssertEqual(transport.calls, 1)
   }
 
+  func testContinueUsesLastGoodSelectionAndCancelsUncommittedReplacement() async throws {
+    let root = try privateRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let transport = SettingsSuspendedTransport()
+    let composition = ProductAppComposition(root: root, transport: transport)
+    await composition.start()
+    try composition.configure(model: "fixture-model")
+    guard case .connection(let connection) = composition.phase else {
+      return XCTFail("Expected connection setup")
+    }
+    let database = try ProductDatabase.open(at: root.appendingPathComponent("database"))
+    connection.connect(key: "fixture-last-good")
+    for _ in 0..<200 where transport.count == 0 { try await Task.sleep(for: .milliseconds(5)) }
+    guard transport.count == 1 else { return XCTFail("Initial probe never started") }
+    XCTAssertFalse(composition.canEnterLibrary)
+    XCTAssertThrowsError(try composition.continueToLibrary())
+    try transport.complete(0)
+    try await waitForProbe(connection)
+    let selected = try database.providerConfiguration()
+    let lastGood = try XCTUnwrap(selected.slotSelection)
+
+    connection.connect(key: "fixture-replacement")
+    for _ in 0..<200 where transport.count == 1 { try await Task.sleep(for: .milliseconds(5)) }
+    guard transport.count == 2 else { return XCTFail("Replacement probe never started") }
+    XCTAssertEqual(connection.phase, .probing)
+    XCTAssertTrue(composition.canEnterLibrary)
+    XCTAssertNoThrow(try composition.continueToLibrary())
+    XCTAssertEqual(connection.phase, .failed(.cancelled))
+    XCTAssertNotNil(composition.workspace)
+    try transport.complete(1)
+    for _ in 0..<200 where !connection.canReplaceOwner { try await Task.sleep(for: .milliseconds(5)) }
+
+    XCTAssertTrue(connection.canReplaceOwner)
+    XCTAssertEqual(try database.providerConfiguration(), selected)
+    let lease = try connection.acquireLease()
+    defer { try? connection.releaseAfterTermination(lease) }
+    XCTAssertEqual(lease.selection, lastGood)
+    XCTAssertTrue(try connection.mayPublish(lease))
+    let directory = root.appendingPathComponent("api-key-slots")
+    XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: directory.path),
+      [lastGood.slotID.uuidString])
+  }
+
   func testSyntheticCommittedConnectionRequiresExplicitContinueAndRestoresBinding() async throws {
     let root = try privateRoot()
     defer { try? FileManager.default.removeItem(at: root) }

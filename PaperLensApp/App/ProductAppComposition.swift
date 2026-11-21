@@ -148,7 +148,7 @@ public final class ProductAppComposition: ObservableObject {
   /// Only the explicit Continue action calls this. Durable selector and slot safety are
   /// checked again, rather than relying on a previously rendered success label.
   public var canEnterLibrary: Bool {
-    guard let connection, connection.phase != .probing else { return false }
+    guard let connection else { return false }
     if codex?.currentConfiguration?.kind == .codexChatGPT {
       return codex?.eligibleForEntry == true
     }
@@ -172,11 +172,13 @@ public final class ProductAppComposition: ObservableObject {
       guard current else { throw ProductEntryError.connectionRequired }
     }
     guard let database else { throw ProductEntryError.privateContainerUnavailable }
-    if workspace == nil {
-      workspace = try ProductWorkspace(
-        database: database, lifecycle: lifecycle,
-        connection: connection, codex: codex, parsing: parsing)
-    }
+    let nextWorkspace = try workspace ?? ProductWorkspace(
+      database: database, lifecycle: lifecycle,
+      connection: connection, codex: codex, parsing: parsing)
+    // Leaving setup abandons its uncommitted intent before Library commands are exposed.
+    connection.cancelUncommittedProbe()
+    codex?.cancelUncommittedLogin()
+    workspace = nextWorkspace
     phase = .library(lifecycle)
   }
 

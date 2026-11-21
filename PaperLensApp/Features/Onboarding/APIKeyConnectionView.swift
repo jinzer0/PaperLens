@@ -52,7 +52,7 @@ public struct APIKeyConnectionView: View {
     .task { connection.restore() }
     .onDisappear {
       key = ""
-      connection.invalidateCandidate()
+      provider.cancelUncommittedConnections()
     }
   }
 
@@ -81,6 +81,10 @@ public struct APIKeyConnectionView: View {
       Text("API 키를 입력해 연결을 확인하세요.").foregroundStyle(.secondary)
     case .probing:
       Text("새 키로 인증된 생성 응답을 확인하는 중입니다.")
+      if provider.eligibleForEntry {
+        Text("기존 \(provider.currentProviderLabel) 연결로 라이브러리를 열 수 있습니다.")
+          .foregroundStyle(.secondary)
+      }
     case .connected:
       if connection.eligibleForEntry {
         Text("연결 확인과 선택 저장을 완료했습니다.").foregroundStyle(.green)
@@ -89,7 +93,7 @@ public struct APIKeyConnectionView: View {
       }
     case .failed(let error):
       Text(error.koreanMessage).foregroundStyle(.red)
-      if connection.eligibleForEntry {
+      if provider.eligibleForEntry {
         Text("기존에 확인된 연결은 유지됩니다.").foregroundStyle(.secondary)
       }
     }
