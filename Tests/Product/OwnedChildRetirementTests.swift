@@ -210,9 +210,11 @@ final class OwnedChildRetirementTests: XCTestCase {
 
   // Scripted protocol only: the broker is an actual exec'd worker child, and
   // Core performs the unmodified Darwin peer-token/image/birth/ancestry checks.
-  // Optional product replies remain synthetic pending login, never SDK import,
+  // Optional product replies are synthetic login-only states, never SDK import,
   // provider probing, authenticated login, or Provider acceptance.
-  private func controlWorkerScript(wrongOrder: Bool, productLogin: Bool = false, retirement: Bool = false) -> String {
+  private func controlWorkerScript(wrongOrder: Bool, productLogin: Bool = false,
+    retirement: Bool = false, observationState: String = "pending"
+  ) -> String {
     """
     import array, json, os, select, socket, struct, subprocess, sys, time
     end = time.monotonic() + 3
@@ -220,6 +222,7 @@ final class OwnedChildRetirementTests: XCTestCase {
     wrong_order = \(wrongOrder ? "True" : "False")
     product_login = \(productLogin ? "True" : "False")
     retirement = \(retirement ? "True" : "False")
+    observation_state = \(String(reflecting: observationState))
     def mark(name):
         with open('work/' + name, 'x'):
             pass
@@ -280,12 +283,17 @@ final class OwnedChildRetirementTests: XCTestCase {
                 assert index == 0 and params == hello
                 result = hello
             elif method == 'product.loginStart':
-                assert identity is None and params['mode'] == 'browser'
+                assert identity is None
                 identity = dict(stageID=params['stageID'], intentID=params['intentID'])
-                result = dict(identity, instructions=dict(mode='browser', authUrl='https://example.invalid/login'))
+                if params['mode'] == 'device':
+                    instructions = dict(mode='device', userCode='TEST-CODE', verificationUrl='https://example.invalid/code')
+                else:
+                    assert params['mode'] == 'browser'
+                    instructions = dict(mode='browser', authUrl='https://example.invalid/login')
+                result = dict(identity, instructions=instructions)
             elif method == 'product.loginObserve':
                 assert identity is not None and params == identity
-                result = dict(identity, state='pending')
+                result = dict(identity, state=observation_state)
             elif method == 'product.loginCancel':
                 assert identity is not None and params == identity
                 mark('cancel-received')
@@ -298,7 +306,8 @@ final class OwnedChildRetirementTests: XCTestCase {
                 count = os.write(1, frame)
                 assert count > 0
                 frame = frame[count:]
-            if retirement and method == 'product.loginCancel':
+            if retirement and (method == 'product.loginCancel' or
+                               (method == 'product.loginObserve' and observation_state != 'pending')):
                 return
     if sys.argv[-1] == '--fixture-broker':
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as broker:
@@ -689,18 +698,23 @@ final class OwnedChildRetirementTests: XCTestCase {
     }
   }
 
-  func testNativeCodexObservedCleanupReleasesReplacementAndPreservesPriorSelection() async throws {
+  func testNativeCodexObservedCleanupAllowsRetryAndRetainsFailureAndPriorSelection() async throws {
     let (root, _, template) = try workerFixture(
-      script: controlWorkerScript(wrongOrder: false, productLogin: true, retirement: true))
+      script: controlWorkerScript(wrongOrder: false, productLogin: true,
+        retirement: true, observationState: "failed"))
     defer { try? FileManager.default.removeItem(at: root) }
     let database = try ProductDatabase.open(at: root.appendingPathComponent("database"))
     let slots = try APIKeySlotStore(directory: root.appendingPathComponent("api-key-slots"))
     let configuration = try NativeOpenAIConfiguration(model: "fixture-model")
-    let selected = try database.providerConfiguration()
+    let oldSlot = try slots.create(key: "synthetic-last-good")
+    let selected = try database.compareAndSwapProviderConfiguration(
+      expected: database.providerConfiguration(), replacementKind: .openAIAPIKey,
+      replacementSlotID: oldSlot, replacementModel: configuration.model)
     let transport = LoginNoNetworkTransport()
     let apiKey = NativeAPIKeyConnection(configuration: configuration, slots: slots,
       persistence: DatabaseAPIKeySelector(database: database, configuration: configuration),
       transport: transport, authority: try ProviderRequest())
+    apiKey.restore()
     var prepared: TopologyOwnedFixtures?
     let candidate = NativeCodexConnection(database: database, root: root, apiKey: apiKey,
       prepareWorker: { namespace in
@@ -709,7 +723,9 @@ final class OwnedChildRetirementTests: XCTestCase {
           agentScript: root.appendingPathComponent("resources/agent.py")) else { return nil }
         return .testing(namespace: namespace, interpreter: template.interpreter, script: template.script)
       })
-    candidate.connect(mode: "browser")
+    candidate.connect(mode: "device")
+    let failedIntent = try XCTUnwrap(candidate.intentID)
+    let failedStage = try XCTUnwrap(candidate.stageID)
     let owner = try XCTUnwrap(candidate.testingOwner)
     let completed = terminalExpectation(owner)
     let directory = try XCTUnwrap(prepared).directoryURL
@@ -720,27 +736,39 @@ final class OwnedChildRetirementTests: XCTestCase {
       try await Task.sleep(nanoseconds: 5_000_000)
     }
     XCTAssertEqual(candidate.phase, .signingIn)
-    candidate.cancel()
+    XCTAssertEqual(candidate.instructions?.userCode, "TEST-CODE")
+    candidate.checkLogin()
     await fulfillment(of: [completed], timeout: 3)
     for _ in 0..<100 {
       if candidate.phase == .idle { break }
       await Task.yield()
     }
     XCTAssertEqual(candidate.phase, .idle)
+    XCTAssertTrue(candidate.offersRetry)
+    XCTAssertTrue(candidate.showsFailure)
+    XCTAssertEqual(candidate.message, "ChatGPT 로그인에 실패했습니다. 전용 로그인 저장소 정리를 완료했습니다.")
+    XCTAssertNil(candidate.instructions)
     XCTAssertFalse(candidate.blocksReplacement)
     XCTAssertTrue(candidate.canStart)
     XCTAssertFalse(FileManager.default.fileExists(atPath: directory.path))
     XCTAssertEqual(try database.providerConfiguration(), selected)
+    XCTAssertTrue(apiKey.eligibleForEntry)
+    XCTAssertEqual(try slots.read(oldSlot), "synthetic-last-good")
     XCTAssertEqual(transport.calls, 0)
     candidate.connect(mode: "browser")
     let replacement = try XCTUnwrap(candidate.testingOwner)
     XCTAssertFalse(owner === replacement)
+    XCTAssertNotEqual(candidate.intentID, failedIntent)
+    XCTAssertNotEqual(candidate.stageID, failedStage)
+    XCTAssertFalse(candidate.offersRetry)
     let replacementDone = terminalExpectation(replacement)
     for _ in 0..<200 {
       if candidate.phase == .signingIn || candidate.phase == .blocked { break }
       try await Task.sleep(nanoseconds: 5_000_000)
     }
     XCTAssertEqual(candidate.phase, .signingIn)
+    XCTAssertEqual(candidate.instructions?.url.absoluteString, "https://example.invalid/login")
+    XCTAssertNil(candidate.instructions?.userCode)
     candidate.cancel()
     await fulfillment(of: [replacementDone], timeout: 3)
     for _ in 0..<100 {
@@ -748,7 +776,11 @@ final class OwnedChildRetirementTests: XCTestCase {
       await Task.yield()
     }
     XCTAssertEqual(candidate.phase, .idle)
+    XCTAssertFalse(candidate.showsFailure)
+    XCTAssertTrue(candidate.offersRetry)
+    XCTAssertEqual(candidate.message, "ChatGPT 연결을 취소했습니다. 전용 로그인 저장소 정리를 완료했습니다.")
     XCTAssertFalse(candidate.blocksReplacement)
+    XCTAssertEqual(try database.providerConfiguration(), selected)
     XCTAssertEqual(transport.calls, 0)
   }
 

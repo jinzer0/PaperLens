@@ -14,7 +14,23 @@ public final class NativeCodexConnection: ObservableObject {
     public let url: URL
     public let userCode: String?
   }
-  private enum Operation { case login, observe, probe }
+  private enum Operation { case login(mode: String), observe, probe }
+  private enum Ending {
+    case cancelled, disconnected, failure(String)
+
+    var message: String {
+      switch self {
+      case .cancelled: return "ChatGPT 연결을 취소했습니다."
+      case .disconnected: return "ChatGPT 연결을 해제했습니다."
+      case .failure(let reason): return reason
+      }
+    }
+
+    var failed: Bool {
+      if case .failure = self { return true }
+      return false
+    }
+  }
   @Published public private(set) var phase: Phase = .idle
   @Published public private(set) var instructions: Instructions?
   @Published public private(set) var message = "브라우저 또는 기기 코드로 ChatGPT에 연결하세요."
@@ -30,7 +46,7 @@ public final class NativeCodexConnection: ObservableObject {
   private var expected: ProviderConfiguration?
   private var committed: ProviderConfiguration?
   private var requests: [UUID: Operation] = [:]
-  private var results: [UUID: AgentRPCConnection.Terminal] = [:]
+  private var ending: Ending?
   private var cancelled = false
   private var retirementRequested = false
   private var summaryScopes: [UUID: NativeCodexSummaryScope] = [:]
@@ -117,6 +133,12 @@ public final class NativeCodexConnection: ObservableObject {
     namespace != nil || owner != nil || !summaryScopes.isEmpty || !summaryNamespaceDebt.isEmpty
   }
   public var canStart: Bool { !blocksReplacement && apiKey.canReplaceOwner }
+  var showsFailure: Bool { phase == .blocked || ending?.failed == true }
+  var offersRetry: Bool {
+    guard phase == .idle, let ending else { return false }
+    if case .disconnected = ending { return false }
+    return true
+  }
   public var eligibleForEntry: Bool {
     guard phase == .connected, !cancelled, !retirementRequested,
       let owner, owner.terminal == nil, let lifecycle,
@@ -130,6 +152,7 @@ public final class NativeCodexConnection: ObservableObject {
 
   public func connect(mode: String) {
     guard canStart, mode == "browser" || mode == "device" else { return }
+    ending = nil
     do {
       cancelled = false
       retirementRequested = false
@@ -163,9 +186,13 @@ public final class NativeCodexConnection: ObservableObject {
           switch terminal {
           case .unknown:
             self.phase = .blocked
-            self.message = "ChatGPT 프로세스 또는 전용 저장소 정리를 확인하지 못했습니다. 재연결과 Provider 교체가 차단됩니다."
+            self.message = self.endMessage(
+              followedBy: "프로세스 또는 전용 저장소 정리를 확인하지 못해 재연결과 Provider 교체가 차단됩니다.")
           case .clean:
             do {
+              if self.ending == nil {
+                self.ending = .failure("ChatGPT 연결 프로세스가 종료되었습니다.")
+              }
               let selected = try self.database.providerConfiguration()
               if selected.kind == .codexChatGPT,
                 selected.slotID?.uuidString.lowercased() == self.namespace?.runID {
@@ -178,13 +205,13 @@ public final class NativeCodexConnection: ObservableObject {
               self.committed = nil
               self.expected = nil
               self.requests.removeAll()
-              self.results.removeAll()
               self.retirementRequested = false
               self.phase = .idle
-              self.message = "ChatGPT 프로세스 종료와 전용 저장소 정리를 완료했습니다. 다시 연결할 수 있습니다."
+              self.message = self.endMessage(followedBy: "전용 로그인 저장소 정리를 완료했습니다.")
             } catch {
               self.phase = .blocked
-              self.message = "ChatGPT 정리는 끝났지만 저장된 선택을 갱신하지 못했습니다. 다시 연결하기 전에 설정을 확인하세요."
+              self.message = self.endMessage(
+                followedBy: "저장된 Provider 선택을 갱신하지 못했습니다. 설정을 확인하세요.")
             }
           }
         }
@@ -196,7 +223,7 @@ public final class NativeCodexConnection: ObservableObject {
         else { return }
         switch result {
         case .failure:
-          self.failClosed()
+          self.failClosed("ChatGPT 연결 프로세스를 시작하지 못했습니다.")
         case .success(let lifecycle):
           self.lifecycle = lifecycle
           lifecycle.onTerminal = { [weak self, weak lifecycle] id, terminal in
@@ -211,22 +238,27 @@ public final class NativeCodexConnection: ObservableObject {
           params["mode"] = mode
           params["model"] = model
           params["expectedSelector"] = self.selector(self.expected!)
-          self.send(.login, method: "product.loginStart", params: params)
+          self.send(.login(mode: mode), method: "product.loginStart", params: params)
         }
       }
-    } catch { failClosed() }
+    } catch { failClosed("저장된 Provider 설정을 읽지 못했습니다.") }
   }
 
   /// Renew only the current intent's observation. The shared channel/session owns
   /// request and traffic limits; observation adds no polling interval or expiry.
   public func checkLogin() {
-    guard phase == .signingIn, fenced else { return }
+    guard phase == .signingIn else { return }
+    guard fenced else {
+      failClosed("현재 로그인 요청을 확인할 수 없습니다.")
+      return
+    }
     phase = .observing
     send(.observe, method: "product.loginObserve", params: identityParams)
   }
 
   public func cancel() {
     guard owner != nil, !retirementRequested else { return }
+    ending = phase == .connected ? .disconnected : .cancelled
     cancelled = true
     instructions = nil
     phase = .retiring
@@ -272,13 +304,21 @@ public final class NativeCodexConnection: ObservableObject {
     } catch { failClosed() }
   }
   private func receive(_ id: UUID, terminal: AgentRPCConnection.Terminal) {
-    guard let operation = requests[id] else { return }
-    results[id] = terminal
-    guard !cancelled, !retirementRequested, fenced else {
-      if !retirementRequested { failClosed() }
+    guard let operation = requests.removeValue(forKey: id) else { return }
+    guard !cancelled, !retirementRequested else { return }
+    if case .failure(let failure) = terminal {
+      switch failure {
+      case .timeout, .remote("timeout"):
+        failClosed("ChatGPT 응답을 기다리다 시간이 초과되었습니다.")
+      case .remote("cancelled"):
+        failClosed("ChatGPT 요청이 취소되었습니다.")
+      default:
+        if case .probe = operation { failClosed("ChatGPT 연결 테스트에 실패했습니다.") }
+        else { failClosed("ChatGPT 로그인 응답을 확인하지 못했습니다.") }
+      }
       return
     }
-    guard case .result(let result) = terminal,
+    guard fenced, case .result(let result) = terminal,
       result["stageID"] as? String == stageID?.uuidString.lowercased(),
       result["intentID"] as? String == intentID?.uuidString.lowercased()
     else {
@@ -286,9 +326,9 @@ public final class NativeCodexConnection: ObservableObject {
       return
     }
     switch operation {
-    case .login:
+    case .login(let requestedMode):
       guard let value = result["instructions"] as? [String: Any],
-        let mode = value["mode"] as? String,
+        let mode = value["mode"] as? String, mode == requestedMode,
         let address = value[mode == "browser" ? "authUrl" : "verificationUrl"] as? String,
         let url = URL(string: address), url.scheme == "https", url.host != nil,
         mode == "browser" || (mode == "device" && value["userCode"] is String)
@@ -309,6 +349,10 @@ public final class NativeCodexConnection: ObservableObject {
         var params = identityParams
         params["expectedSelector"] = selector(expected!)
         send(.probe, method: "product.connectionTest", params: params)
+      case "failed": failClosed("ChatGPT 로그인에 실패했습니다.")
+      case "cancelled": failClosed("ChatGPT 로그인 요청이 취소되었습니다.")
+      case "timeout": failClosed("ChatGPT 로그인을 기다리다 시간이 초과되었습니다.")
+      case "exited": failClosed("ChatGPT 로그인 프로세스가 종료되었습니다.")
       default: failClosed()
       }
     case .probe:
@@ -329,19 +373,35 @@ public final class NativeCodexConnection: ObservableObject {
         phase = .connected
         message =
           "ChatGPT 연결이 완료되었습니다. Library에서 논문 요약을 생성할 수 있습니다."
-      } catch { failClosed() }
+      } catch {
+        failClosed(committed == nil
+          ? "새 Provider 설정을 저장하지 못했습니다."
+          : "새 설정을 저장한 뒤 이전 키를 정리하지 못해 연결을 중단했습니다.")
+      }
     }
   }
-  private func failClosed() {
+
+  private func endMessage(followedBy status: String) -> String {
+    guard let ending else { return status }
+    return "\(ending.message) \(status)"
+  }
+
+  private func failClosed(_ reason: String = "ChatGPT 연결을 검증하지 못했습니다.") {
+    guard !retirementRequested else { return }
     instructions = nil
-    phase = .blocked
-    message =
-      committed == nil
-      ? "연결을 검증하거나 저장하지 못했습니다. 이전 Provider 선택은 유지됩니다. SDK 정리가 입증될 때까지 새 연결을 차단합니다."
-      : "새 선택은 저장됐지만 이전 키 정리를 완료하지 못해 연결을 중단했습니다. SDK 정리가 입증될 때까지 새 연결을 차단합니다."
-    if !retirementRequested, let owner {
+    ending = .failure(reason)
+    if let owner, owner.terminal == nil {
       retirementRequested = true
+      phase = .retiring
+      message = endMessage(followedBy: "재연결 전에 프로세스와 전용 저장소를 정리합니다.")
       owner.retire()
+    } else if blocksReplacement {
+      phase = .blocked
+      message = endMessage(followedBy: "정리를 확인할 때까지 재연결을 차단합니다.")
+    } else {
+      expected = nil
+      phase = .idle
+      message = endMessage(followedBy: "다시 연결할 수 있습니다.")
     }
   }
 }

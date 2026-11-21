@@ -126,8 +126,12 @@ public struct NativeCodexConnectionView: View {
       Text("공식 로그인 후 실제 생성 응답을 검사합니다. 사용량이 발생할 수 있습니다. 연결한 ChatGPT 계정으로 API 키 없이 논문 요약을 생성할 수 있습니다.")
         .font(.callout)
       HStack {
-        Button("브라우저로 로그인") { connection.connect(mode: "browser") }
-        Button("기기 코드로 로그인") { connection.connect(mode: "device") }
+        Button(connection.offersRetry ? "브라우저 로그인 다시 시도" : "브라우저로 로그인") {
+          connection.connect(mode: "browser")
+        }
+        Button(connection.offersRetry ? "기기 코드 로그인 다시 시도" : "기기 코드로 로그인") {
+          connection.connect(mode: "device")
+        }
       }
       .disabled(!connection.canStart)
       if let instructions = connection.instructions,
@@ -157,7 +161,7 @@ public struct NativeCodexConnectionView: View {
       } else if connection.phase == .connected {
         Button("ChatGPT 연결 해제") { connection.cancel() }
       }
-      if connection.phase == .blocked {
+      if connection.showsFailure {
         Label(connection.message, systemImage: "exclamationmark.triangle")
           .foregroundStyle(.red)
       } else {
