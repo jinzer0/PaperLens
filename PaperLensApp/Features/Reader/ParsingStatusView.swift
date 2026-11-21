@@ -150,8 +150,9 @@ public struct ParsingStatusView: View {
       trackingKey = key
       trackingEnded = false
       do {
-        // Observed values invalidate presentation; guarded readback remains authoritative.
-        for try await _ in database.extractionStatuses(paperID: key.paperID) {
+        // A Retry-context change also invalidates presentation. Read back the latest
+        // snapshot because a buffered value could precede an explicit refresh.
+        for try await _ in database.parsingPresentations(paperID: key.paperID, includesRetry: coordinator != nil) {
           guard isCurrent(key), !Task.isCancelled else { return }
           await refresh(key: key)
         }

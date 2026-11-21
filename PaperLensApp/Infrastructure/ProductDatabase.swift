@@ -161,6 +161,13 @@ public final class ProductDatabase: @unchecked Sendable {
     }.values(in: queue, bufferingPolicy: .bufferingNewest(1))
   }
 
+  func parsingPresentations(paperID: UUID, includesRetry: Bool)
+    -> AsyncValueObservation<ParsingRecoveryCoordinator.Presentation> {
+    ValueObservation.tracking { db in
+      try ParsingRecoveryCoordinator.fetchPresentation(paperID: paperID, includesRetry: includesRetry, in: db)
+    }.values(in: queue, bufferingPolicy: .bufferingNewest(1))
+  }
+
   func libraryMetadataChanges() -> AnyPublisher<Void, Error> {
     DatabaseRegionObservation(tracking: Table("extractionVisible"), Table("readerMetadata"))
       .publisher(in: queue)

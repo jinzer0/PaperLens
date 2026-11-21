@@ -35,11 +35,15 @@ public actor ParsingRecoveryCoordinator {
 
   func presentation(paperID: UUID) throws -> Presentation {
     try service.database.adapterRead { db in
-      let status = try ProductDatabase.fetchExtractionStatus(paperID: paperID, in: db)
-      // The displayed failure and its Retry action must use the same database snapshot.
-      let retry = status.state == "failed" ? try Self.context(in: db, paperID: paperID) : nil
-      return Presentation(status: status, retry: retry)
+      try Self.fetchPresentation(paperID: paperID, includesRetry: true, in: db)
     }
+  }
+
+  static func fetchPresentation(paperID: UUID, includesRetry: Bool, in db: Database) throws -> Presentation {
+    let status = try ProductDatabase.fetchExtractionStatus(paperID: paperID, in: db)
+    // The displayed failure and its Retry action must use the same database snapshot.
+    let retry = includesRetry && status.state == "failed" ? try context(in: db, paperID: paperID) : nil
+    return Presentation(status: status, retry: retry)
   }
 
   /// Rejects unavailable production boundaries before any persisted reservation or dispatch.

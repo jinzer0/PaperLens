@@ -97,6 +97,63 @@ final class ParsingRecoveryCoordinatorTests: XCTestCase {
     XCTAssertTrue(calls.isEmpty)
   }
 
+  func testObservedRetryContextRefreshesAfterOnlyProviderConfigurationChanges() async throws {
+    let (database, failed, root) = try fixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    var presentations = database.parsingPresentations(paperID: failed.paperID, includesRetry: true).makeAsyncIterator()
+    let initial = try await presentations.next()
+    let initialContext = try XCTUnwrap(initial?.retry)
+    let configuration = try database.compareAndSwapProviderConfiguration(expected: initialContext.currentConfiguration,
+      replacementKind: .openAIAPIKey, replacementSlotID: UUID(), replacementModel: "fixture-model")
+    let updated = try await presentations.next()
+    let updatedContext = try XCTUnwrap(updated?.retry)
+    XCTAssertEqual(updated?.status.state, "failed")
+    XCTAssertEqual(updated?.status.failure, initial?.status.failure)
+    XCTAssertEqual(updatedContext.failedAttempt, failed)
+    XCTAssertEqual(updatedContext.currentConfiguration, configuration)
+
+    let producer = HeldFailureProducer()
+    let coordinator = ParsingRecoveryCoordinator(service: .init(database: database,
+      producer: producer, geometryValidator: RejectingValidator()), currentEpoch: UUID())
+    do { try await coordinator.retry(initialContext); XCTFail("Previous configuration must be rejected") }
+    catch { XCTAssertEqual(error as? ParsingRecoveryError, .staleContext) }
+    let retry = Task { try await coordinator.retry(updatedContext) }
+    await producer.waitForStart()
+    let running = try await presentations.next()
+    XCTAssertEqual(running?.status.state, "running")
+    XCTAssertNil(running?.retry)
+    await producer.release()
+    do { _ = try await retry.value; XCTFail("Controlled parser failure should propagate") }
+    catch { XCTAssertEqual(error as? ExtractionError, .invalidBatch) }
+    let repeated = try await presentations.next()
+    XCTAssertEqual(repeated?.status.state, "failed")
+    let newRetry = try XCTUnwrap(repeated?.retry)
+    XCTAssertNotEqual(newRetry.failedAttempt.attempt, failed.attempt)
+    XCTAssertEqual(newRetry.currentConfiguration, configuration)
+    let admitted = await producer.identities
+    XCTAssertEqual(admitted.map(\.configuration), [configuration])
+  }
+
+  func testPresentationSuppressesStaleFailureAndRejectsDeletedPaper() async throws {
+    let (database, failed, root) = try fixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let coordinator = ParsingRecoveryCoordinator(service: .init(database: database,
+      producer: nil, geometryValidator: nil), currentEpoch: UUID())
+    let initial = try await coordinator.presentation(paperID: failed.paperID)
+    XCTAssertNotNil(ParsingFailureNotice.message(status: initial.status, unavailable: false))
+    XCTAssertNotNil(initial.retry)
+    for (column, value) in [("generation", UUID().uuidString), ("pdfSHA256", String(repeating: "b", count: 64)),
+      ("pdfReference", "papers/\(UUID().uuidString)/document.pdf"), ("deletionID", UUID().uuidString)] {
+      let original = try database.adapterRead { try String.fetchOne($0, sql: "SELECT \(column) FROM paper") }
+      try database.adapterWrite { try $0.execute(sql: "UPDATE paper SET \(column) = ?", arguments: [value]) }
+      let presentation = try await coordinator.presentation(paperID: failed.paperID)
+      XCTAssertEqual(presentation.status.state, "unavailable", column)
+      XCTAssertNil(ParsingFailureNotice.message(status: presentation.status, unavailable: false), column)
+      XCTAssertNil(presentation.retry, column)
+      try database.adapterWrite { try $0.execute(sql: "UPDATE paper SET \(column) = ?", arguments: [original]) }
+    }
+  }
+
   func testMissingProductionBoundariesRejectBeforeReservation() async throws {
     let (database, old, root) = try fixture()
     defer { try? FileManager.default.removeItem(at: root) }

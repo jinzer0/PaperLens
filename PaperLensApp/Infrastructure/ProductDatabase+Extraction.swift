@@ -255,7 +255,10 @@ extension ProductDatabase {
 
   static func fetchExtractionStatus(paperID: UUID, in db: Database) throws -> ExtractionStatus {
     guard let row = try Row.fetchOne(db, sql: """
-        SELECT paper.status AS paperStatus, extractionAttempt.state, extractionAttempt.failure,
+        SELECT paper.status AS paperStatus, paper.deletionID, extractionAttempt.state, extractionAttempt.failure,
+          extractionAttempt.generation = paper.generation AND extractionAttempt.pdfSHA256 = paper.pdfSHA256
+            AND extractionAttempt.pdfReference = paper.pdfReference AS currentAttempt,
+          extractionAttempt.revision AS attemptRevision,
           extractionRevision.id AS revision FROM paper
         LEFT JOIN extractionAttempt ON extractionAttempt.paperID = paper.id
         LEFT JOIN extractionVisible ON extractionVisible.paperID = paper.id
@@ -266,12 +269,18 @@ extension ProductDatabase {
         WHERE paper.id = ?
         """, arguments: [paperID.uuidString]) else { throw ProductDatabaseError.invalidRecord }
     let paperStatus: String = row["paperStatus"]
-    guard paperStatus == "ready" else { return .init(state: "unavailable", failure: nil, usableRevision: nil) }
+    let deletionID: String? = row["deletionID"]
+    guard paperStatus == "ready", deletionID == nil else {
+      return .init(state: "unavailable", failure: nil, usableRevision: nil)
+    }
     let state: String? = row["state"]
-    let revision: String? = row["revision"]
-    return .init(state: state == "succeeded" && revision == nil ? "unavailable" : state ?? "notStarted",
-      failure: row["failure"],
-      usableRevision: revision.flatMap(UUID.init(uuidString:)))
+    let usable = String.fromDatabaseValue(row["revision"]).flatMap(UUID.init(uuidString:))
+    let currentAttempt: Bool? = row["currentAttempt"]
+    let attempted = String.fromDatabaseValue(row["attemptRevision"]).flatMap(UUID.init(uuidString:))
+    if (state != nil && currentAttempt != true) || (state == "succeeded" && (usable == nil || usable != attempted)) {
+      return .init(state: "unavailable", failure: nil, usableRevision: usable)
+    }
+    return .init(state: state ?? "notStarted", failure: row["failure"], usableRevision: usable)
   }
 
   public func lookupExtraction(_ identity: ExtractionSentenceIdentity) throws -> ExtractionSearchHit? {
