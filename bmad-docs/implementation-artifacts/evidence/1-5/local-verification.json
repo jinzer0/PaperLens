@@ -89,13 +89,33 @@
       {"artifact": "d1c625cc-be3d-4e54-bcc6-50b0df94a1c9", "nativeTests": {"passed": 15, "failed": 0}, "laterStaticFindings": "two-ordinary-operation-lifetime-races-resolved-in-final-source"}
     ]
   },
+  "currentArm64Diagnostic": {
+    "scope": "signed-packaged-main-container-synthetic-db",
+    "sourceCommit": "b2b6ac4865d8339a98ffe1ebd0db0a84cd8a8932",
+    "artifactHash": "32964d5e11567fc1a40caf20d038366073df570229e159ce1d70e0f8bad6236f",
+    "manifestHash": "3947b2ea2c1093fe5811fe18b26805c5e7a46fec85d672fc95b31ee504958f40",
+    "acquisitionHash": "c1c75cd8aafaa27b481d20f5a549706ef2564da04bdd12abcec84e850ea19c71",
+    "osVersion": "26.7.1",
+    "osBuild": "25G241",
+    "architecture": "arm64",
+    "signatureVerified": true,
+    "cases": {"normalChecksPassed": 9, "m1FailureChecksPassed": 8, "m2FailureChecksPassed": 8},
+    "sqlite": {
+      "origin": "apple-system",
+      "version": "3.51.0",
+      "imageIdentity": "656eccab036fe0608536270165001e347dbbb9ef4f89f5a4f5894129b5620edb",
+      "sourceIdentity": "f0ca7bba1c5e232e5d279fad6338121ab55af0c8c68c84cdfb18ba5114dcaapl",
+      "fts5OnInitialAndReopenedConnections": true
+    },
+    "freshSyntheticArtifactsCleaned": true,
+    "packagedMatrixCellVerified": false
+  },
   "notProven": [
-    "main-app-GRDB-integration", "separate-packaged-app-relaunch",
-    "loaded-system-SQLite-provenance", "exact-minimum-OS-build",
-    "native-Intel", "signed-packaged-four-cell-execution", "p1", "p2"
+    "main-app-product-database-integration", "separate-packaged-app-relaunch",
+    "minimum-macos-arm64-runtime", "authenticated-packaged-arm64-matrix", "p1", "p2"
   ],
   "runtimeVerified": false,
-  "runtimeVerifiedScope": "authenticated-packaged-four-cell-only",
+  "runtimeVerifiedScope": "authenticated-packaged-minimum-and-current-arm64",
   "storyComplete": false,
   "p2Passed": false,
   "promotion": "not_promoted"
