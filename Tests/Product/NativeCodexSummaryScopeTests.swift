@@ -125,7 +125,8 @@ import ProviderRequest
     )
   }
 
-  private func controlWorkerScript(holdResult: Bool, remoteTimeout: Bool = false) -> String {
+  private func controlWorkerScript(holdResult: Bool, remoteTimeout: Bool = false,
+    syntheticLogin: Bool = false) -> String {
     """
     import array, json, os, select, socket, struct, subprocess, sys, time
     end = time.monotonic() + 3
@@ -192,6 +193,20 @@ import ProviderRequest
             if method == 'product.hello':
                 assert index == 0 and params == hello
                 result = hello
+            elif \(syntheticLogin ? "True" : "False") and method == 'product.loginStart':
+                identity = dict(stageID=params['stageID'], intentID=params['intentID'])
+                fd = os.open('codex/auth.json', os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                with os.fdopen(fd, 'w') as auth:
+                    auth.write('{}')
+                result = dict(identity, instructions=dict(mode='browser', authUrl='https://example.invalid/login'))
+            elif \(syntheticLogin ? "True" : "False") and method == 'product.loginObserve':
+                assert params == identity
+                result = dict(identity, state='authenticated')
+            elif \(syntheticLogin ? "True" : "False") and method == 'product.connectionTest':
+                result = dict(identity, expectedSelector=params['expectedSelector'], state='usable', text='PAPERLENS_OK')
+            elif \(syntheticLogin ? "True" : "False") and method == 'product.loginCancel':
+                assert params == identity
+                result = dict(identity, accepted=True)
             elif method == 'product.librarySummary':
                 mark('summary-received')
                 if \(holdResult ? "True" : "False"):
@@ -211,7 +226,7 @@ import ProviderRequest
                 count = os.write(1, frame)
                 assert count > 0
                 frame = frame[count:]
-            if retirement and method == 'product.librarySummary':
+            if retirement and method in ('product.librarySummary', 'product.loginCancel'):
                 return
     if sys.argv[-1] == '--fixture-broker':
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as broker:
@@ -293,6 +308,22 @@ import ProviderRequest
 
   private final class Completion { var returned = false }
 
+  private struct RejectNetwork: NativeConnectionTestTransport {
+    func probe(key: String, configuration: NativeOpenAIConfiguration,
+      request: AuthorizedProviderRequest, authority: ProviderRequest) async throws -> NativeProbeResponse {
+      XCTFail("Synthetic Codex connection attempted a network call")
+      throw APIKeyConnectionError.authentication
+    }
+  }
+
+  private func waitFor(_ condition: () -> Bool) async throws {
+    for _ in 0..<200 {
+      if condition() { return }
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    throw LibrarySummaryError.providerUnavailable
+  }
+
   private func marker(_ name: String, directory: URL) -> URL {
     directory.appendingPathComponent("work/" + name)
   }
@@ -306,9 +337,10 @@ import ProviderRequest
     throw LibrarySummaryError.providerUnavailable
   }
 
-  private func parameters() throws -> (ProviderRequest, AuthorizedProviderRequest, [String: Any]) {
+  private func parameters(paperID: UUID = UUID()) throws
+    -> (ProviderRequest, AuthorizedProviderRequest, [String: Any]) {
     let authority = try ProviderRequest()
-    let paper = UUID().uuidString.lowercased()
+    let paper = paperID.uuidString.lowercased()
     let sources = RequestSources.librarySummary(outputLanguage: "en")
     let context = try TrustedRequestContext(authority: authority, sources: sources,
       identity: .init(paperID: paper, paperGeneration: 1,
@@ -340,6 +372,91 @@ import ProviderRequest
     let result = try authority.wrapModelResult(bytes, request: request)
     XCTAssertEqual(result.operation, .librarySummary)
     XCTAssertEqual(result.requestID, request.wire.requestID)
+  }
+
+  func testOtherPaperPurgeKeepsBoundSummaryAndRejectsUnownedEntry() async throws {
+    let (root, _, template) = try workerFixture(
+      script: controlWorkerScript(holdResult: true, syntheticLogin: true))
+    defer { try? FileManager.default.removeItem(at: root) }
+    let database = try ProductDatabase.open(at: root.appendingPathComponent("database"))
+    let configuration = try NativeOpenAIConfiguration(model: "fixture-model")
+    let apiKey = NativeAPIKeyConnection(configuration: configuration,
+      slots: try APIKeySlotStore(directory: root.appendingPathComponent("slots")),
+      persistence: DatabaseAPIKeySelector(database: database, configuration: configuration),
+      transport: RejectNetwork(), authority: try ProviderRequest())
+    let loginRoot = root.appendingPathComponent("codex-scopes", isDirectory: true)
+    var loginDirectory: URL?
+    var summaryDirectory: URL?
+    let codex = NativeCodexConnection(database: database, root: loginRoot, apiKey: apiKey) { namespace in
+      guard namespace.prepareBackupExclusionFixture(
+        agentScript: root.appendingPathComponent("resources/agent.py"),
+        interpreter: SyntheticPython.metadataInterpreter) else { return nil }
+      if namespace.directoryURL.deletingLastPathComponent().path == loginRoot.path {
+        loginDirectory = namespace.directoryURL
+      } else {
+        summaryDirectory = namespace.directoryURL
+      }
+      return .testing(namespace: namespace, interpreter: template.interpreter, script: template.script)
+    }
+    let peer = IsolatedAgentLibraryPurge(unsupportedPaperRoot: root.appendingPathComponent("legacy"),
+      summaryRoot: codex.summaryRoot)
+    peer.bind(codex)
+    let library = try await LocalLibraryLifecycle.open(database: database, agentPurge: peer)
+    let pdf = root.appendingPathComponent("source.pdf")
+    try Data("%PDF-1.7\nsynthetic deletion isolation\n%%EOF\n".utf8).write(to: pdf)
+    let paper = try await library.importPDF(from: pdf)
+    let other = try await library.importPDF(from: pdf)
+    codex.connect(mode: "browser")
+    try await waitFor { codex.phase == .signingIn }
+    let login = try XCTUnwrap(loginDirectory)
+    defer { codex.cancel() }
+    codex.checkLogin()
+    try await waitFor { codex.eligibleForEntry }
+    let (authority, request, _) = try parameters(paperID: paper)
+    let identity = LibrarySummaryIdentity(paperID: paper, generation: UUID(), requestPaperGeneration: 1,
+      pdfSHA256: String(repeating: "a", count: 64), revision: UUID(),
+      configurationGeneration: try database.providerConfiguration().generation, job: UUID(),
+      attempt: UUID(), fence: UUID(), correlation: UUID(), input: UUID(), epoch: UUID())
+    let summary = Task { try await codex.executeLibrarySummary(request, identity: identity, authority: authority) }
+    try await waitFor { summaryDirectory != nil }
+    let live = try XCTUnwrap(summaryDirectory)
+    try await waitForMarker("summary-received", directory: live)
+    do {
+      try await library.delete(paperID: other)
+      let records = try await library.list()
+      XCTAssertEqual(records.map(\.id), [paper])
+      XCTAssertEqual(records.first?.status, .ready)
+    } catch {
+      XCTFail("Purging a different paper refused a bound unrelated worker: \(error)")
+    }
+    XCTAssertTrue(FileManager.default.fileExists(atPath: live.path))
+    let unknown = codex.summaryRoot.appendingPathComponent("unowned")
+    try FileManager.default.createDirectory(at: unknown, withIntermediateDirectories: false)
+    do {
+      _ = try await codex.purgeSummaryPaper(paperID: other, deletionID: UUID())
+      XCTFail("Purging acknowledged an unowned namespace")
+    } catch { XCTAssertEqual(error as? LocalLibraryError, .producerClosureUnknown) }
+    XCTAssertTrue(FileManager.default.fileExists(atPath: unknown.path))
+    try FileManager.default.removeItem(at: unknown)
+    let displaced = root.appendingPathComponent("displaced-summary")
+    try FileManager.default.moveItem(at: live, to: displaced)
+    try FileManager.default.createDirectory(at: live, withIntermediateDirectories: false,
+      attributes: [.posixPermissions: 0o700])
+    do {
+      _ = try await codex.purgeSummaryPaper(paperID: other, deletionID: UUID())
+      XCTFail("Purging trusted a replacement reusing the owned directory name")
+    } catch { XCTAssertEqual(error as? LocalLibraryError, .producerClosureUnknown) }
+    try FileManager.default.removeItem(at: live)
+    try FileManager.default.moveItem(at: displaced, to: live)
+    try Data().write(to: marker("release-result", directory: live))
+    try await waitForMarker("retirement-received", directory: live)
+    try Data().write(to: marker("release-retirement", directory: live))
+    let result = try await summary.value
+    XCTAssertEqual(result.requestID, request.wire.requestID)
+    codex.cancel()
+    try await waitForMarker("retirement-received", directory: login)
+    try Data().write(to: marker("release-retirement", directory: login))
+    try await waitFor { codex.phase == .idle }
   }
 
   func testCancellationRejectsLateResultAndWaitsForActualRetirement() async throws {

@@ -64,7 +64,7 @@ public final class NativeCodexConnection: ObservableObject {
       summaryNamespaceDebt.isEmpty else { throw LibrarySummaryError.providerUnavailable }
     let raw = try authority.encodeRequest(request)
     guard raw.count <= 49_152 else { throw LibrarySummaryError.invalidResult }
-    try IsolatedAgentLibraryPurge.requireEmptySummaryRoot(summaryRoot)
+    try IsolatedAgentLibraryPurge.verifySummaryRoot(summaryRoot)
     let requestID = UUID()
     guard let target = TopologyOwnedFixtures(root: summaryRoot, runID: requestID.uuidString.lowercased())
     else { throw LibrarySummaryError.cleanupUnavailable }
@@ -105,7 +105,10 @@ public final class NativeCodexConnection: ObservableObject {
       guard scope.clean else { throw LocalLibraryError.producerClosureUnknown }
       summaryScopes.removeValue(forKey: id)
     }
-    try IsolatedAgentLibraryPurge.requireEmptySummaryRoot(summaryRoot)
+    // Another Paper may own the single admitted summary worker. Account for only
+    // that live namespace by filesystem identity when observing the shared root.
+    let other = summaryScopes.values.first { $0.paperID != paperID }?.activeNamespace
+    try IsolatedAgentLibraryPurge.verifySummaryRoot(summaryRoot, allowing: other)
     return AgentLibraryPurgeReceipt(paperID: paperID, deletionID: deletionID)
   }
 
@@ -420,6 +423,7 @@ extension String {
 @MainActor
 internal final class NativeCodexSummaryScope {
   let paperID: UUID
+  private let namespace: TopologyOwnedFixtures
   private let owner: OwnedChildRetirement
   private let params: [String: Any]
   private var lifecycle: AgentConnectionLifecycle?
@@ -430,8 +434,11 @@ internal final class NativeCodexSummaryScope {
   private var terminalReceived = false
   private(set) var clean = false
 
+  var activeNamespace: TopologyOwnedFixtures? { owner.terminal == nil ? namespace : nil }
+
   init(launch: OwnedChildRetirement.WorkerLaunch, paperID: UUID, params: [String: Any]) {
     self.paperID = paperID; self.params = params
+    namespace = launch.namespace
     owner = OwnedChildRetirement(worker: launch,
       deadlineUptimeNanoseconds: DispatchTime.now().uptimeNanoseconds + 5_000_000_000)
   }

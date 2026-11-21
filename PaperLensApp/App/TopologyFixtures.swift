@@ -2048,6 +2048,13 @@ final class TopologyOwnedFixtures: @unchecked Sendable {
       && referenceHasBackupExclusion(permit: permit) && matchesOwnedNamespace(permit: permit)
   }
 
+  func matchesDirectoryEntry(_ url: URL) -> Bool {
+    var info = stat()
+    return url.path == directoryURL.path && lstat(url.path, &info) == 0
+      && info.st_mode & S_IFMT == S_IFDIR && info.st_mode & 0o7777 == 0o700
+      && info.st_uid == getuid() && info.st_ino == directoryInode && info.st_dev == directoryDevice
+  }
+
   private func matchesOwnedNamespace(permit: () -> Bool = { true }) -> Bool {
     var info = stat()
     var named = stat()
