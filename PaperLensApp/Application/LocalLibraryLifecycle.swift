@@ -706,6 +706,7 @@ public actor LocalLibraryLifecycle {
         // No history is reconstructed for explicit NULL legacy jobs. Genuine
         // histories come from beginDeletion's acknowledged full capture.
         var finalRecords: [ImportRecoveryRecord] = []
+        var requiresAbsenceCheck = false
         for history in histories {
           let identity = try history.journal.currentCapture().identity
           var record = history
@@ -714,8 +715,10 @@ public actor LocalLibraryLifecycle {
           record = try await closeRetainedPhysical(record, identity: identity, paperID: paperID)
           record = try await cleanupPermits(record, paperID: paperID, strictLateAbort: false)
           if let pending = try record.journal.snapshot().pendingRemoval {
-            guard ActualCopyOwnership.shared.removal(pending.id)?.result != nil else {
-              throw LocalLibraryError.cleanupFailed
+            if let retained = ActualCopyOwnership.shared.removal(pending.id) {
+              guard retained.result != nil else { throw LocalLibraryError.cleanupFailed }
+            } else {
+              requiresAbsenceCheck = true
             }
           } else {
             let journal = try record.journal.recording(.removeNamespace(operation: UUID().uuidString))
@@ -734,30 +737,37 @@ public actor LocalLibraryLifecycle {
         }
         let receiptIDs = operationIDs.isEmpty ? [saga.uuidString] : operationIDs
         let retained = receiptIDs.compactMap { ActualCopyOwnership.shared.removal($0) }
-        let removal: ActualNamespaceRemoval
-        if let existing = retained.first {
-          guard retained.allSatisfy({ $0.namespace == namespace && $0.result != nil }) else {
-            throw LocalLibraryError.cleanupFailed
-          }
-          removal = existing
-        } else { removal = ActualNamespaceRemoval(namespace: namespace) }
-        for id in receiptIDs where ActualCopyOwnership.shared.removal(id) == nil {
-          ActualCopyOwnership.shared.retainRemoval(removal, id: id)
-        }
-        if removal.result == nil {
-          await Task.detached { removal.perform { try Self.removeNamespace(namespace) } }.value
-        }
-        guard let outcome = removal.result else { throw LocalLibraryError.cleanupFailed }
-        if case .failure(let error) = outcome {
-          for record in admitted {
-            guard let pending = try record.journal.snapshot().pendingRemoval else {
-              throw ImportRecoveryPersistenceError.invalidHistory
+        if requiresAbsenceCheck {
+          // A persisted intent may outlive its physical receipt. Observe the
+          // existing postcondition without replaying an unobserved unlink.
+          guard retained.isEmpty else { throw LocalLibraryError.cleanupFailed }
+          try await Task.detached { try Self.checkPreviouslyRemovedNamespace(namespace) }.value
+        } else {
+          let removal: ActualNamespaceRemoval
+          if let existing = retained.first {
+            guard retained.allSatisfy({ $0.namespace == namespace && $0.result != nil }) else {
+              throw LocalLibraryError.cleanupFailed
             }
-            _ = try await store(record, replacement: record.journal.recording(
-              .namespaceRemovalFinished(operation: pending, succeeded: false)), paperID: paperID)
+            removal = existing
+          } else { removal = ActualNamespaceRemoval(namespace: namespace) }
+          for id in receiptIDs where ActualCopyOwnership.shared.removal(id) == nil {
+            ActualCopyOwnership.shared.retainRemoval(removal, id: id)
           }
-          for id in receiptIDs { ActualCopyOwnership.shared.acknowledgeRemoval(id) }
-          throw error
+          if removal.result == nil {
+            await Task.detached { removal.perform { try Self.removeNamespace(namespace) } }.value
+          }
+          guard let outcome = removal.result else { throw LocalLibraryError.cleanupFailed }
+          if case .failure(let error) = outcome {
+            for record in admitted {
+              guard let pending = try record.journal.snapshot().pendingRemoval else {
+                throw ImportRecoveryPersistenceError.invalidHistory
+              }
+              _ = try await store(record, replacement: record.journal.recording(
+                .namespaceRemovalFinished(operation: pending, succeeded: false)), paperID: paperID)
+            }
+            for id in receiptIDs { ActualCopyOwnership.shared.acknowledgeRemoval(id) }
+            throw error
+          }
         }
         try await Task.detached {
           try database.finalizeJournaledDeletion(paperID, saga: saga, expected: admitted)
@@ -1107,6 +1117,16 @@ public actor LocalLibraryLifecycle {
       present.st_mode & 0o7777 == 0o700 else { throw LocalLibraryError.cleanupFailed }
     try FileManager.default.removeItem(at: url)
     guard try checkedNamespace(url) == nil else { throw LocalLibraryError.cleanupFailed }
+  }
+
+  private nonisolated static func checkPreviouslyRemovedNamespace(_ url: URL) throws {
+    let parent = url.deletingLastPathComponent()
+    guard let before = try checkedNamespace(parent), before.st_uid == Darwin.getuid(),
+      before.st_mode & S_IFMT == S_IFDIR, before.st_mode & 0o7777 == 0o700,
+      try checkedNamespace(url) == nil,
+      let after = try checkedNamespace(parent), after.st_dev == before.st_dev,
+      after.st_ino == before.st_ino, after.st_uid == before.st_uid, after.st_mode == before.st_mode
+    else { throw LocalLibraryError.cleanupFailed }
   }
 
   /// Only ENOENT proves this private pathname absent; this is not race/ABA isolation.

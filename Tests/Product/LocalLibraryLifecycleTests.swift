@@ -1143,6 +1143,52 @@ final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
     assertDeletionRowsEqual(tombstone, try deletionRows(reopened, id))
   }
 
+  func testRestartFinishesPendingDeletionAfterObservedAbsenceWithoutUnlinkingUnobservedBytes() async throws {
+    let selected = try source()
+    let bytes = try Data(contentsOf: selected)
+    let (id, otherID, saga) = try await stageUnacknowledgedNamespaceRemoval(selected)
+    let agent = makeAgent()
+    let db = try ProductDatabase.open(at: root)
+    let lifecycle = try await LocalLibraryLifecycle.open(database: db, agentPurge: agent)
+    let before = try deletionRows(db, id)
+    XCTAssertEqual(String.fromDatabaseValue(before[0]["status"]), "deletionFailed")
+    do {
+      try await lifecycle.retryDeletion(paperID: id)
+      XCTFail("Retry cannot repeat a physical removal whose outcome is unknown")
+    } catch { XCTAssertEqual(error as? LocalLibraryError, .cleanupFailed) }
+    XCTAssertEqual(try Data(contentsOf: namespace(id).appendingPathComponent("document.pdf")), bytes)
+    try assertRetainedNamespaceFailure(db, id, before: before)
+
+    // Reproduce the durable state after the unlink, before deletion finalization.
+    try FileManager.default.removeItem(at: namespace(id))
+    let reopened = try ProductDatabase.open(at: root)
+    let restarted = try await LocalLibraryLifecycle.open(database: reopened, agentPurge: agent)
+    try await restarted.retryDeletion(paperID: id)
+    let after = try deletionRows(reopened, id)
+    XCTAssertEqual(after.count, 1)
+    XCTAssertEqual(String.fromDatabaseValue(after[0]["status"]), "tombstone")
+    XCTAssertEqual(String.fromDatabaseValue(after[0]["deletionID"]), saga.uuidString)
+    XCTAssertEqual(Int64.fromDatabaseValue(after[0]["cleanupDebt"]), 0)
+    let invocations = await agent.sagaIDs()
+    XCTAssertEqual(invocations, [saga, saga])
+    let library = try await restarted.list()
+    XCTAssertEqual(library.map(\.id), [otherID])
+    XCTAssertEqual(try Data(contentsOf: namespace(otherID).appendingPathComponent("document.pdf")), bytes)
+    XCTAssertEqual(try Data(contentsOf: selected), bytes)
+  }
+
+  private func stageUnacknowledgedNamespaceRemoval(_ selected: URL) async throws -> (UUID, UUID, UUID) {
+    let db = try ProductDatabase.open(at: root)
+    let lifecycle = try await LocalLibraryLifecycle.open(database: db)
+    let id = try await lifecycle.importPDF(from: selected)
+    let otherID = try await lifecycle.importPDF(from: selected)
+    let deletion = try XCTUnwrap(db.beginDeletion(id))
+    let history = try XCTUnwrap(deletion.histories.first)
+    let pending = try history.journal.recording(.removeNamespace(operation: UUID().uuidString))
+    _ = try db.appendDeletingImport(expected: history, replacement: pending, saga: deletion.saga)
+    return (id, otherID, deletion.saga)
+  }
+
   func testMissingPurgeBlocksDeletionAndKeepsTruthfulDebt() async throws {
     let db = try ProductDatabase.open(at: root)
     let lifecycle = try await LocalLibraryLifecycle.open(database: db)
