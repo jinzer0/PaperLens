@@ -11,6 +11,7 @@ public struct LibraryBrowserView: View {
   private let acknowledgeDeletionRefresh: @MainActor (Set<UUID>) -> Void
   private let importPDF: @MainActor () -> Void
   private let retryImportPDF: @MainActor (UUID, UUID) -> Void
+  private let retryImportURL: URLImportRetryAction?
   private let manageFolders: @MainActor () -> Void
   @ObservedObject private var summaries: LibrarySummaryCoordinator
   private let refreshRevision: Int
@@ -47,6 +48,7 @@ public struct LibraryBrowserView: View {
     acknowledgeDeletionRefresh: @escaping @MainActor (Set<UUID>) -> Void,
     importPDF: @escaping @MainActor () -> Void,
     retryImportPDF: @escaping @MainActor (UUID, UUID) -> Void,
+    retryImportURL: URLImportRetryAction? = nil,
     manageFolders: @escaping @MainActor () -> Void,
     summaries: LibrarySummaryCoordinator) {
     self.service = service; self.folderService = folderService; self.sortFacts = sortFacts
@@ -57,6 +59,7 @@ public struct LibraryBrowserView: View {
     self.finishedDeletionIDs = finishedDeletionIDs
     self.acknowledgeDeletionRefresh = acknowledgeDeletionRefresh
     self.retryImportPDF = retryImportPDF
+    self.retryImportURL = retryImportURL
     self.manageFolders = manageFolders
     self.summaries = summaries
   }
@@ -446,6 +449,16 @@ public struct LibraryBrowserView: View {
         if paper.status == .importFailed {
           Button("새 PDF 선택 후 같은 작업 재시도") { requestRetry(paper) }
             .disabled(busy || loading || loadFailed)
+          if let retryImportURL {
+            Button("URL 입력 후 같은 작업 재시도") {
+              guard !nativeSheetPending, deleting == nil, !operationFailed,
+                renderedPaperControls(for: paper) else { return }
+              retryImportURL(paper) {
+                guard !nativeSheetPending, renderedPaperControls(for: paper) else { return }
+                focusedPaper = paper.id
+              }
+            }.disabled(busy || loading || loadFailed)
+          }
         }
         Button("태그·읽기 상태·즐겨찾기 편집") {
           beginTagEdit(paper)
@@ -904,7 +917,17 @@ public struct LibraryBrowserView: View {
     switch paper.status {
     case .ready: return paper.readable ? "PDF 읽기 가능" : "PDF 사용 불가 · 새로고침 또는 삭제"
     case .importing: return "가져오는 중"
-    case .importFailed: return "가져오기 실패 · 새 PDF로 같은 작업 재시도 또는 삭제"
+    case .importFailed:
+      let reason: String
+      switch paper.failure {
+      case "interrupted": reason = "앱 종료로 가져오기 중단됨"
+      case ImportAbortFailure.cancelled.rawValue: reason = "가져오기 취소됨"
+      case ImportAbortFailure.sourceChanged.rawValue: reason = "선택한 PDF가 변경됨"
+      case ImportAbortFailure.urlImportFailed.rawValue: reason = "URL에서 PDF를 가져오지 못함"
+      case ImportAbortFailure.publicationRejected.rawValue: reason = "PDF 저장을 완료하지 못함"
+      default: reason = "가져오기 실패"
+      }
+      return "\(reason) · 같은 작업 재시도 또는 삭제"
     case .deleting: return "삭제 중 · 열기 불가"
     case .deletionFailed: return "삭제 미완료 · 삭제 다시 시도"
     case .tombstone: return "삭제됨"

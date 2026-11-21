@@ -117,6 +117,83 @@ final class LibraryURLImportWriterTests: XCTestCase, @unchecked Sendable {
       generation: first.generation).encoded, secondRecord.encoded)
   }
 
+  @MainActor
+  func testRelaunchedServicePreparesExplicitURLRetryForSameDurablePaperAndJob() async throws {
+    let originalDatabase = try database()
+    let originalLifecycle = try await LocalLibraryLifecycle.open(database: originalDatabase)
+    let originalService = URLImportService(authority: try ProviderRequest(), grantWriter: { intent in
+      let writer = try await originalLifecycle.grantURLImportWriter(for: intent)
+      try await writer.abort(reason: .rejected)
+      throw URLImportError.rejected
+    })
+    try originalService.prepare("https://writer.invalid/original.pdf", destination: "Library",
+      possibleDuplicate: false)
+    originalService.continueImport(confirmationID: try XCTUnwrap(originalService.confirmation).id)
+    while originalService.state == .downloading { await Task.yield() }
+    XCTAssertEqual(originalService.state, .failed(.rejected))
+    let initialRecord = try XCTUnwrap(originalDatabase.organizationSnapshot(filter: .init()).papers.first)
+    let initialIdentity = try originalDatabase.captureRetryableImport(
+      paperID: initialRecord.id, generation: initialRecord.generation).journal.currentCapture().identity
+
+    let reopenedDatabase = try ProductDatabase.open(at: originalDatabase.root)
+    let reopenedLifecycle = try await LocalLibraryLifecycle.open(database: reopenedDatabase)
+    let expected = try reopenedDatabase.captureRetryableImport(
+      paperID: initialIdentity.paperID, generation: initialIdentity.generation)
+    let service = URLImportService(authority: try ProviderRequest(), grantWriter: { intent in
+      let writer = try await reopenedLifecycle.grantURLImportWriter(for: intent)
+      try await writer.abort(reason: .rejected)
+      throw URLImportError.rejected // Stop before starting any network request.
+    })
+
+    XCTAssertThrowsError(try service.prepareRetry("http://writer.invalid/retry.pdf",
+      destination: "Library", possibleDuplicate: false, expected: expected))
+    XCTAssertNil(service.confirmation)
+    XCTAssertEqual(service.state, .idle)
+    XCTAssertEqual(try reopenedDatabase.captureRetryableImport(
+      paperID: initialIdentity.paperID, generation: initialIdentity.generation).encoded,
+      expected.encoded)
+
+    try service.prepareRetry("https://writer.invalid/retry.pdf", destination: "Library",
+      possibleDuplicate: true, expected: expected)
+    let firstConfirmation = try XCTUnwrap(service.confirmation)
+    guard case .retry(let retryRecord) = firstConfirmation.purpose else {
+      return XCTFail("Relaunch recovery must prepare the supplied failed history as Retry")
+    }
+    XCTAssertEqual(retryRecord.encoded, expected.encoded)
+    XCTAssertThrowsError(try service.prepareRetry("https://writer.invalid/another.pdf",
+      destination: "Library", possibleDuplicate: false, expected: expected))
+    XCTAssertEqual(service.confirmation?.id, firstConfirmation.id,
+      "A second intent cannot replace the active confirmation")
+    XCTAssertEqual(try reopenedDatabase.captureRetryableImport(
+      paperID: initialIdentity.paperID, generation: initialIdentity.generation).encoded,
+      expected.encoded)
+
+    service.cancelConfirmation()
+    XCTAssertEqual(service.state, .idle)
+    XCTAssertNil(service.confirmation)
+    XCTAssertEqual(try reopenedDatabase.captureRetryableImport(
+      paperID: initialIdentity.paperID, generation: initialIdentity.generation).encoded,
+      expected.encoded)
+
+    try service.prepareRetry("https://writer.invalid/retry.pdf", destination: "Library",
+      possibleDuplicate: true, expected: expected)
+    service.continueImport(confirmationID: try XCTUnwrap(service.confirmation).id)
+    while service.state == .downloading { await Task.yield() }
+    XCTAssertEqual(service.state, .failed(.rejected))
+    let retried = try reopenedDatabase.captureRetryableImport(
+      paperID: initialIdentity.paperID, generation: initialIdentity.generation)
+    let retryIdentity = try retried.journal.currentCapture().identity
+    XCTAssertEqual(retryIdentity.paperID, initialIdentity.paperID)
+    XCTAssertEqual(retryIdentity.generation, initialIdentity.generation)
+    XCTAssertEqual(retryIdentity.jobID, initialIdentity.jobID)
+    XCTAssertNotEqual(retryIdentity.attempt, initialIdentity.attempt)
+    XCTAssertEqual(try reopenedDatabase.libraryRecords().map(\.id), [initialIdentity.paperID])
+    XCTAssertEqual(try reopenedDatabase.libraryRecords().first?.status, .importFailed)
+    XCTAssertEqual(try reopenedDatabase.libraryRecords().first?.title, "HTTPS PDF")
+    XCTAssertFalse(String(decoding: retried.encoded, as: UTF8.self)
+      .contains("https://writer.invalid"), "The retry URL must not enter durable history")
+  }
+
   func testActualValidationClosesOnceReleasesQuotaAndCanPublishReopen() async throws {
     let db = try database()
     let pool = try RequestResourcePool(authority: ProviderRequest(), kind: "import")

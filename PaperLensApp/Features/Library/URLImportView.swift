@@ -2,21 +2,26 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
+public typealias URLImportRetryAction = @MainActor (OrganizedPaper, @escaping @MainActor () -> Void) -> Void
+
 /// Wrap the actual Library content; neither confirmation nor completion replaces it.
 public struct URLImportView<LibraryContent: View>: View {
   @ObservedObject private var service: URLImportService
   private let folderService: FolderImportService
   private let possibleDuplicate: (String) -> Bool
+  private let captureRetry: (@MainActor (OrganizedPaper) async throws -> ImportRecoveryRecord)?
   private let openReader: (UUID) -> Void
   private let chooseLocalPDF: (UUID) -> Void
   private let localPDFFocused: FocusState<Bool>.Binding
   @Binding private var localIntentInvalidation: UUID?
   private let confirmLocalPDF: (URL) -> Void
-  private let library: LibraryContent
+  private let library: (URLImportRetryAction?) -> LibraryContent
   @State private var input = ""
   @State private var inputSheet = false
   @StateObject private var drag = URLImportDragState()
   @State private var invalidInput = false
+  @State private var retryUnavailable = false
+  @State private var retryPreparation: UUID?
   @State private var folders: [LibraryFolder] = []
   @State private var destinationFolderID: UUID?
   @State private var folderLoadFailed = false
@@ -26,10 +31,19 @@ public struct URLImportView<LibraryContent: View>: View {
   @State private var confirmationPresentation: ConfirmationPresentation?
 
   private enum Opener: Hashable { case add, paste }
+  private enum FocusReturn {
+    case toolbar(Opener)
+    case paper(@MainActor () -> Void)
+  }
+
+  private struct RetryEntry {
+    let paper: OrganizedPaper
+    let restoreFocus: @MainActor () -> Void
+  }
 
   private struct ConfirmationPresentation {
     let id: UUID
-    let opener: Opener
+    let opener: FocusReturn
     let mount: UUID?
     var interaction: UUID
     var appeared = false
@@ -40,6 +54,7 @@ public struct URLImportView<LibraryContent: View>: View {
   private struct InputPresentation {
     let id = UUID()
     let mount: UUID?
+    let retry: RetryEntry?
     var interaction: UUID
     var submittedText: String?
     var appeared = false
@@ -53,15 +68,38 @@ public struct URLImportView<LibraryContent: View>: View {
     chooseLocalPDF: @escaping (UUID) -> Void,
     confirmLocalPDF: @escaping (URL) -> Void,
     @ViewBuilder library: () -> LibraryContent) {
+    let content = library()
+    self.init(service: service, folderService: folderService, possibleDuplicate: possibleDuplicate,
+      captureRetry: nil, openReader: openReader, localPDFFocused: localPDFFocused,
+      localIntentInvalidation: localIntentInvalidation, chooseLocalPDF: chooseLocalPDF,
+      confirmLocalPDF: confirmLocalPDF) { _ in content }
+  }
+
+  init(service: URLImportService, folderService: FolderImportService,
+    possibleDuplicate: @escaping (String) -> Bool,
+    captureRetry: (@MainActor (OrganizedPaper) async throws -> ImportRecoveryRecord)?,
+    openReader: @escaping (UUID) -> Void,
+    localPDFFocused: FocusState<Bool>.Binding,
+    localIntentInvalidation: Binding<UUID?>,
+    chooseLocalPDF: @escaping (UUID) -> Void,
+    confirmLocalPDF: @escaping (URL) -> Void,
+    @ViewBuilder library: @escaping (URLImportRetryAction?) -> LibraryContent) {
     self.service = service
     self.folderService = folderService
     self.possibleDuplicate = possibleDuplicate
+    self.captureRetry = captureRetry
     self.openReader = openReader
     self.chooseLocalPDF = chooseLocalPDF
     self.localPDFFocused = localPDFFocused
     _localIntentInvalidation = localIntentInvalidation
     self.confirmLocalPDF = confirmLocalPDF
-    self.library = library()
+    self.library = library
+  }
+
+  private var canPresentInput: Bool {
+    drag.mount != nil && inputPresentation == nil && confirmationPresentation == nil
+      && service.confirmation == nil && service.state != .confirming && service.state != .downloading
+      && retryPreparation == nil && !invalidInput && !retryUnavailable
   }
 
   public var body: some View {
@@ -73,20 +111,19 @@ public struct URLImportView<LibraryContent: View>: View {
     VStack {
       HStack {
         Button("URL 추가") {
-          guard drag.isCurrent(mount, interaction), inputPresentation == nil,
-            confirmationPresentation == nil, service.confirmation == nil,
-            service.state != .confirming, service.state != .downloading, !invalidInput else { return }
+          guard drag.isCurrent(mount, interaction), canPresentInput else { return }
           drag.interrupt()
-          inputPresentation = InputPresentation(mount: drag.mount, interaction: drag.interaction)
+          inputPresentation = InputPresentation(mount: drag.mount, retry: nil, interaction: drag.interaction)
           inputSheet = true
         }.focused($openerFocused, equals: .add)
+          .disabled(!canPresentInput)
         Button("URL 붙여넣기") {
-          guard drag.isCurrent(mount, interaction), inputPresentation == nil,
-            confirmationPresentation == nil else { return }
+          guard drag.isCurrent(mount, interaction), canPresentInput else { return }
           drag.interrupt()
-          if let text = NSPasteboard.general.string(forType: .string) { prepare(text, opener: .paste) }
+          if let text = NSPasteboard.general.string(forType: .string) { prepare(text, opener: .toolbar(.paste)) }
           else { invalidInput = true }
         }.focused($openerFocused, equals: .paste)
+          .disabled(!canPresentInput)
         Button("PDF 선택") {
           guard drag.isCurrent(mount, interaction) else { return }
           drag.interrupt()
@@ -119,7 +156,7 @@ public struct URLImportView<LibraryContent: View>: View {
             .foregroundStyle(.red)
         }
       }
-      library
+      library(canPresentInput && captureRetry != nil ? beginRetry : nil)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .overlay {
           if drag.supported {
@@ -134,15 +171,12 @@ public struct URLImportView<LibraryContent: View>: View {
         .onDrop(of: [UTType.url.identifier, UTType.fileURL.identifier],
           delegate: URLImportDropDelegate(state: drag,
             supportsURL: { service.supports($0) },
-            canAccept: {
-              !inputSheet && inputPresentation == nil && confirmationPresentation == nil
-                && !invalidInput && service.confirmation == nil
-                && service.state != .confirming && service.state != .downloading
-            },
+            canAccept: { canPresentInput },
             accept: { url in
               if url.isFileURL { confirmLocalPDF(url) } else { prepare(url.absoluteString) }
             }))
       status
+      if retryPreparation != nil { ProgressView("재시도할 가져오기 확인 중") }
     }
     .sheet(isPresented: Binding(get: { inputSheet }, set: { value in
       guard drag.isCurrent(mount, interaction), let inputPresentationID,
@@ -154,7 +188,12 @@ public struct URLImportView<LibraryContent: View>: View {
     }), onDismiss: { inputDidDismiss(inputPresentationID, mount: mount) }) {
       let presentationID = inputPresentation?.id
       VStack(alignment: .leading, spacing: 16) {
-        Text("HTTPS PDF 또는 arXiv URL").font(.headline)
+        if let retry = inputPresentation?.retry {
+          Text("‘\(retry.paper.title)’의 가져오기 다시 시도").font(.headline)
+          Text("같은 가져오기 작업을 재시도할 HTTPS PDF 또는 arXiv URL을 입력하세요.")
+        } else {
+          Text("HTTPS PDF 또는 arXiv URL").font(.headline)
+        }
         TextField("URL", text: Binding(get: { input }, set: { value in
           guard drag.isCurrent(mount, interaction), inputSheet else { return }
           input = value
@@ -221,6 +260,9 @@ public struct URLImportView<LibraryContent: View>: View {
     .alert("지원하지 않는 URL", isPresented: $invalidInput) {
       Button("확인", role: .cancel) {}
     } message: { Text("인증 정보가 없는 HTTPS PDF 또는 올바른 arXiv URL을 입력하세요.") }
+    .alert("가져오기를 다시 시도할 수 없습니다", isPresented: $retryUnavailable) {
+      Button("확인", role: .cancel) {}
+    } message: { Text("논문의 현재 상태와 저장 폴더를 확인한 뒤 다시 시도하세요.") }
     .onAppear {
       drag.localIntentInvalidation = $localIntentInvalidation
       drag.appear()
@@ -231,10 +273,20 @@ public struct URLImportView<LibraryContent: View>: View {
     .onDisappear {
       inputPresentation = nil
       confirmationPresentation = nil
+      retryPreparation = nil
       drag.disappear()
     }
     .onChange(of: service.confirmation?.id) { _ in serviceInterrupted() }
     .onChange(of: service.state) { _ in serviceInterrupted() }
+  }
+
+  private func beginRetry(_ paper: OrganizedPaper, restoreFocus: @escaping @MainActor () -> Void) {
+    guard canPresentInput, paper.status == .importFailed else { return }
+    drag.interrupt()
+    input = ""
+    inputPresentation = InputPresentation(mount: drag.mount,
+      retry: RetryEntry(paper: paper, restoreFocus: restoreFocus), interaction: drag.interaction)
+    inputSheet = true
   }
 
   private func closeInput(_ id: UUID?, mount: UUID?, interaction: UUID, submit: Bool) {
@@ -256,7 +308,13 @@ public struct URLImportView<LibraryContent: View>: View {
       service.confirmation == nil, !invalidInput else { return }
     // Entry owns no import resources. Prepare only after its actual dismissal;
     // a resulting confirmation or alert must not receive the opener's focus.
-    if let text = presentation.submittedText { prepare(text, opener: .add) }
+    if let retry = presentation.retry {
+      input = ""
+      if let text = presentation.submittedText { prepareRetry(text, entry: retry) }
+      else { retry.restoreFocus() }
+      return
+    }
+    if let text = presentation.submittedText { prepare(text, opener: .toolbar(.add)) }
     guard service.confirmation == nil, !invalidInput else { return }
     openerFocused = .add
   }
@@ -300,7 +358,10 @@ public struct URLImportView<LibraryContent: View>: View {
       !inputSheet, inputPresentation == nil, !invalidInput else { return }
     // Cancelled URL recognition has no grant, writer, stage or network cleanup.
     // Continue is deliberately excluded: service state is not a closure receipt.
-    openerFocused = presentation.opener
+    switch presentation.opener {
+    case .toolbar(let opener): openerFocused = opener
+    case .paper(let restore): restore()
+    }
   }
 
   @ViewBuilder private var status: some View {
@@ -331,15 +392,17 @@ public struct URLImportView<LibraryContent: View>: View {
       HStack {
         Label(safeMessage(reason), systemImage: "exclamationmark.triangle")
         Button("다시 시도") {
-          guard drag.isCurrent(mount, interaction), service.state == .failed(reason) else { return }
+          guard drag.isCurrent(mount, interaction), service.state == .failed(reason),
+            canPresentInput else { return }
           drag.interrupt()
           do { try service.retry() } catch { invalidInput = true }
         }
+        .disabled(!canPresentInput)
       }
     }
   }
 
-  private func prepare(_ text: String, opener: Opener? = nil) {
+  private func prepare(_ text: String, opener: FocusReturn? = nil) {
     do {
       guard drag.mount != nil, service.confirmation == nil,
         service.state != .confirming, service.state != .downloading else { throw URLImportError.rejected }
@@ -353,6 +416,33 @@ public struct URLImportView<LibraryContent: View>: View {
       }
     }
     catch { invalidInput = true }
+  }
+
+  private func prepareRetry(_ text: String, entry: RetryEntry) {
+    guard canPresentInput, let captureRetry else { return }
+    guard service.supports(text) else { invalidInput = true; return }
+    let folderID = destinationFolderID
+    let folder = folders.first { $0.id == folderID }
+    guard folderID == nil || folder != nil else { retryUnavailable = true; return }
+    let id = UUID()
+    let mount = drag.mount, interaction = drag.interaction
+    retryPreparation = id
+    Task {
+      defer { if retryPreparation == id { retryPreparation = nil } }
+      do {
+        let expected = try await captureRetry(entry.paper)
+        guard retryPreparation == id, drag.isCurrent(mount, interaction),
+          service.confirmation == nil, destinationFolderID == folderID else { return }
+        try service.prepareRetry(text, destination: folder?.name ?? "미분류",
+          possibleDuplicate: possibleDuplicate(text), destinationFolderID: folderID, expected: expected)
+        if let confirmation = service.confirmation {
+          confirmationPresentation = ConfirmationPresentation(id: confirmation.id,
+            opener: .paper(entry.restoreFocus), mount: mount, interaction: interaction)
+        }
+      } catch {
+        if retryPreparation == id, drag.isCurrent(mount, interaction) { retryUnavailable = true }
+      }
+    }
   }
 
   private func reloadFolders(mount: UUID?, interaction: UUID) async {

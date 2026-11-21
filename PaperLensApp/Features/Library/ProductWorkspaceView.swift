@@ -166,6 +166,22 @@ public final class ProductWorkspace: ObservableObject {
     finishedDeletionIDs.subtract(paperIDs)
   }
 
+  func captureURLImportRetry(_ paper: OrganizedPaper) async throws -> ImportRecoveryRecord {
+    guard diagnosticSource == nil, canOpenReader, paper.status == .importFailed,
+      !deletingPaperIDs.contains(paper.id), !finishedDeletionIDs.contains(paper.id)
+    else { throw URLImportError.writerUnavailable }
+    let database = database
+    let captured = try await Task.detached {
+      try database.captureRetryableImport(paperID: paper.id, generation: paper.generation)
+    }.value
+    try Task.checkCancellation()
+    guard canOpenReader, !deletingPaperIDs.contains(paper.id), !finishedDeletionIDs.contains(paper.id)
+    else { throw URLImportError.writerUnavailable }
+    return captured
+  }
+
+  func refreshAfterURLImportFailure() { revision += 1 }
+
   @discardableResult public func prepareImport(source: URL) async throws -> UUID {
     try admitDiagnosticSource(source)
     guard !preparing, !opening, !sheetCleanupPending, sheet == nil, reader == nil else {
@@ -708,6 +724,7 @@ public struct ProductWorkspaceView: View {
         URLImportView(
           service: urls, folderService: workspace.imports,
           possibleDuplicate: { _ in true },
+          captureRetry: { try await workspace.captureURLImportRetry($0) },
           openReader: { workspace.openImportedURL($0) },
           localPDFFocused: $localPDFFocused,
           localIntentInvalidation: Binding(
@@ -723,7 +740,7 @@ public struct ProductWorkspaceView: View {
             invalidateDirectIntent()
             workspace.acceptDroppedPDF($0)
           }
-        ) {
+        ) { retryImportURL in
           LibraryBrowserView(
             service: workspace.organization, folderService: workspace.imports,
             filter: $workspace.libraryFilter, refreshRevision: workspace.revision,
@@ -748,14 +765,12 @@ public struct ProductWorkspaceView: View {
               invalidateDirectIntent()
               workspace.pickRetryPDF(paperID: $0, generation: $1)
             },
+            retryImportURL: retryImportURL,
             manageFolders: {
               invalidateDirectIntent()
               workspace.sheet = .folders
             },
             summaries: workspace.summaries)
-        }
-        .onChange(of: urls.state) {
-          if case .ready(let paper) = urls.state { workspace.imported(paper) }
         }
       }
       if let failure = workspace.failure {
@@ -783,6 +798,13 @@ public struct ProductWorkspaceView: View {
       }
     }
     .onChange(of: workspace.sheet?.id) { _, _ in latchNativeSlot() }
+    .onChange(of: urls.state) { _, state in
+      switch state {
+      case .ready(let paper): workspace.imported(paper)
+      case .failed: workspace.refreshAfterURLImportFailure()
+      default: break
+      }
+    }
     .sheet(
       isPresented: Binding(
         get: {

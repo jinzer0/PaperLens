@@ -114,6 +114,23 @@ public final class URLImportService: ObservableObject {
 
   public func prepare(_ input: String, destination: String, possibleDuplicate: Bool,
     destinationFolderID: UUID? = nil) throws {
+    try prepare(input, destination: destination, possibleDuplicate: possibleDuplicate,
+      destinationFolderID: destinationFolderID, purpose: .newPaper)
+  }
+
+  /// Reopens a failed durable URL import after relaunch without storing its URL.
+  /// The supplied URL is validated for this confirmation only. No Paper, Job,
+  /// writer, file or network effect occurs until the user explicitly continues.
+  func prepareRetry(_ input: String, destination: String, possibleDuplicate: Bool,
+    destinationFolderID: UUID? = nil, expected: ImportRecoveryRecord) throws {
+    guard confirmation == nil, state != .confirming, state != .downloading
+    else { throw URLImportError.rejected }
+    try prepare(input, destination: destination, possibleDuplicate: possibleDuplicate,
+      destinationFolderID: destinationFolderID, purpose: .retry(expected))
+  }
+
+  private func prepare(_ input: String, destination: String, possibleDuplicate: Bool,
+    destinationFolderID: UUID?, purpose: URLImportConfirmation.Purpose) throws {
     guard !starting, operation == nil else { throw URLImportError.rejected }
     let route: ValidatedRequestURL
     do { route = try adapter.route(input) } catch { throw URLImportError.rejected }
@@ -126,7 +143,7 @@ public final class URLImportService: ObservableObject {
     admittedFailure = false
     confirmation = URLImportConfirmation(id: UUID(), destination: destination,
       destinationFolderID: destinationFolderID, possibleDuplicate: possibleDuplicate,
-      sourceKind: route.sourceKind, purpose: .newPaper, route: route)
+      sourceKind: route.sourceKind, purpose: purpose, route: route)
     state = .confirming
   }
 
@@ -216,12 +233,8 @@ public final class URLImportService: ObservableObject {
   public func retry() throws {
     guard !starting, operation == nil, case .failed = state, let input = lastInput else { return }
     if let record = retryRecord {
-      let route: ValidatedRequestURL
-      do { route = try adapter.route(input) } catch { throw URLImportError.rejected }
-      confirmation = URLImportConfirmation(id: UUID(), destination: lastDestination,
-        destinationFolderID: lastDestinationFolderID, possibleDuplicate: lastDuplicate,
-        sourceKind: route.sourceKind, purpose: .retry(record), route: route)
-      state = .confirming
+      try prepareRetry(input, destination: lastDestination, possibleDuplicate: lastDuplicate,
+        destinationFolderID: lastDestinationFolderID, expected: record)
     } else {
       guard !admittedFailure, let failedIntent, case .newPaper = failedIntent.purpose else {
         throw URLImportError.writerUnavailable
