@@ -187,8 +187,19 @@ public final class NativeCodexConnection: ObservableObject {
     return candidate == nil || phase == .blocked
   }
 
-  var showsFailure: Bool { phase == .blocked || ending?.failed == true }
+  private var savedConnectionNeedsLogin: Bool {
+    phase == .idle && ending == nil && currentConfiguration?.kind == .codexChatGPT
+  }
+
+  var statusMessage: String {
+    savedConnectionNeedsLogin
+      ? "저장된 ChatGPT 연결을 사용할 수 없습니다. 다시 로그인하거나 OpenAI API 키를 연결하세요."
+      : message
+  }
+
+  var showsFailure: Bool { phase == .blocked || ending?.failed == true || savedConnectionNeedsLogin }
   var offersRetry: Bool {
+    if savedConnectionNeedsLogin { return true }
     switch ending {
     case .cancelled, .failure: return candidate == nil && (phase == .idle || phase == .connected)
     case .disconnected, .superseded, nil: return false
@@ -213,7 +224,7 @@ public final class NativeCodexConnection: ObservableObject {
 
   private var usableActiveLogin: LoginScope? {
     guard let login = activeLogin, login.ending == nil, let owner = login.owner,
-      owner.terminal == nil, login.lifecycle?.connection.state == .ready,
+      owner.core.allowsIO, login.lifecycle?.connection.state == .ready,
       let committed = login.committed, committed.kind == .codexChatGPT,
       committed.slotID?.uuidString.lowercased() == login.namespace.runID,
       currentConfiguration == committed else { return nil }
@@ -458,9 +469,9 @@ public final class NativeCodexConnection: ObservableObject {
   }
 
   private func completeCleanLogin(_ login: LoginScope) {
-    if let committed = login.committed {
+    if case .disconnected = login.ending, let committed = login.committed {
       do {
-        // A predecessor owns only its exact committed selector, never a newer winner.
+        // Process loss retires the login scope but only explicit disconnect clears its selection.
         if try database.providerConfiguration() == committed {
           _ = try database.compareAndSwapProviderConfiguration(expected: committed,
             replacementKind: nil, replacementSlotID: nil, replacementModel: nil)

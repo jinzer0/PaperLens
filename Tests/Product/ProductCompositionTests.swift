@@ -620,6 +620,45 @@ final class ProductCompositionTests: XCTestCase {
     XCTAssertThrowsError(try restored.continueToLibrary())
   }
 
+  func testStartupKeepsUnavailableChatGPTSelectionUntilExplicitProviderSwitch() async throws {
+    let root = try privateRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let database = try ProductDatabase.open(at: root.appendingPathComponent("database"))
+    let previous = try database.compareAndSwapProviderConfiguration(
+      expected: database.providerConfiguration(), replacementKind: .codexChatGPT,
+      replacementSlotID: UUID(), replacementModel: "saved-model")
+    let transport = CompositionProbe()
+    let composition = ProductAppComposition(root: root, transport: transport)
+    await composition.start()
+    guard case .connection(let connection) = composition.phase else {
+      return XCTFail("Expected saved Provider setup")
+    }
+    let codex = try XCTUnwrap(composition.codex)
+    XCTAssertEqual(codex.currentConfiguration, previous)
+    XCTAssertEqual(connection.configuration.model, "saved-model")
+    XCTAssertTrue(codex.showsFailure)
+    XCTAssertTrue(codex.statusMessage.contains("다시 로그인"))
+    XCTAssertTrue(codex.offersRetry)
+    XCTAssertTrue(codex.canStart)
+    XCTAssertNil(codex.instructions)
+    XCTAssertFalse(codex.eligibleForEntry)
+    XCTAssertFalse(composition.canEnterLibrary)
+    XCTAssertThrowsError(try composition.continueToLibrary())
+    XCTAssertEqual(transport.calls, 0)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("codex-scopes").path))
+
+    transport.evidence = .authenticatedGenerationResponse
+    ProviderSettingsService(connection: connection, codex: codex).reconnect(key: "fixture-replacement")
+    try await waitForProbe(connection)
+    let next = try database.providerConfiguration()
+    XCTAssertEqual(next.kind, .openAIAPIKey)
+    XCTAssertEqual(next.generation, previous.generation + 1)
+    XCTAssertTrue(composition.canEnterLibrary)
+    XCTAssertFalse(codex.showsFailure)
+    XCTAssertFalse(codex.offersRetry)
+    XCTAssertEqual(transport.calls, 1)
+  }
+
   func testLegacySelectorWithoutModelCannotRestoreEntry() async throws {
     let root = try privateRoot()
     defer { try? FileManager.default.removeItem(at: root) }

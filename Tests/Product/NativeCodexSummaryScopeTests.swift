@@ -127,7 +127,7 @@ import ProviderRequest
   }
 
   private func controlWorkerScript(holdResult: Bool, remoteTimeout: Bool = false,
-    syntheticLogin: Bool = false, holdProbe: Bool = false) -> String {
+    syntheticLogin: Bool = false, holdProbe: Bool = false, closeAfterProbe: Bool = false) -> String {
     """
     import array, json, os, select, socket, struct, subprocess, sys, time
     end = time.monotonic() + 3
@@ -234,6 +234,10 @@ import ProviderRequest
                 count = os.write(1, frame)
                 assert count > 0
                 frame = frame[count:]
+            if \(closeAfterProbe ? "True" : "False") and method == 'product.connectionTest':
+                gate('close-product-output')
+                os.close(1)
+                return
             if retirement and method in ('product.librarySummary', 'product.loginCancel'):
                 return
     if sys.argv[-1] == '--fixture-broker':
@@ -585,6 +589,51 @@ import ProviderRequest
     XCTAssertFalse(codex.eligibleForEntry)
     XCTAssertNil(try database.providerConfiguration().slotID)
     XCTAssertFalse(FileManager.default.fileExists(atPath: retry.path))
+  }
+
+  func testUnexpectedLoginChannelClosureRetainsCommittedSelectionForExplicitReconnect() async throws {
+    let (root, _, template) = try workerFixture(script: controlWorkerScript(
+      holdResult: false, syntheticLogin: true, closeAfterProbe: true))
+    defer { try? FileManager.default.removeItem(at: root) }
+    let database = try ProductDatabase.open(at: root.appendingPathComponent("database"))
+    let configuration = try NativeOpenAIConfiguration(model: "fixture-model")
+    let slots = try APIKeySlotStore(directory: root.appendingPathComponent("slots"))
+    let apiKey = NativeAPIKeyConnection(configuration: configuration, slots: slots,
+      persistence: DatabaseAPIKeySelector(database: database, configuration: configuration),
+      transport: RejectNetwork(), authority: try ProviderRequest())
+    var prepared: [URL] = []
+    let codex = NativeCodexConnection(database: database, root: root.appendingPathComponent("login"),
+      apiKey: apiKey) { namespace in
+        guard namespace.prepareBackupExclusionFixture(
+          agentScript: root.appendingPathComponent("resources/agent.py"),
+          interpreter: SyntheticPython.metadataInterpreter) else { return nil }
+        prepared.append(namespace.directoryURL)
+        return .testing(namespace: namespace, interpreter: template.interpreter, script: template.script)
+      }
+    defer { codex.cancel() }
+    codex.connect(mode: "browser")
+    let login = try XCTUnwrap(prepared.last)
+    try await waitFor { codex.phase == .signingIn }
+    codex.checkLogin()
+    try await waitFor { codex.eligibleForEntry }
+    let selected = try database.providerConfiguration()
+    XCTAssertEqual(selected.kind, .codexChatGPT)
+    try Data().write(to: marker("close-product-output", directory: login))
+    try await waitForMarker("retirement-received", directory: login)
+    XCTAssertFalse(codex.eligibleForEntry)
+    XCTAssertFalse(codex.canStart)
+    XCTAssertEqual(try database.providerConfiguration(), selected)
+    try Data().write(to: marker("release-retirement", directory: login))
+    try await waitFor { codex.phase == .idle && codex.canStart }
+
+    XCTAssertFalse(FileManager.default.fileExists(atPath: login.path))
+    XCTAssertEqual(try database.providerConfiguration(), selected)
+    XCTAssertTrue(codex.offersRetry)
+    XCTAssertFalse(codex.eligibleForEntry)
+    XCTAssertEqual(prepared, [login], "Connection loss must not replay login or the probe")
+    let settings = ProviderSettingsService(connection: apiKey, codex: codex)
+    XCTAssertEqual(settings.currentProviderLabel, "ChatGPT")
+    XCTAssertFalse(settings.eligibleForEntry)
   }
 
   func testSwitchingProviderPreservesLastGoodAndRetiresOnlySupersededResources() async throws {

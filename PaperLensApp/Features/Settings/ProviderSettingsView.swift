@@ -173,10 +173,10 @@ public struct NativeCodexConnectionView: View {
         Button("ChatGPT 연결 해제") { if isCurrent() { connection.disconnect() } }
       }
       if connection.showsFailure {
-        Label(connection.message, systemImage: "exclamationmark.triangle")
+        Label(connection.statusMessage, systemImage: "exclamationmark.triangle")
           .foregroundStyle(.red)
       } else {
-        Text(connection.message)
+        Text(connection.statusMessage)
       }
       if connection.canStart && connection.eligibleForEntry {
         Text("새 로그인이 확인될 때까지 현재 ChatGPT 연결을 유지합니다.")
