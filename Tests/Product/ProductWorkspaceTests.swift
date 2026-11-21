@@ -514,6 +514,31 @@ private actor WorkspaceDeletionAgent: AgentLibraryPurging {
     f.workspace.presentationDidDismiss()
   }
 
+  func testWorkspaceDismissDuringPreparationPublicationAllowsFreshSelection() async throws {
+    let f = try await fixture()
+    var dismissed = false
+    let observation = f.workspace.$preparing.sink { preparing in
+      guard preparing, !dismissed else { return }
+      dismissed = true
+      f.workspace.dismissSheet()
+    }
+    defer { observation.cancel() }
+
+    do {
+      _ = try await f.workspace.prepareImport(source: f.source)
+      XCTFail("Dismissed preparation returned a confirmation")
+    } catch { XCTAssertTrue(error is CancellationError) }
+    XCTAssertTrue(dismissed)
+    XCTAssertFalse(f.workspace.preparing)
+    XCTAssertNil(f.workspace.sheet)
+    let pending = await f.workspace.imports.pendingConfirmationCount
+    XCTAssertEqual(pending, 0)
+
+    let freshID = try await f.workspace.prepareImport(source: f.source)
+    XCTAssertEqual(try confirmation(f.workspace).id, freshID)
+    _ = await f.workspace.dismissSheet()?.value
+  }
+
   func testWorkspaceClosingPresentationBlocksRetryAndObsoleteCallbackPreservesSameJobCapture() async throws {
     let f = try await fixture()
     let old = try await failedImportForRetry(f)

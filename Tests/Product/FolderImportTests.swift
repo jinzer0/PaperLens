@@ -57,6 +57,74 @@ final class FolderImportTests: XCTestCase {
     XCTAssertFalse(FileManager.default.fileExists(atPath: db.root.appendingPathComponent("papers").path))
   }
 
+  func testCancelledPreparationReleasesImportSlotWithoutOpeningSource() async throws {
+    let (root, source, db) = try fixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let lifecycle = try await LocalLibraryLifecycle.open(database: db)
+    let pool = try RequestResourcePool(authority: ProviderRequest(), kind: "import")
+    let beforeOpen = expectation(description: "Selected source is about to open")
+    let releaseOpen = DispatchSemaphore(value: 0)
+    defer { releaseOpen.signal() }
+    let closes = CloseCalls()
+    let service = FolderImportService(database: db, lifecycle: lifecycle,
+      closeSelectedSource: { handle in closes.record(); try handle.close() },
+      beforeOpen: { _ in
+        beforeOpen.fulfill()
+        _ = releaseOpen.wait(timeout: .now() + 10)
+      })
+
+    let preparation = Task { try await service.prepare(source: source) }
+    await fulfillment(of: [beforeOpen], timeout: 3)
+    XCTAssertEqual(pool.active, 1)
+    preparation.cancel()
+    releaseOpen.signal()
+    do { _ = try await preparation.value; XCTFail("Cancelled preparation returned a confirmation") }
+    catch { XCTAssertTrue(error is CancellationError) }
+    XCTAssertEqual(closes.count, 0, "The cancelled worker must not open the file")
+    XCTAssertEqual(pool.active, 0)
+    let pending = await service.pendingConfirmationCount
+    XCTAssertEqual(pending, 0)
+    try assertNoImportEffects(db)
+  }
+
+  func testCancelledContinueHoldsImportSlotUntilSelectedSourceCloses() async throws {
+    let (root, source, db) = try fixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let lifecycle = try await LocalLibraryLifecycle.open(database: db)
+    let pool = try RequestResourcePool(authority: ProviderRequest(), kind: "import")
+    let closing = expectation(description: "Revalidation is about to close the source")
+    let releaseClose = DispatchSemaphore(value: 0)
+    defer { releaseClose.signal() }
+    let closes = CloseCalls()
+    let cancelled = CloseCalls()
+    let service = FolderImportService(database: db, lifecycle: lifecycle,
+      closeSelectedSource: { handle in
+        closes.record()
+        if closes.count == 2 {
+          closing.fulfill()
+          _ = releaseClose.wait(timeout: .now() + 10)
+          if Task.isCancelled { cancelled.record() }
+        }
+        try handle.close()
+      })
+    let confirmation = try await service.prepare(source: source)
+
+    let importing = Task {
+      try await service.continueImport(confirmation.id, destinationFolderID: nil)
+    }
+    await fulfillment(of: [closing], timeout: 3)
+    importing.cancel()
+    XCTAssertEqual(pool.active, 1, "Cancellation alone does not establish physical closure")
+    releaseClose.signal()
+    do { _ = try await importing.value; XCTFail("Cancelled revalidation created an import") }
+    catch { XCTAssertTrue(error is CancellationError) }
+    XCTAssertEqual(cancelled.count, 1, "The task that owns the descriptor must see cancellation")
+    XCTAssertEqual(pool.active, 0)
+    let pending = await service.pendingConfirmationCount
+    XCTAssertEqual(pending, 0)
+    try assertNoImportEffects(db)
+  }
+
   func testChangedSourceRejectsBeforeReservation() async throws {
     let (root, source, db) = try fixture()
     defer { try? FileManager.default.removeItem(at: root) }

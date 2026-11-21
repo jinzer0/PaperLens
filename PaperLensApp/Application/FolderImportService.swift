@@ -199,11 +199,12 @@ public actor FolderImportService {
     let database = database
     let closeSelectedSource = closeSelectedSource
     let beforeOpen = beforeOpen
-    let facts = try await Task.detached {
+    let facts = try await Self.readSelectedSource {
       try database.validateFolderDestination(destinationFolderID)
       let digest = try Self.hashLocalPDF(source, close: closeSelectedSource, beforeOpen: beforeOpen)
+      try Task.checkCancellation()
       return (digest, try database.contentHashMatches(digest))
-    }.value
+    }
     try Task.checkCancellation()
     let id = UUID()
     pending[id] = Pending(source: source, digest: facts.0, purpose: purpose)
@@ -224,7 +225,7 @@ public actor FolderImportService {
     let database = database
     let closeSelectedSource = closeSelectedSource
     let beforeOpen = beforeOpen
-    let digest = try await Task.detached {
+    let digest = try await Self.readSelectedSource {
       try database.validateFolderDestination(destinationFolderID)
       let digest = try Self.hashLocalPDF(intent.source, close: closeSelectedSource,
         beforeOpen: beforeOpen)
@@ -232,7 +233,7 @@ public actor FolderImportService {
         throw FolderImportError.sourceChanged
       }
       return digest
-    }.value
+    }
     try Task.checkCancellation()
     // Existing owner must compare the digest of its actual copied bytes again before publish.
     switch intent.purpose {
@@ -249,9 +250,25 @@ public actor FolderImportService {
     try hashLocalPDF(source, validateSignature: false, close: { try $0.close() }, beforeOpen: nil)
   }
 
+  private nonisolated static func readSelectedSource<Result: Sendable>(
+    _ read: @escaping @Sendable () throws -> Result
+  ) async throws -> Result {
+    try Task.checkCancellation()
+    let worker = Task.detached {
+      try Task.checkCancellation()
+      return try read()
+    }
+    return try await withTaskCancellationHandler {
+      try await worker.value
+    } onCancel: {
+      worker.cancel()
+    }
+  }
+
   private nonisolated static func hashLocalPDF(_ source: URL, validateSignature: Bool = true,
     close: @Sendable (FileHandle) throws -> Void,
     beforeOpen: (@Sendable (URL) throws -> Void)?) throws -> String {
+    try Task.checkCancellation()
     guard source.isFileURL else { throw FolderImportError.invalidSource }
     let authority = try ProviderRequest()
     let pool = try RequestResourcePool(authority: authority, kind: "import")
@@ -274,6 +291,7 @@ public actor FolderImportService {
       }
       observed = facts
       try beforeOpen?(source)
+      try Task.checkCancellation()
       let descriptor = source.withUnsafeFileSystemRepresentation { path in
         path.map { Darwin.open($0, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK) } ?? -1
       }

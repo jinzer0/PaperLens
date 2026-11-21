@@ -58,7 +58,7 @@ public final class ProductWorkspace: ObservableObject {
   private var pendingConfirmation: UUID?
   private var continuedLocalConfirmation: UUID?
   private var confirmationCancellation: (id: UUID, task: Task<UUID, Never>)?
-  private var importPreparation: UUID?
+  private var importPreparation: (id: UUID, task: Task<LocalImportConfirmation, any Error>)?
   internal var beforeImportConfirmationInstallForOwnedFixtures:
     (@MainActor (LocalImportConfirmation) -> Void)?
   private var metadataReadRequest: UUID?
@@ -221,35 +221,58 @@ public final class ProductWorkspace: ObservableObject {
   }
 
   @discardableResult public func prepareImport(source: URL) async throws -> UUID {
-    try admitDiagnosticSource(source)
-    guard canPrepareLocalImport else {
-      throw ProductWorkspaceError.busy
-    }
-    confirmationCancellation = nil
     let destinationFolderID: UUID?
     switch libraryFilter.folder {
     case .folder(let id): destinationFolderID = id
     case .all, .unfiled: destinationFolderID = nil
     }
+    return try await prepareLocalImport(source: source, destinationFolderID: destinationFolderID)
+  }
+
+  public func prepareRetry(source: URL, paperID: UUID, generation: UUID) async throws {
+    _ = try await prepareLocalImport(source: source, retry: (paperID, generation))
+  }
+
+  private func prepareLocalImport(
+    source: URL, destinationFolderID: UUID? = nil,
+    retry: (paperID: UUID, generation: UUID)? = nil
+  ) async throws -> UUID {
+    try admitDiagnosticSource(source)
+    guard canPrepareLocalImport else {
+      throw ProductWorkspaceError.busy
+    }
+    try Task.checkCancellation()
+    confirmationCancellation = nil
+    let scoped = source.startAccessingSecurityScopedResource()
     let request = UUID()
-    importPreparation = request
+    let task = Task { [imports] in
+      if let retry {
+        return try await imports.prepareRetry(
+          source: source, paperID: retry.paperID, generation: retry.generation)
+      }
+      return try await imports.prepare(source: source, destinationFolderID: destinationFolderID)
+    }
+    importPreparation = (request, task)
     preparing = true
+    // A synchronous observer may have dismissed the request during publication.
+    if importPreparation == nil { preparing = false }
     defer {
-      if importPreparation == request {
+      if importPreparation?.id == request {
         importPreparation = nil
         preparing = false
       }
     }
-    let scoped = source.startAccessingSecurityScopedResource()
     var returnedConfirmation: UUID?
     do {
-      let confirmation = try await imports.prepare(
-        source: source,
-        destinationFolderID: destinationFolderID)
+      let confirmation = try await withTaskCancellationHandler {
+        try await task.value
+      } onCancel: {
+        task.cancel()
+      }
       returnedConfirmation = confirmation.id
       beforeImportConfirmationInstallForOwnedFixtures?(confirmation)
       try Task.checkCancellation()
-      guard importPreparation == request, !opening, !sheetCleanupPending, sheet == nil,
+      guard importPreparation?.id == request, !opening, !sheetCleanupPending, sheet == nil,
         reader == nil
       else { throw CancellationError() }
       if scoped { scopedSource = source }
@@ -276,49 +299,13 @@ public final class ProductWorkspace: ObservableObject {
     if let diagnosticSource { picker.directoryURL = diagnosticSource.deletingLastPathComponent() }
     guard picker.runModal() == .OK, let source = picker.url else { return nil }
     return Task {
-      do { return try await prepareImport(source: source) } catch {
+      do { return try await prepareImport(source: source) }
+      catch is CancellationError { return nil }
+      catch {
         failure = (error as? FolderImportError)?.reselectionMessage
           ?? "PDF 가져오기를 준비하지 못했습니다. 원본 PDF를 다시 선택하세요."
         return nil
       }
-    }
-  }
-
-  public func prepareRetry(source: URL, paperID: UUID, generation: UUID) async throws {
-    try admitDiagnosticSource(source)
-    guard canPrepareLocalImport else {
-      throw ProductWorkspaceError.busy
-    }
-    confirmationCancellation = nil
-    let request = UUID()
-    importPreparation = request
-    preparing = true
-    defer {
-      if importPreparation == request {
-        importPreparation = nil
-        preparing = false
-      }
-    }
-    let scoped = source.startAccessingSecurityScopedResource()
-    var returnedConfirmation: UUID?
-    do {
-      let confirmation = try await imports.prepareRetry(
-        source: source,
-        paperID: paperID, generation: generation)
-      returnedConfirmation = confirmation.id
-      beforeImportConfirmationInstallForOwnedFixtures?(confirmation)
-      try Task.checkCancellation()
-      guard importPreparation == request, !opening, !sheetCleanupPending, sheet == nil,
-        reader == nil
-      else { throw CancellationError() }
-      if scoped { scopedSource = source }
-      pendingConfirmation = confirmation.id
-      sheet = .confirmation(confirmation)
-      failure = nil
-    } catch {
-      if scoped { source.stopAccessingSecurityScopedResource() }
-      if let returnedConfirmation { await imports.cancel(returnedConfirmation) }
-      throw error
     }
   }
 
@@ -333,6 +320,7 @@ public final class ProductWorkspace: ObservableObject {
     guard picker.runModal() == .OK, let source = picker.url else { return }
     Task {
       do { try await prepareRetry(source: source, paperID: paperID, generation: generation) }
+      catch is CancellationError { return }
       catch {
         failure = (error as? FolderImportError)?.reselectionMessage
           ?? "PDF 재시도를 준비하지 못했습니다. 작업 상태를 확인하고 PDF를 다시 선택하세요."
@@ -368,6 +356,11 @@ public final class ProductWorkspace: ObservableObject {
     }
   }
 
+  fileprivate func cancelLocalImportPreparation() {
+    guard importPreparation != nil, activeSheet == nil, !installingSheet else { return }
+    dismissSheet()
+  }
+
   @discardableResult public func dismissSheet() -> Task<UUID, Never>? {
     if !installingSheet, !preparing, importPreparation == nil, activeSheet == nil,
       let confirmationCancellation
@@ -378,6 +371,7 @@ public final class ProductWorkspace: ObservableObject {
     cleaningSheet = true
     sheetCleanupPending = true
     clearActiveSheet()
+    importPreparation?.task.cancel()
     importPreparation = nil
     preparing = false
     let confirmationID = pendingConfirmation
@@ -428,7 +422,9 @@ public final class ProductWorkspace: ObservableObject {
 
   public func acceptDroppedPDF(_ source: URL) {
     Task {
-      do { _ = try await prepareImport(source: source) } catch {
+      do { _ = try await prepareImport(source: source) }
+      catch is CancellationError { return }
+      catch {
         failure = (error as? FolderImportError)?.reselectionMessage
           ?? "PDF 가져오기를 준비하지 못했습니다. 원본 PDF를 다시 선택하세요."
       }
@@ -807,15 +803,20 @@ public struct ProductWorkspaceView: View {
         .id(reader.mountIdentity)
       } else {
         HStack {
-          Button("폴더 관리") { openToolbar(.folders) }.focused($folderOpenerFocused)
-          Button("Settings") { openToolbar(.settings) }.focused($settingsOpenerFocused)
-          if let paperID = workspace.latestLocalImport {
-            Button("가져온 PDF 열기") { Task { await workspace.openImportedPDF(paperID) } }
+          Group {
+            Button("폴더 관리") { openToolbar(.folders) }.focused($folderOpenerFocused)
+            Button("Settings") { openToolbar(.settings) }.focused($settingsOpenerFocused)
+            if let paperID = workspace.latestLocalImport {
+              Button("가져온 PDF 열기") { Task { await workspace.openImportedPDF(paperID) } }
+            }
+          }.disabled(workspace.preparing || workspace.opening || workspace.sheetCleanupPending)
+          if workspace.preparing {
+            ProgressView("PDF 확인 중")
+            Button("취소") { workspace.cancelLocalImportPreparation() }
+              .accessibilityLabel("PDF 확인 취소")
           }
-          if workspace.preparing { ProgressView("PDF 확인 중") }
           Spacer()
-        }.padding().disabled(
-          workspace.preparing || workspace.opening || workspace.sheetCleanupPending)
+        }.padding()
         URLImportView(
           service: urls, folderService: workspace.imports,
           possibleDuplicate: { _ in true },
@@ -888,6 +889,7 @@ public struct ProductWorkspaceView: View {
     }
     .onDisappear {
       invalidateDirectIntent()
+      workspace.cancelLocalImportPreparation()
       mount = nil
       toolbarPresentation = nil
     }
