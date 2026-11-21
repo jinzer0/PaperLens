@@ -881,22 +881,7 @@ final class LibrarySummaryServiceTests: XCTestCase {
   }
 
   private func prepareCoordinator(_ f: Fixture) throws {
-    var owners = try canonicalOwners(f)
-    let first = owners[0]
-    owners[0] = try PDFSentenceAnchor(identity: first.identity,
-      fullSourceQuote: "main contribution results conclusion alpha", page: first.page, quads: first.quads)
-    try f.db.adapterWrite {
-      try $0.execute(sql: "UPDATE extractionSentence SET text = ? WHERE revision = ? AND sentenceID = 0",
-        arguments: [owners[0].fullSourceQuote, f.identity.revision.uuidString])
-      // Production extraction rows are immutable and inserted with their FTS text.
-      // This fixture replaces a quote after insertion, so update its search entry too.
-      try $0.execute(sql: """
-        UPDATE extractionFTS SET text = ? WHERE rowid = (
-          SELECT id FROM extractionSentence WHERE revision = ? AND sentenceID = 0
-        )
-        """, arguments: [owners[0].fullSourceQuote, f.identity.revision.uuidString])
-    }
-    _ = try installCanonicalGeometry(f, owners: owners)
+    let owners = try canonicalOwners(f)
     try f.db.adapterWrite { db in
       for owner in owners {
         try db.execute(sql: """
@@ -915,7 +900,7 @@ final class LibrarySummaryServiceTests: XCTestCase {
   }
 
   @MainActor func testExplicitCoordinatorDispatchPublishesGroundedResultAndRestoresWithoutRequest() async throws {
-    let f = try fixture()
+    let f = try fixture(tail: "appendix acknowledgments")
     defer { try? FileManager.default.removeItem(at: f.root) }
     try prepareCoordinator(f)
     let leases = SummaryLeases(), provider = SummaryProvider()
@@ -927,10 +912,12 @@ final class LibrarySummaryServiceTests: XCTestCase {
     XCTAssertEqual(provider.calls, 1)
     XCTAssertTrue(leases.lease.closed)
     XCTAssertNil(coordinator.activePaperID)
-    XCTAssertEqual(saved.claimAnchors.map(\.fullSourceQuote), ["main contribution results conclusion alpha"])
+    XCTAssertEqual(saved.evidence.items.map(\.quote), ["main contribution alpha", "results conclusion beta"])
+    XCTAssertEqual(saved.claimAnchors.map(\.fullSourceQuote), ["main contribution alpha"])
     let restored = try XCTUnwrap(LibrarySummaryService(database: ProductDatabase.open(at: f.root))
       .restore(paperID: f.identity.paperID))
     XCTAssertEqual(restored.id, saved.id)
+    XCTAssertEqual(restored.claimAnchors, saved.claimAnchors)
     XCTAssertEqual(provider.calls, 1)
     let files = try FileManager.default.contentsOfDirectory(atPath:
       f.db.root.appendingPathComponent("papers/\(f.identity.paperID.uuidString)").path)

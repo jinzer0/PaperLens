@@ -352,10 +352,15 @@ extension LibrarySummaryFailure {
         guard (row["sentenceID"] as Int) == index else { throw LibrarySummaryError.invalidGrounding }
         return .init(anchor: .init(pageIndex: row["page"], sentenceID: index), quote: row["text"])
       }
+      // FTS rows are sentences. The fixed topics can occur in different sentences of the paper.
+      let query = authority.contract["policies"]["summaryQuery"].string
+        .split(whereSeparator: \.isWhitespace)
+        .map { "\"\($0.replacingOccurrences(of: "\"", with: "\"\""))\"" }
+        .joined(separator: " OR ")
       let ranked = try Int.fetchAll(db, sql: """
         SELECT sentenceID FROM extractionFTS JOIN extractionSentence s ON s.id = extractionFTS.rowid
-        WHERE extractionFTS MATCH ? AND revision = ? ORDER BY rank, sentenceID
-        """, arguments: [authority.contract["policies"]["summaryQuery"].string, revision.uuidString])
+        WHERE extractionFTS MATCH ? AND revision = ? ORDER BY rank, page, sentenceID
+        """, arguments: [query, revision.uuidString])
       return Input(revision: revision, hash: row["hash"], configuration: row["configuration"],
         sentences: sentences, ranked: ranked)
     }
