@@ -3,8 +3,10 @@ import SwiftUI
 public struct ReaderMetadataPresentation {
   public let identity: ReaderMetadataIdentity?
   public let metadata: ReaderMetadataSnapshot
-  public init(identity: ReaderMetadataIdentity?, metadata: ReaderMetadataSnapshot) {
-    self.identity = identity; self.metadata = metadata
+  public let storedMetadataInvalid: Bool
+  public init(identity: ReaderMetadataIdentity?, metadata: ReaderMetadataSnapshot,
+    storedMetadataInvalid: Bool = false) {
+    self.identity = identity; self.metadata = metadata; self.storedMetadataInvalid = storedMetadataInvalid
   }
 }
 
@@ -21,7 +23,10 @@ public struct MetadataOutlineView: View {
       VStack(alignment: .leading, spacing: 16) {
         Text("논문 정보").font(.headline).accessibilityAddTraits(.isHeader)
         if let state = binding.state {
-          if state.presentation.identity == nil {
+          if state.presentation.storedMetadataInvalid {
+            Label("저장된 출처 정보를 확인할 수 없습니다.", systemImage: "exclamationmark.triangle")
+              .font(.caption)
+          } else if state.presentation.identity == nil {
             Text("원본 PDF의 정보를 표시합니다. 추출 정보는 아직 사용할 수 없습니다.")
               .font(.caption).foregroundStyle(.secondary)
           }

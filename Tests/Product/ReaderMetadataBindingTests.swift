@@ -465,6 +465,42 @@ private final class MetadataObservedPDFDocument: PDFDocument {
     XCTAssertEqual(try ReaderMetadataService(database: db).metadata(for: identity), before)
   }
 
+  func testCorruptStoredMetadataRetainsNativeTitleAndContentsUntilValidDataReturns() async throws {
+    let (db, _, identity, owner) = try await fixture()
+    defer { owner.session.close() }
+    try outline(owner)
+    owner.view.document?.documentAttributes = [PDFDocumentAttribute.titleAttribute: "Native title"]
+    let service = ReaderMetadataService(database: db)
+    try service.accept(.init(), for: identity)
+    let damaged = Data("not JSON".utf8)
+    try db.adapterWrite {
+      try $0.execute(sql: "UPDATE readerMetadata SET payload = ? WHERE paperID = ?",
+        arguments: [damaged, identity.paperID.uuidString])
+    }
+    let binding = try mount(db, identity, owner)
+    let state = try XCTUnwrap(binding.state)
+    XCTAssertTrue(state.presentation.storedMetadataInvalid)
+    XCTAssertEqual(state.presentation.metadata.title.candidates.map(\.text), ["Native title"])
+    XCTAssertEqual(state.sections.map(\.title), ["Introduction", "Methods", "Foreign"])
+    try binding.navigate(sectionID: "/1")
+    XCTAssertEqual(owner.view.requestedLocation?.pageIndex, 0)
+    XCTAssertNil(binding.state?.observedLocation)
+    XCTAssertEqual(try db.adapterRead {
+      try Data.fetchOne($0, sql: "SELECT payload FROM readerMetadata WHERE paperID = ?",
+        arguments: [identity.paperID.uuidString])
+    }, damaged, "Reading must not rewrite damaged metadata")
+    let repaired = ReaderMetadataSnapshot(year: .init([
+      .init(text: "2024", source: .acceptedExtraction, sourceID: identity.revisionID.uuidString)
+    ]))
+    try service.accept(repaired, for: identity)
+    try binding.refresh()
+    let refreshed = try XCTUnwrap(binding.state)
+    XCTAssertFalse(refreshed.presentation.storedMetadataInvalid)
+    XCTAssertEqual(refreshed.presentation.metadata.title.candidates.map(\.text), ["Native title"])
+    XCTAssertEqual(refreshed.presentation.metadata.year, repaired.year)
+    XCTAssertEqual(refreshed.sections.map(\.title), state.sections.map(\.title))
+  }
+
   func testBlankOrWrongTypedAttributesPreserveAdmittedFieldsWithoutDefaults() async throws {
     let (db, _, identity, owner) = try await fixture()
     defer { owner.session.close() }

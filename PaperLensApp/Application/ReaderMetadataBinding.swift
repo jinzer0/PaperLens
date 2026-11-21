@@ -228,7 +228,7 @@ public struct ReaderMetadataBindingState {
     }
   }
 
-  private func validate() throws -> ReaderMetadataSnapshot {
+  private func validate() throws -> ReaderMetadataSnapshot? {
     guard !invalidated, let paper = session.currentPaper,
       paper.paperID == documentIdentity.paperID, paper.generation == documentIdentity.generation,
       paper.pdfReference == documentIdentity.pdfReference, let view, let document,
@@ -244,10 +244,11 @@ public struct ReaderMetadataBindingState {
       throw ReaderMetadataError.staleIdentity
     }
     // The shared DB atomically checks ready generation/SHA/reference AND published revision.
-    return try service.metadata(for: identity)
+    do { return try service.metadata(for: identity) }
+    catch ReaderMetadataError.invalidMetadata { return nil }
   }
 
-  private func access<T>(_ operation: (PDFView, PDFDocument, ReaderMetadataSnapshot) throws -> T) throws -> T {
+  private func access<T>(_ operation: (PDFView, PDFDocument, ReaderMetadataSnapshot?) throws -> T) throws -> T {
     do {
       return try session.withReadAccess {
         let metadata = try validate()
@@ -262,18 +263,27 @@ public struct ReaderMetadataBindingState {
     }
   }
 
-  private func makeState(metadata: ReaderMetadataSnapshot, document: PDFDocument,
+  private func makeState(metadata: ReaderMetadataSnapshot?, document: PDFDocument,
     adapter: ReaderOutlineAdapter, context: ReaderMetadataContext?,
     observed: ReaderConfirmedLocation?) throws -> ReaderMetadataBindingState {
-    var displayedMetadata = metadata
+    var displayedMetadata = metadata ?? ReaderMetadataSnapshot()
+    var storedMetadataInvalid = metadata == nil
     let candidate = ReaderMetadataValue.pdfTitle(in: document, pdfSHA256: documentIdentity.pdfSHA256)
     _ = try validate()
     if let candidate {
-      displayedMetadata = try identity.map { try service.recordSourceTitle(candidate.text, for: $0) }
-        ?? metadata.addingOptionalPDFTitle(candidate)
+      displayedMetadata = displayedMetadata.addingOptionalPDFTitle(candidate)
+      if let identity, !storedMetadataInvalid {
+        do { displayedMetadata = try service.recordSourceTitle(candidate.text, for: identity) }
+        catch ReaderMetadataError.invalidMetadata {
+          // Leave damaged saved data untouched and use the admitted PDF's title.
+          displayedMetadata = ReaderMetadataSnapshot(title: .init([candidate]))
+          storedMetadataInvalid = true
+        }
+      }
     }
     // PDF creation/modification dates, subject and keywords have different semantics.
-    return ReaderMetadataBindingState(presentation: .init(identity: identity, metadata: displayedMetadata),
+    return ReaderMetadataBindingState(presentation: .init(identity: identity, metadata: displayedMetadata,
+      storedMetadataInvalid: storedMetadataInvalid),
       sections: adapter.sections.map {
         ReaderMetadataOutlineRow(id: $0.id, title: $0.title, depth: $0.depth, location: $0.location)
       }, restorationCandidate: context.flatMap { adapter.validatedRestoration($0) }, observedLocation: observed,

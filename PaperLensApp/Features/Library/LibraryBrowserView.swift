@@ -381,12 +381,18 @@ public struct LibraryBrowserView: View {
 
   @ViewBuilder private func paperContent(_ paper: OrganizedPaper) -> some View {
     let fact = currentFacts[paper.id].flatMap { $0.generation == paper.generation ? $0 : nil }
+    let metadata = paper.sourceMetadataInvalid ? nil : fact?.metadata
     let deletionPending = deletingPaperIDs.contains(paper.id) || finishedDeletionIDs.contains(paper.id)
     VStack(alignment: .leading, spacing: 8) {
       Text(paper.title).font(.headline).textSelection(.enabled)
       paperActions(paper).disabled(deletionPending)
-      Text("출처 제목 · \(LibraryMetadataPresentation.preview(paper.sourceTitle, limit: 160))")
-        .font(.caption).textSelection(.enabled)
+      if paper.sourceMetadataInvalid {
+        Label(ReaderMetadataError.invalidMetadata.message, systemImage: "exclamationmark.triangle")
+          .font(.caption)
+      } else {
+        Text("출처 제목 · \(LibraryMetadataPresentation.preview(paper.sourceTitle, limit: 160))")
+          .font(.caption).textSelection(.enabled)
+      }
       Text(deletionPending ? "삭제 중 · 열기 불가" : statusLabel(paper)).font(.caption)
       Text("\(readingLabel(paper.organization.readingStatus)) · \(paper.organization.favorite ? "즐겨찾기" : "즐겨찾기 아님")")
       HStack {
@@ -417,14 +423,17 @@ public struct LibraryBrowserView: View {
         .accessibilityValue(readingLabel(paper.organization.readingStatus))
       }.disabled(deletionPending || !paper.readable || busy || loading || loadFailed)
       if !paper.organization.tags.isEmpty { Text(paper.organization.tags.joined(separator: " · ")).font(.caption) }
-      if fact?.metadata?.year.isConflict == true {
-        Text("발행연도 출처 간 충돌 · 상세에서 후보 확인").font(.caption)
-      } else if let year = fact?.publicationYear { Text("발행연도 \(String(year))").font(.caption) }
-      else if let year = fact?.metadata?.year, !year.candidates.isEmpty {
-        Text("발행연도 미확인 · \(LibraryMetadataPresentation.preview(year, limit: 80))")
-          .font(.caption)
+      if !paper.sourceMetadataInvalid {
+        if metadata?.year.isConflict == true {
+          Text("발행연도 출처 간 충돌 · 상세에서 후보 확인").font(.caption)
+        } else if let year = fact?.publicationYear {
+          Text("발행연도 \(String(year))").font(.caption)
+        } else if let year = metadata?.year, !year.candidates.isEmpty {
+          Text("발행연도 미확인 · \(LibraryMetadataPresentation.preview(year, limit: 80))").font(.caption)
+        } else {
+          Text("발행연도 정보 없음").font(.caption).foregroundStyle(.secondary)
+        }
       }
-      else { Text("발행연도 정보 없음").font(.caption).foregroundStyle(.secondary) }
       if let date = fact?.lastReadAt {
         Text("최근 읽음 \(date.formatted())").font(.caption)
       }
@@ -442,10 +451,12 @@ public struct LibraryBrowserView: View {
         .disabled(deletionPending || !paper.readable || busy || loading || loadFailed || summaries.activePaperID != nil)
         .accessibilityLabel("\(paper.title) 근거 문장으로 요약 생성")
       }
-      Text("초록 · \(LibraryMetadataPresentation.preview(fact?.metadata?.abstract, limit: 220))")
-        .font(.caption).textSelection(.enabled)
-      Text("출처 주제 (사용자 태그 아님) · \(LibraryMetadataPresentation.preview(fact?.metadata?.topics, limit: 120))")
-        .font(.caption).textSelection(.enabled)
+      if !paper.sourceMetadataInvalid {
+        Text("초록 · \(LibraryMetadataPresentation.preview(metadata?.abstract, limit: 220))")
+          .font(.caption).textSelection(.enabled)
+        Text("출처 주제 (사용자 태그 아님) · \(LibraryMetadataPresentation.preview(metadata?.topics, limit: 120))")
+          .font(.caption).textSelection(.enabled)
+      }
       if paper.status == .importing, !deletionPending {
         ProgressView()
         Text("\((activeImportProgress[paper.id] ?? paper.bytesCopied).formatted()) bytes 복사됨")
@@ -1258,12 +1269,18 @@ enum LibraryMetadataPresentation {
       if eligible, !closed, isEligible() {
       ScrollView {
         VStack(alignment: .leading, spacing: 16) {
-          field("출처 제목", captured.paper.sourceTitle)
-          field("발행연도", captured.metadata?.year)
+          if captured.paper.sourceMetadataInvalid {
+            Label(ReaderMetadataError.invalidMetadata.message, systemImage: "exclamationmark.triangle")
+          } else {
+            field("출처 제목", captured.paper.sourceTitle)
+            field("발행연도", captured.metadata?.year)
+          }
           LibraryStoredSummary(paper: captured.paper, observation: captured.summary, showEvidence: true)
           storedReadingRecords
-          field("초록", captured.metadata?.abstract)
-          field("출처 주제 · 사용자 태그 아님", captured.metadata?.topics)
+          if !captured.paper.sourceMetadataInvalid {
+            field("초록", captured.metadata?.abstract)
+            field("출처 주제 · 사용자 태그 아님", captured.metadata?.topics)
+          }
         }.frame(maxWidth: .infinity, alignment: .leading)
       }
       }

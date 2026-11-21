@@ -1736,7 +1736,7 @@ private actor WorkspaceDeletionAgent: AgentLibraryPurging {
       "Retained data-only old facts also fail the existing UI generation match")
   }
 
-  func testLibraryMetadataQueryRejectsCorruptPayloadAndFencesMismatchedRevisionIdentity() async throws {
+  func testLibraryMetadataQueryFencesMismatchedRevisionIdentity() async throws {
     let f = try await fixture()
     let id = try await importSelected(f)
     let identity = try publishMetadataRevision(f, id: id)
@@ -1767,17 +1767,69 @@ private actor WorkspaceDeletionAgent: AgentLibraryPurging {
         arguments: [UUID().uuidString, id.uuidString])
     }
     XCTAssertNil(try reopened.librarySortFacts().first?.metadata, "Payload bound to a different revision is absent")
+  }
+
+  func testCorruptMetadataDoesNotHideLibraryOrBlockOpeningOriginalPDF() async throws {
+    let f = try await fixture()
+    var bounds = CGRect(x: 0, y: 0, width: 400, height: 600)
+    let pdf = try XCTUnwrap(CGContext(f.source as CFURL, mediaBox: &bounds, nil))
+    pdf.beginPDFPage(nil)
+    pdf.endPDFPage()
+    pdf.closePDF()
+    let id = try await importSelected(f)
+    let other = try await importSelected(f)
+    let identity = try publishMetadataRevision(f, id: id)
+    let otherIdentity = try publishMetadataRevision(f, id: other)
+    let stored = ReaderMetadataSnapshot(year: .init([
+      .init(text: "2030", source: .acceptedExtraction, sourceID: identity.revisionID.uuidString)
+    ]))
+    let otherMetadata = ReaderMetadataSnapshot(title: .init([
+      .init(text: "Healthy source title", source: .source, sourceID: otherIdentity.pdfSHA256)
+    ]), year: .init([
+      .init(text: "2024", source: .acceptedExtraction, sourceID: otherIdentity.revisionID.uuidString)
+    ]))
     try f.database.saveReaderMetadata(stored, for: identity)
-    for corrupt in [Data("not JSON".utf8), try JSONEncoder().encode(ReaderMetadataSnapshot(abstract: .init([
-      .init(text: "", source: .source, sourceID: "invalid-empty-text")
-    ])))] {
+    try f.database.saveReaderMetadata(otherMetadata, for: otherIdentity)
+    let affected = try await paper(f, id: id)
+    try await f.workspace.organization.save(.init(favorite: true, tags: ["Findable tag"]), for: affected)
+    try await f.workspace.organization.savePreferences(.init(presentation: .grid, sort: .publicationYear))
+    let oldFacts = try await f.workspace.sortFacts()
+    let invalidSnapshot = ReaderMetadataSnapshot(title: .init([
+      .init(text: "Unverified source title", source: .source, sourceID: identity.pdfSHA256)
+    ]), abstract: .init([.init(text: "", source: .source, sourceID: "invalid-empty-text")]))
+    for corrupt in [Data("not JSON".utf8), try JSONEncoder().encode(invalidSnapshot)] {
       try f.database.adapterWrite { db in
         try db.execute(sql: "UPDATE readerMetadata SET payload = ? WHERE paperID = ?",
           arguments: [corrupt, id.uuidString])
       }
-      XCTAssertThrowsError(try reopened.librarySortFacts(), "Corrupt or invalid metadata is a failed query, not nil")
-      try f.database.saveReaderMetadata(stored, for: identity)
-      XCTAssertEqual(try reopened.librarySortFacts().first?.metadata, stored)
+      let facts = try await f.workspace.sortFacts()
+      XCTAssertNil(facts.first { $0.paperID == id }?.metadata)
+      XCTAssertEqual(facts.first { $0.paperID == other }?.metadata, otherMetadata)
+      let snapshot = try await f.workspace.organization.snapshot(filter: .init(), facts: oldFacts)
+      XCTAssertEqual(snapshot.papers.map(\.id), [other, id], "An old year cannot sort the damaged record")
+      let paper = try XCTUnwrap(snapshot.papers.last)
+      XCTAssertTrue(paper.sourceMetadataInvalid)
+      XCTAssertNil(paper.sourceTitle)
+      XCTAssertTrue(paper.readable)
+      var search = OrganizationFilter()
+      for (text, expected) in [("Findable tag", [id]), ("Healthy source title", [other]), ("Unverified source title", [])] {
+        search.search = text
+        let results = try await f.workspace.organization.snapshot(filter: search, facts: facts)
+        XCTAssertEqual(results.papers.map(\.id), expected)
+      }
+      try await f.workspace.open(paper)
+      let reader = try XCTUnwrap(f.workspace.reader)
+      let presentation = ReaderPresentation(session: reader.session,
+        annotationIdentity: reader.annotationIdentity, annotationService: f.workspace.annotations,
+        metadataService: f.workspace.metadata, metadataIdentity: reader.metadataIdentity)
+      presentation.open(paperID: id)
+      XCTAssertTrue(presentation.opened)
+      XCTAssertEqual(presentation.pdfView.document?.pageCount, 1)
+      XCTAssertTrue(presentation.metadataBinding?.state?.presentation.storedMetadataInvalid == true)
+      f.workspace.returnToLibrary()
     }
+    try f.database.saveReaderMetadata(stored, for: identity)
+    let restored = try await paper(f, id: id)
+    XCTAssertFalse(restored.sourceMetadataInvalid)
   }
 }

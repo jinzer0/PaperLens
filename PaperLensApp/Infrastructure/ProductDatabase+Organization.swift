@@ -99,7 +99,8 @@ extension ProductDatabase {
           filter.readingStatus.map({ $0 == readingStatus }) ?? true,
           !filter.favoritesOnly || favorite else { return nil }
         let title: String = row["title"]
-        let sourceTitle = try Self.decodeLibraryMetadata(row["metadataPayload"])?.title
+        let metadata = try Self.libraryMetadataObservation(row.decode(Data?.self, forColumn: "metadataPayload"))
+        let sourceTitle = metadata.snapshot?.title
         let resolvedTitle = sourceTitle.flatMap { $0.isConflict ? nil : $0.candidates.first?.text }
         guard search.isEmpty || LibraryOrganizationService.normalized(title).contains(search)
           || resolvedTitle.map({ LibraryOrganizationService.normalized($0).contains(search) }) == true
@@ -108,7 +109,8 @@ extension ProductDatabase {
         let canRetryImport = status == .importFailed && failure != "missingPDF"
           && String.fromDatabaseValue(row["importJobState"]) == "failed"
           && (row["hasImportHistory"] as Bool) && !(row["cleanupDebt"] as Bool)
-        return OrganizedPaper(id: id, generation: generation, title: title, sourceTitle: sourceTitle, status: status,
+        return OrganizedPaper(id: id, generation: generation, title: title, sourceTitle: sourceTitle,
+          sourceMetadataInvalid: metadata.invalid, status: status,
           failure: failure, bytesCopied: row["bytesCopied"], createdAt: Date(timeIntervalSince1970: row["createdAt"]),
           readable: (try? validateOrganizationPDF(row, verifyDigest: true)) != nil,
           canRetryImport: canRetryImport,

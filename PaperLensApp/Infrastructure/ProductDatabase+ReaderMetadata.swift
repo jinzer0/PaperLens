@@ -75,11 +75,9 @@ extension ProductDatabase {
   public func readerMetadata(for identity: ReaderMetadataIdentity) throws -> ReaderMetadataSnapshot? {
     try adapterRead { db in
       try Self.guardReaderMetadata(identity, in: db)
-      guard let data = try Data.fetchOne(db, sql: "SELECT payload FROM readerMetadata WHERE paperID = ? AND revisionID = ?",
-        arguments: [identity.paperID.uuidString, identity.revisionID.uuidString]) else { return nil }
-      let snapshot = try JSONDecoder().decode(ReaderMetadataSnapshot.self, from: data)
-      try snapshot.validate()
-      return snapshot
+      let data = try Data.fetchOne(db, sql: "SELECT payload FROM readerMetadata WHERE paperID = ? AND revisionID = ?",
+        arguments: [identity.paperID.uuidString, identity.revisionID.uuidString])
+      return try Self.decodeReaderMetadata(data)
     }
   }
 
@@ -107,7 +105,7 @@ extension ProductDatabase {
     try guardReaderMetadata(identity, in: db)
     let data = try Data.fetchOne(db, sql: "SELECT payload FROM readerMetadata WHERE paperID = ? AND revisionID = ?",
       arguments: [identity.paperID.uuidString, identity.revisionID.uuidString])
-    let existing = try decodeLibraryMetadata(data) ?? ReaderMetadataSnapshot()
+    let existing = try decodeReaderMetadata(data) ?? ReaderMetadataSnapshot()
     let merged = existing.addingOptionalPDFTitle(candidate)
     guard merged.title.candidates.count != existing.title.candidates.count else { return existing }
     try db.execute(sql: """

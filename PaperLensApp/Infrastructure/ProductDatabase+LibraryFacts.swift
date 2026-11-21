@@ -11,11 +11,20 @@ extension ProductDatabase {
     LEFT JOIN readerMetadata m ON m.paperID = p.id AND m.revisionID = r.id
     """
 
-  static func decodeLibraryMetadata(_ payload: Data?) throws -> ReaderMetadataSnapshot? {
+  static func decodeReaderMetadata(_ payload: Data?) throws -> ReaderMetadataSnapshot? {
     guard let payload else { return nil }
-    let snapshot = try JSONDecoder().decode(ReaderMetadataSnapshot.self, from: payload)
-    try snapshot.validate()
-    return snapshot
+    do {
+      let snapshot = try JSONDecoder().decode(ReaderMetadataSnapshot.self, from: payload)
+      try snapshot.validate()
+      return snapshot
+    } catch is DecodingError {
+      throw ReaderMetadataError.invalidMetadata
+    }
+  }
+
+  static func libraryMetadataObservation(_ payload: Data?) throws -> (snapshot: ReaderMetadataSnapshot?, invalid: Bool) {
+    do { return (try decodeReaderMetadata(payload), false) }
+    catch ReaderMetadataError.invalidMetadata { return (nil, true) }
   }
 
   /// One read transaction binds read, year, metadata and Summary observations to the ready Paper/revision.
@@ -33,7 +42,7 @@ extension ProductDatabase {
           let timestamp: Double? = row["lastReadAt"]
           guard timestamp?.isFinite != false else { throw ProductDatabaseError.invalidRecord }
           var year: Int?
-          let metadata = try Self.decodeLibraryMetadata(row["payload"])
+          let metadata = try Self.libraryMetadataObservation(row.decode(Data?.self, forColumn: "payload")).snapshot
           if let field = metadata?.year {
             if !field.isConflict, let text = field.candidates.first?.text,
               !text.isEmpty, text.count <= 4, text.allSatisfy({ $0 >= "0" && $0 <= "9" }),

@@ -102,6 +102,7 @@ public struct OrganizedPaper: Identifiable, Equatable, Sendable {
   public let generation: UUID
   public let title: String
   public let sourceTitle: ReaderMetadataField?
+  public let sourceMetadataInvalid: Bool
   public let status: LibraryStatus
   public let failure: String?
   public let bytesCopied: Int64
@@ -195,7 +196,8 @@ public actor LibraryOrganizationService {
         let a = currentFacts(lhs)?.lastReadAt, b = currentFacts(rhs)?.lastReadAt
         if a != b { return Self.descending(a, b) }
       case .publicationYear:
-        let a = currentFacts(lhs)?.publicationYear, b = currentFacts(rhs)?.publicationYear
+        let a = lhs.sourceMetadataInvalid ? nil : currentFacts(lhs)?.publicationYear
+        let b = rhs.sourceMetadataInvalid ? nil : currentFacts(rhs)?.publicationYear
         if a != b { return Self.descending(a, b) }
       }
       return lhs.id.uuidString < rhs.id.uuidString
