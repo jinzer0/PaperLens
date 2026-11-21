@@ -141,7 +141,15 @@ private final class SelectorFixture: APIKeySelectorPersistence {
   var conflict = false
   var failCommit = false
   var commitAndThrow = false
-  func currentSelection() throws -> APIKeySelection? { selected }
+  var failFirstReadAfterCommit = false
+  private var failNextSelectionRead = false
+  func currentSelection() throws -> APIKeySelection? {
+    if failNextSelectionRead {
+      failNextSelectionRead = false
+      throw APIKeyConnectionError.persistenceFailure
+    }
+    return selected
+  }
   func selectionMatchesConfiguration(_ configuration: NativeOpenAIConfiguration) throws -> Bool {
     selected != nil && configuration.model == "explicit-test-snapshot"
   }
@@ -151,6 +159,7 @@ private final class SelectorFixture: APIKeySelectorPersistence {
     let value = APIKeySelection(slotID: slotID, configGeneration: (selected?.configGeneration ?? 0) + 1)
     selected = value
     commits += 1
+    failNextSelectionRead = failFirstReadAfterCommit
     if commitAndThrow { throw APIKeyConnectionError.persistenceFailure }
     return value
   }
@@ -976,6 +985,7 @@ final class APIKeyConnectionTests: XCTestCase {
     try await settled(connection)
     XCTAssertEqual(connection.phase, .failed(.persistenceFailure))
     XCTAssertEqual(db.selected, good)
+    XCTAssertTrue(connection.eligibleForEntry)
   }
 
   func testEditCancelAndWrongCorrelationRejectLateSuccess() async throws {
@@ -1083,6 +1093,51 @@ final class APIKeyConnectionTests: XCTestCase {
     XCTAssertNil(connection.activeSelection)
     XCTAssertFalse(connection.eligibleForEntry)
     XCTAssertThrowsError(try connection.acquireLease())
+  }
+
+  func testUnreadableSelectorAfterCommitRecoversOnlyFromDurableSelectionOnReopen() async throws {
+    let parent = try ownedParent()
+    defer { try? FileManager.default.removeItem(at: parent) }
+    let directory = parent.appendingPathComponent("slots", isDirectory: true)
+    let db = SelectorFixture()
+    let transport = SuspendedProbe()
+    let durable: APIKeySelection
+    do {
+      let store = try APIKeySlotStore(directory: directory)
+      let previous = try store.create(key: "fixture-previous-key")
+      db.selected = APIKeySelection(slotID: previous, configGeneration: 1)
+      let connection = try service(store: store, db: db, transport: transport)
+      connection.restore()
+      let lease = try connection.acquireLease()
+
+      db.commitAndThrow = true
+      db.failFirstReadAfterCommit = true
+      connection.connect(key: "fixture-candidate-key")
+      try await started(transport, count: 1)
+      try transport.finish(0)
+      try await settled(connection)
+
+      durable = try XCTUnwrap(db.selected)
+      XCTAssertNotEqual(durable.slotID, previous)
+      XCTAssertEqual(connection.phase, .failed(.persistenceFailure))
+      XCTAssertFalse(connection.eligibleForEntry)
+      XCTAssertFalse(connection.canReplaceOwner)
+      XCTAssertThrowsError(try connection.acquireLease())
+      XCTAssertFalse(try connection.mayPublish(lease))
+      try connection.releaseAfterTermination(lease)
+      XCTAssertEqual(try store.read(durable.slotID), "fixture-candidate-key")
+      XCTAssertEqual(try store.read(previous), "fixture-previous-key")
+    }
+
+    let store = try APIKeySlotStore(directory: directory)
+    let restored = try service(store: store, db: db, transport: transport)
+    restored.restore()
+    XCTAssertEqual(restored.phase, .connected(durable))
+    XCTAssertTrue(restored.eligibleForEntry)
+    XCTAssertEqual(try store.validatedSlotIDs(), [durable.slotID])
+    XCTAssertEqual(try store.read(durable.slotID), "fixture-candidate-key")
+    XCTAssertEqual(transport.pending.count, 1)
+    XCTAssertEqual(db.commits, 1)
   }
 
   func testCleanupFailureAndBackupExclusionFailureBlockWithoutRepair() async throws {

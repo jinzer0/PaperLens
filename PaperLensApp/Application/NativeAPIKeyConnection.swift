@@ -27,7 +27,7 @@ public enum APIKeyConnectionError: Error, Equatable, Sendable {
     case .staleCandidate: return "변경된 연결 요청입니다. 다시 시도해 주세요."
     case .persistenceUnavailable: return "연결 선택 저장소가 연결되지 않았습니다."
     case .selectorConflict: return "다른 연결이 먼저 저장되었습니다. 다시 시도해 주세요."
-    case .persistenceFailure: return "연결 선택을 안전하게 저장하지 못했습니다."
+    case .persistenceFailure: return "연결 선택의 저장 결과를 확인하지 못했습니다."
     }
   }
 }
@@ -344,6 +344,7 @@ public final class NativeAPIKeyConnection: ObservableObject {
       publishOwnerReplacementAvailability()
     }
     var staged: UUID?
+    var promotionAttempted = false
     do {
       try Task.checkCancellation()
       guard intent == attempt else { throw APIKeyConnectionError.staleCandidate }
@@ -387,7 +388,9 @@ public final class NativeAPIKeyConnection: ObservableObject {
       guard try slots.read(slot) == stagedKey else { throw APIKeyConnectionError.unsafeStorage }
       // No suspension between final validation, CAS and publication.
       guard !unresolvedSlots else { throw APIKeyConnectionError.cleanupBlocked }
+      promotionAttempted = true
       guard let winner = try persistence.compareAndSwap(expected: expected, slotID: slot) else {
+        promotionAttempted = false
         throw APIKeyConnectionError.selectorConflict
       }
       // CAS returning a malformed receipt is ambiguous: keep the staged secret and block.
@@ -412,13 +415,15 @@ public final class NativeAPIKeyConnection: ObservableObject {
     } catch {
       if let staged {
         probes.remove(staged)
-        if let persistence, (try? persistence.currentSelection())?.slotID == staged {
-          // A commit can be ambiguous even when its adapter throws. Never delete or
-          // publish a possibly selected candidate on the strength of that error.
-          storageBlocked = true
-          eligibleForEntry = false
-          publishPhase(.failed(.persistenceFailure))
-          return
+        if promotionAttempted {
+          // An unreadable selector can hide a successful commit. Retain the
+          // candidate and fence both connections until durable state is known.
+          guard let persistence, let observed = try? persistence.selectorSnapshot(),
+            observed.slotID != staged else {
+            storageBlocked = true
+            fail(APIKeyConnectionError.persistenceFailure)
+            return
+          }
         }
         retired.insert(staged)
         do { try drainRetired() } catch {

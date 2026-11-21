@@ -39,7 +39,8 @@ public struct ProviderSettingsView: View {
         Text("Provider 설정").font(.title2).accessibilityAddTraits(.isHeader)
         Text("현재 Provider: \(service.currentProviderLabel)")
         Text(service.availabilityMessage)
-        if service.currentProviderLabel == "OpenAI API", let selected = service.activeSelection {
+        if service.currentProviderLabel == "OpenAI API", service.eligibleForEntry,
+          let selected = service.activeSelection {
           Text("연결 버전: \(selected.configGeneration)")
             .font(.caption).foregroundStyle(.secondary)
         }
@@ -109,7 +110,9 @@ public struct ProviderSettingsView: View {
     case .failed(let error):
       Label(error.koreanMessage, systemImage: "exclamationmark.triangle")
         .foregroundStyle(.red)
-      if service.eligibleForEntry && !service.keyStorageBlocked {
+      if error == .persistenceFailure && service.keyStorageBlocked {
+        Text("앱을 다시 열어 저장된 연결을 확인하세요.")
+      } else if service.eligibleForEntry && !service.keyStorageBlocked {
         Text("새 연결은 적용하지 않았으며 기존 연결을 유지합니다.")
       }
     }
