@@ -122,6 +122,7 @@ public struct OrganizedPaper: Identifiable, Equatable, Sendable {
   public let sourceTitle: ReaderMetadataField?
   public let sourceMetadataInvalid: Bool
   public let status: LibraryStatus
+  let deletionID: UUID?
   public let failure: String?
   public let bytesCopied: Int64
   public let createdAt: Date
@@ -292,13 +293,11 @@ public actor LibraryOrganizationService {
     let database = database
     try await Task.detached { try database.admitOrganizationOpen(paperID: paper.id, generation: paper.generation) }.value
   }
-  /// Lifecycle owns revocation, draining and same-saga retry. Parent read-lease integration
-  /// must keep this generation check and lifecycle admission in the same arbitration domain.
   public func delete(_ paper: OrganizedPaper, retry: Bool) async throws {
-    let database = database
-    try await Task.detached { try database.validateOrganizationDeletion(paperID: paper.id, generation: paper.generation) }.value
-    if retry { try await lifecycle.retryDeletion(paperID: paper.id) }
-    else { try await lifecycle.delete(paperID: paper.id) }
+    guard retry == (paper.status == .deletionFailed), retry == (paper.deletionID != nil),
+      paper.status != .deleting, paper.status != .tombstone else { throw OrganizationError.stalePaper }
+    try await lifecycle.delete(paperID: paper.id,
+      expected: LibraryDeletionTarget(generation: paper.generation, failedSaga: paper.deletionID))
   }
   nonisolated static func normalized(_ value: String) -> String {
     value.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX"))

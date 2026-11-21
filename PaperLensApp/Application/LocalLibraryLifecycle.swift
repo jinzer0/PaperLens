@@ -650,24 +650,34 @@ public actor LocalLibraryLifecycle {
   }
 
   public func delete(paperID: UUID) async throws {
+    try await delete(paperID: paperID, expected: nil)
+  }
+
+  func delete(paperID: UUID, expected: LibraryDeletionTarget?) async throws {
     guard deletionInFlight.insert(paperID).inserted else { throw LocalLibraryError.deletionInProgress }
     defer { deletionInFlight.remove(paperID) }
     let database = database
-    // Shared admission closes before durable visibility changes; callbacks never run under lock.
-    let callbacks = readLeaseRegistry.revoke(paperID)
-    cancellations[paperID]?.cancel()
-    await MainActor.run { for callback in callbacks { callback() } }
+    let registry = readLeaseRegistry
     await enterTransition(paperID)
     let capture: ImportDeletionCapture
     do {
       guard let acknowledged = try await Task.detached(operation: {
-        try database.beginDeletion(paperID)
+        try database.beginDeletion(paperID, expected: expected) {
+          registry.prepareDeletion(paperID)
+        }
       }).value else { leaveTransition(paperID); return }
       capture = acknowledged
-      deletionSagas[paperID] = capture.saga
-      if let record = capture.histories.first { records[paperID] = record }
+    } catch {
+      registry.abandonDeletion(paperID)
       leaveTransition(paperID)
-    } catch { leaveTransition(paperID); throw error }
+      throw error
+    }
+    deletionSagas[paperID] = capture.saga
+    if let record = capture.histories.first { records[paperID] = record }
+    let callbacks = registry.revoke(paperID)
+    cancellations[paperID]?.cancel()
+    leaveTransition(paperID)
+    await MainActor.run { for callback in callbacks { callback() } }
     let saga = capture.saga
     if cancellations[paperID] != nil {
       await withCheckedContinuation { drains[paperID, default: []].append($0) }

@@ -125,6 +125,7 @@ extension ProductDatabase {
         && (row["hasImportHistory"] as Bool) && !(row["cleanupDebt"] as Bool)
       return OrganizedPaper(id: id, generation: generation, title: title, sourceTitle: sourceTitle,
         sourceMetadataInvalid: metadata.invalid, status: status,
+        deletionID: String.fromDatabaseValue(row["deletionID"]).flatMap(UUID.init(uuidString:)),
         failure: failure, bytesCopied: row["bytesCopied"], createdAt: Date(timeIntervalSince1970: row["createdAt"]),
         readable: (try? validateOrganizationPDF(row, verifyDigest: true)) != nil,
         canRetryImport: canRetryImport,
@@ -193,13 +194,6 @@ extension ProductDatabase {
   public func admitOrganizationOpen(paperID: UUID, generation: UUID) throws {
     try adapterRead { db in
       try validateOrganizationPDF(currentOrganizationPaper(db, paperID: paperID, generation: generation), verifyDigest: true)
-    }
-  }
-  public func validateOrganizationDeletion(paperID: UUID, generation: UUID) throws {
-    try adapterRead { db in
-      let row = try currentOrganizationPaper(db, paperID: paperID, generation: generation)
-      let status: String = row["status"]
-      guard status != "tombstone" else { throw OrganizationError.stalePaper }
     }
   }
   private func currentOrganizationPaper(_ db: Database, paperID: UUID, generation: UUID) throws -> Row {

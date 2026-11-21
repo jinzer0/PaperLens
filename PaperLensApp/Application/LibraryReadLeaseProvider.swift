@@ -19,6 +19,7 @@ final class LibraryReadLeaseRegistry: @unchecked Sendable {
   }
   private let lock = NSLock()
   private var closed: Set<UUID> = []
+  private var pendingDeletion: Set<UUID> = []
   private var entries: [UUID: Entry] = [:]
   private var waiters: [UUID: [CheckedContinuation<Void, any Error>]] = [:]
   private let closeHandle: @Sendable (FileHandle) throws -> Void
@@ -38,7 +39,9 @@ final class LibraryReadLeaseRegistry: @unchecked Sendable {
 
   func reserve(_ snapshot: ReaderPaperSnapshot, revoke: @escaping @MainActor () -> Void) throws -> UUID {
     try lock.withLock {
-      guard !closed.contains(snapshot.paperID) else { throw ReaderError.revoked }
+      guard !closed.contains(snapshot.paperID), !pendingDeletion.contains(snapshot.paperID) else {
+        throw ReaderError.revoked
+      }
       let token = UUID()
       entries[token] = Entry(snapshot: snapshot, revoke: revoke)
       return token
@@ -50,7 +53,7 @@ final class LibraryReadLeaseRegistry: @unchecked Sendable {
       entries[token]!.handle = handle
       entries[token]!.opening = false
       if handle == nil { entries[token]!.closeRequested = true }
-      return entries[token]!.revoked
+      return !allowsAccess(entries[token]!)
     }
     if revoked { close(token) }
     else { finishClose(token) }
@@ -59,14 +62,14 @@ final class LibraryReadLeaseRegistry: @unchecked Sendable {
 
   func validate(_ token: UUID) throws {
     try lock.withLock {
-      guard let entry = entries[token], !entry.revoked, !entry.closeRequested,
+      guard let entry = entries[token], allowsAccess(entry), !entry.closeRequested,
         !entry.opening, entry.handle != nil else { throw ReaderError.revoked }
     }
   }
 
   func beginRead(_ token: UUID) throws {
     try lock.withLock {
-      guard let entry = entries[token], !entry.revoked, !entry.closeRequested,
+      guard let entry = entries[token], allowsAccess(entry), !entry.closeRequested,
         !entry.opening, entry.handle != nil else { throw ReaderError.revoked }
       entries[token]!.reads += 1
     }
@@ -75,6 +78,11 @@ final class LibraryReadLeaseRegistry: @unchecked Sendable {
   func endRead(_ token: UUID) {
     lock.withLock { entries[token]!.reads -= 1 }
     finishClose(token)
+  }
+
+  // Caller holds the registry lock.
+  private func allowsAccess(_ entry: Entry) -> Bool {
+    !entry.revoked && !pendingDeletion.contains(entry.snapshot.paperID)
   }
 
   func closureObservation(_ token: UUID) -> LibraryPinClosureObservation {
@@ -92,7 +100,7 @@ final class LibraryReadLeaseRegistry: @unchecked Sendable {
   /// Linearize admission and transfer, but perform duplication/cleanup outside arbitration.
   func takeSenderPDF(_ token: UUID) throws -> FileHandle {
     let original: FileHandle = try lock.withLock {
-      guard let entry = entries[token], !entry.revoked, !entry.closeRequested,
+      guard let entry = entries[token], allowsAccess(entry), !entry.closeRequested,
         !entry.closureUnknown, !entry.opening, let handle = entry.handle else {
         throw ReaderError.revoked
       }
@@ -105,7 +113,7 @@ final class LibraryReadLeaseRegistry: @unchecked Sendable {
     let sender = try duplicateHandle(original)
     let admitted = lock.withLock {
       let entry = entries[token]!
-      return !entry.revoked && !entry.closeRequested && !entry.closureUnknown
+      return allowsAccess(entry) && !entry.closeRequested && !entry.closureUnknown
     }
     guard admitted else {
       do { try closeHandle(sender) }
@@ -164,10 +172,19 @@ final class LibraryReadLeaseRegistry: @unchecked Sendable {
     for waiter in result.1 { waiter.resume(returning: ()) }
   }
 
-  /// Closes admission before the caller changes durable visibility.
+  /// Prevent access while the checked deletion transaction commits.
+  func prepareDeletion(_ paperID: UUID) {
+    lock.withLock { _ = pendingDeletion.insert(paperID) }
+  }
+
+  func abandonDeletion(_ paperID: UUID) {
+    lock.withLock { _ = pendingDeletion.remove(paperID) }
+  }
+
   func revoke(_ paperID: UUID) -> [@MainActor () -> Void] {
     lock.withLock {
       closed.insert(paperID)
+      pendingDeletion.remove(paperID)
       let tokens = entries.filter { $0.value.snapshot.paperID == paperID }.map(\.key)
       return tokens.map {
         entries[$0]!.revoked = true

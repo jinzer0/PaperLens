@@ -1439,6 +1439,8 @@ private actor WorkspaceDeletionAgent: AgentLibraryPurging {
     let session = try XCTUnwrap(f.workspace.reader?.session)
     var discarded = false
     _ = try session.open(paperID: id, validateDocument: { _ in 4 }, discard: { discarded = true })
+    try session.save(.init(pageIndex: 2, zoom: 1.5))
+    XCTAssertNotNil(try f.database.librarySortFacts().first(where: { $0.paperID == id })?.lastReadAt)
     do {
       try await f.lifecycle.delete(paperID: id)
       XCTFail("No Agent producer has been bound")
@@ -1448,7 +1450,87 @@ private actor WorkspaceDeletionAgent: AgentLibraryPurging {
     XCTAssertThrowsError(try session.save(.init(pageIndex: 1, zoom: 1)))
     XCTAssertThrowsError(try session.withReadAccess { XCTFail("Revoked content must not be used") })
     XCTAssertEqual(try f.database.libraryRecords().first?.status, .deletionFailed)
+    let retained = try f.database.adapterRead { db in
+      try Row.fetchOne(db, sql: "SELECT lastReadPage, lastReadZoom, lastReadAt, readerSession, readerSequence FROM paper WHERE id = ?",
+        arguments: [id.uuidString])
+    }
+    let row = try XCTUnwrap(retained)
+    for column in ["lastReadPage", "lastReadZoom", "lastReadAt", "readerSession"] {
+      XCTAssertEqual(row[column] as DatabaseValue, .null, column)
+    }
+    XCTAssertEqual(row["readerSequence"] as Int64, 0)
     f.workspace.returnToLibrary()
+  }
+
+  func testStaleDeletionGenerationPreservesCurrentPDFAndReadLeases() async throws {
+    let agent = WorkspaceDeletionAgent()
+    let f = try await fixture(agentPurge: agent)
+    let id = try await importSelected(f)
+    let selected = try await paper(f, id: id)
+    let replacement = UUID()
+    try f.database.adapterWrite { db in
+      try db.execute(sql: "UPDATE paper SET generation = ? WHERE id = ?",
+        arguments: [replacement.uuidString, id.uuidString])
+    }
+    let snapshot = try f.database.readerSnapshot(paperID: id)
+    let provider = LibraryReadLeaseProvider(lifecycle: f.lifecycle)
+    let lease = try provider.acquireReadLease(for: snapshot) { XCTFail("The stale request revoked the current lease") }
+    defer { lease.close() }
+
+    do {
+      try await f.workspace.organization.delete(selected, retry: false)
+      XCTFail("The deletion must match the selected generation")
+    } catch { XCTAssertEqual(error as? OrganizationError, .stalePaper) }
+
+    try lease.validate()
+    let newLease = try provider.acquireReadLease(for: snapshot) {}
+    newLease.close()
+    let current = try await paper(f, id: id)
+    XCTAssertEqual(current.generation, replacement)
+    XCTAssertEqual(current.status, .ready)
+    XCTAssertNil(current.deletionID)
+    XCTAssertEqual(try Data(contentsOf: f.database.root.appendingPathComponent(snapshot.pdfReference)),
+      try Data(contentsOf: f.source))
+    let purges = await agent.deletionIDs
+    XCTAssertTrue(purges.isEmpty)
+  }
+
+  func testDeletionCaptureCannotAdoptOrReplaceAFailedSaga() async throws {
+    let agent = WorkspaceDeletionAgent()
+    let f = try await fixture(agentPurge: agent)
+    let id = try await importSelected(f)
+    let ready = try await paper(f, id: id)
+    do {
+      try await f.workspace.organization.delete(ready, retry: true)
+      XCTFail("Retry cannot create a saga")
+    } catch { XCTAssertEqual(error as? OrganizationError, .stalePaper) }
+    do {
+      try await f.workspace.organization.delete(ready, retry: false)
+      XCTFail("The first Agent purge fails in this fixture")
+    } catch { XCTAssertEqual(error as? LocalLibraryError, .cleanupFailed) }
+    let failed = try await paper(f, id: id)
+    let originalSaga = try XCTUnwrap(failed.deletionID)
+    XCTAssertEqual(failed.status, .deletionFailed)
+
+    do {
+      try await f.workspace.organization.delete(ready, retry: false)
+      XCTFail("A stale Delete confirmation cannot adopt the failed saga")
+    } catch { XCTAssertEqual(error as? OrganizationError, .stalePaper) }
+
+    let replacement = UUID()
+    try f.database.adapterWrite { db in
+      try db.execute(sql: "UPDATE paper SET deletionID = ? WHERE id = ?",
+        arguments: [replacement.uuidString, id.uuidString])
+    }
+    do {
+      try await f.workspace.organization.delete(failed, retry: true)
+      XCTFail("Retry must match the captured saga")
+    } catch { XCTAssertEqual(error as? OrganizationError, .stalePaper) }
+    let current = try await paper(f, id: id)
+    XCTAssertEqual(current.status, .deletionFailed)
+    XCTAssertEqual(current.deletionID, replacement)
+    let purges = await agent.deletionIDs
+    XCTAssertEqual(purges, [originalSaga])
   }
 
   func testWorkspaceDeletionLeavesOtherPapersUsableAndRetriesSameSaga() async throws {
@@ -1470,7 +1552,10 @@ private actor WorkspaceDeletionAgent: AgentLibraryPurging {
     let other = try await paper(f, id: otherID)
 
     let source = try f.database.readerSnapshot(paperID: removalID)
-    let lease = try LibraryReadLeaseProvider(lifecycle: f.lifecycle).acquireReadLease(for: source) {}
+    let lease = try LibraryReadLeaseProvider(lifecycle: f.lifecycle).acquireReadLease(for: source) {
+      let record = try? f.database.libraryRecords().first(where: { $0.id == removalID })
+      XCTAssertEqual(record?.status, .deleting)
+    }
     defer { lease.close() }
     let deletion = try XCTUnwrap(f.workspace.requestDeletion(removal, retry: false))
     XCTAssertEqual(f.workspace.deletingPaperIDs, [removalID])

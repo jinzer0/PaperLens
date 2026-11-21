@@ -24,6 +24,11 @@ public enum LibraryStatus: String, Hashable, Sendable {
   case importing, ready, importFailed, deleting, deletionFailed, tombstone
 }
 
+struct LibraryDeletionTarget: Sendable {
+  let generation: UUID
+  let failedSaga: UUID?
+}
+
 public struct LibraryRecord: Identifiable, Equatable, Sendable {
   public let id: UUID
   public let title: String
@@ -395,17 +400,26 @@ public final class ProductDatabase: @unchecked Sendable {
     }
   }
 
-  func beginDeletion(_ paperID: UUID) throws -> ImportDeletionCapture? {
+  func beginDeletion(_ paperID: UUID, expected: LibraryDeletionTarget? = nil,
+    beforeCommit: @Sendable () -> Void = {}) throws -> ImportDeletionCapture? {
     try queue.write { db in
       guard let row = try Row.fetchOne(db, sql: "SELECT * FROM paper WHERE id = ?",
-        arguments: [paperID.uuidString]) else { throw ProductDatabaseError.invalidRecord }
+        arguments: [paperID.uuidString]) else {
+        if expected != nil { throw OrganizationError.stalePaper }
+        throw ProductDatabaseError.invalidRecord
+      }
       guard let status = String.fromDatabaseValue(row["status"]),
         let state = LibraryStatus(rawValue: status),
         let generation = String.fromDatabaseValue(row["generation"]), !generation.isEmpty else {
         throw ProductDatabaseError.invalidRecord
       }
-      if state == .tombstone { return nil }
       let existing: String? = row["deletionID"]
+      if let expected {
+        guard generation == expected.generation.uuidString, existing == expected.failedSaga?.uuidString,
+          state != .tombstone, state != .deleting, (state == .deletionFailed) == (expected.failedSaga != nil)
+        else { throw OrganizationError.stalePaper }
+      }
+      if state == .tombstone { return nil }
       let saga: UUID
       if let existing {
         guard let parsed = UUID(uuidString: existing), parsed.uuidString == existing else {
@@ -434,10 +448,14 @@ public final class ProductDatabase: @unchecked Sendable {
       guard db.changesCount == running,
         let after = try Row.fetchOne(db, sql: "SELECT * FROM paper WHERE id = ?",
           arguments: [paperID.uuidString]),
-        Self.sameDeletionRow(row, after, except: ["status", "deletionID", "pdfReference", "deletionFailure"]),
+        Self.sameDeletionRow(row, after, except: ["status", "deletionID", "pdfReference", "deletionFailure",
+          "lastReadPage", "lastReadZoom", "lastReadAt", "readerSession", "readerSequence"]),
         String.fromDatabaseValue(after["status"]) == "deleting",
         String.fromDatabaseValue(after["deletionID"]) == saga.uuidString,
-        after["pdfReference"] == DatabaseValue.null, after["deletionFailure"] == DatabaseValue.null else {
+        after["pdfReference"] == DatabaseValue.null, after["deletionFailure"] == DatabaseValue.null,
+        after["lastReadPage"] == DatabaseValue.null, after["lastReadZoom"] == DatabaseValue.null,
+        after["lastReadAt"] == DatabaseValue.null, after["readerSession"] == DatabaseValue.null,
+        after["readerSequence"] == Int64(0).databaseValue else {
         throw ProductDatabaseError.invalidRecord
       }
       let acknowledgments = try histories.map { history -> ImportRecoveryRecord? in
@@ -463,6 +481,7 @@ public final class ProductDatabase: @unchecked Sendable {
           }
         } else if !Self.sameDeletionRow(before, after, except: ignored) { throw ProductDatabaseError.invalidRecord }
       }
+      beforeCommit()
       return ImportDeletionCapture(saga: saga, histories: acknowledgments.compactMap { $0 },
         legacyJobCount: acknowledgments.filter { $0 == nil }.count)
     }
