@@ -442,6 +442,11 @@ public struct LibraryBrowserView: View {
           Button("요약 취소") { summaries.cancel() }
         }.disabled(deletionPending)
       } else {
+        if let attempt = fact?.summary?.recentAttempt, attempt.canRetry {
+          Button("요약 다시 시도") { retrySummary(paper, attempt: attempt) }
+            .disabled(deletionPending || !paper.readable || busy || loading || loadFailed || summaries.activePaperID != nil)
+            .accessibilityLabel("\(paper.title) 실패한 요약 다시 시도")
+        }
         Menu(fact?.summary?.record == nil ? "요약 생성" : "요약 다시 생성") {
           Button("한국어") { beginSummary(paper, language: "ko") }
           Button("English") { beginSummary(paper, language: "en") }
@@ -821,6 +826,15 @@ public struct LibraryBrowserView: View {
     guard !nativeSheetPending, !busy else { return }
     summaries.requestGeneration(paperID: paper.id, generation: paper.generation,
       outputLanguage: language)
+  }
+
+  private func retrySummary(_ paper: OrganizedPaper, attempt: LibrarySummaryRecentAttempt) {
+    guard !nativeSheetPending, deleting == nil, !operationFailed, renderedPaperControls(for: paper),
+      paper.readable, attempt.canRetry, attempt.identity.paperID == paper.id,
+      attempt.identity.generation == paper.generation,
+      currentFacts[paper.id]?.summary?.recentAttempt?.identity == attempt.identity
+    else { return }
+    summaries.requestRetry(attempt.identity)
   }
   private func refresh(preservingEditor slotID: UUID? = nil,
     returningSheet slot: LibrarySheetSlot? = nil,

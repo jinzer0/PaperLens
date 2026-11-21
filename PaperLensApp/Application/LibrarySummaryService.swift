@@ -84,13 +84,14 @@ public struct LibrarySummaryService: Sendable {
 
   /// Caller applies .dispatch first. Durable intent and frozen input precede the only send.
   @MainActor public func dispatch(_ request: AuthorizedProviderRequest, identity: LibrarySummaryIdentity,
-    snapshot: JobRecoveryPolicy.Snapshot) async throws -> ValidatedProviderResult {
+    snapshot: JobRecoveryPolicy.Snapshot, retrying failed: LibrarySummaryIdentity? = nil) async throws
+    -> ValidatedProviderResult {
     guard let provider else { throw LibrarySummaryError.providerUnavailable }
     guard let geometry else { throw LibrarySummaryError.geometryUnavailable }
     try identity.check(snapshot)
     guard snapshot.current.dispatch == .intentRecorded else { throw LibrarySummaryError.staleIdentity }
     let frozen = try LibrarySummaryFrozen(request: request)
-    try database.reserveLibrarySummary(identity, frozen: frozen, geometry: geometry)
+    try database.reserveLibrarySummary(identity, frozen: frozen, geometry: geometry, retrying: failed)
     try Task.checkCancellation()
     // Any thrown/ambiguous return retains intent. Parent must terminate/drain, not auto-replay.
     let result = try await provider.execute(request, identity: identity)

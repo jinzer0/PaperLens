@@ -862,17 +862,19 @@ final class LibrarySummaryServiceTests: XCTestCase {
 
   @MainActor private final class SummaryProvider: LibrarySummaryProviding {
     var calls = 0
+    var outputLanguages: [String] = []
     var suspend = false
     var continuation: CheckedContinuation<Void, Never>?
     var beforeResult: ((LibrarySummaryIdentity) throws -> Void)?
     func execute(_ request: AuthorizedProviderRequest, identity: LibrarySummaryIdentity) async throws
       -> ValidatedProviderResult {
       calls += 1
-      if suspend { await withCheckedContinuation { continuation = $0 } }
-      try beforeResult?(identity)
-      guard case .librarySummary(_, let evidence) = request.wire.typedInput else {
+      guard case .librarySummary(let language, let evidence) = request.wire.typedInput else {
         throw LibrarySummaryError.invalidResult
       }
+      outputLanguages.append(language)
+      if suspend { await withCheckedContinuation { continuation = $0 } }
+      try beforeResult?(identity)
       let value: [String: Any] = [
         "summary": ["text": evidence.items.isEmpty ? "Insufficient evidence" : "Grounded summary",
           "kind": evidence.items.isEmpty ? "insufficient" : "paper",
@@ -1113,6 +1115,116 @@ final class LibrarySummaryServiceTests: XCTestCase {
     coordinator.clearRequestFailure()
     XCTAssertNil(coordinator.requestFailure)
     XCTAssertEqual(provider.calls, 1, "Dismissing a failure is never a new request")
+  }
+
+  @MainActor func testExplicitSummaryRetryAfterReopenKeepsLanguageAndPriorResultUntilNewSuccess() async throws {
+    let f = try fixture()
+    defer { try? FileManager.default.removeItem(at: f.root) }
+    try prepareCoordinator(f)
+    let authority = try ProviderRequest(), provider = SummaryProvider(), epoch = UUID()
+    let first = LibrarySummaryCoordinator(database: f.db, epoch: epoch, leases: SummaryLeases(),
+      authority: authority, provider: provider)
+    let old = try await first.generate(paperID: f.identity.paperID, generation: f.identity.generation,
+      outputLanguage: "ko")
+    provider.beforeResult = { _ in throw URLError(.timedOut) }
+    let second = LibrarySummaryCoordinator(database: f.db, epoch: epoch, leases: SummaryLeases(),
+      authority: authority, provider: provider)
+    XCTAssertTrue(second.requestGeneration(paperID: f.identity.paperID, generation: f.identity.generation,
+      outputLanguage: "en"))
+    for _ in 0..<1000 where second.activePaperID != nil { await Task.yield() }
+    XCTAssertEqual(second.requestFailure, .timedOut)
+
+    let reopened = try ProductDatabase.open(at: f.root)
+    let failure = try XCTUnwrap(reopened.librarySortFacts().first?.summary?.recentAttempt)
+    XCTAssertTrue(failure.canRetry)
+    XCTAssertEqual(failure.failure, .timedOut)
+    let configuration = try reopened.compareAndSwapProviderConfiguration(expected: reopened.providerConfiguration(),
+      replacementKind: .openAIAPIKey, replacementSlotID: UUID(), replacementModel: "updated-fixture-model")
+    let retryEpoch = UUID()
+    let restored = LibrarySummaryService(database: reopened)
+    let retry = LibrarySummaryCoordinator(database: reopened, epoch: retryEpoch, leases: SummaryLeases(),
+      authority: authority, provider: provider)
+    XCTAssertEqual(try restored.restore(paperID: f.identity.paperID)?.id, old.id)
+    XCTAssertEqual(provider.calls, 2)
+    provider.suspend = true
+    provider.beforeResult = nil
+    XCTAssertTrue(retry.requestRetry(failure.identity))
+    XCTAssertFalse(retry.requestRetry(failure.identity))
+    for _ in 0..<1000 where provider.continuation == nil { await Task.yield() }
+    let completion = try XCTUnwrap(provider.continuation)
+    defer { provider.continuation?.resume(); provider.continuation = nil }
+    XCTAssertEqual(provider.outputLanguages, ["ko", "en", "en"])
+    XCTAssertEqual(try restored.restore(paperID: f.identity.paperID)?.id, old.id)
+    XCTAssertEqual(try restored.restore(paperID: f.identity.paperID)?.claimAnchors, old.claimAnchors)
+    let running = try XCTUnwrap(reopened.librarySortFacts().first?.summary?.recentAttempt)
+    XCTAssertEqual(running.activity, .running)
+    XCTAssertNotEqual(running.identity.job, failure.identity.job)
+    XCTAssertNotEqual(running.identity.attempt, failure.identity.attempt)
+    XCTAssertNotEqual(running.identity.fence, failure.identity.fence)
+    XCTAssertNotEqual(running.identity.correlation, failure.identity.correlation)
+    XCTAssertNotEqual(running.identity.input, failure.identity.input)
+    XCTAssertEqual(running.identity.configurationGeneration, configuration.generation)
+    XCTAssertEqual(running.identity.epoch, retryEpoch)
+    let competingProvider = SummaryProvider()
+    let competitor = LibrarySummaryCoordinator(database: f.db, epoch: retryEpoch, leases: SummaryLeases(),
+      authority: authority, provider: competingProvider)
+    XCTAssertTrue(competitor.requestRetry(failure.identity))
+    for _ in 0..<1000 where competitor.activePaperID != nil { await Task.yield() }
+    XCTAssertEqual(competitor.requestFailure, .staleIdentity)
+    XCTAssertEqual(competingProvider.calls, 0, "Another coordinator cannot send while the accepted retry runs")
+    completion.resume(); provider.continuation = nil
+    for _ in 0..<1000 where retry.activePaperID != nil { await Task.yield() }
+    XCTAssertNil(retry.requestFailure)
+    XCTAssertEqual(try restored.restore(paperID: f.identity.paperID)?.identity, running.identity)
+    XCTAssertEqual(try reopened.adapterRead { try String.fetchOne($0,
+      sql: "SELECT failure FROM librarySummaryJob WHERE job = ? AND state = 'failed'",
+      arguments: [failure.identity.job.uuidString]) }, "timedOut")
+    XCTAssertTrue(retry.requestRetry(failure.identity))
+    for _ in 0..<1000 where retry.activePaperID != nil { await Task.yield() }
+    XCTAssertEqual(retry.requestFailure, .staleIdentity)
+    XCTAssertEqual(provider.calls, 3, "An old failure cannot dispatch after a newer attempt completes")
+  }
+
+  @MainActor func testSummaryRetryRechecksFailureInsideReservationAndRejectsUnknownReasons() async throws {
+    let f = try fixture()
+    defer { try? FileManager.default.removeItem(at: f.root) }
+    try prepareCoordinator(f)
+    let authority = try ProviderRequest(), provider = SummaryProvider(), epoch = UUID()
+    provider.beforeResult = { _ in throw URLError(.timedOut) }
+    let first = LibrarySummaryCoordinator(database: f.db, epoch: epoch, leases: SummaryLeases(),
+      authority: authority, provider: provider)
+    XCTAssertTrue(first.requestGeneration(paperID: f.identity.paperID, generation: f.identity.generation,
+      outputLanguage: "en"))
+    for _ in 0..<1000 where first.activePaperID != nil { await Task.yield() }
+    let failed = try XCTUnwrap(f.db.librarySortFacts().first?.summary?.recentAttempt)
+    XCTAssertTrue(failed.canRetry)
+    let leases = SummaryLeases()
+    // Change the durable failure after language lookup and before the reservation write.
+    leases.lease.onValidate = {
+      try f.db.adapterWrite { db in
+        try db.execute(sql: "UPDATE librarySummaryJob SET failure = ? WHERE job = ?",
+          arguments: [LibrarySummaryFailure.cleanupUnavailable.rawValue, failed.identity.job.uuidString])
+      }
+    }
+    let retry = LibrarySummaryCoordinator(database: f.db, epoch: epoch, leases: leases,
+      authority: authority, provider: provider)
+    XCTAssertTrue(retry.requestRetry(failed.identity))
+    for _ in 0..<1000 where retry.activePaperID != nil { await Task.yield() }
+    XCTAssertEqual(retry.requestFailure, .staleIdentity)
+    XCTAssertEqual(provider.calls, 1)
+    XCTAssertTrue(leases.lease.closed)
+    XCTAssertEqual(try f.db.adapterRead { try Int.fetchOne($0,
+      sql: "SELECT COUNT(*) FROM librarySummaryJob") }, 1)
+    XCTAssertEqual(try f.db.librarySortFacts().first?.summary?.recentAttempt?.canRetry, false)
+
+    try f.db.adapterWrite { db in
+      try db.execute(sql: "UPDATE librarySummaryJob SET failure = 'unknown_reason' WHERE job = ?",
+        arguments: [failed.identity.job.uuidString])
+    }
+    let unknown = try XCTUnwrap(f.db.librarySortFacts().first?.summary?.recentAttempt)
+    XCTAssertEqual(unknown.failure, .terminated)
+    XCTAssertFalse(unknown.canRetry)
+    XCTAssertThrowsError(try f.db.summaryRetryLanguage(for: unknown.identity))
   }
 
   @MainActor func testActualSummaryFailuresPersistRedactedReasonsAcrossReopenWithoutRetry() async throws {

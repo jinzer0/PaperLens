@@ -138,18 +138,24 @@ extension ProductDatabase {
     }
   }
 
-  /// Ground the entire frozen corpus before selecting bundle anchors inside the SQL snapshot.
-  private func summaryAnchors(_ i: LibrarySummaryIdentity, frozen: LibrarySummaryFrozen,
-    db: Database, geometry: any LibrarySummaryGeometryValidating) throws
-    -> (RequestEvidenceBundle, [PDFSentenceAnchor]) {
+  private func summaryInput(_ i: LibrarySummaryIdentity, frozen: LibrarySummaryFrozen) throws
+    -> (language: String, bundle: RequestEvidenceBundle) {
     let authorized = try frozen.authorized()
-    guard case .librarySummary(_, let bundle) = authorized.wire.typedInput,
+    guard case .librarySummary(let language, let bundle) = authorized.wire.typedInput,
       bundle.identity.paperID == i.paperID.uuidString.lowercased(),
       bundle.identity.paperGeneration == i.requestPaperGeneration,
       bundle.identity.pdfSHA256 == i.pdfSHA256,
       bundle.identity.extractionRevision == i.revision.uuidString.lowercased(),
       authorized.wire.requestID == i.correlation.uuidString.lowercased()
     else { throw LibrarySummaryError.invalidGrounding }
+    return (language, bundle)
+  }
+
+  /// Ground the entire frozen corpus before selecting bundle anchors inside the SQL snapshot.
+  private func summaryAnchors(_ i: LibrarySummaryIdentity, frozen: LibrarySummaryFrozen,
+    db: Database, geometry: any LibrarySummaryGeometryValidating) throws
+    -> (RequestEvidenceBundle, [PDFSentenceAnchor]) {
+    let (_, bundle) = try summaryInput(i, frozen: frozen)
     var verified: [PDFSentenceAnchor] = []
     for sentence in frozen.sentences {
       guard let row = try Row.fetchOne(db, sql: """
@@ -186,9 +192,42 @@ extension ProductDatabase {
     return (bundle, anchors)
   }
 
+  func summaryRetryLanguage(for failed: LibrarySummaryIdentity) throws -> String {
+    try adapterRead { try summaryRetryLanguage(for: failed, in: $0) }
+  }
+
+  private func summaryRetryLanguage(for failed: LibrarySummaryIdentity, in db: Database) throws -> String {
+    guard let row = try Row.fetchOne(db, sql: """
+      SELECT job, attempt, fence, correlation, input, epoch, identity, frozen, state, failure,
+        resultID, permit
+      FROM librarySummaryJob WHERE paperID = ? ORDER BY rowid DESC LIMIT 1
+      """, arguments: [failed.paperID.uuidString]),
+      try row.decode(String.self, forColumn: "state") == "failed",
+      let reason = try row.decode(String?.self, forColumn: "failure"),
+      LibrarySummaryFailure(rawValue: reason)?.allowsRetry == true,
+      try row.decode(String?.self, forColumn: "resultID") == nil,
+      try row.decode(String?.self, forColumn: "permit") == nil,
+      try row.decode(String.self, forColumn: "job") == failed.job.uuidString,
+      try row.decode(String.self, forColumn: "attempt") == failed.attempt.uuidString,
+      try row.decode(String.self, forColumn: "fence") == failed.fence.uuidString,
+      try row.decode(String.self, forColumn: "correlation") == failed.correlation.uuidString,
+      try row.decode(String.self, forColumn: "input") == failed.input.uuidString,
+      try row.decode(String.self, forColumn: "epoch") == failed.epoch.uuidString,
+      try JSONDecoder().decode(LibrarySummaryIdentity.self, from: row["identity"]) == failed
+    else { throw LibrarySummaryError.staleIdentity }
+    let saved = try JSONDecoder().decode(LibrarySummaryFrozen.self, from: row["frozen"])
+    return try summaryInput(failed, frozen: saved).language
+  }
+
   func reserveLibrarySummary(_ i: LibrarySummaryIdentity, frozen: LibrarySummaryFrozen,
-    geometry: any LibrarySummaryGeometryValidating) throws {
+    geometry: any LibrarySummaryGeometryValidating, retrying failed: LibrarySummaryIdentity? = nil) throws {
     try adapterWrite { db in
+      if let failed {
+        guard failed.paperID == i.paperID, failed.generation == i.generation,
+          failed.pdfSHA256 == i.pdfSHA256,
+          try summaryRetryLanguage(for: failed, in: db) == frozen.language
+        else { throw LibrarySummaryError.staleIdentity }
+      }
       guard let original = geometry as? CanonicalExtractionGeometryValidator else {
         throw LibrarySummaryError.geometryUnavailable
       }

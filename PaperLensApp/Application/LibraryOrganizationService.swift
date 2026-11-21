@@ -41,6 +41,10 @@ public enum LibrarySummaryFailure: String, CaseIterable, Sendable {
   case invalidResponse, invalidGrounding, geometryUnavailable, staleIdentity, cleanupUnavailable
   case persistenceFailure, paperUnavailable, requestInProgress, terminated
 
+  var allowsRetry: Bool {
+    self != .cleanupUnavailable && self != .paperUnavailable && self != .requestInProgress
+  }
+
   public var koreanMessage: String {
     switch self {
     case .cancelled: return "요약 생성을 취소했습니다. 원할 때 요약 생성을 다시 선택하세요."
@@ -65,10 +69,12 @@ public enum LibrarySummaryFailure: String, CaseIterable, Sendable {
 public struct LibrarySummaryRecentAttempt: Sendable {
   public let identity: LibrarySummaryIdentity
   public let activity: LibrarySummaryAttemptActivity
-  public let failure: LibrarySummaryFailure?
+  private let storedFailure: LibrarySummaryFailure?
+  public var failure: LibrarySummaryFailure? { storedFailure ?? (activity == .failed ? .terminated : nil) }
+  var canRetry: Bool { activity == .failed && storedFailure?.allowsRetry == true }
   public init(identity: LibrarySummaryIdentity, activity: LibrarySummaryAttemptActivity,
     failure: LibrarySummaryFailure? = nil) {
-    self.identity = identity; self.activity = activity; self.failure = failure
+    self.identity = identity; self.activity = activity; self.storedFailure = failure
   }
 }
 /// Passive facts from one database read, never dispatch or publication authority.

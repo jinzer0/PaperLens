@@ -110,7 +110,7 @@ extension ProductDatabase {
             UUID(uuidString: epoch) == identity.epoch
           else { throw LibrarySummaryError.staleIdentity }
           let failure: LibrarySummaryFailure? = state == "failed"
-            ? (LibrarySummaryFailure(rawValue: (job["failure"] as String?) ?? "") ?? .terminated)
+            ? (job["failure"] as String?).flatMap(LibrarySummaryFailure.init(rawValue:))
             : nil
           recentAttempt = LibrarySummaryRecentAttempt(identity: identity, activity: activity,
             failure: failure)

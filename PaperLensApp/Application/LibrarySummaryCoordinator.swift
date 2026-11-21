@@ -167,6 +167,11 @@ extension LibrarySummaryFailure {
   private var cleanupDebt: [(SummaryStage, any ReaderReadLease)] = []
   private var producerCleanupDebt: [any ReaderReadLease] = []
 
+  private enum Generation {
+    case new(language: String)
+    case retry(LibrarySummaryIdentity)
+  }
+
   public init(database: ProductDatabase, epoch: UUID, leases: any ReaderLeaseProvider,
     authority: ProviderRequest, provider: any LibrarySummaryProviding) {
     self.database = database; self.epoch = epoch; self.leases = leases
@@ -181,13 +186,20 @@ extension LibrarySummaryFailure {
   /// to Reader. Only an explicit cancel, revocation or shutdown cancels the request.
   @discardableResult public func requestGeneration(paperID: UUID, generation: UUID,
     outputLanguage: String) -> Bool {
+    request(paperID: paperID, generation: generation, action: .new(language: outputLanguage))
+  }
+
+  @discardableResult func requestRetry(_ failed: LibrarySummaryIdentity) -> Bool {
+    request(paperID: failed.paperID, generation: failed.generation, action: .retry(failed))
+  }
+
+  private func request(paperID: UUID, generation: UUID, action: Generation) -> Bool {
     guard requested == nil, active == nil else { return false }
     // Published observers may synchronously cancel or try to submit another request.
     requested = Task {
       defer { activePaperID = nil; requested = nil }
       do {
-        _ = try await performGeneration(paperID: paperID, generation: generation,
-          outputLanguage: outputLanguage)
+        _ = try await performGeneration(paperID: paperID, generation: generation, action: action)
       } catch {
         if !Task.isCancelled { requestFailure = .classify(error) }
       }
@@ -201,17 +213,16 @@ extension LibrarySummaryFailure {
     outputLanguage: String) async throws -> LibrarySummaryRecord {
     guard requested == nil else { throw LibrarySummaryError.requestInProgress }
     return try await performGeneration(paperID: paperID, generation: generation,
-      outputLanguage: outputLanguage)
+      action: .new(language: outputLanguage))
   }
 
   private func performGeneration(paperID: UUID, generation: UUID,
-    outputLanguage: String) async throws -> LibrarySummaryRecord {
+    action: Generation) async throws -> LibrarySummaryRecord {
     try Task.checkCancellation()
     guard active == nil, cleanupDebt.isEmpty, producerCleanupDebt.isEmpty else {
       throw LibrarySummaryError.requestInProgress
     }
-    let task = Task { try await self.execute(paperID: paperID, generation: generation,
-      outputLanguage: outputLanguage) }
+    let task = Task { try await self.execute(paperID: paperID, generation: generation, action: action) }
     active = task
     if activePaperID != paperID { activePaperID = paperID }
     defer {
@@ -221,9 +232,19 @@ extension LibrarySummaryFailure {
     return try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
   }
 
-  private func execute(paperID: UUID, generation: UUID, outputLanguage: String) async throws
+  private func execute(paperID: UUID, generation: UUID, action: Generation) async throws
     -> LibrarySummaryRecord {
     try Task.checkCancellation()
+    let outputLanguage: String
+    let failed: LibrarySummaryIdentity?
+    switch action {
+    case .new(let language):
+      outputLanguage = language
+      failed = nil
+    case .retry(let previous):
+      outputLanguage = try database.summaryRetryLanguage(for: previous)
+      failed = previous
+    }
     let ordinal = try database.summaryGenerationOrdinal(paperID: paperID, generation: generation)
     let input = try capture(paperID: paperID, generation: generation)
     let identity = LibrarySummaryIdentity(paperID: paperID, generation: generation,
@@ -272,7 +293,7 @@ extension LibrarySummaryFailure {
       // Reserve succeeds before provider execution; failure cleanup below targets exact identity only.
       reserved = true
       awaitingProducer = true
-      let result = try await service.dispatch(request, identity: identity, snapshot: policy)
+      let result = try await service.dispatch(request, identity: identity, snapshot: policy, retrying: failed)
       awaitingProducer = false
       try Task.checkCancellation()
       try lease.validate()
