@@ -2045,9 +2045,17 @@ final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
       replacementModel: "explicit-test-snapshot"))
   }
 
+  private func physicalTemporaryDirectory() throws -> URL {
+    // Resolve only the test fixture base. The inventory must inspect the named summary root.
+    let path = try XCTUnwrap(realpath(temporary.path, nil))
+    defer { free(path) }
+    return URL(fileURLWithFileSystemRepresentation: path, isDirectory: true, relativeTo: nil)
+  }
+
   @MainActor func testIsolatedPurgeColdStartupAcceptsAbsentOrEmptyPrivateSummaryRoot() async throws {
-    let summaryRoot = temporary.appendingPathComponent("summary-scopes")
-    let legacyRoot = temporary.appendingPathComponent("legacy-agent-papers")
+    let base = try physicalTemporaryDirectory()
+    let summaryRoot = base.appendingPathComponent("summary-scopes")
+    let legacyRoot = base.appendingPathComponent("legacy-agent-papers")
     let peer = IsolatedAgentLibraryPurge(unsupportedPaperRoot: legacyRoot, summaryRoot: summaryRoot)
     let paper = UUID(), deletion = UUID()
     let absent = try await peer.purgeLibraryPaper(paperID: paper, deletionID: deletion)
@@ -2061,7 +2069,8 @@ final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
   }
 
   @MainActor func testIsolatedPurgeColdStartupPreservesUnknownSummaryDirectory() async throws {
-    let summaryRoot = temporary.appendingPathComponent("summary-scopes")
+    let base = try physicalTemporaryDirectory()
+    let summaryRoot = base.appendingPathComponent("summary-scopes")
     let unknown = summaryRoot.appendingPathComponent("unowned-run")
     try FileManager.default.createDirectory(at: unknown, withIntermediateDirectories: true,
       attributes: [.posixPermissions: 0o700])
@@ -2069,7 +2078,7 @@ final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
     let bytes = Data("unowned input must remain".utf8)
     try bytes.write(to: sentinel)
     let peer = IsolatedAgentLibraryPurge(
-      unsupportedPaperRoot: temporary.appendingPathComponent("legacy-agent-papers"),
+      unsupportedPaperRoot: base.appendingPathComponent("legacy-agent-papers"),
       summaryRoot: summaryRoot)
     do {
       _ = try await peer.purgeLibraryPaper(paperID: UUID(), deletionID: UUID())
@@ -2079,16 +2088,17 @@ final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
   }
 
   @MainActor func testIsolatedPurgeColdStartupPreservesSummarySymlinkAndTarget() async throws {
-    let target = temporary.appendingPathComponent("unowned-target")
+    let base = try physicalTemporaryDirectory()
+    let target = base.appendingPathComponent("unowned-target")
     try FileManager.default.createDirectory(at: target, withIntermediateDirectories: false,
       attributes: [.posixPermissions: 0o700])
     let sentinel = target.appendingPathComponent("preserve.txt")
     let bytes = Data("preserve target".utf8)
     try bytes.write(to: sentinel)
-    let summaryRoot = temporary.appendingPathComponent("summary-scopes")
+    let summaryRoot = base.appendingPathComponent("summary-scopes")
     try FileManager.default.createSymbolicLink(at: summaryRoot, withDestinationURL: target)
     let peer = IsolatedAgentLibraryPurge(
-      unsupportedPaperRoot: temporary.appendingPathComponent("legacy-agent-papers"),
+      unsupportedPaperRoot: base.appendingPathComponent("legacy-agent-papers"),
       summaryRoot: summaryRoot)
     do {
       _ = try await peer.purgeLibraryPaper(paperID: UUID(), deletionID: UUID())
@@ -2096,5 +2106,23 @@ final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
     } catch { XCTAssertEqual(error as? LocalLibraryError, .producerClosureUnknown) }
     XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: summaryRoot.path), target.path)
     XCTAssertEqual(try Data(contentsOf: sentinel), bytes)
+  }
+
+  @MainActor func testIsolatedPurgeColdStartupRejectsSummaryPathThroughSymlink() async throws {
+    let base = try physicalTemporaryDirectory()
+    let target = base.appendingPathComponent("unowned-parent")
+    let aliasedParent = base.appendingPathComponent("aliased-parent")
+    let actualSummaryRoot = target.appendingPathComponent("summary-scopes")
+    try FileManager.default.createDirectory(at: actualSummaryRoot, withIntermediateDirectories: true,
+      attributes: [.posixPermissions: 0o700])
+    try FileManager.default.createSymbolicLink(at: aliasedParent, withDestinationURL: target)
+    let peer = IsolatedAgentLibraryPurge(
+      unsupportedPaperRoot: base.appendingPathComponent("legacy-agent-papers"),
+      summaryRoot: aliasedParent.appendingPathComponent("summary-scopes"))
+    do {
+      _ = try await peer.purgeLibraryPaper(paperID: UUID(), deletionID: UUID())
+      XCTFail("An empty summary root through a symlink cannot certify cleanup")
+    } catch { XCTAssertEqual(error as? LocalLibraryError, .producerClosureUnknown) }
+    XCTAssertTrue(FileManager.default.fileExists(atPath: actualSummaryRoot.path))
   }
 }

@@ -29,8 +29,8 @@ import ProviderRequest
       try FileManager.default.copyItem(
         at: repository.appendingPathComponent(source), to: resources.appendingPathComponent(name))
     }
-    let namespace = try XCTUnwrap(
-      TopologyOwnedFixtures(root: root, runID: UUID().uuidString.lowercased()))
+    let namespace = try XCTUnwrap(TopologyOwnedFixtures(
+      root: root.appendingPathComponent("worker-scopes"), runID: UUID().uuidString.lowercased()))
     // Actual metadata helper, never a fabricated exclusion receipt or genuine SDK launch.
     XCTAssertTrue(
       namespace.prepareBackupExclusionFixture(
@@ -1036,8 +1036,18 @@ import ProviderRequest
     } catch { XCTAssertEqual(error as? LocalLibraryError, .producerClosureUnknown) }
     XCTAssertTrue(FileManager.default.fileExists(atPath: unknown.path))
     try FileManager.default.removeItem(at: unknown)
+    let pending = try await library.importPDF(from: pdf)
+    let pendingStorage = database.root.appendingPathComponent("papers")
+      .appendingPathComponent(pending.uuidString)
     let displaced = root.appendingPathComponent("displaced-summary")
     try FileManager.default.moveItem(at: live, to: displaced)
+    do {
+      try await library.delete(paperID: pending)
+      XCTFail("Deletion completed while the bound worker's namespace was missing")
+    } catch { XCTAssertEqual(error as? LocalLibraryError, .producerClosureUnknown) }
+    let failedDeletion = try await library.list().first { $0.id == pending }
+    XCTAssertEqual(failedDeletion?.status, .deletionFailed)
+    XCTAssertTrue(FileManager.default.fileExists(atPath: pendingStorage.path))
     try FileManager.default.createDirectory(at: live, withIntermediateDirectories: false,
       attributes: [.posixPermissions: 0o700])
     do {
@@ -1046,6 +1056,11 @@ import ProviderRequest
     } catch { XCTAssertEqual(error as? LocalLibraryError, .producerClosureUnknown) }
     try FileManager.default.removeItem(at: live)
     try FileManager.default.moveItem(at: displaced, to: live)
+    try await library.retryDeletion(paperID: pending)
+    let remaining = try await library.list()
+    XCTAssertEqual(remaining.map(\.id), [paper])
+    XCTAssertEqual(remaining.first?.status, .ready)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: pendingStorage.path))
     try Data().write(to: marker("release-result", directory: live))
     try await waitForMarker("retirement-received", directory: live)
     try Data().write(to: marker("release-retirement", directory: live))
@@ -1120,6 +1135,14 @@ import ProviderRequest
     XCTAssertTrue(FileManager.default.fileExists(atPath: namespace.directoryURL.path))
     XCTAssertEqual(try Data(contentsOf: linked), bytes)
     XCTAssertEqual(try Data(contentsOf: external), bytes)
+    let scopeRoot = namespace.directoryURL.deletingLastPathComponent()
+    let displaced = root.appendingPathComponent("displaced-summary")
+    try FileManager.default.moveItem(at: namespace.directoryURL, to: displaced)
+    XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: scopeRoot.path).isEmpty)
+    XCTAssertThrowsError(try scope.verifyNamespaceForUnrelatedPurge(at: scopeRoot)) {
+      XCTAssertEqual($0 as? LocalLibraryError, .producerClosureUnknown)
+    }
+    XCTAssertEqual(try Data(contentsOf: displaced.appendingPathComponent("work/external-link")), bytes)
   }
 
 }

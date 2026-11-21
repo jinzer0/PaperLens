@@ -65,19 +65,12 @@ public final class IsolatedAgentLibraryPurge: AgentLibraryPurging {
 
   internal static func verifySummaryRoot(_ root: URL, allowing namespace: TopologyOwnedFixtures? = nil) throws {
     guard root.isFileURL else { throw LocalLibraryError.cleanupFailed }
-    var info = stat()
-    if lstat(root.path, &info) != 0 {
-      guard errno == ENOENT, namespace == nil else { throw LocalLibraryError.producerClosureUnknown }
-      return
+    let owners = namespace.map { [$0] } ?? []
+    var inventory = TopologyOwnedFixtures.verifyInventory(at: root, allowing: owners)
+    if inventory == .changed {
+      inventory = TopologyOwnedFixtures.verifyInventory(at: root, allowing: owners)
     }
-    var after = stat()
-    guard info.st_mode & S_IFMT == S_IFDIR, info.st_uid == getuid(), info.st_mode & 0o077 == 0,
-      try FileManager.default.contentsOfDirectory(atPath: root.path).allSatisfy({ entry in
-        namespace?.matchesDirectoryEntry(root.appendingPathComponent(entry)) == true
-      }),
-      lstat(root.path, &after) == 0, after.st_ino == info.st_ino, after.st_dev == info.st_dev,
-      after.st_mode == info.st_mode, after.st_uid == info.st_uid
-    else { throw LocalLibraryError.producerClosureUnknown }
+    guard inventory == .verified else { throw LocalLibraryError.producerClosureUnknown }
   }
 }
 

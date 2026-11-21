@@ -124,17 +124,20 @@ public final class NativeCodexConnection: ObservableObject {
   }
 
   public func purgeSummaryPaper(paperID: UUID, deletionID: UUID) async throws -> AgentLibraryPurgeReceipt {
-    guard summaryNamespaceDebt.isEmpty else { throw LocalLibraryError.producerClosureUnknown }
     let scopes = summaryScopes.filter { $0.value.paperID == paperID }
     for (id, scope) in scopes {
       await scope.retireAndWait()
       guard scope.clean else { throw LocalLibraryError.producerClosureUnknown }
       removeSummaryScope(id)
     }
+    guard summaryNamespaceDebt.isEmpty else { throw LocalLibraryError.producerClosureUnknown }
     // Another Paper may own the single admitted summary worker. Account for only
     // that live namespace by filesystem identity when observing the shared root.
-    let other = summaryScopes.values.first { $0.paperID != paperID }?.activeNamespace
-    try IsolatedAgentLibraryPurge.verifySummaryRoot(summaryRoot, allowing: other)
+    if let other = summaryScopes.values.first(where: { $0.paperID != paperID }) {
+      try other.verifyNamespaceForUnrelatedPurge(at: summaryRoot)
+    } else {
+      try IsolatedAgentLibraryPurge.verifySummaryRoot(summaryRoot)
+    }
     return AgentLibraryPurgeReceipt(paperID: paperID, deletionID: deletionID)
   }
 
@@ -652,13 +655,29 @@ internal final class NativeCodexSummaryScope {
   private var terminalReceived = false
   private(set) var clean = false
 
-  var activeNamespace: TopologyOwnedFixtures? { owner.terminal == nil ? namespace : nil }
-
   init(launch: OwnedChildRetirement.WorkerLaunch, paperID: UUID, params: [String: Any]) {
     self.paperID = paperID; self.params = params
     namespace = launch.namespace
     owner = OwnedChildRetirement(worker: launch,
       deadlineUptimeNanoseconds: DispatchTime.now().uptimeNanoseconds + 5_000_000_000)
+  }
+
+  func verifyNamespaceForUnrelatedPurge(at root: URL) throws {
+    switch owner.terminal {
+    case .clean:
+      try IsolatedAgentLibraryPurge.verifySummaryRoot(root)
+    case .unknown:
+      throw LocalLibraryError.producerClosureUnknown
+    case nil:
+      do {
+        try IsolatedAgentLibraryPurge.verifySummaryRoot(root, allowing: namespace)
+      } catch {
+        // The background owner can complete retirement during the scan.
+        guard case .clean = owner.terminal else { throw error }
+        try IsolatedAgentLibraryPurge.verifySummaryRoot(root)
+      }
+      if case .unknown = owner.terminal { throw LocalLibraryError.producerClosureUnknown }
+    }
   }
 
   func execute() async throws -> Data {
