@@ -361,6 +361,65 @@ final class LibraryOrganizationTests: XCTestCase {
     XCTAssertNil(try reopened.folderID(for: survivor.0))
   }
 
+  func testBrowserSearchAndSidebarReflectTheSameFolderAndTagChanges() async throws {
+    let database = try ProductDatabase.open(at: root())
+    let folder = try database.createFolder(name: "Original folder")
+    let paper = try seed(database, title: "Organized paper")
+    let other = try seed(database, title: "Unfiled paper")
+    try database.movePaper(database.capturePaperPlacement(paperID: paper.0, generation: paper.1), to: folder.id)
+    let original = PaperOrganization(tags: ["Original tag"])
+    let updated = PaperOrganization(tags: ["Updated tag"])
+    try database.updatePaperOrganization(paperID: paper.0, generation: paper.1, expected: .init(), value: original)
+    try database.updatePaperOrganization(paperID: other.0, generation: other.1, expected: .init(),
+      value: .init(tags: ["Unfiled tag"]))
+    let lifecycle = try await LocalLibraryLifecycle.open(database: database)
+    let service = LibraryOrganizationService(database: database, lifecycle: lifecycle)
+    var filter = OrganizationFilter(); filter.folder = .folder(folder.id)
+    filter.search = "original tag"
+
+    let first = try await service.observation(filter: filter)
+    XCTAssertEqual(first.folders, [folder])
+    XCTAssertEqual(first.tags, ["Original tag", "Unfiled tag"])
+    XCTAssertEqual(first.snapshot.papers.map(\.id), [paper.0])
+
+    try database.renameFolder(id: folder.id, name: "Renamed folder")
+    try database.updatePaperOrganization(paperID: paper.0, generation: paper.1, expected: original, value: updated)
+    let renamed = try await service.observation(filter: filter)
+    XCTAssertEqual(renamed.folders?.map(\.name), ["Renamed folder"])
+    XCTAssertEqual(renamed.tags, ["Unfiled tag", "Updated tag"])
+    XCTAssertTrue(renamed.snapshot.papers.isEmpty)
+    filter.search = "updated tag"
+    let matched = try await service.observation(filter: filter)
+    XCTAssertEqual(matched.snapshot.papers.map(\.id), [paper.0])
+    XCTAssertEqual(matched.facts.map(\.paperID), [paper.0])
+
+    let saga = try XCTUnwrap(database.beginDeletion(paper.0)).saga
+    try database.finalizeDeletion(paper.0, saga: saga)
+    try database.deleteFolder(id: folder.id)
+    let removed = try await service.observation(filter: filter)
+    XCTAssertEqual(removed.folders, [])
+    XCTAssertEqual(removed.tags, ["Unfiled tag"])
+    XCTAssertEqual(removed.snapshot.totalCount, 1)
+    XCTAssertTrue(removed.snapshot.papers.isEmpty)
+    XCTAssertTrue(removed.facts.isEmpty)
+  }
+
+  func testInvalidFolderCatalogDoesNotHideCurrentPapersOrTags() async throws {
+    let database = try ProductDatabase.open(at: root())
+    let paper = try seed(database, title: "Still visible")
+    try database.updatePaperOrganization(paperID: paper.0, generation: paper.1, expected: .init(),
+      value: .init(tags: ["Stored tag"]))
+    try database.adapterWrite { db in
+      try db.execute(sql: "INSERT INTO libraryFolder(id, name) VALUES ('invalid-id', 'Unreadable folder')")
+    }
+    let lifecycle = try await LocalLibraryLifecycle.open(database: database)
+    let service = LibraryOrganizationService(database: database, lifecycle: lifecycle)
+    let observation = try await service.observation(filter: .init())
+    XCTAssertNil(observation.folders)
+    XCTAssertEqual(observation.tags, ["Stored tag"])
+    XCTAssertEqual(observation.snapshot.papers.map(\.id), [paper.0])
+  }
+
   func testGuardFailuresLeavePreviousRecordsAndTombstoneCascades() throws {
     let database = try ProductDatabase.open(at: root())
     let a = try seed(database, title: "A"), b = try seed(database, title: "B")

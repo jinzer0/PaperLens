@@ -887,34 +887,18 @@ public struct LibraryBrowserView: View {
     query.invalidate()
   }
   private func load(_ request: OrganizationQueryState.Request, refreshingDeletions: Set<UUID>) async {
-    let observedFolders: [LibraryFolder]
-    let foldersFailed: Bool
     do {
-      observedFolders = try await folderService.folders()
-      foldersFailed = false
-    } catch {
-      observedFolders = []
-      foldersFailed = true
-    }
-    let observedTags: [String]
-    let tagsFailed: Bool
-    do {
-      observedTags = try await service.tags()
-      tagsFailed = false
-    } catch {
-      observedTags = []
-      tagsFailed = true
-    }
-    do {
-      let (value, facts) = try await service.snapshot(filter: request.filter)
+      let observation = try await service.observation(filter: request.filter)
+      let value = observation.snapshot
       guard query.accept(value, request: request, currentFilter: filter) else { return }
       if !refreshingDeletions.isEmpty { acknowledgeDeletionRefresh(refreshingDeletions) }
-      folders = observedFolders
-      folderLoadFailed = foldersFailed
-      tags = observedTags
-      tagLoadFailed = tagsFailed
+      folders = observation.folders ?? []
+      folderLoadFailed = observation.folders == nil
+      tags = observation.tags ?? []
+      tagLoadFailed = observation.tags == nil
       let generations = Dictionary(uniqueKeysWithValues: value.papers.map { ($0.id, $0.generation) })
-      currentFacts = Dictionary(uniqueKeysWithValues: facts.filter { generations[$0.paperID] == $0.generation }.map { ($0.paperID, $0) })
+      currentFacts = Dictionary(uniqueKeysWithValues: observation.facts
+        .filter { generations[$0.paperID] == $0.generation }.map { ($0.paperID, $0) })
       consumeSheetReturn(request)
       consumeOrganizationReturn(request)
     } catch {

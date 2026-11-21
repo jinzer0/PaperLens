@@ -117,6 +117,15 @@ public struct OrganizationSnapshot: Sendable {
   public let totalCount: Int
   public let papers: [OrganizedPaper]
 }
+
+struct OrganizationObservation: Sendable {
+  var snapshot: OrganizationSnapshot
+  let facts: [OrganizationSortFacts]
+  // A missing catalog indicates a read failure. An empty one is a successful read.
+  let folders: [LibraryFolder]?
+  let tags: [String]?
+}
+
 public enum OrganizationError: Error, Equatable, Sendable {
   case stalePaper, staleOrganization, unavailablePDF, invalidTags, invalidSortFacts
 }
@@ -171,9 +180,15 @@ public actor LibraryOrganizationService {
 
   public func snapshot(filter: OrganizationFilter) async throws
     -> (snapshot: OrganizationSnapshot, facts: [OrganizationSortFacts]) {
+    let result = try await observation(filter: filter)
+    return (result.snapshot, result.facts)
+  }
+
+  func observation(filter: OrganizationFilter) async throws -> OrganizationObservation {
     let database = database
-    let result = try await Task.detached { try database.organizationObservation(filter: filter) }.value
-    return (try Self.sorted(result.snapshot, facts: result.facts), result.facts)
+    var result = try await Task.detached { try database.organizationObservation(filter: filter) }.value
+    result.snapshot = try Self.sorted(result.snapshot, facts: result.facts)
+    return result
   }
 
   private static func sorted(_ result: OrganizationSnapshot, facts: [OrganizationSortFacts]) throws

@@ -39,14 +39,16 @@ extension ProductDatabase {
   }
 
   public func folders() throws -> [LibraryFolder] {
-    try adapterRead { db in
-      try Row.fetchAll(db, sql: "SELECT id, name FROM libraryFolder ORDER BY name COLLATE NOCASE, id")
-        .map { row in
-          let raw: String = row["id"]
-          guard let id = UUID(uuidString: raw) else { throw ProductDatabaseError.invalidRecord }
-          return LibraryFolder(id: id, name: row["name"])
-        }
-    }
+    try adapterRead { try folders(in: $0) }
+  }
+
+  func folders(in db: Database) throws -> [LibraryFolder] {
+    try Row.fetchAll(db, sql: "SELECT id, name FROM libraryFolder ORDER BY name COLLATE NOCASE, id")
+      .map { row in
+        let raw: String = row["id"]
+        guard let id = UUID(uuidString: raw) else { throw ProductDatabaseError.invalidRecord }
+        return LibraryFolder(id: id, name: row["name"])
+      }
   }
 
   public func createFolder(name: String) throws -> LibraryFolder {

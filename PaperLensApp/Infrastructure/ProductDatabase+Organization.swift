@@ -47,14 +47,14 @@ extension ProductDatabase {
     try adapterRead { try organizationSnapshot(filter: filter, in: $0) }
   }
 
-  /// Search, sort and detail facts must see the same committed Library revision.
-  func organizationObservation(filter: OrganizationFilter) throws
-    -> (snapshot: OrganizationSnapshot, facts: [OrganizationSortFacts]) {
+  /// The Library rows, detail facts and sidebar describe the same committed state.
+  func organizationObservation(filter: OrganizationFilter) throws -> OrganizationObservation {
     try adapterRead { db in
       let snapshot = try organizationSnapshot(filter: filter, in: db)
       let ids = Set(snapshot.papers.filter { $0.status == .ready }.map(\.id))
       let facts = try librarySortFacts(for: ids, in: db)
-      return (snapshot, facts)
+      return OrganizationObservation(snapshot: snapshot, facts: facts,
+        folders: try? folders(in: db), tags: try? organizationTags(in: db))
     }
   }
 
@@ -134,15 +134,17 @@ extension ProductDatabase {
   }
 
   public func organizationTags() throws -> [String] {
-    try adapterRead { db in
-      try String.fetchAll(db, sql: """
-        SELECT MIN(t.label) FROM paperUserTag t
-        JOIN paperOrganization o ON o.paperID = t.paperID
-        JOIN paper p ON p.id = o.paperID AND p.generation = o.generation
-        WHERE p.status != 'tombstone'
-        GROUP BY t.normalized ORDER BY t.normalized, MIN(t.label)
-        """)
-    }
+    try adapterRead { try organizationTags(in: $0) }
+  }
+
+  private func organizationTags(in db: Database) throws -> [String] {
+    try String.fetchAll(db, sql: """
+      SELECT MIN(t.label) FROM paperUserTag t
+      JOIN paperOrganization o ON o.paperID = t.paperID
+      JOIN paper p ON p.id = o.paperID AND p.generation = o.generation
+      WHERE p.status != 'tombstone'
+      GROUP BY t.normalized ORDER BY t.normalized, MIN(t.label)
+      """)
   }
 
   public func updatePaperOrganization(paperID: UUID, generation: UUID,
