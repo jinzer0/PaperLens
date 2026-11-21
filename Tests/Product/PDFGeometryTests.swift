@@ -218,6 +218,59 @@ final class PDFGeometryTests: XCTestCase {
         }
     }
 
+    @MainActor
+    func testOriginalPDFKitWitnessUsesIntersectionOfDeclaredPDFBoxes() throws {
+        let media = CGRect(x: 20, y: 30, width: 200, height: 300)
+        let declaredCrop = CGRect(x: -20, y: 40, width: 200, height: 400)
+        let effective = CGRect(x: 20, y: 40, width: 160, height: 290)
+        let document = try XCTUnwrap(PDFDocument(data: SyntheticPDFGeometryCalibration.fixturePDF()))
+        let page = try XCTUnwrap(document.page(at: 0))
+        page.setBounds(media, for: .mediaBox)
+        page.setBounds(declaredCrop, for: .cropBox)
+        XCTAssertEqual(page.bounds(for: .cropBox), effective)
+
+        let view = PDFView(frame: CGRect(x: 0, y: 0, width: 800, height: 1000))
+        view.displayMode = .singlePage
+        view.displayBox = .cropBox
+        view.autoScales = false
+        view.document = document
+        defer { view.document = nil }
+        view.go(to: page)
+        view.scaleFactor = 1
+        view.layoutDocumentView()
+
+        func quad(_ rect: CGRect) throws -> PDFiumRawQuad {
+            try PDFiumRawQuad(topLeftX: rect.minX, topLeftY: rect.maxY,
+                topRightX: rect.maxX, topRightY: rect.maxY, bottomRightX: rect.maxX,
+                bottomRightY: rect.minY, bottomLeftX: rect.minX, bottomLeftY: rect.minY)
+        }
+        let raw = try PDFiumRawPage(pageIndex: 0, boundingBox: quad(effective),
+            mediaBox: quad(media), cropBox: quad(declaredCrop), rotationQuarterTurns: 0)
+        let mapping = try OriginalPDFKitPageWitness.mapping(raw: raw, page: page, view: view)
+        XCTAssertEqual(mapping.page, try PDFPageGeometry(pageIndex: 0,
+            cropOrigin: .init(x: 20, y: 40), width: 160, height: 290, rotation: 0))
+        XCTAssertNoThrow(try mapping.page.validate(.init(x: 20, y: 60)))
+        assertError(.outsidePage) { try mapping.page.validate(.init(x: 19, y: 60)) }
+
+        let inheritedMedia = try PDFiumRawPage(pageIndex: 0, boundingBox: quad(effective),
+            mediaBox: nil, cropBox: quad(declaredCrop), rotationQuarterTurns: 0)
+        XCTAssertEqual(try OriginalPDFKitPageWitness.mapping(raw: inheritedMedia, page: page, view: view).page,
+            mapping.page)
+
+        let incorrectEffective = try PDFiumRawPage(pageIndex: 0, boundingBox: quad(declaredCrop),
+            mediaBox: quad(media), cropBox: quad(declaredCrop), rotationQuarterTurns: 0)
+        let inconsistentDeclaration = try PDFiumRawPage(pageIndex: 0, boundingBox: quad(effective),
+            mediaBox: quad(media), cropBox: quad(declaredCrop.offsetBy(dx: 0, dy: 1)),
+            rotationQuarterTurns: 0)
+        let inconsistentMedia = try PDFiumRawPage(pageIndex: 0, boundingBox: quad(effective),
+            mediaBox: quad(effective), cropBox: quad(declaredCrop), rotationQuarterTurns: 0)
+        for invalid in [incorrectEffective, inconsistentDeclaration, inconsistentMedia] {
+            assertError(.malformedGeometry) {
+                try OriginalPDFKitPageWitness.mapping(raw: invalid, page: page, view: view)
+            }
+        }
+    }
+
     func testCalibrationLaunchRejectsMixedModesPathsAndNoncanonicalIDs() {
         typealias Calibration = SyntheticPDFGeometryCalibration
         let id = "00000000-0000-4000-8000-000000000abc"

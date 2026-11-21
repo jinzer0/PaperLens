@@ -340,11 +340,13 @@ enum OriginalPDFKitPageWitness {
     let x = geometry.cropOrigin.x, y = geometry.cropOrigin.y
     let right = x + geometry.width, top = y + geometry.height
     let projected = [x, top, right, top, right, y, x, y].map { Double(Float($0)) }
-    // A missing direct /CropBox is common (including inherited boxes). In that
-    // case PDFKit supplies the effective CropBox and PDFium's effective page
-    // bounding-box API must independently agree; MediaBox is never substituted.
-    let actualBox = raw.cropBox ?? raw.boundingBox
-    guard actualBox.coordinates == projected else { throw PDFGeometryError.malformedGeometry }
+    // Both renderers report the effective CropBox clipped to the MediaBox.
+    // If PDFium also reports a direct CropBox, verify how it yields that boundary.
+    guard raw.boundingBox.coordinates == projected else { throw PDFGeometryError.malformedGeometry }
+    if let crop = raw.cropBox {
+      try validateDeclaredCrop(crop, media: page.bounds(for: .mediaBox),
+        reportedMedia: raw.mediaBox, expected: projected)
+    }
     let precision = try PDFGeometryPrecision(maximumErrorPDFPoints: maximumErrorPDFPoints)
     let origin = PDFPoint(x: x, y: y)
     let horizontal = PDFPoint(x: right, y: y)
@@ -372,6 +374,27 @@ enum OriginalPDFKitPageWitness {
     return try PDFiumPageMapping(page: geometry,
       rawToCanonical: PDFGeometryAffine(a: 1, b: 0, c: 0, d: 1, tx: 0, ty: 0),
       canonicalToReader: transform)
+  }
+
+  private static func validateDeclaredCrop(_ crop: PDFiumRawQuad, media: CGRect,
+    reportedMedia: PDFiumRawQuad?, expected: [Double]) throws {
+    // PDFium's direct box API may omit an inherited MediaBox. PDFKit resolves it
+    // from the same original PDF, and the effective box already agrees with PDFium.
+    let mediaLeft = Double(Float(media.minX)), mediaRight = Double(Float(media.maxX))
+    let mediaBottom = Double(Float(media.minY)), mediaTop = Double(Float(media.maxY))
+    let mediaCoordinates = [mediaLeft, mediaTop, mediaRight, mediaTop,
+      mediaRight, mediaBottom, mediaLeft, mediaBottom]
+    guard mediaCoordinates.allSatisfy(\.isFinite), mediaLeft < mediaRight, mediaBottom < mediaTop,
+      reportedMedia.map({ $0.coordinates == mediaCoordinates }) ?? true,
+      crop.topLeftX == crop.bottomLeftX, crop.topRightX == crop.bottomRightX,
+      crop.topLeftY == crop.topRightY, crop.bottomLeftY == crop.bottomRightY else {
+      throw PDFGeometryError.malformedGeometry
+    }
+    let left = max(crop.topLeftX, mediaLeft), right = min(crop.topRightX, mediaRight)
+    let bottom = max(crop.bottomLeftY, mediaBottom), top = min(crop.topLeftY, mediaTop)
+    guard [left, top, right, top, right, bottom, left, bottom] == expected else {
+      throw PDFGeometryError.malformedGeometry
+    }
   }
 
   private static func envelope(_ points: [PDFPoint]) throws {
