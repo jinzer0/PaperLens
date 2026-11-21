@@ -205,6 +205,52 @@ final class ReaderMetadataTests: XCTestCase {
   }
 
   @MainActor
+  func testNativeOutlineNavigatesPageFitAndPartialDestinations() throws {
+    let objects = [
+      "<< /Type /Catalog /Pages 2 0 R /Outlines 5 0 R >>",
+      "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>",
+      "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 240 350] >>",
+      "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 240 350] /CropBox [20 30 220 330] >>",
+      "<< /Type /Outlines /First 6 0 R /Last 8 0 R /Count 3 >>",
+      "<< /Title (Chapter) /Parent 5 0 R /Next 7 0 R /Dest [4 0 R /Fit] >>",
+      "<< /Title (Section) /Parent 5 0 R /Prev 6 0 R /Next 8 0 R /Dest [4 0 R /XYZ null 180 0] >>",
+      "<< /Title (Invalid) /Parent 5 0 R /Prev 7 0 R /Dest [4 0 R /XYZ 221 null 0] >>"
+    ]
+    var pdf = "%PDF-1.7\n"
+    var offsets: [Int] = []
+    for (index, object) in objects.enumerated() {
+      offsets.append(pdf.utf8.count)
+      pdf += "\(index + 1) 0 obj\n\(object)\nendobj\n"
+    }
+    let xref = pdf.utf8.count
+    let size = objects.count + 1
+    pdf += "xref\n0 \(size)\n0000000000 65535 f \n"
+    for offset in offsets { pdf += String(format: "%010d 00000 n \n", offset) }
+    pdf += "trailer\n<< /Root 1 0 R /Size \(size) >>\nstartxref\n\(xref)\n%%EOF\n"
+
+    let document = try XCTUnwrap(PDFDocument(data: Data(pdf.utf8)))
+    let adapter = ReaderOutlineAdapter(document: document, identity: nil)
+    XCTAssertEqual(adapter.sections.map(\.title), ["Chapter", "Section", "Invalid"])
+    XCTAssertEqual(adapter.sections.map(\.location), [
+      .init(pageIndex: 1, x: 20, y: 330), .init(pageIndex: 1, x: 20, y: 180), nil
+    ])
+    XCTAssertEqual(adapter.activeSection(at: .init(pageIndex: 1, x: 30, y: 250)), "/0")
+    XCTAssertEqual(adapter.activeSection(at: .init(pageIndex: 1, x: 30, y: 120)), "/1")
+
+    let view = PDFView(frame: NSRect(x: 0, y: 0, width: 640, height: 480))
+    view.displayMode = .singlePage
+    view.document = document
+    XCTAssertTrue(view.currentPage === document.page(at: 0))
+    XCTAssertThrowsError(try adapter.navigate(sectionID: "/2", in: view, current: nil))
+    XCTAssertTrue(view.currentPage === document.page(at: 0))
+    try adapter.navigate(sectionID: "/0", in: view, current: nil)
+    XCTAssertTrue(view.currentPage === document.page(at: 1))
+    view.goToFirstPage(nil)
+    try adapter.navigate(sectionID: "/1", in: view, current: nil)
+    XCTAssertTrue(view.currentPage === document.page(at: 1))
+  }
+
+  @MainActor
   func testOutlineFollowsDisplayedVerticalOrderOnRotatedPages() {
     // Each row lists page-space points from the top of the displayed page to the bottom.
     let rotations: [(degrees: Int, points: [CGPoint])] = [
@@ -241,6 +287,15 @@ final class ReaderMetadataTests: XCTestCase {
       }
       XCTAssertEqual(adapter.activeSection(at: .init(pageIndex: 1, x: 100, y: 100)), "/1",
         "The visually last section of a rotated page remains current onto the next page")
+
+      let pageStart = PDFOutline()
+      pageStart.label = "Page start"
+      pageStart.destination = PDFDestination(page: page, at: CGPoint(
+        x: kPDFDestinationUnspecifiedValue, y: kPDFDestinationUnspecifiedValue))
+      root.insertChild(pageStart, at: 0)
+      let top = points[0]
+      XCTAssertEqual(ReaderOutlineAdapter(document: document, identity: nil)
+        .activeSection(at: .init(pageIndex: 0, x: top.x, y: top.y)), "/0", "Rotation \(degrees)")
     }
   }
 }

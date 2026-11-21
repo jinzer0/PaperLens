@@ -343,6 +343,7 @@ public final class ReaderOutlineAdapter {
     public let id: String
     public let title: String
     public let depth: Int
+    /// Missing coordinates anchor section ordering at the displayed start of the page.
     public let location: ReaderConfirmedLocation?
     fileprivate let destination: PDFDestination?
     fileprivate let displayedY: CGFloat?
@@ -358,7 +359,7 @@ public final class ReaderOutlineAdapter {
     guard depth < 64, sections.count < 4096 else { return }
     if depth >= 0 {
       let destination = outline.destination ?? (outline.action as? PDFActionGoTo)?.destination
-      let location = destination.flatMap { try? validated($0) }
+      let location = destination.flatMap { try? validated($0, forOutline: true) }
       let y = location.flatMap { location in
         destination?.page.flatMap { displayedY(at: location, on: $0) }
       }
@@ -370,13 +371,27 @@ public final class ReaderOutlineAdapter {
       if let child = outline.child(at: index) { collect(child, path: "\(path)/\(index)", depth: depth + 1) }
     }
   }
-  private func validated(_ destination: PDFDestination) throws -> ReaderConfirmedLocation {
+  private func validated(_ destination: PDFDestination, forOutline: Bool = false) throws -> ReaderConfirmedLocation {
     guard let page = destination.page, page.document === document else {
       throw ReaderMetadataError.invalidDestination
     }
+    let bounds = page.bounds(for: .cropBox)
+    var point = destination.point
+    if point.x == kPDFDestinationUnspecifiedValue || point.y == kPDFDestinationUnspecifiedValue {
+      guard forOutline else { throw ReaderMetadataError.invalidDestination }
+      // PDFKit leaves axes unset for page-fit and partial XYZ destinations.
+      // Only the outline anchor needs coordinates; navigation keeps the original destination.
+      let transform = page.transform(for: .cropBox)
+      if point.x == kPDFDestinationUnspecifiedValue {
+        point.x = transform.b > 0 ? bounds.maxX : bounds.minX
+      }
+      if point.y == kPDFDestinationUnspecifiedValue {
+        point.y = transform.d < 0 ? bounds.minY : bounds.maxY
+      }
+    }
     let location = ReaderConfirmedLocation(pageIndex: document.index(for: page),
-      x: Double(destination.point.x), y: Double(destination.point.y))
-    guard location.isValid(pageCount: document.pageCount, bounds: page.bounds(for: .cropBox)) else {
+      x: Double(point.x), y: Double(point.y))
+    guard location.isValid(pageCount: document.pageCount, bounds: bounds) else {
       throw ReaderMetadataError.invalidDestination
     }
     return location
@@ -386,7 +401,7 @@ public final class ReaderOutlineAdapter {
     guard current == identity, view.document === document else { throw ReaderMetadataError.staleIdentity }
     guard let section = sections.first(where: { $0.id == sectionID }),
       let destination = section.destination else { throw ReaderMetadataError.invalidDestination }
-    _ = try validated(destination)
+    _ = try validated(destination, forOutline: true)
     view.go(to: destination)
   }
   /// Call from the actual Reader position observer under its current read lease, not row selection.
