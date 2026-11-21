@@ -22,6 +22,8 @@ import SwiftUI
   private let service: AnnotationService
   private weak var view: PDFView?
   private weak var document: PDFDocument?
+  private weak var revealedOverlay: PDFSelection?
+  private var revealedRecordID: UUID?
   private var invalidated = false
   let editor = ReaderAnnotationEditor()
   @Published public private(set) var isActive = true
@@ -37,26 +39,29 @@ import SwiftUI
   public func invalidate() {
     guard !invalidated else { return }
     invalidated = true
+    clearRevealedOverlay()
     view = nil; document = nil
     editor.reset()
     isActive = false
   }
 
-  private func validate() throws {
+  private func validate(requiring record: AnnotationRecord? = nil) throws {
     guard !invalidated, let paper = session.currentPaper,
       paper.paperID == identity.id, paper.generation == identity.generation,
       let view, let document, view.document === document else { throw AnnotationError.stalePaper }
-    _ = try service.records(for: identity)
+    let current = try service.records(for: identity)
+    if let record, !current.contains(record) { throw AnnotationError.staleRecord }
   }
 
-  private func access<T>(_ operation: (PDFView, PDFDocument) throws -> T) throws -> T {
+  private func access<T>(requiring record: AnnotationRecord? = nil,
+    _ operation: (PDFView, PDFDocument) throws -> T) throws -> T {
     do {
       return try session.withReadAccess {
-        try validate()
+        try validate(requiring: record)
         guard let view, let document else { throw AnnotationError.stalePaper }
         let result = try operation(view, document)
         // Navigation/selection notifications can synchronously close or replace the Reader.
-        try validate()
+        try validate(requiring: record)
         return result
       }
     } catch {
@@ -102,7 +107,19 @@ import SwiftUI
     try access { _, _ in
       guard record.selection.paper == identity else { throw AnnotationError.stalePaper }
       try service.delete(record)
+      if revealedRecordID == record.id { clearRevealedOverlay() }
     }
+  }
+
+  private func clearRevealedOverlay() {
+    let overlay = revealedOverlay
+    revealedOverlay = nil
+    revealedRecordID = nil
+    guard let overlay, let view, let document, view.document === document,
+      let visible = view.highlightedSelections else { return }
+    let remaining = visible.filter { $0 !== overlay }
+    guard remaining.count != visible.count else { return }
+    view.highlightedSelections = remaining.isEmpty ? nil : remaining
   }
 
   public func copySelection() throws {
@@ -170,31 +187,39 @@ import SwiftUI
   }
 
   public func reveal(_ record: AnnotationRecord) throws {
-    try access { view, document in
-      guard try service.records(for: identity).contains(record),
-        let location = record.selection.locations.first,
-        let page = document.page(at: location.pageIndex), let rect = location.rectangles.first
-      else { throw AnnotationError.staleRecord }
-      // Selection overlay only: never annotate or rewrite the original PDF.
-      let overlay = PDFSelection(document: document)
-      for location in record.selection.locations {
-        try validate()
-        guard let page = document.page(at: location.pageIndex),
-          page.rotation == location.rotation,
-          AnnotationRectangle(page.bounds(for: .mediaBox)) == location.mediaBox,
-          AnnotationRectangle(page.bounds(for: .cropBox)) == location.cropBox
-        else { throw AnnotationError.invalidSelection }
-        for rectangle in location.rectangles {
-          guard let part = page.selection(for: rectangle.cgRect)
+    var installedOverlay: PDFSelection?
+    do {
+      try access(requiring: record) { view, document in
+        guard let location = record.selection.locations.first,
+          let page = document.page(at: location.pageIndex), let rect = location.rectangles.first
+        else { throw AnnotationError.staleRecord }
+        // Selection overlay only: never annotate or rewrite the original PDF.
+        let overlay = PDFSelection(document: document)
+        for location in record.selection.locations {
+          try validate()
+          guard let page = document.page(at: location.pageIndex),
+            page.rotation == location.rotation,
+            AnnotationRectangle(page.bounds(for: .mediaBox)) == location.mediaBox,
+            AnnotationRectangle(page.bounds(for: .cropBox)) == location.cropBox
           else { throw AnnotationError.invalidSelection }
-          overlay.add(part)
+          for rectangle in location.rectangles {
+            guard let part = page.selection(for: rectangle.cgRect)
+            else { throw AnnotationError.invalidSelection }
+            overlay.add(part)
+          }
         }
+        overlay.color = NSColor.systemYellow.withAlphaComponent(0.35)
+        try validate(requiring: record)
+        installedOverlay = overlay
+        revealedOverlay = overlay
+        revealedRecordID = record.id
+        view.highlightedSelections = [overlay]
+        try validate(requiring: record)
+        view.go(to: PDFDestination(page: page, at: CGPoint(x: rect.x, y: rect.y + rect.height)))
       }
-      overlay.color = NSColor.systemYellow.withAlphaComponent(0.35)
-      try validate()
-      view.highlightedSelections = [overlay]
-      try validate()
-      view.go(to: PDFDestination(page: page, at: CGPoint(x: rect.x, y: rect.y + rect.height)))
+    } catch {
+      if let installedOverlay, revealedOverlay === installedOverlay { clearRevealedOverlay() }
+      throw error
     }
   }
 }

@@ -160,6 +160,13 @@ private final class AnnotationPageDelegate: NSObject, PDFDocumentDelegate {
     try fresh.reveal(edited)
     try fresh.delete(edited)
     XCTAssertEqual(try fresh.records(), [highlight])
+    XCTAssertTrue(binding.view.highlightedSelections?.isEmpty ?? true)
+    try fresh.reveal(highlight)
+    let pageBeforeClosing = binding.view.currentPage
+    fresh.invalidate()
+    XCTAssertTrue(binding.view.currentPage === pageBeforeClosing)
+    XCTAssertTrue(binding.view.highlightedSelections?.isEmpty ?? true)
+    XCTAssertEqual(try service.records(for: fresh.identity), [highlight])
   }
 
   private func presentation(database: ProductDatabase, lifecycle: LocalLibraryLifecycle,
@@ -539,6 +546,29 @@ private final class AnnotationPageDelegate: NSObject, PDFDocumentDelegate {
     XCTAssertNil(binding.view.highlightedSelections)
     XCTAssertEqual(binding.view.navigationCalls, navigation)
     XCTAssertEqual(try AnnotationService(database: db).records(for: context.identity), [saved])
+  }
+
+  func testAnnotationDeletedDuringReconstructionCannotReplaceCurrentOverlayOrNavigate() async throws {
+    let (_, db, _, id, binding) = try await fixture()
+    defer { binding.session.close() }
+    let context = try binding.open(database: db, paperID: id)
+    let selected = try context.capture()
+    let previous = try context.createHighlight()
+    let deleted = try context.createNote(selected, text: "remove while revealing")
+    try context.reveal(previous)
+    let overlay = try XCTUnwrap(binding.view.highlightedSelections?.first)
+    let page = try XCTUnwrap(binding.view.document?.page(at: 1) as? AnnotationControlledPDFPage)
+    let navigation = binding.view.navigationCalls
+    page.onRectangleSelection = {
+      do { try context.delete(deleted) }
+      catch { XCTFail("Fixture could not delete the annotation: \(error)") }
+    }
+    XCTAssertThrowsError(try context.reveal(deleted)) {
+      XCTAssertEqual($0 as? AnnotationError, .staleRecord)
+    }
+    XCTAssertEqual(binding.view.navigationCalls, navigation)
+    XCTAssertTrue(binding.view.highlightedSelections?.first === overlay)
+    XCTAssertEqual(try context.records(), [previous])
   }
 
   func testCancelDataOnlyDraftDoesNotWriteAndCloseResetsAllEditorState() async throws {
