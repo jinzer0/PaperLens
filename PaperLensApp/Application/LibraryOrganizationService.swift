@@ -106,6 +106,8 @@ public struct OrganizedPaper: Identifiable, Equatable, Sendable {
   public let bytesCopied: Int64
   public let createdAt: Date
   public let readable: Bool
+  /// Display eligibility. A retry still requires a fresh capture of the job and confirmation.
+  public let canRetryImport: Bool
   public let organization: PaperOrganization
 }
 public struct OrganizationSnapshot: Sendable {

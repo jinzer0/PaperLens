@@ -227,19 +227,21 @@ public final class ProductDatabase: @unchecked Sendable {
           let status: String = row["status"]
           guard let uuid = UUID(uuidString: id), let state = LibraryStatus(rawValue: status)
           else { throw ProductDatabaseError.invalidRecord }
-          var failure: String? = row["failure"]
-          if state == .importFailed, String.fromDatabaseValue(row["importJobState"]) == "succeeded" {
-            guard let jobID = String.fromDatabaseValue(row["importJobID"]) else {
-              throw ProductDatabaseError.invalidRecord
-            }
-            _ = try Self.readUnavailableSucceededImport(jobID: jobID, in: db)
-            failure = "missingPDF"
-          }
           return LibraryRecord(id: uuid, title: row["title"], status: state,
-            bytesCopied: row["bytesCopied"] ?? 0, failure: failure,
+            bytesCopied: row["bytesCopied"] ?? 0, failure: try Self.libraryFailure(row, status: state, in: db),
             cleanupDebt: row["cleanupDebt"])
         }
     }
+  }
+
+  static func libraryFailure(_ row: Row, status: LibraryStatus, in db: Database) throws -> String? {
+    guard status == .importFailed, String.fromDatabaseValue(row["importJobState"]) == "succeeded"
+    else { return row["failure"] }
+    guard let jobID = String.fromDatabaseValue(row["importJobID"]) else {
+      throw ProductDatabaseError.invalidRecord
+    }
+    _ = try readUnavailableSucceededImport(jobID: jobID, in: db)
+    return "missingPDF"
   }
 
   static func insertImport(_ identity: ImportIdentity, title: String, createdAt: Double,

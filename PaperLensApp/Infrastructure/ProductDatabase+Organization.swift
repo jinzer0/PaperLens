@@ -64,7 +64,11 @@ extension ProductDatabase {
         folderArguments = [id.uuidString]
       }
       let rows = try Row.fetchAll(db, sql: """
-        SELECT p.*, j.failure, COALESCE(j.bytesCopied, 0) AS bytesCopied,
+        SELECT p.*, j.id AS importJobID, j.state AS importJobState,
+          j.recoveryJournal IS NOT NULL AS hasImportHistory,
+          CASE WHEN p.status IN ('deleting', 'deletionFailed') THEN p.deletionFailure
+            ELSE j.failure END AS failure,
+          COALESCE(j.bytesCopied, 0) AS bytesCopied,
           COALESCE(o.readingStatus, 'unread') AS readingStatus,
           COALESCE(o.favorite, 0) AS favorite
         FROM paper p LEFT JOIN importJob j ON j.paperID = p.id
@@ -87,9 +91,14 @@ extension ProductDatabase {
           let status = LibraryStatus(rawValue: row["status"]),
           let readingStatus = PaperReadingStatus(rawValue: row["readingStatus"])
         else { throw ProductDatabaseError.invalidRecord }
+        let failure = try Self.libraryFailure(row, status: status, in: db)
+        let canRetryImport = status == .importFailed && failure != "missingPDF"
+          && String.fromDatabaseValue(row["importJobState"]) == "failed"
+          && (row["hasImportHistory"] as Bool) && !(row["cleanupDebt"] as Bool)
         return OrganizedPaper(id: id, generation: generation, title: row["title"], status: status,
-          failure: row["failure"], bytesCopied: row["bytesCopied"], createdAt: Date(timeIntervalSince1970: row["createdAt"]),
+          failure: failure, bytesCopied: row["bytesCopied"], createdAt: Date(timeIntervalSince1970: row["createdAt"]),
           readable: (try? validateOrganizationPDF(row, verifyDigest: true)) != nil,
+          canRetryImport: canRetryImport,
           organization: PaperOrganization(readingStatus: readingStatus, favorite: row["favorite"], tags: tags[idString] ?? []))
       }.filter { paper in
         let normalizedTags = paper.organization.tags.map(LibraryOrganizationService.normalized)

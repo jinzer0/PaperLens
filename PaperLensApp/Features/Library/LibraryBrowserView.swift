@@ -467,7 +467,7 @@ public struct LibraryBrowserView: View {
         .focused($focusedMovement, equals: paper.id)
         .accessibilityLabel("\(paper.title) 폴더 이동")
       Menu("더 보기") {
-        if paper.status == .importFailed {
+        if paper.canRetryImport {
           Button("새 PDF 선택 후 같은 작업 재시도") { requestRetry(paper) }
             .disabled(!localPDFAvailable || busy || loading || loadFailed)
           if let retryImportURL {
@@ -778,7 +778,7 @@ public struct LibraryBrowserView: View {
     refresh()
   }
   private func requestRetry(_ paper: OrganizedPaper) {
-    guard localPDFAvailable, !nativeSheetPending, paper.status == .importFailed,
+    guard localPDFAvailable, !nativeSheetPending, paper.canRetryImport,
       !busy, !loading, !loadFailed else { return }
     invalidateObservation()
     retryImportPDF(paper.id, paper.generation)
@@ -946,6 +946,7 @@ public struct LibraryBrowserView: View {
     case .importFailed:
       let reason: String
       switch paper.failure {
+      case "missingPDF": return "저장된 PDF를 찾을 수 없음 · 삭제하거나 PDF 새로 추가"
       case "interrupted": reason = "앱 종료로 가져오기 중단됨"
       case ImportAbortFailure.cancelled.rawValue: reason = "가져오기 취소됨"
       case ImportAbortFailure.sourceChanged.rawValue: reason = "선택한 PDF가 변경됨"
@@ -953,7 +954,7 @@ public struct LibraryBrowserView: View {
       case ImportAbortFailure.publicationRejected.rawValue: reason = "PDF 저장을 완료하지 못함"
       default: reason = "가져오기 실패"
       }
-      return "\(reason) · 같은 작업 재시도 또는 삭제"
+      return "\(reason) · \(paper.canRetryImport ? "같은 작업 재시도 또는 삭제" : "삭제")"
     case .deleting: return "삭제 중 · 열기 불가"
     case .deletionFailed: return "삭제 미완료 · 삭제 다시 시도"
     case .tombstone: return "삭제됨"
