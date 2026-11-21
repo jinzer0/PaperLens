@@ -51,6 +51,8 @@ struct PaperLensApp: App {
 private final class TopologyApplicationDelegate: NSObject, NSApplicationDelegate {
   let model = TopologyModel()
   let dbSmoke = SyntheticPackagedDBSmokeModel()
+  private var waitingForProductTermination = false
+  private var productTerminationReady = false
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     if SyntheticPackagedDBSmoke.launch(CommandLine.arguments) != .absent {
@@ -64,6 +66,38 @@ private final class TopologyApplicationDelegate: NSObject, NSApplicationDelegate
     }
     topologyLog.notice("application_finished_launching")
     model.automate()
+  }
+
+  func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+    if productTerminationReady { return .terminateNow }
+    if waitingForProductTermination { return .terminateCancel }
+    guard let codex = ProductAppComposition.codexForApplicationTermination(),
+      codex.blocksReplacement else { return .terminateNow }
+    waitingForProductTermination = true
+    Task { @MainActor in
+      let cleaned = await codex.retireForApplicationTermination()
+      let shouldTerminate: Bool
+      if cleaned {
+        shouldTerminate = true
+      } else {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "ChatGPT 전용 저장소 정리를 확인하지 못했습니다."
+        alert.informativeText = "지금 종료하면 정리되지 않은 파일이 다음 실행까지 남을 수 있습니다."
+        alert.addButton(withTitle: "계속 사용")
+        alert.addButton(withTitle: "종료")
+        shouldTerminate = alert.runModal() == .alertSecondButtonReturn
+      }
+      if shouldTerminate {
+        productTerminationReady = true
+        sender.terminate(nil)
+        productTerminationReady = false
+      }
+      codex.cancelApplicationTermination()
+      waitingForProductTermination = false
+    }
+    // Keep the normal AppKit event loop available for MainActor retirement work.
+    return .terminateCancel
   }
 }
 

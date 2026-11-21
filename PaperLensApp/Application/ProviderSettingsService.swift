@@ -17,13 +17,14 @@ public final class NativeCodexConnection: ObservableObject {
   }
   private enum Operation { case login(mode: String), observe, probe }
   private enum Ending {
-    case cancelled, disconnected, superseded, failure(String)
+    case cancelled, disconnected, superseded, applicationTermination, failure(String)
 
     var message: String {
       switch self {
       case .cancelled: return "ChatGPT 연결을 취소했습니다."
       case .disconnected: return "ChatGPT 연결을 해제했습니다."
       case .superseded: return "이전 ChatGPT 연결을 교체했습니다."
+      case .applicationTermination: return "앱 종료를 위해 ChatGPT 연결을 닫습니다."
       case .failure(let reason): return reason
       }
     }
@@ -45,6 +46,8 @@ public final class NativeCodexConnection: ObservableObject {
     var committed: ProviderConfiguration?
     var requests: [UUID: Operation] = [:]
     var ending: Ending?
+    var retirementSettled = false
+    var retirementWaiter: CheckedContinuation<Void, Never>?
 
     init(namespace: TopologyOwnedFixtures, expected: ProviderConfiguration) {
       self.namespace = namespace
@@ -73,6 +76,7 @@ public final class NativeCodexConnection: ObservableObject {
   private var publishingPhase = false
   private var summaryScopes: [UUID: NativeCodexSummaryScope] = [:]
   private var summaryNamespaceDebt: [TopologyOwnedFixtures] = []
+  private(set) var preparingForApplicationTermination = false
 
   public var summaryRoot: URL { root.deletingLastPathComponent().appendingPathComponent("codex-summary-scopes") }
 
@@ -170,7 +174,8 @@ public final class NativeCodexConnection: ObservableObject {
   }
 
   public var canStart: Bool {
-    guard !publishingPhase, candidate == nil, predecessor == nil, summaryNamespaceDebt.isEmpty,
+    guard !preparingForApplicationTermination, !publishingPhase, candidate == nil,
+      predecessor == nil, summaryNamespaceDebt.isEmpty,
       apiKey.canReplaceOwner else { return false }
     if activeLogin == nil { return phase == .idle && summaryScopes.isEmpty }
     return phase == .connected && eligibleForEntry
@@ -182,7 +187,8 @@ public final class NativeCodexConnection: ObservableObject {
   }
 
   var canDisconnect: Bool {
-    guard let activeLogin, activeLogin.ending == nil, let owner = activeLogin.owner,
+    guard !preparingForApplicationTermination, let activeLogin,
+      activeLogin.ending == nil, let owner = activeLogin.owner,
       owner.terminal == nil else { return false }
     return candidate == nil || phase == .blocked
   }
@@ -201,7 +207,8 @@ public final class NativeCodexConnection: ObservableObject {
   var offersRetry: Bool {
     if savedConnectionNeedsLogin { return true }
     switch ending {
-    case .cancelled, .failure: return candidate == nil && (phase == .idle || phase == .connected)
+    case .cancelled, .applicationTermination, .failure:
+      return candidate == nil && (phase == .idle || phase == .connected)
     case .disconnected, .superseded, nil: return false
     }
   }
@@ -223,7 +230,8 @@ public final class NativeCodexConnection: ObservableObject {
   }
 
   private var usableActiveLogin: LoginScope? {
-    guard let login = activeLogin, login.ending == nil, let owner = login.owner,
+    guard !preparingForApplicationTermination, let login = activeLogin,
+      login.ending == nil, let owner = login.owner,
       owner.core.allowsIO, login.lifecycle?.connection.state == .ready,
       let committed = login.committed, committed.kind == .codexChatGPT,
       committed.slotID?.uuidString.lowercased() == login.namespace.runID,
@@ -311,6 +319,31 @@ public final class NativeCodexConnection: ObservableObject {
     guard canDisconnect, let activeLogin else { return }
     retire(activeLogin, because: .disconnected, sendCancel: true)
     for scope in summaryScopes.values { scope.cancel() }
+  }
+
+  /// Fence admission before requesting all retirements. The app keeps each owner
+  /// until its actual terminal and leaves the durable selection for the next launch.
+  func retireForApplicationTermination() async -> Bool {
+    guard !preparingForApplicationTermination else { return false }
+    preparingForApplicationTermination = true
+    objectWillChange.send()
+    let logins = [candidate, activeLogin, predecessor].compactMap { $0 }
+    let summaries = summaryScopes
+    for login in logins { retire(login, because: .applicationTermination, sendCancel: true) }
+    for scope in summaries.values { scope.cancel() }
+    for login in logins where login.owner != nil && !login.retirementSettled {
+      await withCheckedContinuation { login.retirementWaiter = $0 }
+    }
+    for (id, scope) in summaries {
+      await scope.retireAndWait()
+      if scope.clean { removeSummaryScope(id) }
+    }
+    return !blocksReplacement
+  }
+
+  func cancelApplicationTermination() {
+    preparingForApplicationTermination = false
+    objectWillChange.send()
   }
 
   private func selector(_ value: ProviderConfiguration) -> [String: Any] {
@@ -460,6 +493,12 @@ public final class NativeCodexConnection: ObservableObject {
   }
 
   private func finish(_ login: LoginScope, terminal: OwnedChildRetirement.Terminal) {
+    defer {
+      login.retirementSettled = true
+      let waiter = login.retirementWaiter
+      login.retirementWaiter = nil
+      waiter?.resume()
+    }
     guard candidate === login || activeLogin === login || predecessor === login else { return }
     guard case .clean = terminal else {
       block(login, "프로세스 또는 전용 저장소 정리를 확인하지 못했습니다.")
@@ -679,7 +718,8 @@ public final class ProviderSettingsService: ObservableObject {
   }
   public var candidatesBlocked: Bool {
     guard let codex else { return false }
-    return codex.blocksReplacement && codex.configurationAvailableForAPIKeyPromotion == nil
+    return codex.preparingForApplicationTermination
+      || (codex.blocksReplacement && codex.configurationAvailableForAPIKeyPromotion == nil)
   }
   public var model: String { connection.configuration.model }
   public var isTesting: Bool { phase == .probing }
@@ -692,6 +732,7 @@ public final class ProviderSettingsService: ObservableObject {
     connection.restore()
   }
   public func reconnect(key: String) {
+    guard codex?.preparingForApplicationTermination != true else { return }
     guard let codex, codex.blocksReplacement else { return connection.connect(key: key) }
     guard let expected = codex.configurationAvailableForAPIKeyPromotion else { return }
     connection.connect(key: key, replacing: expected) { [weak codex] winner in

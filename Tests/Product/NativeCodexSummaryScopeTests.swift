@@ -743,6 +743,154 @@ import ProviderRequest
     XCTAssertFalse(FileManager.default.fileExists(atPath: second.path))
   }
 
+  func testApplicationTerminationStartsAllOwnedDrainsBeforeWaitingAndPreservesSelection() async throws {
+    let (root, _, template) = try workerFixture(script: controlWorkerScript(
+      holdResult: true, syntheticLogin: true, holdProbe: true))
+    defer { try? FileManager.default.removeItem(at: root) }
+    let database = try ProductDatabase.open(at: root.appendingPathComponent("database"))
+    let configuration = try NativeOpenAIConfiguration(model: "fixture-model")
+    let apiKey = NativeAPIKeyConnection(configuration: configuration,
+      slots: try APIKeySlotStore(directory: root.appendingPathComponent("slots")),
+      persistence: DatabaseAPIKeySelector(database: database, configuration: configuration),
+      transport: RejectNetwork(), authority: try ProviderRequest())
+    apiKey.restore()
+    let loginRoot = root.appendingPathComponent("codex-scopes", isDirectory: true)
+    var loginDirectories: [URL] = []
+    var summaryDirectory: URL?
+    let codex = NativeCodexConnection(database: database, root: loginRoot, apiKey: apiKey) { namespace in
+      guard namespace.prepareBackupExclusionFixture(
+        agentScript: root.appendingPathComponent("resources/agent.py"),
+        interpreter: SyntheticPython.metadataInterpreter) else { return nil }
+      if namespace.directoryURL.deletingLastPathComponent().path == loginRoot.path {
+        loginDirectories.append(namespace.directoryURL)
+      } else {
+        summaryDirectory = namespace.directoryURL
+      }
+      return .testing(namespace: namespace, interpreter: template.interpreter, script: template.script)
+    }
+    codex.connect(mode: "browser")
+    let active = try XCTUnwrap(loginDirectories.last)
+    try await waitFor { codex.phase == .signingIn }
+    codex.checkLogin()
+    try await waitForMarker("probe-received", directory: active)
+    try Data().write(to: marker("release-probe", directory: active))
+    try await waitFor { codex.eligibleForEntry }
+    let selected = try database.providerConfiguration()
+
+    codex.connect(mode: "device")
+    let replacement = try XCTUnwrap(loginDirectories.last)
+    XCTAssertNotEqual(replacement, active)
+    try await waitFor { codex.phase == .signingIn }
+    codex.checkLogin()
+    try await waitForMarker("probe-received", directory: replacement)
+    let paperID = UUID()
+    let (authority, request, _) = try parameters(paperID: paperID)
+    let identity = LibrarySummaryIdentity(paperID: paperID, generation: UUID(), requestPaperGeneration: 1,
+      pdfSHA256: String(repeating: "a", count: 64), revision: UUID(),
+      configurationGeneration: selected.generation, job: UUID(), attempt: UUID(), fence: UUID(),
+      correlation: UUID(), input: UUID(), epoch: UUID())
+    let summary = Task { try await codex.executeLibrarySummary(request, identity: identity, authority: authority) }
+    defer { summary.cancel() }
+    try await waitFor { summaryDirectory != nil }
+    let summaryScope = try XCTUnwrap(summaryDirectory)
+    try await waitForMarker("summary-received", directory: summaryScope)
+
+    let completed = Completion()
+    let shutdown = Task {
+      defer { completed.returned = true }
+      return await codex.retireForApplicationTermination()
+    }
+    // The held replacement must not delay admission of the current login's drain.
+    try await waitForMarker("retirement-received", directory: active)
+    XCTAssertFalse(completed.returned)
+    XCTAssertFalse(codex.canStart)
+    XCTAssertFalse(codex.eligibleForEntry)
+    codex.connect(mode: "browser")
+    XCTAssertEqual(loginDirectories.count, 2)
+    do {
+      _ = try await codex.executeLibrarySummary(request, identity: identity, authority: authority)
+      XCTFail("Termination must deny new Summary work")
+    } catch { XCTAssertEqual(error as? LibrarySummaryError, .providerUnavailable) }
+
+    // Each drain must reach its own terminal handshake while all peers remain held.
+    try Data().write(to: marker("release-probe", directory: replacement))
+    try await waitForMarker("retirement-received", directory: replacement)
+    try Data().write(to: marker("release-result", directory: summaryScope))
+    try await waitForMarker("retirement-received", directory: summaryScope)
+    XCTAssertFalse(completed.returned)
+    try Data().write(to: marker("release-retirement", directory: active))
+    try await waitFor { !FileManager.default.fileExists(atPath: active.path) }
+    XCTAssertFalse(completed.returned)
+    XCTAssertEqual(try database.providerConfiguration(), selected)
+    try Data().write(to: marker("release-retirement", directory: replacement))
+    try await waitFor { !FileManager.default.fileExists(atPath: replacement.path) }
+    XCTAssertFalse(completed.returned)
+    XCTAssertEqual(try database.providerConfiguration(), selected)
+
+    try Data().write(to: marker("release-retirement", directory: summaryScope))
+    let clean = await shutdown.value
+    XCTAssertTrue(clean)
+    XCTAssertTrue(completed.returned)
+    do {
+      _ = try await summary.value
+      XCTFail("A Summary cancelled for termination must reject its late result")
+    } catch { XCTAssertTrue(error is CancellationError) }
+    XCTAssertEqual(try database.providerConfiguration(), selected)
+    XCTAssertEqual(try ProductDatabase.open(at: database.root).providerConfiguration(), selected)
+    XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: loginRoot.path).isEmpty)
+    XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: codex.summaryRoot.path).isEmpty)
+    XCTAssertFalse(codex.canStart)
+    codex.cancelApplicationTermination()
+    XCTAssertTrue(codex.canStart)
+    XCTAssertEqual(try database.providerConfiguration(), selected)
+  }
+
+  func testApplicationTerminationKeepsUnverifiedNamespaceAndReportsFailure() async throws {
+    let (root, _, template) = try workerFixture(script: controlWorkerScript(
+      holdResult: false, syntheticLogin: true))
+    defer { try? FileManager.default.removeItem(at: root) }
+    let database = try ProductDatabase.open(at: root.appendingPathComponent("database"))
+    let configuration = try NativeOpenAIConfiguration(model: "fixture-model")
+    let apiKey = NativeAPIKeyConnection(configuration: configuration,
+      slots: try APIKeySlotStore(directory: root.appendingPathComponent("slots")),
+      persistence: DatabaseAPIKeySelector(database: database, configuration: configuration),
+      transport: RejectNetwork(), authority: try ProviderRequest())
+    var loginDirectory: URL?
+    let codex = NativeCodexConnection(database: database,
+      root: root.appendingPathComponent("codex-scopes"), apiKey: apiKey) { namespace in
+      guard namespace.prepareBackupExclusionFixture(
+        agentScript: root.appendingPathComponent("resources/agent.py"),
+        interpreter: SyntheticPython.metadataInterpreter) else { return nil }
+      loginDirectory = namespace.directoryURL
+      return .testing(namespace: namespace, interpreter: template.interpreter, script: template.script)
+    }
+    codex.connect(mode: "browser")
+    let login = try XCTUnwrap(loginDirectory)
+    try await waitFor { codex.phase == .signingIn }
+    codex.checkLogin()
+    try await waitFor { codex.eligibleForEntry }
+    let selected = try database.providerConfiguration()
+    let owner = try XCTUnwrap(codex.testingOwner)
+    // The test, rather than the process owner, creates this top-level entry.
+    let unknown = login.appendingPathComponent("unowned-fixture")
+    let bytes = Data("fixture".utf8)
+    try bytes.write(to: unknown)
+
+    let shutdown = Task { await codex.retireForApplicationTermination() }
+    try await waitForMarker("retirement-received", directory: login)
+    try Data().write(to: marker("release-retirement", directory: login))
+    let cleaned = await shutdown.value
+    XCTAssertFalse(cleaned)
+    XCTAssertEqual(owner.terminal, .unknown(.namespaceCleanup))
+    XCTAssertTrue(owner.testingReaped)
+    XCTAssertEqual(try Data(contentsOf: unknown), bytes)
+    XCTAssertEqual(try database.providerConfiguration(), selected)
+    codex.cancelApplicationTermination()
+    XCTAssertEqual(codex.phase, .blocked)
+    XCTAssertTrue(codex.blocksReplacement)
+    XCTAssertFalse(codex.canStart)
+  }
+
   func testOtherPaperPurgeKeepsBoundSummaryAndRejectsUnownedEntry() async throws {
     let (root, _, template) = try workerFixture(
       script: controlWorkerScript(holdResult: true, syntheticLogin: true))

@@ -63,6 +63,11 @@ public final class ProductAppComposition: ObservableObject {
     return instance
   }
 
+  static func codexForApplicationTermination() -> NativeCodexConnection? {
+    productionInstance?.connection?.cancelUncommittedProbe()
+    return productionInstance?.codex
+  }
+
   public func start() async {
     guard !started else { return }
     started = true
@@ -109,7 +114,8 @@ public final class ProductAppComposition: ObservableObject {
     guard let database, let slots, let authority else {
       throw ProductEntryError.privateContainerUnavailable
     }
-    guard codex?.blocksReplacement != true, connection?.canReplaceOwner != false else {
+    guard codex?.preparingForApplicationTermination != true, codex?.blocksReplacement != true,
+      connection?.canReplaceOwner != false else {
       throw ProductEntryError.connectionInUse
     }
     try connection?.retireAfterDrain()
@@ -132,7 +138,8 @@ public final class ProductAppComposition: ObservableObject {
   }
 
   public func changeModel() {
-    guard workspace == nil, codex?.blocksReplacement != true else {
+    guard workspace == nil, codex?.preparingForApplicationTermination != true,
+      codex?.blocksReplacement != true else {
       entryFailed = true
       return
     }
@@ -256,6 +263,17 @@ private struct ProductCompositionView: View {
   @State private var configurationFailed = false
 
   var body: some View {
+    content.safeAreaInset(edge: .bottom, spacing: 0) {
+      if composition.codex?.preparingForApplicationTermination == true {
+        ProgressView("앱을 종료하기 전에 ChatGPT 프로세스를 정리하고 있습니다.")
+          .padding(12)
+          .frame(maxWidth: .infinity)
+          .background(.bar)
+      }
+    }
+  }
+
+  @ViewBuilder private var content: some View {
     switch composition.phase {
     case .loading:
       ProgressView("라이브러리 준비 중")
