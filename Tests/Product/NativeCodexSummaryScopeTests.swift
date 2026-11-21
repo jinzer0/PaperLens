@@ -775,6 +775,78 @@ import ProviderRequest
       mayBeAbsent: mayBeAbsent), .unverified)
   }
 
+  func testCommittedChatGPTConnectionSurvivesOldKeyCleanupFailure() async throws {
+    let (root, _, template) = try workerFixture(
+      script: controlWorkerScript(holdResult: false, syntheticLogin: true, holdProbe: true))
+    defer { try? FileManager.default.removeItem(at: root) }
+    let database = try ProductDatabase.open(at: root.appendingPathComponent("database"))
+    let configuration = try NativeOpenAIConfiguration(model: "fixture-model")
+    let slotsRoot = root.appendingPathComponent("slots")
+    let slots = try APIKeySlotStore(directory: slotsRoot)
+    let key = "fixture-last-good"
+    let slot = try slots.create(key: key)
+    let selected = try database.compareAndSwapProviderConfiguration(
+      expected: database.providerConfiguration(), replacementKind: .openAIAPIKey,
+      replacementSlotID: slot, replacementModel: configuration.model)
+    let transport = SettingsSuspendedTransport()
+    let apiKey = NativeAPIKeyConnection(configuration: configuration, slots: slots,
+      persistence: DatabaseAPIKeySelector(database: database, configuration: configuration),
+      transport: transport, authority: try ProviderRequest())
+    var loginDirectory: URL?
+    let codex = NativeCodexConnection(database: database, root: root.appendingPathComponent("login"),
+      apiKey: apiKey) { namespace in
+        guard namespace.prepareBackupExclusionFixture(
+          agentScript: root.appendingPathComponent("resources/agent.py"),
+          interpreter: SyntheticPython.metadataInterpreter) else { return nil }
+        loginDirectory = namespace.directoryURL
+        return .testing(namespace: namespace, interpreter: template.interpreter, script: template.script)
+      }
+    let settings = ProviderSettingsService(connection: apiKey, codex: codex)
+    settings.restore()
+    XCTAssertTrue(apiKey.eligibleForEntry)
+    codex.connect(mode: "browser")
+    let login = try XCTUnwrap(loginDirectory)
+    try await waitFor { codex.phase == .signingIn }
+    codex.checkLogin()
+    try await waitForMarker("probe-received", directory: login)
+    XCTAssertEqual(try database.providerConfiguration(), selected)
+    XCTAssertTrue(apiKey.eligibleForEntry)
+
+    // Change only the synthetic previous slot after ChatGPT has started its probe.
+    let slotFile = slotsRoot.appendingPathComponent(slot.uuidString)
+    let before = try Data(contentsOf: slotFile)
+    try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: slotFile.path)
+    try Data().write(to: marker("release-probe", directory: login))
+    try await waitFor { codex.currentConfiguration?.kind == .codexChatGPT }
+
+    let committed = try database.providerConfiguration()
+    XCTAssertEqual(committed.generation, selected.generation + 1)
+    XCTAssertEqual(committed.slotID, UUID(uuidString: login.lastPathComponent))
+    XCTAssertEqual(codex.phase, .connected)
+    XCTAssertEqual(settings.currentProviderLabel, "ChatGPT")
+    XCTAssertTrue(settings.eligibleForEntry)
+    XCTAssertFalse(apiKey.eligibleForEntry)
+    XCTAssertNil(apiKey.activeSelection)
+    XCTAssertTrue(codex.showsFailure)
+    XCTAssertTrue(codex.statusMessage.contains("이전 API 키"))
+    XCTAssertEqual(apiKey.phase, .failed(.cleanupBlocked))
+    XCTAssertEqual(try Data(contentsOf: slotFile), before)
+    XCTAssertFalse(codex.canStart)
+    XCTAssertTrue(settings.candidatesBlocked)
+    settings.reconnect(key: "fixture-replacement")
+    XCTAssertFalse(settings.isTesting)
+    XCTAssertEqual(transport.count, 0)
+
+    let shutdown = Task { await codex.retireForApplicationTermination() }
+    try await waitForMarker("retirement-received", directory: login)
+    try Data().write(to: marker("release-retirement", directory: login))
+    let drained = await shutdown.value
+    XCTAssertTrue(drained)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: login.path))
+    XCTAssertEqual(try database.providerConfiguration(), committed)
+    XCTAssertEqual(try Data(contentsOf: slotFile), before)
+  }
+
   func testUnownedLoginEntryAppearingDuringProbePreventsPromotion() async throws {
     let (root, _, template) = try workerFixture(script: controlWorkerScript(
       holdResult: false, syntheticLogin: true, holdProbe: true, closeAfterProbe: true))

@@ -69,7 +69,7 @@ public struct ProviderSettingsView: View {
           }
         }
         candidateStatus
-        if service.candidatesBlocked {
+        if service.candidatesBlocked && !service.keyStorageBlocked {
           Text("진행 중인 ChatGPT 로그인이나 전용 저장소 정리가 끝나면 새 키를 확인할 수 있습니다.")
             .foregroundStyle(.secondary)
         }
@@ -109,7 +109,7 @@ public struct ProviderSettingsView: View {
     case .failed(let error):
       Label(error.koreanMessage, systemImage: "exclamationmark.triangle")
         .foregroundStyle(.red)
-      if service.eligibleForEntry {
+      if service.eligibleForEntry && !service.keyStorageBlocked {
         Text("새 연결은 적용하지 않았으며 기존 연결을 유지합니다.")
       }
     }

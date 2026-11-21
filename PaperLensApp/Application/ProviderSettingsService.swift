@@ -494,8 +494,9 @@ public final class NativeCodexConnection: ObservableObject {
     do {
       try apiKey.retireSupersededSelection()
     } catch {
-      retire(login, because: .failure("새 설정을 저장한 뒤 이전 키를 정리하지 못해 연결을 중단했습니다."),
-        sendCancel: false)
+      // The durable selector already points to this independently validated login.
+      guard login.ending == nil else { return }
+      reportFailure("이전 API 키의 안전한 정리를 확인하지 못해 Provider 교체가 차단되었습니다.")
       return
     }
     guard login.ending == nil else { return }
@@ -784,7 +785,9 @@ public final class ProviderSettingsService: ObservableObject {
     }
     return activeSelection == nil ? "없음" : "OpenAI API"
   }
+  var keyStorageBlocked: Bool { connection.storageBlocked }
   public var candidatesBlocked: Bool {
+    if keyStorageBlocked { return true }
     guard let codex else { return false }
     return codex.preparingForApplicationTermination
       || (codex.blocksReplacement && codex.configurationAvailableForAPIKeyPromotion == nil)
@@ -800,7 +803,7 @@ public final class ProviderSettingsService: ObservableObject {
     connection.restore()
   }
   public func reconnect(key: String) {
-    guard codex?.preparingForApplicationTermination != true else { return }
+    guard !keyStorageBlocked, codex?.preparingForApplicationTermination != true else { return }
     guard let codex, codex.blocksReplacement else { return connection.connect(key: key) }
     guard let expected = codex.configurationAvailableForAPIKeyPromotion else { return }
     connection.connect(key: key, replacing: expected) { [weak codex] winner in

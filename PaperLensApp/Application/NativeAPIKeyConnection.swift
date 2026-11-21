@@ -174,7 +174,7 @@ public final class NativeAPIKeyConnection: ObservableObject {
   private var probes: Set<UUID> = []
   private var retired: Set<UUID> = []
   private var leases: [UUID: APIKeySelection] = [:]
-  private var storageBlocked = false
+  private(set) var storageBlocked = false
   // Unlike unsafe storage, unresolved unselected ownership does not revoke a
   // separately validated last-good selection. It denies all replacement.
   private var unresolvedSlots = false
@@ -272,18 +272,21 @@ public final class NativeAPIKeyConnection: ObservableObject {
   /// Retire only a selection actually superseded in the sole durable selector.
   /// Existing consumers retain their key until their real termination releases the lease.
   public func retireSupersededSelection() throws {
-    guard let persistence else { throw APIKeyConnectionError.persistenceUnavailable }
     guard let previous = activeSelection else { return }
-    guard try persistence.currentSelection() != previous else {
-      throw APIKeyConnectionError.selectorConflict
-    }
     defer { publishOwnerReplacementAvailability() }
-    retired.insert(previous.slotID)
-    activeSelection = nil
-    eligibleForEntry = false
-    publishPhase(.idle)
-    do { try drainRetired() } catch {
+    do {
+      guard let persistence else { throw APIKeyConnectionError.persistenceUnavailable }
+      guard try persistence.currentSelection() != previous else {
+        throw APIKeyConnectionError.selectorConflict
+      }
+      retired.insert(previous.slotID)
+      activeSelection = nil
+      eligibleForEntry = false
+      publishPhase(.idle)
+      try drainRetired()
+    } catch {
       storageBlocked = true
+      eligibleForEntry = false
       publishPhase(.failed(.cleanupBlocked))
       throw APIKeyConnectionError.cleanupBlocked
     }
