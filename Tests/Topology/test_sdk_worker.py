@@ -30,6 +30,7 @@ sys.path.insert(0, str(ROOT / 'ProviderAgent'))
 import agent
 import sdk_worker
 from provider_rpc import ProtocolError, decode_frame, validate_terminal
+from Contracts.ProviderRequest import provider_request
 
 
 def identity():
@@ -62,7 +63,7 @@ def notification(method, payload):
 
 
 def completion(thread='thread-actual', turn='turn-actual', status='completed',
-               text='{"text":"PAPERLENS_OK"}', phase='final_answer', error=None,
+               text='PAPERLENS_OK', phase='final_answer', error=None,
                items_view='full', count=1):
     items = [SimpleNamespace(root=SimpleNamespace(type='agentMessage', phase=phase, text=text))
              for _ in range(count)]
@@ -135,6 +136,7 @@ def scripted_worker():
         'LoginAccountParams', 'ThreadStartParams', 'AskForApproval',
         'TurnStartParams', 'ReadOnlySandboxPolicy')},
         SandboxMode=SimpleNamespace(read_only='read-only'))
+    owner._sdk_module = {'provider_request.provider_request': provider_request}.__getitem__
     owner.cwd = Path('/SCRIPTED-PUBLIC-CONTRACT-NOT-PRODUCTION')
     owner.run_id = str(uuid.uuid4())
     owner.dispatch_enabled = True
@@ -174,8 +176,8 @@ class ScriptedDispatchTests(unittest.IsolatedAsyncioTestCase):
         return await self.call('product.loginStart', dict(self.bound, expectedSelector=self.expected,
                                                         model='bound-model', mode=mode))
 
-    async def authenticate(self):
-        await self.login()
+    async def authenticate(self, mode='browser'):
+        await self.login(mode)
         self.owner.client.login_notifications.put(notification('account/login/completed',
             {'loginId': 'actual-login', 'success': True}))
         for _ in range(1000):
@@ -222,7 +224,7 @@ class ScriptedDispatchTests(unittest.IsolatedAsyncioTestCase):
                                                        model='other', mode='browser'))
 
     async def test_exact_probe_fields_and_authoritative_completion_only(self):
-        await self.authenticate()
+        await self.authenticate('device')
         self.owner.client.turn_notifications.put(notification('item/agentMessage/delta', {'delta': 'PAPERLENS_OK'}))
         self.owner.client.turn_notifications.put(completion())
         result = await self.call('product.connectionTest', dict(self.bound, expectedSelector=self.expected))
@@ -233,13 +235,14 @@ class ScriptedDispatchTests(unittest.IsolatedAsyncioTestCase):
                          ('bound-model', str(self.owner.cwd), True))
         self.assertEqual(thread.approval_policy.root, 'never')
         self.assertEqual(thread.sandbox, 'read-only')
-        self.assertEqual(thread.developer_instructions, 'Reply exactly PAPERLENS_OK.')
+        self.assertIsNone(getattr(thread, 'developer_instructions', None))
         turn = next(c for c in self.owner.client.calls if c[0] == 'turn_start')
-        self.assertEqual(turn[1:3], ('thread-actual', []))
-        self.assertEqual(turn[3].input, [])
+        user_input = [{'type': 'text', 'text': 'Reply exactly PAPERLENS_OK.', 'text_elements': []}]
+        self.assertEqual(turn[1:3], ('thread-actual', user_input))
+        self.assertEqual(turn[3].input, user_input)
         self.assertEqual(turn[3].thread_id, 'thread-actual')
         self.assertFalse(turn[3].sandbox_policy.network_access)
-        self.assertEqual(turn[3].output_schema, sdk_worker._MARKER_SCHEMA)
+        self.assertIsNone(getattr(turn[3], 'output_schema', None))
         with self.assertRaises(ProtocolError):
             await self.call('product.connectionTest', dict(self.bound, expectedSelector=self.expected))
 
@@ -854,9 +857,8 @@ class MarkerContractTests(unittest.TestCase):
         invalid = [dict(status='failed'), dict(status='interrupted'), dict(status='inProgress'),
                    dict(thread='other'), dict(turn='other'), dict(error=SimpleNamespace()),
                    dict(items_view='partial'), dict(count=0), dict(count=2), dict(phase='commentary'),
-                   dict(text='PAPERLENS_OK'), dict(text='{"text":"PAPERLENS_OK","extra":1}'),
-                   dict(text='{"text":"wrong","text":"PAPERLENS_OK"}'),
-                   dict(text='["PAPERLENS_OK"]')]
+                   dict(text=' PAPERLENS_OK'), dict(text='PAPERLENS_OK\n'),
+                   dict(text='PAPERLENS_OK.'), dict(text='{"text":"PAPERLENS_OK"}')]
         for values in invalid:
             with self.subTest(values=values):
                 self.assertFalse(sdk_worker.OfficialSDKWorker._valid_marker(

@@ -24,10 +24,6 @@ import uuid
 _ROOTS = []
 _ENV_KEYS = frozenset(('PATH', 'LANG', 'LC_ALL', 'HOME', 'CODEX_HOME', 'TMPDIR'))
 _MARKER = 'PAPERLENS_OK'
-_MARKER_SCHEMA = {
-    'type': 'object', 'properties': {'text': {'type': 'string', 'const': _MARKER}},
-    'required': ['text'], 'additionalProperties': False,
-}
 _SUMMARY_SCHEMA = {
     'type': 'object', 'additionalProperties': False,
     'required': ['summary', 'insufficiency'], 'properties': {
@@ -652,11 +648,14 @@ class OfficialSDKWorker:
                 stage.controller.fail(stage.intent)
 
     def _probe(self, request_id, stage):
+        authority = self._sdk_module('provider_request.provider_request')
+        wire = authority.WireRequest(1, request_id, 'connectionTest', {})
+        message, = authority.render_messages(wire)
+        user_input = [{'type': 'text', 'text': message.content, 'text_elements': []}]
         m = self.models
         thread = self._call(request_id, self.client.thread_start, m.ThreadStartParams(
             model=stage.model, cwd=str(self.cwd), ephemeral=True,
-            approval_policy=m.AskForApproval(root='never'), sandbox=m.SandboxMode.read_only,
-            developer_instructions='Reply exactly PAPERLENS_OK.'), stage=stage)
+            approval_policy=m.AskForApproval(root='never'), sandbox=m.SandboxMode.read_only), stage=stage)
         thread_id = thread.thread.id
         stage.thread_ids.append(thread_id)
         if type(thread_id) is not str or not thread_id:
@@ -664,11 +663,10 @@ class OfficialSDKWorker:
         self._check(request_id)
         if stage.stale:
             raise ProtocolError('cancelled')
-        turn = self._call(request_id, self.client.turn_start, thread_id, [], m.TurnStartParams(
-            thread_id=thread_id, input=[], model=stage.model, cwd=str(self.cwd),
+        turn = self._call(request_id, self.client.turn_start, thread_id, user_input, m.TurnStartParams(
+            thread_id=thread_id, input=user_input, model=stage.model, cwd=str(self.cwd),
             approval_policy=m.AskForApproval(root='never'),
-            sandbox_policy=m.ReadOnlySandboxPolicy(type='readOnly', network_access=False),
-            output_schema=_MARKER_SCHEMA), stage=stage)
+            sandbox_policy=m.ReadOnlySandboxPolicy(type='readOnly', network_access=False)), stage=stage)
         turn_id = turn.turn.id
         stage.turn_ids.append(turn_id)
         if type(turn_id) is not str or not turn_id:
@@ -704,20 +702,7 @@ class OfficialSDKWorker:
         messages = [item.root for item in turn.items
                     if getattr(item.root, 'type', None) == 'agentMessage'
                     and _value(getattr(item.root, 'phase', None)) == 'final_answer']
-        if len(messages) != 1:
-            return False
-        try:
-            # Duplicate keys, trailing tokens and non-object values are rejected.
-            def pairs(items):
-                result = {}
-                for key, value in items:
-                    if key in result:
-                        raise ValueError('duplicateKey')
-                    result[key] = value
-                return result
-            return json.loads(messages[0].text, object_pairs_hook=pairs) == {'text': _MARKER}
-        except (TypeError, ValueError):
-            return False
+        return len(messages) == 1 and messages[0].text == _MARKER
 
     def _cancel(self, request_id, stage):
         from account_login import validate_cancel_status
