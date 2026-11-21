@@ -1,3 +1,4 @@
+import Combine
 import Darwin
 import Foundation
 import XCTest
@@ -126,7 +127,7 @@ import ProviderRequest
   }
 
   private func controlWorkerScript(holdResult: Bool, remoteTimeout: Bool = false,
-    syntheticLogin: Bool = false) -> String {
+    syntheticLogin: Bool = false, holdProbe: Bool = false) -> String {
     """
     import array, json, os, select, socket, struct, subprocess, sys, time
     end = time.monotonic() + 3
@@ -203,6 +204,9 @@ import ProviderRequest
                 assert params == identity
                 result = dict(identity, state='authenticated')
             elif \(syntheticLogin ? "True" : "False") and method == 'product.connectionTest':
+                if \(holdProbe ? "True" : "False"):
+                    mark('probe-received')
+                    gate('release-probe')
                 result = dict(identity, expectedSelector=params['expectedSelector'], state='usable', text='PAPERLENS_OK')
             elif \(syntheticLogin ? "True" : "False") and method == 'product.loginCancel':
                 assert params == identity
@@ -372,6 +376,81 @@ import ProviderRequest
     let result = try authority.wrapModelResult(bytes, request: request)
     XCTAssertEqual(result.operation, .librarySummary)
     XCTAssertEqual(result.requestID, request.wire.requestID)
+  }
+
+  func testClosingWorkspaceSettingsRejectsLateProbeButKeepsCommittedLogin() async throws {
+    let (root, _, template) = try workerFixture(
+      script: controlWorkerScript(holdResult: false, syntheticLogin: true, holdProbe: true))
+    defer { try? FileManager.default.removeItem(at: root) }
+    let database = try ProductDatabase.open(at: root.appendingPathComponent("database"))
+    let configuration = try NativeOpenAIConfiguration(model: "fixture-model")
+    let slots = try APIKeySlotStore(directory: root.appendingPathComponent("slots"))
+    let oldSlot = try slots.create(key: "synthetic-last-good")
+    let selected = try database.compareAndSwapProviderConfiguration(expected: database.providerConfiguration(),
+      replacementKind: .openAIAPIKey, replacementSlotID: oldSlot, replacementModel: configuration.model)
+    let apiKey = NativeAPIKeyConnection(configuration: configuration, slots: slots,
+      persistence: DatabaseAPIKeySelector(database: database, configuration: configuration),
+      transport: RejectNetwork(), authority: try ProviderRequest())
+    apiKey.restore()
+    var prepared: URL?
+    let codex = NativeCodexConnection(database: database, root: root.appendingPathComponent("codex-scopes"),
+      apiKey: apiKey) { namespace in
+        guard namespace.prepareBackupExclusionFixture(
+          agentScript: root.appendingPathComponent("resources/agent.py"),
+          interpreter: SyntheticPython.metadataInterpreter) else { return nil }
+        prepared = namespace.directoryURL
+        return .testing(namespace: namespace, interpreter: template.interpreter, script: template.script)
+      }
+    let library = try await LocalLibraryLifecycle.open(database: database)
+    let workspace = try ProductWorkspace(database: database, lifecycle: library, connection: apiKey, codex: codex)
+
+    workspace.sheet = .settings
+    codex.connect(mode: "browser")
+    let firstDirectory = try XCTUnwrap(prepared)
+    try await waitFor { codex.phase == .signingIn }
+    codex.checkLogin()
+    try await waitForMarker("probe-received", directory: firstDirectory)
+    XCTAssertEqual(codex.phase, .probing)
+    workspace.sheet = nil
+    XCTAssertEqual(codex.phase, .retiring)
+    XCTAssertTrue(workspace.settings.eligibleForEntry)
+    try Data().write(to: marker("release-probe", directory: firstDirectory))
+    try await waitForMarker("retirement-received", directory: firstDirectory)
+    try Data().write(to: marker("release-retirement", directory: firstDirectory))
+    try await waitFor { codex.phase == .idle }
+    XCTAssertTrue(codex.offersRetry)
+    XCTAssertEqual(try database.providerConfiguration(), selected)
+    XCTAssertEqual(try slots.validatedSlotIDs(), [oldSlot])
+    XCTAssertFalse(FileManager.default.fileExists(atPath: firstDirectory.path))
+
+    workspace.presentationDidDismiss()
+    workspace.sheet = .settings
+    // Close during the synchronous notifications after CAS but before `.connected`.
+    let closing = apiKey.$activeSelection.dropFirst().sink { selection in
+      if selection == nil { workspace.dismissSheet() }
+    }
+    defer { closing.cancel() }
+    codex.connect(mode: "browser")
+    let retryDirectory = try XCTUnwrap(prepared)
+    XCTAssertNotEqual(retryDirectory, firstDirectory)
+    try await waitFor { codex.phase == .signingIn }
+    codex.checkLogin()
+    try await waitForMarker("probe-received", directory: retryDirectory)
+    try Data().write(to: marker("release-probe", directory: retryDirectory))
+    try await waitFor { codex.eligibleForEntry }
+    XCTAssertNil(workspace.sheet)
+    let committed = try database.providerConfiguration()
+    XCTAssertEqual(committed.kind, .codexChatGPT)
+    XCTAssertEqual(committed.generation, selected.generation + 1)
+
+    workspace.sheet = .settings
+    workspace.sheet = nil
+    XCTAssertTrue(codex.eligibleForEntry)
+    XCTAssertEqual(try database.providerConfiguration(), committed)
+    codex.cancel()
+    try await waitForMarker("retirement-received", directory: retryDirectory)
+    try Data().write(to: marker("release-retirement", directory: retryDirectory))
+    try await waitFor { codex.phase == .idle }
   }
 
   func testOtherPaperPurgeKeepsBoundSummaryAndRejectsUnownedEntry() async throws {

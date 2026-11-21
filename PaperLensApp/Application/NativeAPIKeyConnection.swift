@@ -168,6 +168,7 @@ public final class NativeAPIKeyConnection: ObservableObject {
   private let authority: ProviderRequest
   private var intent = UUID()
   private var running: Task<Void, Never>?
+  private var publishingSelection = false
   private var probes: Set<UUID> = []
   private var retired: Set<UUID> = []
   private var leases: [UUID: APIKeySelection] = [:]
@@ -288,6 +289,11 @@ public final class NativeAPIKeyConnection: ObservableObject {
     invalidateCandidate()
     phase = .failed(.cancelled)
   }
+
+  func cancelUncommittedProbe() {
+    guard phase == .probing, !publishingSelection else { return }
+    cancel()
+  }
   public func connect(key: String) {
     guard !ownerRetired else {
       fail(APIKeyConnectionError.staleCandidate)
@@ -370,6 +376,8 @@ public final class NativeAPIKeyConnection: ObservableObject {
       }
       probes.remove(slot)
       staged = nil
+      publishingSelection = true
+      defer { publishingSelection = false }
       activeSelection = winner
       eligibleForEntry = true
       phase = .connected(winner)

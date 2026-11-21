@@ -63,6 +63,7 @@ public final class ProductWorkspace: ObservableObject {
     (@MainActor (LocalImportConfirmation) -> Void)?
   private var metadataReadRequest: UUID?
   private var installingSheet = false
+  private var clearingSheet = false
   private var cleaningSheet = false
   @Published private var activeSheet: Sheet?
   @Published public private(set) var sheetCleanupPending = false
@@ -85,9 +86,22 @@ public final class ProductWorkspace: ObservableObject {
         sheetCleanupPending = true
         activeSheet = newValue
       } else {
-        activeSheet = nil
+        clearActiveSheet()
       }
     }
+  }
+
+  fileprivate var settingsActionsAllowed: Bool {
+    if case .settings = activeSheet { return !clearingSheet && !cleaningSheet }
+    return false
+  }
+
+  private func clearActiveSheet() {
+    guard !clearingSheet, let activeSheet else { return }
+    clearingSheet = true
+    defer { clearingSheet = false }
+    if case .settings = activeSheet { settings.cancelUncommittedConnections() }
+    self.activeSheet = nil
   }
   @Published public var libraryFilter = OrganizationFilter()
   @Published public private(set) var reader: OpenReader?
@@ -360,10 +374,10 @@ public final class ProductWorkspace: ObservableObject {
     {
       return confirmationCancellation.task
     }
-    guard !cleaningSheet else { return nil }
+    guard !cleaningSheet, !clearingSheet else { return nil }
     cleaningSheet = true
     sheetCleanupPending = true
-    activeSheet = nil
+    clearActiveSheet()
     importPreparation = nil
     preparing = false
     let confirmationID = pendingConfirmation
@@ -939,7 +953,10 @@ public struct ProductWorkspaceView: View {
       }.padding().frame(minWidth: 420)
     case .settings:
       VStack {
-        ProviderSettingsView(service: workspace.settings)
+        ProviderSettingsView(service: workspace.settings, isCurrent: {
+          nativeSlot?.id == slot.id && mount == slot.mount && workspace.settingsActionsAllowed
+        })
+        .onDisappear { closeNativeSlot(slot) }
         Button("닫기") { closeNativeSlot(slot) }
       }.padding()
     }
@@ -1081,6 +1098,7 @@ public struct ProductWorkspaceView: View {
   private func nativeDidDismiss(_ slot: NativeSlot) {
     // Slot identity gates duplicate callbacks; owner cleanup precedes every focus guard.
     guard nativeSlot?.id == slot.id else { return }
+    if case .settings = slot.sheet { closeNativeSlot(slot) }
     let cleanup = workspace.presentationDidDismiss(confirmationID: slot.confirmationID)
     let appeared = nativeSlot?.appeared == true
     nativeSlot = nil

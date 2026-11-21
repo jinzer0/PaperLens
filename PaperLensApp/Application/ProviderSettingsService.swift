@@ -140,6 +140,12 @@ public final class NativeCodexConnection: ObservableObject {
     namespace != nil || owner != nil || !summaryScopes.isEmpty || !summaryNamespaceDebt.isEmpty
   }
   public var canStart: Bool { !blocksReplacement && apiKey.canReplaceOwner }
+  var hasPendingLogin: Bool {
+    switch phase {
+    case .starting, .signingIn, .observing, .probing: return true
+    case .idle, .connected, .retiring, .blocked: return false
+    }
+  }
   var showsFailure: Bool { phase == .blocked || ending?.failed == true }
   var offersRetry: Bool {
     guard phase == .idle, let ending else { return false }
@@ -267,10 +273,10 @@ public final class NativeCodexConnection: ObservableObject {
     guard owner != nil, !retirementRequested else { return }
     ending = phase == .connected ? .disconnected : .cancelled
     cancelled = true
+    retirementRequested = true
     instructions = nil
     phase = .retiring
     message = "로그인 취소와 종료를 요청했습니다. 실제 정리는 아직 입증되지 않았습니다."
-    retirementRequested = true
     for scope in summaryScopes.values { scope.cancel() }
     // Only the final cancel frame retains bounded owner admission. Local publication
     // is fenced already; SDK cancellation acceptance is never retirement proof.
@@ -279,6 +285,11 @@ public final class NativeCodexConnection: ObservableObject {
     } else {
       owner?.retire()
     }
+  }
+
+  func cancelUncommittedLogin() {
+    guard committed == nil, hasPendingLogin else { return }
+    cancel()
   }
 
   private var identityParams: [String: Any] {
@@ -563,6 +574,10 @@ public final class ProviderSettingsService: ObservableObject {
     connection.connect(key: key)
   }
   public func cancel() { connection.cancel() }
+  func cancelUncommittedConnections() {
+    connection.cancelUncommittedProbe()
+    codex?.cancelUncommittedLogin()
+  }
   public func candidateEdited() { if isTesting { connection.invalidateCandidate() } }
   public func acquireLease() throws -> APIKeyConnectionLease { try connection.acquireLease() }
   public func mayPublish(_ lease: APIKeyConnectionLease) throws -> Bool {

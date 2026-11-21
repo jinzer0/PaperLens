@@ -2,12 +2,13 @@ import SwiftUI
 
 @MainActor
 func providerSettingsKeyBinding(
-  _ entry: Binding<String>, service: ProviderSettingsService
+  _ entry: Binding<String>, service: ProviderSettingsService,
+  isCurrent: @escaping @MainActor () -> Bool = { true }
 ) -> Binding<String> {
   Binding(
     get: { entry.wrappedValue },
     set: { value in
-      guard !service.candidatesBlocked else { return }
+      guard isCurrent(), !service.candidatesBlocked else { return }
       if value != entry.wrappedValue {
         service.candidateEdited()
       }
@@ -19,11 +20,17 @@ func providerSettingsKeyBinding(
 @MainActor
 public struct ProviderSettingsView: View {
   @ObservedObject private var service: ProviderSettingsService
+  private let isCurrent: @MainActor () -> Bool
   @State private var key = ""
   @FocusState private var keyFocused: Bool
 
   public init(service: ProviderSettingsService) {
+    self.init(service: service, isCurrent: { true })
+  }
+
+  init(service: ProviderSettingsService, isCurrent: @escaping @MainActor () -> Bool) {
     self.service = service
+    self.isCurrent = isCurrent
   }
 
   public var body: some View {
@@ -41,7 +48,7 @@ public struct ProviderSettingsView: View {
         Text("모델: \(service.model)")
         Text("새 키로 실제 생성 요청을 보내 연결을 확인합니다. API 사용 요금이 발생할 수 있습니다.")
           .font(.callout)
-        SecureField("새 API 키", text: providerSettingsKeyBinding($key, service: service))
+        SecureField("새 API 키", text: providerSettingsKeyBinding($key, service: service, isCurrent: isCurrent))
           .textFieldStyle(.roundedBorder)
           .focused($keyFocused)
           .accessibilityLabel("재연결할 OpenAI API 키")
@@ -54,6 +61,7 @@ public struct ProviderSettingsView: View {
           if service.isTesting {
             ProgressView().controlSize(.small).accessibilityLabel("새 연결 확인 중")
             Button("취소") {
+              guard isCurrent() else { return }
               service.cancel()
               keyFocused = true
             }
@@ -67,18 +75,15 @@ public struct ProviderSettingsView: View {
         }
         Divider()
         if let codex = service.codex {
-          NativeCodexConnectionView(connection: codex)
+          NativeCodexConnectionView(connection: codex, isCurrent: isCurrent)
         }
       }
       .padding(24)
       .frame(maxWidth: 640, alignment: .leading)
     }
     .frame(minWidth: 380, minHeight: 360)
-    .task { service.restore() }
-    .onDisappear {
-      if service.isTesting { service.cancel() }
-      key = ""
-    }
+    .task { if isCurrent() { service.restore() } }
+    .onDisappear { key = "" }
   }
 
   private var actionTitle: String {
@@ -87,7 +92,7 @@ public struct ProviderSettingsView: View {
   }
 
   private func submit() {
-    guard !key.isEmpty, !service.isTesting, !service.candidatesBlocked else { return }
+    guard isCurrent(), !key.isEmpty, !service.isTesting, !service.candidatesBlocked else { return }
     service.reconnect(key: key)
   }
 
@@ -115,9 +120,15 @@ public struct ProviderSettingsView: View {
 @MainActor
 public struct NativeCodexConnectionView: View {
   @ObservedObject private var connection: NativeCodexConnection
+  private let isCurrent: @MainActor () -> Bool
 
   public init(connection: NativeCodexConnection) {
+    self.init(connection: connection, isCurrent: { true })
+  }
+
+  init(connection: NativeCodexConnection, isCurrent: @escaping @MainActor () -> Bool) {
     self.connection = connection
+    self.isCurrent = isCurrent
   }
 
   public var body: some View {
@@ -127,10 +138,10 @@ public struct NativeCodexConnectionView: View {
         .font(.callout)
       HStack {
         Button(connection.offersRetry ? "브라우저 로그인 다시 시도" : "브라우저로 로그인") {
-          connection.connect(mode: "browser")
+          if isCurrent() { connection.connect(mode: "browser") }
         }
         Button(connection.offersRetry ? "기기 코드 로그인 다시 시도" : "기기 코드로 로그인") {
-          connection.connect(mode: "device")
+          if isCurrent() { connection.connect(mode: "device") }
         }
       }
       .disabled(!connection.canStart)
@@ -146,20 +157,20 @@ public struct NativeCodexConnectionView: View {
             .font(.caption).textSelection(.enabled)
           Link("로그인 페이지 열기", destination: instructions.url)
         }
-        Button("로그인 완료 확인") { connection.checkLogin() }
+        Button("로그인 완료 확인") { if isCurrent() { connection.checkLogin() } }
           .disabled(connection.phase != .signingIn)
         Text("직접 선택할 때만 완료를 확인합니다. 확인 중에는 다시 요청하지 않으며 공통 세션 한도와 요청 제한 시간이 적용됩니다.")
           .font(.caption).foregroundStyle(.secondary)
       }
-      if busy {
+      if connection.hasPendingLogin {
         HStack {
           ProgressView().controlSize(.small).accessibilityLabel("ChatGPT 연결 진행 중")
-          Button("ChatGPT 연결 취소") { connection.cancel() }
+          Button("ChatGPT 연결 취소") { if isCurrent() { connection.cancel() } }
         }
       } else if connection.phase == .retiring {
         ProgressView("실제 종료 및 정리 확인 중")
       } else if connection.phase == .connected {
-        Button("ChatGPT 연결 해제") { connection.cancel() }
+        Button("ChatGPT 연결 해제") { if isCurrent() { connection.cancel() } }
       }
       if connection.showsFailure {
         Label(connection.message, systemImage: "exclamationmark.triangle")
@@ -176,13 +187,6 @@ public struct NativeCodexConnectionView: View {
         Text("OpenAI API 작업 종료와 키 저장소 정리가 확인되면 ChatGPT에 연결할 수 있습니다.")
           .font(.caption).foregroundStyle(.secondary)
       }
-    }
-  }
-
-  private var busy: Bool {
-    switch connection.phase {
-    case .starting, .signingIn, .observing, .probing: return true
-    case .idle, .connected, .retiring, .blocked: return false
     }
   }
 }

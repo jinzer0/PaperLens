@@ -57,6 +57,7 @@ final class ProviderSettingsTests: XCTestCase {
     let slots: APIKeySlotStore
     let selector: SettingsSelectorFixture
     let transport: SettingsSuspendedTransport
+    let connection: NativeAPIKeyConnection
     let service: ProviderSettingsService
   }
 
@@ -86,7 +87,8 @@ final class ProviderSettingsTests: XCTestCase {
       persistence: selector, transport: transport, authority: try ProviderRequest())
     let service = ProviderSettingsService(connection: connection)
     service.restore()
-    return Fixture(root: root, slots: slots, selector: selector, transport: transport, service: service)
+    return Fixture(root: root, slots: slots, selector: selector, transport: transport,
+      connection: connection, service: service)
   }
 
   private func waitUntil(_ predicate: () -> Bool, file: StaticString = #filePath,
@@ -100,6 +102,41 @@ final class ProviderSettingsTests: XCTestCase {
 
   private func removeFixture(_ root: URL) throws {
     try FileManager.default.removeItem(at: root)
+  }
+
+  func testClosingWorkspaceSettingsCancelsOnlyUncommittedAPIKeyProbe() async throws {
+    let f = try fixture()
+    defer { try? removeFixture(f.root) }
+    let database = try ProductDatabase.open(at: f.root.appendingPathComponent("database"))
+    let library = try await LocalLibraryLifecycle.open(database: database)
+    let workspace = try ProductWorkspace(database: database, lifecycle: library, connection: f.connection)
+    let lastGood = try XCTUnwrap(f.selector.selection)
+    workspace.sheet = .settings
+    workspace.settings.reconnect(key: "synthetic-cancelled-key")
+    await waitUntil { f.transport.count == 1 }
+    guard f.transport.count == 1 else { return }
+
+    workspace.dismissSheet()
+    XCTAssertEqual(workspace.settings.phase, .failed(.cancelled))
+    try f.transport.complete(0)
+    await waitUntil { f.connection.canReplaceOwner }
+    XCTAssertEqual(f.selector.selection, lastGood)
+    XCTAssertEqual(try f.slots.validatedSlotIDs(), [lastGood.slotID])
+
+    workspace.sheet = .settings
+    let closing = f.connection.$activeSelection.dropFirst().sink { _ in workspace.sheet = nil }
+    defer { closing.cancel() }
+    workspace.settings.reconnect(key: "synthetic-committed-key")
+    await waitUntil { f.transport.count == 2 }
+    guard f.transport.count == 2 else { return }
+    try f.transport.complete(1)
+    await waitUntil { f.connection.canReplaceOwner }
+    let committed = try XCTUnwrap(f.selector.selection)
+    XCTAssertNil(workspace.sheet)
+    XCTAssertEqual(committed.configGeneration, lastGood.configGeneration + 1)
+    XCTAssertEqual(workspace.settings.phase, .connected(committed))
+    XCTAssertTrue(workspace.settings.eligibleForEntry)
+    XCTAssertEqual(try f.slots.validatedSlotIDs(), [committed.slotID])
   }
 
   func testChatGPTControlsObserveLeaseDrainAndCancelledProbeCompletion() async throws {
