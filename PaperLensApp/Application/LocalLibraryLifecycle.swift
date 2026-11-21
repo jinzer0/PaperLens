@@ -760,6 +760,11 @@ public actor LocalLibraryLifecycle {
             }
             for id in receiptIDs { ActualCopyOwnership.shared.acknowledgeRemoval(id) }
             throw error
+          } else if !retained.isEmpty {
+            // Recheck the postcondition before using an earlier unlink receipt.
+            try await Task.detached {
+              try Self.checkPreviouslyRemovedNamespace(namespace, allowMissingPapers: true)
+            }.value
           }
         }
         try await Task.detached {
@@ -1112,11 +1117,20 @@ public actor LocalLibraryLifecycle {
     guard try checkedNamespace(url) == nil else { throw LocalLibraryError.cleanupFailed }
   }
 
-  private nonisolated static func checkPreviouslyRemovedNamespace(_ url: URL) throws {
-    let parent = url.deletingLastPathComponent()
+  private nonisolated static func checkPreviouslyRemovedNamespace(_ url: URL,
+    allowMissingPapers: Bool = false) throws {
+    let papers = url.deletingLastPathComponent()
+    let entry: URL
+    if allowMissingPapers, try checkedNamespace(papers) == nil {
+      // A retained receipt may come from deleting a Paper that never had files.
+      entry = papers
+    } else {
+      entry = url
+    }
+    let parent = entry.deletingLastPathComponent()
     guard let before = try checkedNamespace(parent), before.st_uid == Darwin.getuid(),
       before.st_mode & S_IFMT == S_IFDIR, before.st_mode & 0o7777 == 0o700,
-      try checkedNamespace(url) == nil,
+      try checkedNamespace(entry) == nil,
       let after = try checkedNamespace(parent), after.st_dev == before.st_dev,
       after.st_ino == before.st_ino, after.st_uid == before.st_uid, after.st_mode == before.st_mode
     else { throw LocalLibraryError.cleanupFailed }

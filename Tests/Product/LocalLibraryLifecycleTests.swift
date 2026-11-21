@@ -1177,6 +1177,90 @@ final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
     XCTAssertEqual(try Data(contentsOf: selected), bytes)
   }
 
+  func testRetryChecksNamespaceAgainAfterDatabaseFinalizationFails() async throws {
+    let db = try ProductDatabase.open(at: root)
+    let agent = makeAgent()
+    let lifecycle = try await LocalLibraryLifecycle.open(database: db, agentPurge: agent)
+    let selected = try source()
+    let id = try await lifecycle.importPDF(from: selected)
+    let other = try await lifecycle.importPDF(from: selected)
+    try db.adapterWrite { sql in
+      try sql.execute(sql: """
+        CREATE TRIGGER blockTombstone BEFORE UPDATE OF status ON paper
+        WHEN NEW.status = 'tombstone' BEGIN SELECT RAISE(IGNORE); END
+        """)
+    }
+    do {
+      try await lifecycle.delete(paperID: id)
+      XCTFail("Deletion completed despite the database finalization failure")
+    } catch { XCTAssertEqual(error as? ProductDatabaseError, .invalidRecord) }
+    let paperDirectory = namespace(id)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: paperDirectory.path))
+    let interrupted = try deletionRows(db, id)
+    let saga = try XCTUnwrap(String.fromDatabaseValue(interrupted[0]["deletionID"])
+      .flatMap(UUID.init(uuidString:)))
+    XCTAssertEqual(String.fromDatabaseValue(interrupted[0]["status"]), "deletionFailed")
+    try db.adapterWrite { try $0.execute(sql: "DROP TRIGGER blockTombstone") }
+
+    try FileManager.default.createDirectory(at: paperDirectory, withIntermediateDirectories: false,
+      attributes: [.posixPermissions: 0o700])
+    let unexpected = paperDirectory.appendingPathComponent("document.pdf")
+    let unexpectedBytes = Data("unverified replacement".utf8)
+    try unexpectedBytes.write(to: unexpected)
+    do {
+      try await lifecycle.retryDeletion(paperID: id)
+      XCTFail("An old deletion receipt cannot certify a replaced namespace")
+    } catch { XCTAssertEqual(error as? LocalLibraryError, .cleanupFailed) }
+    let afterRetry = try deletionRows(db, id)
+    assertDeletionRowsEqual(interrupted, afterRetry, jobExcept: ["recoveryJournal"])
+    if afterRetry.count == 2 {
+      let maximum = ProductJobRecovery.maximumImportRecoveryJournalBytes
+      let oldJournal = try ImportRecoveryJournal.decode(
+        XCTUnwrap(Data.fromDatabaseValue(interrupted[1]["recoveryJournal"])), maximumBytes: maximum)
+      let expected = try oldJournal.recording(.revoke).encoded(maximumBytes: maximum)
+      XCTAssertEqual(Data.fromDatabaseValue(afterRetry[1]["recoveryJournal"]), expected)
+    }
+    XCTAssertEqual(try Data(contentsOf: unexpected), unexpectedBytes)
+
+    try FileManager.default.removeItem(at: paperDirectory)
+    try await lifecycle.retryDeletion(paperID: id)
+    let finalized = try deletionRows(db, id)
+    XCTAssertEqual(finalized.count, 1)
+    XCTAssertEqual(String.fromDatabaseValue(finalized[0]["status"]), "tombstone")
+    XCTAssertEqual(String.fromDatabaseValue(finalized[0]["deletionID"]), saga.uuidString)
+    let invocations = await agent.sagaIDs()
+    XCTAssertEqual(invocations, [saga, saga, saga])
+    let library = try await lifecycle.list()
+    XCTAssertEqual(library.map(\.id), [other])
+    XCTAssertEqual(try Data(contentsOf: namespace(other).appendingPathComponent("document.pdf")),
+      try Data(contentsOf: selected))
+  }
+
+  func testRetryAfterDatabaseFinalizationFailureCanFinishPaperWithNoCreatedNamespace() async throws {
+    let db = try ProductDatabase.open(at: root)
+    let current = identity()
+    try reserveLegacyImportFixture(in: db, identity: current, title: "import that created no files")
+    try db.failImport(current, failure: "interrupted", cleanupDebt: false)
+    let lifecycle = try await LocalLibraryLifecycle.open(database: db, agentPurge: makeAgent())
+    let papers = root.appendingPathComponent("papers")
+    XCTAssertFalse(FileManager.default.fileExists(atPath: papers.path))
+    try db.adapterWrite { sql in
+      try sql.execute(sql: """
+        CREATE TRIGGER blockTombstone BEFORE UPDATE OF status ON paper
+        WHEN NEW.status = 'tombstone' BEGIN SELECT RAISE(IGNORE); END
+        """)
+    }
+    do {
+      try await lifecycle.delete(paperID: current.paperID)
+      XCTFail("Deletion completed despite the database finalization failure")
+    } catch { XCTAssertEqual(error as? ProductDatabaseError, .invalidRecord) }
+    try db.adapterWrite { try $0.execute(sql: "DROP TRIGGER blockTombstone") }
+    try await lifecycle.retryDeletion(paperID: current.paperID)
+    let library = try await lifecycle.list()
+    XCTAssertTrue(library.isEmpty)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: papers.path))
+  }
+
   private func stageUnacknowledgedNamespaceRemoval(_ selected: URL) async throws -> (UUID, UUID, UUID) {
     let db = try ProductDatabase.open(at: root)
     let lifecycle = try await LocalLibraryLifecycle.open(database: db)
