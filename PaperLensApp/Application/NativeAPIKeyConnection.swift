@@ -52,14 +52,24 @@ extension ProviderConfiguration {
 /// These synchronous calls do not suspend Application's winner/lease serialization.
 @MainActor
 public protocol APIKeySelectorPersistence: AnyObject {
-  func selectorSnapshot() throws -> ProviderConfiguration
+  func currentSelection() throws -> APIKeySelection?
   func selectionMatchesConfiguration(_ configuration: NativeOpenAIConfiguration) throws -> Bool
+  func compareAndSwap(expected: APIKeySelection?, slotID: UUID) throws -> APIKeySelection?
+  func selectorSnapshot() throws -> ProviderConfiguration
   func compareAndSwap(expected: ProviderConfiguration, slotID: UUID) throws -> APIKeySelection?
 }
 
-extension APIKeySelectorPersistence {
-  public func currentSelection() throws -> APIKeySelection? {
-    try selectorSnapshot().slotSelection
+public extension APIKeySelectorPersistence {
+  // Existing adapters can keep their original comparison contract. Database-backed
+  // adapters should implement both snapshot methods to fence empty selections too.
+  func selectorSnapshot() throws -> ProviderConfiguration {
+    let selection = try currentSelection()
+    return ProviderConfiguration(kind: selection.map { _ in .openAIAPIKey },
+      slotID: selection?.slotID, generation: selection?.configGeneration ?? 0, model: nil)
+  }
+
+  func compareAndSwap(expected: ProviderConfiguration, slotID: UUID) throws -> APIKeySelection? {
+    try compareAndSwap(expected: expected.slotSelection, slotID: slotID)
   }
 }
 

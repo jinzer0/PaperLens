@@ -11,16 +11,14 @@ import ProviderRequest
 private final class SettingsSelectorFixture: APIKeySelectorPersistence {
   var selection: APIKeySelection?
   var commits = 0
-  func selectorSnapshot() throws -> ProviderConfiguration {
-    ProviderConfiguration(kind: selection.map { _ in .openAIAPIKey }, slotID: selection?.slotID,
-      generation: selection?.configGeneration ?? 0, model: selection.map { _ in "fixture-snapshot" })
-  }
+  func currentSelection() throws -> APIKeySelection? { selection }
   func selectionMatchesConfiguration(_ configuration: NativeOpenAIConfiguration) throws -> Bool {
     selection != nil && configuration.model == "fixture-snapshot"
   }
-  func compareAndSwap(expected: ProviderConfiguration, slotID: UUID) throws -> APIKeySelection? {
-    guard try selectorSnapshot() == expected else { return nil }
-    let winner = APIKeySelection(slotID: slotID, configGeneration: expected.generation + 1)
+  func compareAndSwap(expected: APIKeySelection?, slotID: UUID) throws -> APIKeySelection? {
+    guard selection == expected else { return nil }
+    let winner = APIKeySelection(slotID: slotID,
+      configGeneration: (selection?.configGeneration ?? 0) + 1)
     selection = winner
     commits += 1
     return winner

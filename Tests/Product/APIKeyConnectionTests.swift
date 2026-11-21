@@ -141,18 +141,14 @@ private final class SelectorFixture: APIKeySelectorPersistence {
   var conflict = false
   var failCommit = false
   var commitAndThrow = false
-  func selectorSnapshot() throws -> ProviderConfiguration {
-    ProviderConfiguration(kind: selected.map { _ in .openAIAPIKey }, slotID: selected?.slotID,
-      generation: selected?.configGeneration ?? 0,
-      model: selected.map { _ in "explicit-test-snapshot" })
-  }
+  func currentSelection() throws -> APIKeySelection? { selected }
   func selectionMatchesConfiguration(_ configuration: NativeOpenAIConfiguration) throws -> Bool {
     selected != nil && configuration.model == "explicit-test-snapshot"
   }
-  func compareAndSwap(expected: ProviderConfiguration, slotID: UUID) throws -> APIKeySelection? {
+  func compareAndSwap(expected: APIKeySelection?, slotID: UUID) throws -> APIKeySelection? {
     if failCommit { throw APIKeyConnectionError.persistenceFailure }
-    guard !conflict, try selectorSnapshot() == expected else { return nil }
-    let value = APIKeySelection(slotID: slotID, configGeneration: expected.generation + 1)
+    guard !conflict, selected == expected else { return nil }
+    let value = APIKeySelection(slotID: slotID, configGeneration: (selected?.configGeneration ?? 0) + 1)
     selected = value
     commits += 1
     if commitAndThrow { throw APIKeyConnectionError.persistenceFailure }

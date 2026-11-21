@@ -334,6 +334,7 @@ final class ProductCompositionTests: XCTestCase {
     let cleared = try database.compareAndSwapProviderConfiguration(expected: selected,
       replacementKind: nil, replacementSlotID: nil, replacementModel: nil)
     XCTAssertNil(try adapter.currentSelection())
+    XCTAssertNil(try adapter.compareAndSwap(expected: nil, slotID: UUID()))
     XCTAssertNil(try adapter.compareAndSwap(expected: initial, slotID: UUID()))
     XCTAssertEqual(try database.providerConfiguration(), cleared)
     let winner = try XCTUnwrap(adapter.compareAndSwap(
