@@ -5,6 +5,8 @@ import SwiftUI
 /// Explicit SQL diagnostic, never a product persistence owner or a P2 certificate.
 enum SyntheticPackagedDBSmoke {
   static let flag = "--synthetic-packaged-db-smoke"
+  static let relaunchFlag = "--synthetic-packaged-db-relaunch"
+  static let directoryName = "Library/Application Support/PaperLensSyntheticPackagedDB"
   enum Launch: Equatable { case absent, invalid, run(String) }
   enum Failure: Error { case ownership, deadline, report }
   enum Kind: String, Codable, CaseIterable, Sendable { case normal, m1, m2 }
@@ -19,6 +21,16 @@ enum SyntheticPackagedDBSmoke {
   struct SQLiteFailure: Codable, Sendable {
     let primary: Int32?
     let extended: Int32?
+  }
+  private enum RelaunchPhase: String, Encodable { case first, reopen }
+  private struct RelaunchResult: Encodable {
+    let phase: RelaunchPhase
+    let kind: Kind
+    let rollbackVersion: Int
+    let failure: SQLiteFailure
+    let closed = true
+    let cleaned: Bool
+    let provenance: PackagedDBProvenance
   }
   struct CaseResult: Encodable, Sendable {
     let kind: Kind
@@ -68,6 +80,76 @@ enum SyntheticPackagedDBSmoke {
       let id = UUID(uuidString: args[2]), id.uuidString.lowercased() == args[2]
     else { return .invalid }
     return .run(args[2])
+  }
+
+  // Called before SwiftUI starts. The launcher retains the reserved directory
+  // descriptors and observes this process exit before launching the reopen.
+  static func runRelaunchPhase(_ arguments: [String], parentURL: URL) throws -> Data {
+    let deadline = ContinuousClock.now.advanced(by: .seconds(30))
+    guard arguments.count == 11, arguments[0] == relaunchFlag,
+      let phase = RelaunchPhase(rawValue: arguments[1]),
+      let kind = Kind(rawValue: arguments[2]), kind != .normal,
+      arguments[3...5].allSatisfy(TopologyFixtures.validRunID),
+      let worktree = Int32(arguments[6]), let topology = Int32(arguments[7]),
+      let namespace = Int32(arguments[8]), [worktree, topology, namespace].allSatisfy({ $0 >= 3 }),
+      Set([worktree, topology, namespace]).count == 3,
+      let device = dev_t(arguments[9]), let inode = ino_t(arguments[10])
+    else { throw Failure.ownership }
+    let root = parentURL.appendingPathComponent(arguments[3], isDirectory: true)
+    let path = root.path + "/.build/topology/local-grdb-probe-" + arguments[4] + "/db.sqlite"
+    var rootInfo = stat()
+    var topologyInfo = stat()
+    var namespaceInfo = stat()
+    var databaseInfo = stat()
+    guard TopologyFixtures.privateDirectory(worktree, info: &rootInfo),
+      TopologyFixtures.privateDirectory(topology, info: &topologyInfo),
+      TopologyFixtures.privateDirectory(namespace, info: &namespaceInfo),
+      TopologyFixtures.privateNamedFile(directory: namespace, name: "db.sqlite",
+        path: path, info: &databaseInfo),
+      databaseInfo.st_dev == device, databaseInfo.st_ino == inode
+    else { throw Failure.ownership }
+    let owner = TopologyDBOwnerContext(worktreePath: root.path, worktree: worktree,
+      topology: topology, namespace: namespace, worktreeIdentity: rootInfo,
+      topologyIdentity: topologyInfo, namespaceIdentity: namespaceInfo, databaseIdentity: databaseInfo,
+      uid: getuid(), ownerID: arguments[3], runID: arguments[4], attemptID: arguments[5])
+    let probe = try PackagedDBProbe(owner: owner, fault: kind == .m1 ? .m1 : .m2,
+      reopeningClosedFixture: phase == .reopen)
+    defer { if !probe.hasObservedClose { probe.closeAndDrain() } }
+    let initial = try probe.snapshot()
+    // A reopening phase must observe rollback before issuing any migration.
+    let initialValid = phase == .first
+      ? initial.version == 0 && initial.registryRows == 0 && initial.probeObjects.isEmpty
+      : matchesRollback(initial, kind: kind)
+    guard initialValid, !probe.isReady else { throw PackagedDBFailure(.unexpectedFailure) }
+    let provenance = try probe.provenance()
+    var observed: PackagedDBFailure?
+    do { _ = try probe.migrate() }
+    catch { observed = error as? PackagedDBFailure }
+    let rolledBack = try probe.snapshot()
+    guard observed?.reason == .migrationFailed, observed?.primaryCode == 19,
+      observed?.extendedCode == 1555, !probe.isReady,
+      matchesRollback(rolledBack, kind: kind), phase == .first || initial == rolledBack,
+      probe.closeAndDrain(), probe.hasObservedClose, probe.failureHistory.count == 1,
+      owner.validate(), owner.entries() == ["db.sqlite"], ContinuousClock.now < deadline
+    else { throw PackagedDBFailure(.unexpectedFailure) }
+    let cleaned = phase == .reopen && probe.cleanup()
+    guard (phase == .first || cleaned), ContinuousClock.now < deadline
+    else { throw PackagedDBFailure(.cleanupFailed) }
+    return try JSONEncoder().encode(RelaunchResult(phase: phase, kind: kind,
+      rollbackVersion: rolledBack.version,
+      failure: SQLiteFailure(primary: observed?.primaryCode, extended: observed?.extendedCode),
+      cleaned: cleaned, provenance: provenance))
+  }
+
+  private static func matchesRollback(_ snapshot: PackagedDBSnapshot, kind: Kind) -> Bool {
+    let expectedMigrations = kind == .m1 ? [] : [PackagedDBProbe.migrationNames[0]]
+    return snapshot.version == (kind == .m1 ? 0 : 1)
+      && snapshot.migrations == expectedMigrations && snapshot.identifiers == Set(expectedMigrations)
+      && snapshot.registryRows == expectedMigrations.count
+      && snapshot.probeObjects == (kind == .m1 ? [] : ["probe_base"])
+      && snapshot.baselineRows == 0 && snapshot.ftsRows == 0 && snapshot.ftsIDs.isEmpty
+      && !snapshot.ftsSchemaValid && snapshot.sentences.isEmpty && snapshot.matches.isEmpty
+      && snapshot.baseSchemaValid == (kind == .m2)
   }
 
   static func run(parentURL: URL, runID: String) throws -> Report {
@@ -138,15 +220,7 @@ enum SyntheticPackagedDBSmoke {
       } else {
         try constraint(.firstFailure, opened)
         let rolledBack = try opened.snapshot()
-        let expectedMigrations = kind == .m1 ? [] : [PackagedDBProbe.migrationNames[0]]
-        try check(.rollback, rolledBack.version == (kind == .m1 ? 0 : 1)
-          && rolledBack.migrations == expectedMigrations
-          && rolledBack.identifiers == Set(expectedMigrations)
-          && rolledBack.registryRows == expectedMigrations.count
-          && rolledBack.probeObjects == (kind == .m1 ? [] : ["probe_base"])
-          && rolledBack.baselineRows == 0 && rolledBack.ftsRows == 0
-          && !rolledBack.ftsSchemaValid && rolledBack.sentences.isEmpty && rolledBack.matches.isEmpty
-          && (kind == .m1 || rolledBack.baseSchemaValid))
+        try check(.rollback, matchesRollback(rolledBack, kind: kind))
         try check(.closeBeforeReopen, opened.closeAndDrain() && opened.hasObservedClose && owner.validate())
         try opened.reopen()
         let reopened = try opened.snapshot()
@@ -335,7 +409,7 @@ final class SyntheticPackagedDBFiles {
     }
     running = true
     status = "마이그레이션·FTS·롤백·같은 파일 재열기 검사 중"
-    let parent = container.appendingPathComponent("Library/Application Support/PaperLensSyntheticPackagedDB", isDirectory: true)
+    let parent = container.appendingPathComponent(SyntheticPackagedDBSmoke.directoryName, isDirectory: true)
     Task {
       try? await Task.sleep(for: .seconds(30))
       if running {

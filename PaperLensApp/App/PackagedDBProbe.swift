@@ -270,13 +270,17 @@ final class PackagedDBProbe: @unchecked Sendable {
   var failureHistory: [PackagedDBFailure] { lock.withLock { failures } }
   var hasObservedClose: Bool { lock.withLock { closed } }
 
-  init(owner input: TopologyDBOwnerContext, fault: PackagedDBFault) throws {
+  init(owner input: TopologyDBOwnerContext, fault: PackagedDBFault,
+       reopeningClosedFixture: Bool = false) throws {
     guard input.validate(), input.entries() == ["db.sqlite"],
-      input.databaseIdentity.st_size == 0
+      reopeningClosedFixture ? fault != .none && input.databaseIdentity.st_size > 0
+        : input.databaseIdentity.st_size == 0
     else { throw PackagedDBFailure(.bindingMismatch) }
     var current = stat()
     guard fstatat(input.namespace, "db.sqlite", &current, AT_SYMLINK_NOFOLLOW) == 0,
-      current.st_size == 0
+      current.st_size == input.databaseIdentity.st_size,
+      current.st_dev == input.databaseIdentity.st_dev,
+      current.st_ino == input.databaseIdentity.st_ino
     else { throw PackagedDBFailure(.bindingMismatch) }
     let root = fcntl(input.worktree, F_DUPFD_CLOEXEC, 0)
     let topology = fcntl(input.topology, F_DUPFD_CLOEXEC, 0)

@@ -97,6 +97,31 @@ final class SyntheticPackagedDBSmokeTests: XCTestCase {
     XCTAssertEqual(try Data(contentsOf: reportURL), bytes)
   }
 
+  func testRelaunchRejectsWrongDatabaseIdentityAndFreshReopen() throws {
+    let root = try temporaryRoot()
+    let parent = root.appendingPathComponent("runs", isDirectory: true)
+    let files = try SyntheticPackagedDBFiles(parentURL: parent, runID: UUID().uuidString.lowercased())
+    let owner = try files.reserveCase()
+    let binding = [owner.ownerID, owner.runID, owner.attemptID, String(owner.worktree),
+      String(owner.topology), String(owner.namespace), String(owner.databaseIdentity.st_dev)]
+    let flag = SyntheticPackagedDBSmoke.relaunchFlag
+    XCTAssertThrowsError(try SyntheticPackagedDBSmoke.runRelaunchPhase(
+      [flag, "first", "m1"] + binding + ["0"], parentURL: parent))
+    XCTAssertThrowsError(try SyntheticPackagedDBSmoke.runRelaunchPhase(
+      [flag, "reopen", "m1"] + binding + [String(owner.databaseIdentity.st_ino)], parentURL: parent))
+    XCTAssertTrue(owner.validate())
+    XCTAssertEqual(owner.entries(), ["db.sqlite"])
+    var current = stat()
+    XCTAssertEqual(fstatat(owner.namespace, "db.sqlite", &current, AT_SYMLINK_NOFOLLOW), 0)
+    XCTAssertEqual(current.st_size, 0)
+    let probe = try PackagedDBProbe(owner: owner, fault: .m1)
+    XCTAssertTrue(probe.closeAndDrain())
+    XCTAssertTrue(probe.cleanup())
+    if probe.hasObservedClose, owner.entries() == [] {
+      try FileManager.default.removeItem(at: root)
+    }
+  }
+
   func testSourceIdentityProjectionPreservesTimestampFreeHashAndOfficialMarkers() {
     let sha1 = String(repeating: "a", count: 40)
     let sha3 = String(repeating: "b", count: 64)

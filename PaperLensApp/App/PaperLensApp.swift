@@ -9,6 +9,22 @@ private let topologyLog = Logger(
   subsystem: "io.github.jinzer0.PaperLens.TopologySmoke", category: "lifecycle")
 
 @main
+enum PaperLensEntrypoint {
+  @MainActor static func main() {
+    let arguments = Array(CommandLine.arguments.dropFirst())
+    guard arguments.contains(SyntheticPackagedDBSmoke.relaunchFlag) else {
+      PaperLensApp.main()
+      return
+    }
+    guard let container = TopologyIdentity.container(TopologyIdentity.main) else { exit(1) }
+    let parent = container.appendingPathComponent(SyntheticPackagedDBSmoke.directoryName, isDirectory: true)
+    do {
+      let receipt = try SyntheticPackagedDBSmoke.runRelaunchPhase(arguments, parentURL: parent)
+      try FileHandle.standardOutput.write(contentsOf: receipt)
+    } catch { exit(1) }
+  }
+}
+
 struct PaperLensApp: App {
   @NSApplicationDelegateAdaptor(TopologyApplicationDelegate.self) private var delegate
 
