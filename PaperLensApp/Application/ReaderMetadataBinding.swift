@@ -268,20 +268,19 @@ public struct ReaderMetadataBindingState {
     observed: ReaderConfirmedLocation?) throws -> ReaderMetadataBindingState {
     var displayedMetadata = metadata ?? ReaderMetadataSnapshot()
     var storedMetadataInvalid = metadata == nil
-    let candidate = ReaderMetadataValue.pdfTitle(in: document, pdfSHA256: documentIdentity.pdfSHA256)
+    let pdfSource = PDFSourceMetadata.read(from: document, sha256: documentIdentity.pdfSHA256)
     _ = try validate()
-    if let candidate {
-      displayedMetadata = displayedMetadata.addingOptionalPDFTitle(candidate)
+    if !pdfSource.isEmpty {
+      displayedMetadata = displayedMetadata.mergingPDFSource(pdfSource)
       if let identity, !storedMetadataInvalid {
-        do { displayedMetadata = try service.recordSourceTitle(candidate.text, for: identity) }
+        do { displayedMetadata = try service.recordPDFSource(pdfSource, for: identity) }
         catch ReaderMetadataError.invalidMetadata {
-          // Leave damaged saved data untouched and use the admitted PDF's title.
-          displayedMetadata = ReaderMetadataSnapshot(title: .init([candidate]))
+          // Leave damaged saved data untouched and use the admitted PDF's metadata.
+          displayedMetadata = pdfSource
           storedMetadataInvalid = true
         }
       }
     }
-    // PDF creation/modification dates, subject and keywords have different semantics.
     return ReaderMetadataBindingState(presentation: .init(identity: identity, metadata: displayedMetadata,
       storedMetadataInvalid: storedMetadataInvalid),
       sections: adapter.sections.map {

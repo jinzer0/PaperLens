@@ -124,13 +124,14 @@ import XCTest
     }
   }
 
-  func testOriginalReadLeaseCapturesEmbeddedTitle() async throws {
+  func testOriginalReadLeasePublishesEmbeddedMetadataToLibraryWithoutOpeningReader() async throws {
     let bytes = NSMutableData()
     let consumer = try XCTUnwrap(CGDataConsumer(data: bytes as CFMutableData))
     let title = "PDF에 기록된 원본 제목"
     var box = CGRect(x: 0, y: 0, width: 200, height: 300)
     let pdf = try XCTUnwrap(CGContext(consumer: consumer, mediaBox: &box,
       [kCGPDFContextTitle as String: title] as CFDictionary))
+    pdf.addDocumentMetadata(Data(PDFMetadataFixture.packet.utf8) as CFData)
     pdf.beginPDFPage(nil)
     pdf.endPDFPage()
     pdf.closePDF()
@@ -139,7 +140,24 @@ import XCTest
     defer { try? FileManager.default.removeItem(at: f.temporary) }
     let witness = try OriginalPDFKitPageWitness.capture(identity: f.identity, rawPages: [:],
       lifecycle: f.lifecycle, authority: ProviderRequest(), checkBudget: {})
-    XCTAssertEqual(witness.sourceTitle, title)
+    XCTAssertEqual(witness.metadata.title.candidates.map(\.text), [title])
+    XCTAssertEqual(witness.metadata.abstract.candidates.map(\.text), [PDFMetadataFixture.abstract])
+    XCTAssertTrue(try f.database.librarySortFacts().allSatisfy { $0.metadata == nil })
+
+    // Synthetic sentence/index row only; the metadata comes from the admitted original PDF.
+    let sentences: [ValidatedExtractionSentence] = [
+      .init(page: 0, sentenceID: 0, text: "Published PDF sentence.", geometry: Data()),
+    ]
+    try f.database.publishExtraction(f.identity, sentences: sentences, sourceMetadata: witness.metadata,
+      checkBudget: {})
+    let reopened = try ProductDatabase.open(at: f.database.root)
+    let fact = try XCTUnwrap(reopened.librarySortFacts().first { $0.paperID == f.identity.paperID })
+    XCTAssertEqual(fact.metadata, witness.metadata)
+    XCTAssertEqual(fact.publicationYear, 2024)
+    XCTAssertEqual(fact.metadata?.topics.candidates.map(\.text), [PDFMetadataFixture.topics])
+    // Deletion entry invalidates the metadata before asynchronous Agent cleanup.
+    _ = try f.database.beginDeletion(f.identity.paperID)
+    XCTAssertTrue(try reopened.librarySortFacts().allSatisfy { $0.paperID != f.identity.paperID })
   }
 
   func testInitialAdmissionCapturesFreshLineageAndNeverActsAsRetry() async throws {

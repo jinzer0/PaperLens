@@ -102,19 +102,19 @@ public protocol ExtractionBatchProducing: Sendable {
 /// Main-only authority over the original captured allowance; never encoded on XPC.
 public struct ExtractionConsumptionScope: Sendable {
   private let checkBudgetBody: @Sendable () throws -> Void
-  let sourceTitle: String?
+  let sourceMetadata: ReaderMetadataSnapshot
 
   public init(checkBudget: @escaping @Sendable () throws -> Void) {
-    self.init(sourceTitle: nil, checkBudget: checkBudget)
+    self.init(sourceMetadata: .init(), checkBudget: checkBudget)
   }
 
-  init(sourceTitle: String?, checkBudget: @escaping @Sendable () throws -> Void) {
-    self.sourceTitle = sourceTitle
+  private init(sourceMetadata: ReaderMetadataSnapshot, checkBudget: @escaping @Sendable () throws -> Void) {
+    self.sourceMetadata = sourceMetadata
     self.checkBudgetBody = checkBudget
   }
 
-  func withSourceTitle(_ title: String?) -> Self {
-    Self(sourceTitle: title, checkBudget: checkBudgetBody)
+  func withSourceMetadata(_ metadata: ReaderMetadataSnapshot) -> Self {
+    Self(sourceMetadata: metadata, checkBudget: checkBudgetBody)
   }
   public func checkBudget() throws {
     try Task.checkCancellation()
@@ -802,7 +802,7 @@ public struct ExtractionRevisionService: Sendable {
         try await Task.detached {
           do {
             try database.publishExtraction(identity, sentences: sentences,
-              sourceTitle: scope.sourceTitle,
+              sourceMetadata: scope.sourceMetadata,
               checkBudget: {
                 do { try scope.checkBudget() }
                 catch {

@@ -93,21 +93,21 @@ extension ProductDatabase {
     }
   }
 
-  /// Merge a witnessed PDF title without overwriting candidates accepted by another reader.
-  func mergeReaderSourceTitle(_ title: String, for identity: ReaderMetadataIdentity) throws -> ReaderMetadataSnapshot {
-    try adapterWrite { try Self.mergeReaderSourceTitle(title, for: identity, in: $0) }
-  }
-
-  static func mergeReaderSourceTitle(_ title: String, for identity: ReaderMetadataIdentity,
+  /// Merge witnessed source fields without overwriting accepted extraction candidates.
+  static func mergeReaderPDFSource(_ source: ReaderMetadataSnapshot, for identity: ReaderMetadataIdentity,
     in db: Database) throws -> ReaderMetadataSnapshot {
-    let candidate = ReaderMetadataValue(text: title, source: .source,
-      sourceID: "pdf:\(identity.pdfSHA256)")
     try guardReaderMetadata(identity, in: db)
+    let pdfSourceID = "pdf:\(identity.pdfSHA256)"
+    guard [source.title, source.year, source.abstract, source.topics].allSatisfy({ field in
+      field.candidates.allSatisfy {
+        $0.source == .source && ($0.sourceID == pdfSourceID || $0.sourceID == pdfSourceID + "#xmp")
+      }
+    }) else { throw ReaderMetadataError.invalidMetadata }
     let data = try Data.fetchOne(db, sql: "SELECT payload FROM readerMetadata WHERE paperID = ? AND revisionID = ?",
       arguments: [identity.paperID.uuidString, identity.revisionID.uuidString])
     let existing = try decodeReaderMetadata(data) ?? ReaderMetadataSnapshot()
-    let merged = existing.addingOptionalPDFTitle(candidate)
-    guard merged.title.candidates.count != existing.title.candidates.count else { return existing }
+    let merged = existing.mergingPDFSource(source)
+    guard merged != existing else { return existing }
     try db.execute(sql: """
       INSERT INTO readerMetadata(paperID, revisionID, payload) VALUES (?, ?, ?)
       ON CONFLICT(paperID) DO UPDATE SET revisionID = excluded.revisionID, payload = excluded.payload

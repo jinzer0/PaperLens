@@ -366,7 +366,9 @@ private actor WorkspaceDeletionAgent: AgentLibraryPurging {
     let scope = fixtureExtractionScope()
     let rows = try ExtractionRevisionService.validate([batch], identity: extraction,
       validator: validator, scope: scope)
-    try f.database.publishExtraction(extraction, sentences: rows, sourceTitle: sourceTitle,
+    let titles = sourceTitle.map { [ReaderMetadataValue(text: $0, source: .source,
+      sourceID: "pdf:\(paper.pdfSHA256)")] } ?? []
+    try f.database.publishExtraction(extraction, sentences: rows, sourceMetadata: .init(title: .init(titles)),
       checkBudget: { try scope.checkBudget() })
     return try XCTUnwrap(f.database.publishedMetadataPaperIdentity(paperID: id))
   }

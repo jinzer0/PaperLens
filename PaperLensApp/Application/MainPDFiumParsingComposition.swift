@@ -232,7 +232,7 @@ private struct OriginalPDFKitGeometryProducer: ExtractionBatchProducing {
       try validator.install(witness.geometry, identity: identity)
       defer { validator.remove(identity) }
       try scope.checkBudget()
-      try await consume(batches, scope.withSourceTitle(witness.sourceTitle))
+      try await consume(batches, scope.withSourceMetadata(witness.metadata))
     }
   }
 
@@ -270,14 +270,14 @@ enum OriginalPDFKitPageWitness {
 
   @MainActor static func capture(identity: ExtractionIdentity, rawPages: [Int: PDFiumRawPage],
     lifecycle: LocalLibraryLifecycle, authority: ProviderRequest,
-    checkBudget: () throws -> Void) throws -> (geometry: PDFiumGeometryBinding, sourceTitle: String?) {
+    checkBudget: () throws -> Void) throws -> (geometry: PDFiumGeometryBinding, metadata: ReaderMetadataSnapshot) {
     try checkBudget()
     let database = lifecycle.readLeaseDatabase
     let snapshot = try database.extractionReadSnapshot(identity)
     let lease = try LibraryReadLeaseProvider(lifecycle: lifecycle)
       .acquireReadLease(for: snapshot, onRevoked: {})
     defer { lease.close() }
-    let (mappings, sourceTitle): ([Int: PDFiumPageMapping], String?) = try lease.withReadAccess {
+    let (mappings, metadata): ([Int: PDFiumPageMapping], ReaderMetadataSnapshot) = try lease.withReadAccess {
       try autoreleasepool {
         let url = database.root.appendingPathComponent(snapshot.pdfReference)
         let values = try url.resourceValues(forKeys: [.fileSizeKey])
@@ -306,9 +306,9 @@ enum OriginalPDFKitPageWitness {
           view.layoutDocumentView()
           mappings[index] = try mapping(raw: raw, page: page, view: view)
         }
-        let title = ReaderMetadataValue.pdfTitle(in: document, pdfSHA256: identity.pdfSHA256)
+        let metadata = PDFSourceMetadata.read(from: document, sha256: identity.pdfSHA256)
         try checkBudget()
-        return (mappings, title?.text)
+        return (mappings, metadata)
       }
     }
     try lease.validate()
@@ -319,7 +319,7 @@ enum OriginalPDFKitPageWitness {
         let mapping = mappings[raw.pageIndex] else { throw PDFGeometryError.identityMismatch }
       return mapping
     })
-    return (geometry, sourceTitle)
+    return (geometry, metadata)
   }
 
   static func sameRawPage(_ lhs: PDFiumRawPage, _ rhs: PDFiumRawPage) -> Bool {

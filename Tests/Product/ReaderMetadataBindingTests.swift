@@ -5,6 +5,37 @@ import PDFKit
 import XCTest
 @testable import PaperLensProduct
 
+enum PDFMetadataFixture {
+  static let packet = """
+    <x:xmpmeta xmlns:x="adobe:ns:meta/">
+      <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+        <rdf:Description rdf:about=""
+            xmlns:core="http://purl.org/dc/elements/1.1/"
+            xmlns:terms="http://purl.org/dc/terms/"
+            xmlns:journal="http://prismstandard.org/namespaces/basic/2.0/"
+            xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:CreateDate="2018-01-01">
+          <journal:publicationDate>2024-02-29T00:30:00+08:00</journal:publicationDate>
+          <terms:issued>2026-02-30</terms:issued>
+          <terms:abstract><rdf:Alt>
+            <rdf:li xml:lang="en">Alternate language</rdf:li>
+            <rdf:li xml:lang="x-default">원본에 포함된 초록 &amp; 결과.</rdf:li>
+          </rdf:Alt></terms:abstract>
+          <core:description>Publisher description</core:description>
+          <core:subject><rdf:Bag>
+            <rdf:li>시각 인식</rdf:li><rdf:li>Privacy</rdf:li>
+          </rdf:Bag></core:subject>
+        </rdf:Description>
+        <rdf:Description rdf:about="supplement"
+            xmlns:terms="http://purl.org/dc/terms/" terms:issued="1999">
+          <terms:abstract>Supplement only</terms:abstract>
+        </rdf:Description>
+      </rdf:RDF>
+    </x:xmpmeta>
+    """
+  static let abstract = "원본에 포함된 초록 & 결과."
+  static let topics = "시각 인식, Privacy"
+}
+
 private final class MetadataObservedPDFDocument: PDFDocument {
   var onAttributes: (() -> Void)?
   override var documentAttributes: [AnyHashable: Any]? {
@@ -84,7 +115,8 @@ private final class MetadataObservedPDFDocument: PDFDocument {
 }
 
 @MainActor final class ReaderMetadataBindingTests: XCTestCase {
-  private func fixture(publishExtraction: Bool = true, embeddedTitle: String? = nil) async throws
+  private func fixture(publishExtraction: Bool = true, embeddedTitle: String? = nil,
+    xmp: String? = nil) async throws
     -> (ProductDatabase, LocalLibraryLifecycle, ReaderMetadataIdentity, MetadataBindingOwner) {
     let temporary = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
@@ -94,6 +126,7 @@ private final class MetadataObservedPDFDocument: PDFDocument {
     var box = CGRect(x: 0, y: 0, width: 400, height: 600)
     let attributes = embeddedTitle.map { [kCGPDFContextTitle as String: $0] as CFDictionary }
     let pdf = try XCTUnwrap(CGContext(consumer: consumer, mediaBox: &box, attributes))
+    if let xmp { pdf.addDocumentMetadata(Data(xmp.utf8) as CFData) }
     for _ in 0..<2 { pdf.beginPDFPage(nil); pdf.endPDFPage() }
     pdf.closePDF()
     let source = temporary.appendingPathComponent("synthetic.pdf")
@@ -480,6 +513,55 @@ private final class MetadataObservedPDFDocument: PDFDocument {
     XCTAssertTrue(before.topics.candidates.isEmpty)
     try reopened.refresh()
     XCTAssertEqual(try ReaderMetadataService(database: db).metadata(for: identity), before)
+  }
+
+  func testEmbeddedXMPIsVisibleBeforeExtractionAndMergesWithAcceptedMetadata() async throws {
+    let (db, _, identity, owner) = try await fixture(embeddedTitle: "Original title",
+      xmp: PDFMetadataFixture.packet)
+    defer { owner.session.close() }
+    let native = try mount(db, nil, owner)
+    let embedded = try XCTUnwrap(native.state?.presentation.metadata)
+    XCTAssertEqual(embedded.title.candidates.map(\.text), ["Original title"])
+    XCTAssertEqual(embedded.year.candidates.map(\.text), ["2024"])
+    XCTAssertEqual(embedded.abstract.candidates.map(\.text), [PDFMetadataFixture.abstract])
+    XCTAssertEqual(embedded.topics.candidates.map(\.text), [PDFMetadataFixture.topics])
+    XCTAssertEqual(embedded.abstract.candidates.first?.sourceID, "pdf:\(identity.pdfSHA256)#xmp")
+    let service = ReaderMetadataService(database: db)
+    XCTAssertTrue(try service.metadata(for: identity).isEmpty)
+    native.invalidate()
+
+    let accepted = ReaderMetadataValue(text: "2023", source: .acceptedExtraction,
+      sourceID: identity.revisionID.uuidString)
+    try service.accept(.init(year: .init([accepted])), for: identity)
+    let published = try mount(db, identity, owner)
+    let merged = try XCTUnwrap(published.state?.presentation.metadata)
+    XCTAssertEqual(merged.year.candidates.map(\.text), ["2023", "2024"])
+    XCTAssertTrue(merged.year.isConflict)
+    XCTAssertEqual(merged.abstract, embedded.abstract)
+    XCTAssertEqual(merged.topics, embedded.topics)
+    XCTAssertNil(try XCTUnwrap(db.librarySortFacts().first).publicationYear)
+    try published.refresh()
+    XCTAssertEqual(published.state?.presentation.metadata, merged)
+    owner.session.close()
+    try owner.open(paperID: identity.paperID)
+    XCTAssertEqual(try mount(db, identity, owner).state?.presentation.metadata, merged)
+  }
+
+  func testOversizedOrMalformedXMPLeavesPDFTitleAndNavigationAvailable() async throws {
+    let oversized = PDFMetadataFixture.packet + String(repeating: " ", count: ReaderMetadataValue.maximumUTF8Bytes)
+    for packet in [oversized, "<x:xmpmeta"] {
+      let (db, _, _, owner) = try await fixture(embeddedTitle: "Usable original", xmp: packet)
+      defer { owner.session.close() }
+      try outline(owner)
+      let binding = try mount(db, nil, owner)
+      let state = try XCTUnwrap(binding.state)
+      XCTAssertEqual(state.presentation.metadata.title.candidates.map(\.text), ["Usable original"])
+      XCTAssertTrue(state.presentation.metadata.year.candidates.isEmpty)
+      XCTAssertTrue(state.presentation.metadata.abstract.candidates.isEmpty)
+      XCTAssertTrue(state.presentation.metadata.topics.candidates.isEmpty)
+      try binding.navigate(sectionID: "/0")
+      XCTAssertEqual(owner.view.requestedLocation?.pageIndex, 0)
+    }
   }
 
   func testCorruptStoredMetadataRetainsNativeTitleAndContentsUntilValidDataReturns() async throws {
