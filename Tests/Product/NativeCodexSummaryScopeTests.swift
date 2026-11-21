@@ -743,6 +743,38 @@ import ProviderRequest
     XCTAssertFalse(FileManager.default.fileExists(atPath: second.path))
   }
 
+  func testLoginInventoryAllowsOnlyTheRetiringNamespaceToDisappear() throws {
+    let repository = URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+    let root = repository.appendingPathComponent(".build/login-inventory-" + UUID().uuidString)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false,
+      attributes: [.posixPermissions: 0o700])
+    defer { try? FileManager.default.removeItem(at: root) }
+    let loginRoot = root.appendingPathComponent("codex-scopes", isDirectory: true)
+    let previous = try XCTUnwrap(
+      TopologyOwnedFixtures(root: loginRoot, runID: UUID().uuidString.lowercased()))
+    let staged = try XCTUnwrap(
+      TopologyOwnedFixtures(root: loginRoot, runID: UUID().uuidString.lowercased()))
+    let replacement = root.appendingPathComponent("replacement")
+    try FileManager.default.createDirectory(at: replacement, withIntermediateDirectories: false,
+      attributes: [.posixPermissions: 0o700])
+    defer { XCTAssertTrue(staged.cleanupUnlaunchedWorkerNamespace()) }
+    let owners = [previous, staged]
+    let mayBeAbsent: (TopologyOwnedFixtures) -> Bool = { $0 === previous }
+
+    XCTAssertEqual(TopologyOwnedFixtures.verifyInventory(at: loginRoot, allowing: owners,
+      mayBeAbsent: mayBeAbsent), .verified)
+    XCTAssertTrue(previous.cleanupUnlaunchedWorkerNamespace())
+    XCTAssertEqual(TopologyOwnedFixtures.verifyInventory(at: loginRoot, allowing: owners),
+      .unverified)
+    XCTAssertEqual(TopologyOwnedFixtures.verifyInventory(at: loginRoot, allowing: owners,
+      mayBeAbsent: mayBeAbsent), .verified)
+
+    try FileManager.default.moveItem(at: replacement, to: previous.directoryURL)
+    XCTAssertEqual(TopologyOwnedFixtures.verifyInventory(at: loginRoot, allowing: owners,
+      mayBeAbsent: mayBeAbsent), .unverified)
+  }
+
   func testUnownedLoginEntryAppearingDuringProbePreventsPromotion() async throws {
     let (root, _, template) = try workerFixture(script: controlWorkerScript(
       holdResult: false, syntheticLogin: true, holdProbe: true, closeAfterProbe: true))
