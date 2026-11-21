@@ -1287,6 +1287,61 @@ private final class MetadataObservedPDFDocument: PDFDocument {
     }
   }
 
+  func testSamePageClipScrollUpdatesSectionAndImmediateReturnSavesPosition() async throws {
+    let (db, lifecycle, identity, owner) = try await fixture()
+    owner.session.close()
+    let service = ReaderMetadataService(database: db)
+    let session = ReaderSession(database: db,
+      leaseProvider: LibraryReadLeaseProvider(lifecycle: lifecycle))
+    defer { session.close() }
+    let view = MetadataObservedPDFView(frame: CGRect(x: 0, y: 0, width: 220, height: 180))
+    let presentation = ReaderPresentation(session: session,
+      annotationIdentity: try db.annotationIdentity(paperID: identity.paperID),
+      annotationService: AnnotationService(database: db), metadataService: service,
+      metadataIdentity: identity, pdfView: view)
+    presentation.open(paperID: identity.paperID)
+    view.layoutSubtreeIfNeeded()
+    presentation.trackPDFScrolling()
+    let clip = try XCTUnwrap(view.documentView?.enclosingScrollView?.contentView)
+    let document = try XCTUnwrap(view.document)
+    let page = try XCTUnwrap(document.page(at: 0))
+    let outline = PDFOutline()
+    for (index, y) in [500.0, 250.0].enumerated() {
+      let entry = PDFOutline()
+      entry.label = "Section \(index)"
+      entry.destination = PDFDestination(page: page, at: CGPoint(x: 20, y: y))
+      outline.insertChild(entry, at: index)
+    }
+    document.outlineRoot = outline
+    let binding = try XCTUnwrap(presentation.metadataBinding)
+    try binding.refresh()
+
+    // Exercise the real AppKit bounds event without a window or a raster probe.
+    let observed = expectation(description: "same-page scroll updates the active section")
+    let subscription = binding.$state.first { $0?.activeSectionID == "/1" }.sink { _ in observed.fulfill() }
+    defer { subscription.cancel() }
+    let before = clip.bounds.origin
+    let previouslyObserved = binding.state?.observedLocation
+    view.observedDestination = PDFDestination(page: page, at: CGPoint(x: 20, y: 220))
+    clip.setBoundsOrigin(CGPoint(x: before.x, y: before.y - 25))
+    XCTAssertNotEqual(clip.bounds.origin, before)
+    XCTAssertEqual(binding.state?.observedLocation, previouslyObserved)
+    await fulfillment(of: [observed], timeout: 2)
+    XCTAssertEqual(presentation.pageIndex, 0)
+    XCTAssertEqual(binding.state?.observedLocation, .init(pageIndex: 0, x: 20, y: 220))
+
+    // Return before the next coalesced observation runs. Reentry must recover the new point.
+    view.observedDestination = PDFDestination(page: page, at: CGPoint(x: 20, y: 480))
+    clip.setBoundsOrigin(before)
+    var returned = false
+    presentation.leave { returned = true }
+    XCTAssertTrue(returned)
+    XCTAssertNil(binding.state)
+    let restored = try service.beginSession(for: identity)
+    XCTAssertEqual(restored.location, .init(pageIndex: 0, x: 20, y: 480))
+    XCTAssertEqual(restored.sectionID, "/0")
+  }
+
   func testUnconfirmedSavedPositionArrivalDoesNotShowContentsFailure() async throws {
     let (db, lifecycle, identity, owner) = try await fixture()
     owner.session.close()

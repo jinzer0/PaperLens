@@ -29,6 +29,9 @@ import SwiftUI
   private var searchTask: Task<Void, Never>?
   private var searchGeneration = UUID()
   private var restoring = false
+  private weak var scrollClipView: NSClipView?
+  private var scrollOrigin: CGPoint?
+  private var pendingScrollPosition: Task<Void, Never>?
 
   init(session: ReaderSession, annotationIdentity: AnnotationPaperIdentity,
     annotationService: AnnotationService, metadataService: ReaderMetadataService,
@@ -57,7 +60,10 @@ import SwiftUI
   func open(paperID: UUID) {
     guard !opened, !restoring else { return }
     restoring = true
-    defer { restoring = false }
+    defer {
+      restoring = false
+      trackPDFScrolling()
+    }
     enum RestorationInterrupted: Error { case admissionChanged }
     weak var admittedDocument: PDFDocument?
     do {
@@ -147,6 +153,7 @@ import SwiftUI
   func discard() {
     // Detaching a PDF synchronously emits page notifications; block saves first.
     opened = false
+    trackPDFScrolling()
     searchGeneration = UUID()
     searchTask?.cancel()
     searchTask = nil
@@ -180,6 +187,8 @@ import SwiftUI
   }
 
   private func closeMetadata() {
+    pendingScrollPosition?.cancel()
+    pendingScrollPosition = nil
     metadataBinding?.invalidate()
     metadataBinding = nil
     metadataFailure = nil
@@ -292,10 +301,60 @@ import SwiftUI
       try session.save(ReaderPosition(pageIndex: pageIndex, zoom: zoom))
       failure = nil
     } catch { failure = "Reading position was not saved: \(error)" }
-    // Normal navigation is confirmed by actual PDFKit position notifications.
-    guard opened, let binding = metadataBinding else { return }
-    do { try binding.observePosition(); metadataFailure = nil }
-    catch { reportMetadataPositionFailure(error) }
+    observeMetadataPosition()
+  }
+
+  func trackPDFScrolling() {
+    // This only locates the AppKit view. Position readback uses the binding's read lease.
+    let clipView = opened ? pdfView.documentView?.enclosingScrollView?.contentView : nil
+    guard clipView !== scrollClipView else { return }
+    pendingScrollPosition?.cancel()
+    pendingScrollPosition = nil
+    if let scrollClipView {
+      NotificationCenter.default.removeObserver(self, name: NSView.boundsDidChangeNotification,
+        object: scrollClipView)
+    }
+    scrollClipView = clipView
+    scrollOrigin = clipView?.bounds.origin
+    if let clipView {
+      clipView.postsBoundsChangedNotifications = true
+      NotificationCenter.default.addObserver(self, selector: #selector(scrollPositionChanged),
+        name: NSView.boundsDidChangeNotification, object: clipView)
+    }
+  }
+
+  @objc private func scrollPositionChanged(_ notification: Notification) {
+    guard let clipView = scrollClipView, notification.object as? NSClipView === clipView,
+      clipView.bounds.origin != scrollOrigin else { return }
+    scrollOrigin = clipView.bounds.origin
+    guard opened, !restoring, let binding = metadataBinding else { return }
+    // Read after PDFKit has processed the scroll, and write once per settled position.
+    pendingScrollPosition?.cancel()
+    pendingScrollPosition = Task { [weak self, weak binding] in
+      do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
+      guard !Task.isCancelled, let self, let binding, self.metadataBinding === binding else { return }
+      self.pendingScrollPosition = nil
+      self.observeMetadataPosition()
+    }
+  }
+
+  private func flushScrollPosition() {
+    guard let pendingScrollPosition else { return }
+    pendingScrollPosition.cancel()
+    self.pendingScrollPosition = nil
+    observeMetadataPosition()
+  }
+
+  private func observeMetadataPosition() {
+    guard opened, !restoring, let binding = metadataBinding else { return }
+    do {
+      try binding.observePosition()
+      guard opened, metadataBinding === binding else { return }
+      metadataFailure = nil
+    } catch {
+      guard opened, metadataBinding === binding else { return }
+      reportMetadataPositionFailure(error)
+    }
   }
 
   private func reportMetadataPositionFailure(_ error: Error) {
@@ -401,6 +460,7 @@ import SwiftUI
 
   func leave(onReturn: () -> Void) {
     guard opened else { session.close(); onReturn(); return }
+    flushScrollPosition()
     do {
       try session.leave(at: readCurrentPosition())
       onReturn()
@@ -409,6 +469,7 @@ import SwiftUI
 
   func disappear(reportFailure: (Error) -> Void) {
     if opened {
+      flushScrollPosition()
       do { try session.save(readCurrentPosition()) }
       catch { reportFailure(error) }
     }
@@ -434,9 +495,9 @@ import SwiftUI
 }
 
 @MainActor private struct NativePDFSurface: NSViewRepresentable {
-  let pdfView: PDFView
-  func makeNSView(context: Context) -> PDFView { pdfView }
-  func updateNSView(_ nsView: PDFView, context: Context) {}
+  let presentation: ReaderPresentation
+  func makeNSView(context: Context) -> PDFView { presentation.pdfView }
+  func updateNSView(_ nsView: PDFView, context: Context) { presentation.trackPDFScrolling() }
   // ReaderPresentation exclusively discards PDF state, before session lease release.
 }
 
@@ -560,7 +621,7 @@ import SwiftUI
         }
       }
       HSplitView {
-        NativePDFSurface(pdfView: presentation.pdfView)
+        NativePDFSurface(presentation: presentation)
           .frame(minWidth: 240, maxWidth: .infinity, maxHeight: .infinity)
         VStack(alignment: .leading) {
           parsingStatus.padding(12)
