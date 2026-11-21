@@ -248,6 +248,78 @@ final class URLImportTests: XCTestCase {
   }
 
   @MainActor
+  func testDropLoadsURLAndLocalPDFOnlyAfterEnteringTarget() async throws {
+    let grants = GrantRecorder()
+    let service = URLImportService(authority: try ProviderRequest(), grantWriter: { _ in
+      grants.record()
+      throw URLImportError.writerUnavailable
+    })
+    let state = URLImportDragState()
+    state.appear()
+    var selectedFiles: [URL] = []
+    let delegate = URLImportDropDelegate(state: state, supportsURL: { service.supports($0) },
+      localPDFAvailable: true, canAccept: { service.confirmation == nil }, accept: { url in
+        if url.isFileURL {
+          selectedFiles.append(url)
+        } else {
+          do { try service.prepare(url.absoluteString, destination: "Library", possibleDuplicate: true) }
+          catch { XCTFail("Supported drop did not enter confirmation") }
+        }
+      })
+    let link = try XCTUnwrap(URL(string: "https://arxiv.org/abs/2401.12345v2"))
+    let urlItem = NSItemProvider(object: link as NSURL)
+    XCTAssertFalse(delegate.performDrop(urlItem), "The Library is not targeted yet")
+    state.targeted = true
+    XCTAssertTrue(delegate.performDrop(urlItem), "A fast drop needs no loaded hover payload")
+    XCTAssertFalse(state.targeted)
+    try await settleDrop(state)
+    XCTAssertEqual(service.state, .confirming)
+    XCTAssertEqual(service.confirmation?.inputKind, .arxivAbstract)
+    XCTAssertEqual(grants.count, 0)
+    service.cancelConfirmation()
+
+    let file = try directory().appendingPathComponent("selected.pdf")
+    try Data("%PDF-1.4\n%%EOF\n".utf8).write(to: file)
+    state.targeted = true
+    XCTAssertTrue(delegate.performDrop(NSItemProvider(object: file as NSURL)))
+    try await settleDrop(state)
+    XCTAssertEqual(selectedFiles.map(\.path), [file.path])
+    XCTAssertEqual(service.state, .idle)
+    XCTAssertEqual(grants.count, 0)
+  }
+
+  @MainActor
+  func testDropRejectsHTTPAndNonPDFPayloadsAfterTypedHover() async throws {
+    let service = URLImportService(authority: try ProviderRequest())
+    let state = URLImportDragState()
+    state.appear()
+    let delegate = URLImportDropDelegate(state: state, supportsURL: { service.supports($0) },
+      localPDFAvailable: true, canAccept: { true }, accept: { _ in
+        XCTFail("Unsupported payload reached the Library")
+      })
+    let http = try XCTUnwrap(URL(string: "http://fixture.invalid/paper.pdf"))
+    let textFile = try directory().appendingPathComponent("selected.txt")
+    try Data("not a PDF".utf8).write(to: textFile)
+    for candidate in [http, textFile] {
+      state.targeted = true
+      XCTAssertTrue(delegate.performDrop(NSItemProvider(object: candidate as NSURL)))
+      try await settleDrop(state)
+    }
+    XCTAssertFalse(state.targeted)
+    XCTAssertNil(service.confirmation)
+  }
+
+  @MainActor
+  private func settleDrop(_ state: URLImportDragState) async throws {
+    let clock = ContinuousClock()
+    let deadline = clock.now + .seconds(3)
+    while state.pendingDrop != nil && clock.now < deadline {
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    XCTAssertNil(state.pendingDrop, "Item provider did not finish")
+  }
+
+  @MainActor
   func testCancelBeforeContinueAndMissingCapabilityHaveZeroGrantEffects() throws {
     let recorder = GrantRecorder()
     let service = URLImportService(authority: try ProviderRequest(), grantWriter: { _ in

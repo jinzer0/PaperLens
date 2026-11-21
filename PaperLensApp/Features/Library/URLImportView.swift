@@ -163,7 +163,7 @@ public struct URLImportView<LibraryContent: View>: View {
       library(canPresentInput && captureRetry != nil ? beginRetry : nil)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .overlay {
-          if drag.supported {
+          if drag.targeted {
             ZStack {
               Color.accentColor.opacity(0.15)
               Label("PDF 또는 HTTPS URL을 Library에 추가", systemImage: "plus.circle.fill")
@@ -172,7 +172,7 @@ public struct URLImportView<LibraryContent: View>: View {
             .allowsHitTesting(false)
           }
         }
-        .onDrop(of: [UTType.url.identifier, UTType.fileURL.identifier],
+        .onDrop(of: URLImportDropDelegate.contentTypes,
           delegate: URLImportDropDelegate(state: drag,
             supportsURL: { service.supports($0) },
             localPDFAvailable: localPDFAvailable,
@@ -495,11 +495,10 @@ public struct URLImportView<LibraryContent: View>: View {
 }
 
 @MainActor
-private final class URLImportDragState: ObservableObject {
-  @Published var supported = false
+final class URLImportDragState: ObservableObject {
+  @Published var targeted = false
   @Published private(set) var mount: UUID?
   @Published private(set) var interaction = UUID()
-  var hover: UUID?
   private(set) var pendingDrop: UUID?
   var localIntent: UUID?
   var localIntentInvalidation: Binding<UUID?>?
@@ -515,9 +514,8 @@ private final class URLImportDragState: ObservableObject {
       self.localIntent = nil
     }
     interaction = UUID()
-    hover = nil
     pendingDrop = nil
-    supported = false
+    targeted = false
   }
 
   func appear() {
@@ -545,7 +543,8 @@ private final class URLImportDragState: ObservableObject {
 }
 
 @MainActor
-private struct URLImportDropDelegate: DropDelegate {
+struct URLImportDropDelegate: DropDelegate {
+  static let contentTypes: [UTType] = [.url, .fileURL]
   let state: URLImportDragState
   let supportsURL: (String) -> Bool
   let localPDFAvailable: Bool
@@ -553,58 +552,46 @@ private struct URLImportDropDelegate: DropDelegate {
   let accept: (URL) -> Void
 
   func validateDrop(info: DropInfo) -> Bool {
-    info.hasItemsConforming(to: [UTType.url.identifier, UTType.fileURL.identifier])
+    canAccept() && info.hasItemsConforming(to: Self.contentTypes)
   }
 
   func dropEntered(info: DropInfo) {
     state.interrupt()
-    guard state.mount != nil, canAccept(), let item = item(info) else { return }
-    let mount = state.mount
-    let interaction = state.interaction
-    let hover = UUID()
-    state.hover = hover
-    state.supported = false
-    load(item) { url in
-      guard state.isCurrent(mount, interaction), state.hover == hover, canAccept() else { return }
-      state.supported = url.map { supported($0) } ?? false
-    }
+    state.targeted = state.mount != nil && validateDrop(info: info)
   }
 
   func dropExited(info: DropInfo) {
-    state.hover = nil
-    state.supported = false
+    state.targeted = false
   }
 
   func dropUpdated(info: DropInfo) -> DropProposal? {
-    DropProposal(operation: state.supported ? .copy : .cancel)
+    DropProposal(operation: state.targeted && canAccept() ? .copy : .cancel)
   }
 
   func performDrop(info: DropInfo) -> Bool {
-    guard state.mount != nil, state.supported, state.hover != nil,
-      canAccept(), let item = item(info) else { return false }
+    // SwiftUI only makes the item providers available during this callback.
+    guard let item = info.itemProviders(for: Self.contentTypes).first else { return false }
+    return performDrop(item)
+  }
+
+  func performDrop(_ item: NSItemProvider) -> Bool {
+    guard state.mount != nil, state.targeted, canAccept(),
+      item.canLoadObject(ofClass: NSURL.self) else { return false }
     let token = state.beginDrop()
     let mount = state.mount
     let interaction = state.interaction
-    load(item) { url in
-      guard state.consumeDrop(token, mount: mount, interaction: interaction),
-        canAccept(), let url, supported(url) else { return }
-      accept(url)
+    item.loadObject(ofClass: NSURL.self) { value, _ in
+      let url = value as? URL
+      Task { @MainActor in
+        guard state.consumeDrop(token, mount: mount, interaction: interaction),
+          canAccept(), let url, supported(url) else { return }
+        accept(url)
+      }
     }
     return true
   }
 
   private func supported(_ url: URL) -> Bool {
     url.isFileURL ? localPDFAvailable && url.pathExtension.lowercased() == "pdf" : supportsURL(url.absoluteString)
-  }
-
-  private func item(_ info: DropInfo) -> NSItemProvider? {
-    info.itemProviders(for: [UTType.url.identifier, UTType.fileURL.identifier]).first
-  }
-
-  private func load(_ item: NSItemProvider, completion: @escaping @MainActor (URL?) -> Void) {
-    item.loadObject(ofClass: NSURL.self) { value, _ in
-      let url = value as? URL
-      Task { @MainActor in completion(url) }
-    }
   }
 }
