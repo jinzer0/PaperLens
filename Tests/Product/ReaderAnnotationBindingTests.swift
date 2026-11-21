@@ -282,6 +282,56 @@ private final class AnnotationPageDelegate: NSObject, PDFDocumentDelegate {
     XCTAssertEqual(reader.currentMatchNumber, 0)
   }
 
+  func testReaderExitPersistsNativeSearchPageAndZoomBeforeNotificationsArrive() async throws {
+    let (_, db, lifecycle, id, _) = try await fixture()
+
+    func withholdPositionNotifications(from reader: ReaderPresentation) {
+      for name in [Notification.Name.PDFViewPageChanged, .PDFViewScaleChanged, .PDFViewVisiblePagesChanged] {
+        NotificationCenter.default.removeObserver(reader, name: name, object: reader.pdfView)
+      }
+    }
+
+    let reader = try presentation(database: db, lifecycle: lifecycle, paperID: id)
+    defer { reader.session.close() }
+    reader.query = "alpha"
+    reader.search()
+    await settleSearch(reader)
+    withholdPositionNotifications(from: reader)
+    reader.changeZoom(factor: 2)
+    reader.showMatch(delta: 1)
+    let document = try XCTUnwrap(reader.pdfView.document)
+    XCTAssertEqual(document.index(for: try XCTUnwrap(reader.pdfView.currentPage)), 1)
+    XCTAssertEqual(reader.pdfView.scaleFactor, 2, accuracy: 0.001)
+    XCTAssertEqual(reader.pageIndex, 0)
+    XCTAssertEqual(reader.zoom, 1)
+
+    var returned = false
+    reader.leave { returned = true }
+    XCTAssertTrue(returned)
+    XCTAssertNil(reader.pdfView.document)
+
+    let reopened = try ProductDatabase.open(at: db.root)
+    let restarted = try await LocalLibraryLifecycle.open(database: reopened)
+    let restored = try presentation(database: reopened, lifecycle: restarted, paperID: id)
+    defer { restored.session.close() }
+    XCTAssertEqual(restored.pageIndex, 1)
+    XCTAssertEqual(restored.zoom, 2)
+    withholdPositionNotifications(from: restored)
+    restored.changeZoom(factor: 0.5)
+    restored.navigate(toPage: 1)
+    XCTAssertEqual(restored.pageIndex, 1)
+    XCTAssertEqual(restored.zoom, 2)
+    let reopenedDocument = try XCTUnwrap(restored.pdfView.document)
+    XCTAssertEqual(reopenedDocument.index(for: try XCTUnwrap(restored.pdfView.currentPage)), 0)
+    XCTAssertEqual(restored.pdfView.scaleFactor, 1, accuracy: 0.001)
+    restored.disappear { XCTFail("Unable to save current Reader position: \($0)") }
+    XCTAssertNil(restored.pdfView.document)
+
+    let generation = try reopened.readerSnapshot(paperID: id).generation
+    let records = try reopened.libraryReadingRecords(paperID: id, generation: generation)
+    XCTAssertEqual(records.position, .init(pageIndex: 0, zoom: 1))
+  }
+
   func testClearSearchRemovesResultsCancelsPendingSearchAndAllowsSearchingAgain() async throws {
     let (_, db, lifecycle, id, _) = try await fixture()
     let reader = try presentation(database: db, lifecycle: lifecycle, paperID: id)

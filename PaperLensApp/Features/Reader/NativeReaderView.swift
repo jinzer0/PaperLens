@@ -402,17 +402,29 @@ import SwiftUI
   func leave(onReturn: () -> Void) {
     guard opened else { session.close(); onReturn(); return }
     do {
-      try session.leave(at: ReaderPosition(pageIndex: pageIndex, zoom: zoom))
+      try session.leave(at: readCurrentPosition())
       onReturn()
     } catch { failure = "Cannot leave without saving: \(error). Retry or explicitly discard." }
   }
 
   func disappear(reportFailure: (Error) -> Void) {
     if opened {
-      do { try session.save(ReaderPosition(pageIndex: pageIndex, zoom: zoom)) }
+      do { try session.save(readCurrentPosition()) }
       catch { reportFailure(error) }
     }
     session.close()
+  }
+
+  private func readCurrentPosition() throws -> ReaderPosition {
+    // The toolbar may still reflect the previous position when PDFKit changes the view.
+    try session.withReadAccess {
+      guard let document = pdfView.document, let page = pdfView.currentPage else {
+        throw ReaderError.invalidDocument
+      }
+      let position = ReaderPosition(pageIndex: document.index(for: page), zoom: Double(pdfView.scaleFactor))
+      try position.validate(pageCount: document.pageCount)
+      return position
+    }
   }
 
   private func perform(_ action: () throws -> Void) {
