@@ -281,30 +281,40 @@ final class ParsingRecoveryCoordinatorTests: XCTestCase {
       try db.execute(sql: "INSERT INTO extractionVisible(paperID, revision) VALUES (?, ?)",
         arguments: [old.paperID.uuidString, usable.uuidString])
     }
-    let failed = try database.extractionStatus(paperID: old.paperID)
-    XCTAssertEqual(failed.usableRevision, usable)
-    XCTAssertEqual(ParsingFailureNotice.message(status: failed, unavailable: false),
-      "원문 파싱 결과를 검증하지 못했습니다. 다시 시도하세요.")
     let producer = HeldFailureProducer(failure: .storageFailure)
     let coordinator = ParsingRecoveryCoordinator(service: .init(database: database,
       producer: producer, geometryValidator: RejectingValidator()), currentEpoch: UUID())
-    let captured = try await coordinator.context(paperID: old.paperID)
-    let context = try XCTUnwrap(captured)
+    let failed = try await coordinator.presentation(paperID: old.paperID)
+    XCTAssertEqual(failed.status.usableRevision, usable)
+    XCTAssertEqual(ParsingFailureNotice.message(status: failed.status, unavailable: false),
+      "원문 파싱 결과를 검증하지 못했습니다. 다시 시도하세요.")
+    let context = try XCTUnwrap(failed.retry)
+    XCTAssertEqual(context.failedAttempt.attempt, old.attempt)
+    XCTAssertEqual(context.usableRevision, usable)
     let retry = Task { try await coordinator.retry(context) }
     await producer.waitForStart()
-    let running = try database.extractionStatus(paperID: old.paperID)
-    XCTAssertEqual(running.state, "running")
-    XCTAssertEqual(running.usableRevision, usable)
-    XCTAssertNil(ParsingFailureNotice.message(status: running, unavailable: false))
+    let running = try await coordinator.presentation(paperID: old.paperID)
+    XCTAssertEqual(running.status.state, "running")
+    XCTAssertEqual(running.status.usableRevision, usable)
+    XCTAssertNil(running.retry)
+    XCTAssertNil(ParsingFailureNotice.message(status: running.status, unavailable: false))
     await producer.release()
     do { try await retry.value; XCTFail("controlled failure reported success") }
     catch { XCTAssertEqual(error as? ExtractionError, .storageFailure) }
     let reopened = try ProductDatabase.open(at: root)
-    let latest = try reopened.extractionStatus(paperID: old.paperID)
-    XCTAssertEqual(latest.usableRevision, usable)
-    XCTAssertEqual(ParsingFailureNotice.message(status: latest, unavailable: false),
+    let reopenedCoordinator = ParsingRecoveryCoordinator(service: .init(database: reopened,
+      producer: producer, geometryValidator: RejectingValidator()), currentEpoch: UUID())
+    let latest = try await reopenedCoordinator.presentation(paperID: old.paperID)
+    XCTAssertEqual(latest.status.usableRevision, usable)
+    XCTAssertEqual(ParsingFailureNotice.message(status: latest.status, unavailable: false),
       "원문 파싱 결과를 저장하지 못했습니다. 다시 시도하세요.")
-    XCTAssertNil(ParsingFailureNotice.message(status: latest, unavailable: true))
+    XCTAssertNil(ParsingFailureNotice.message(status: latest.status, unavailable: true))
+    let currentRetry = try XCTUnwrap(latest.retry)
+    let retryIdentities = await producer.identities
+    XCTAssertEqual(currentRetry.failedAttempt.attempt, retryIdentities.first?.attempt)
+    XCTAssertEqual(currentRetry.usableRevision, usable)
+    do { try await reopenedCoordinator.retry(context); XCTFail("old presentation retried a newer failure") }
+    catch { XCTAssertEqual(error as? ParsingRecoveryError, .staleContext) }
     XCTAssertEqual(try invocationCount(reopened), 2)
     XCTAssertEqual(try reopened.extractionStatus(paperID: old.paperID).failure, "storageFailure")
     _ = try XCTUnwrap(reopened.beginDeletion(old.paperID))

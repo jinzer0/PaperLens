@@ -51,8 +51,7 @@ public struct ParsingStatusView: View {
   public let coordinator: ParsingRecoveryCoordinator?
   private let onUsableRevisionChange: @MainActor () async -> Bool
   @State private var reconciliation = ParsingMetadataReconciliation()
-  @State private var status: ExtractionStatus?
-  @State private var recoveryContext: ParsingRecoveryContext?
+  @State private var presentation: ParsingRecoveryCoordinator.Presentation?
   @State private var retrying = false
   @State private var retryFailure: String?
   @State private var unavailable = false
@@ -60,6 +59,8 @@ public struct ParsingStatusView: View {
   @State private var trackingKey: ObservationTaskKey?
   @State private var trackingEnded = false
   @State private var presentationPaperID: UUID?
+
+  private var status: ExtractionStatus? { presentation?.status }
 
   public init(database: ProductDatabase, paperID: UUID,
     coordinator: ParsingRecoveryCoordinator? = nil,
@@ -89,8 +90,12 @@ public struct ParsingStatusView: View {
           .accessibilityLabel(retryFailure)
       }
       if status?.state == "failed" {
-        Button(retrying ? "파싱 재시도 요청 중…" : "파싱 다시 시도") { Task { await retryParsing(key: key) } }
-          .disabled(retrying || recoveryContext == nil || coordinator == nil || unavailable)
+        let displayedRetry = presentation?.retry
+        Button(retrying ? "파싱 재시도 요청 중…" : "파싱 다시 시도") {
+          guard let displayedRetry else { return }
+          Task { await retryParsing(displayedRetry, key: key) }
+        }
+          .disabled(retrying || displayedRetry == nil || coordinator == nil || unavailable)
           .accessibilityValue(retrying ? "재시도 요청 처리 중" : "")
           .accessibilityHint("현재 논문의 파싱 재시도를 명시적으로 요청합니다. 완료를 의미하지 않습니다.")
         if coordinator == nil {
@@ -122,8 +127,7 @@ public struct ParsingStatusView: View {
     .task(id: key) {
       guard isCurrent(key), !Task.isCancelled else { return }
       if presentationPaperID != key.paperID {
-        status = nil
-        recoveryContext = nil
+        presentation = nil
         retryFailure = nil
         retrying = false
         unavailable = false
@@ -144,8 +148,7 @@ public struct ParsingStatusView: View {
         guard isCurrent(key), !Task.isCancelled else { return }
         trackingEnded = true
         let request = reconciliation.beginRequest()
-        status = nil
-        recoveryContext = nil
+        presentation = nil
         unavailable = true
         await reconcile(.unavailable, request: request)
       }
@@ -188,9 +191,9 @@ public struct ParsingStatusView: View {
     key.paperID == paperID && key.restart == restartToken
   }
 
-  @MainActor private func retryParsing(key: ObservationTaskKey) async {
+  @MainActor private func retryParsing(_ context: ParsingRecoveryContext, key: ObservationTaskKey) async {
     guard isCurrent(key), !Task.isCancelled,
-      !retrying, let coordinator, let context = recoveryContext else { return }
+      !retrying, !unavailable, presentation?.retry == context, let coordinator else { return }
     let id = key.paperID
     retrying = true
     retryFailure = nil
@@ -212,7 +215,7 @@ public struct ParsingStatusView: View {
     guard isCurrent(key), !Task.isCancelled else { return }
     guard let recoveredKey = await recoverTracking(key: key),
       isCurrent(recoveredKey), !Task.isCancelled else { return }
-    if recoveryContext?.failedAttempt.attempt != context.failedAttempt.attempt {
+    if presentation?.retry?.failedAttempt.attempt != context.failedAttempt.attempt {
       retryFailure = nil
     }
   }
@@ -236,19 +239,21 @@ public struct ParsingStatusView: View {
     let id = key.paperID
     let request = reconciliation.beginRequest()
     do {
-      let latest = try await Task.detached { try database.extractionStatus(paperID: id) }.value
+      let latest: ParsingRecoveryCoordinator.Presentation
+      if let coordinator {
+        latest = try await coordinator.presentation(paperID: id)
+      } else {
+        let status = try await Task.detached { try database.extractionStatus(paperID: id) }.value
+        latest = .init(status: status, retry: nil)
+      }
       guard reconciliation.isCurrent(request), isCurrent(key), !Task.isCancelled else { return }
-      let context = try await coordinator?.context(paperID: id)
-      guard reconciliation.isCurrent(request), isCurrent(key), !Task.isCancelled else { return }
-      status = latest
-      recoveryContext = context
+      presentation = latest
       unavailable = false
-      await reconcile(.revision(latest.usableRevision), request: request)
+      await reconcile(.revision(latest.status.usableRevision), request: request)
     } catch {
       guard reconciliation.isCurrent(request), isCurrent(key), !Task.isCancelled else { return }
       unavailable = true
-      status = nil
-      recoveryContext = nil
+      presentation = nil
       await reconcile(.unavailable, request: request)
     }
   }

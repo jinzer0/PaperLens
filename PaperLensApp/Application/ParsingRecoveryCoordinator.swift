@@ -15,6 +15,11 @@ public enum ParsingRecoveryError: Error, Equatable, Sendable {
 /// Main injects its existing process epoch and real extraction dependencies.
 /// Durable state remains exclusively in ProductDatabase's extraction tables.
 public actor ParsingRecoveryCoordinator {
+  struct Presentation: Sendable {
+    let status: ExtractionStatus
+    let retry: ParsingRecoveryContext?
+  }
+
   private let service: ExtractionRevisionService
   private let currentEpoch: UUID
   private var inFlight: Set<UUID> = []
@@ -26,6 +31,15 @@ public actor ParsingRecoveryCoordinator {
 
   public func context(paperID: UUID) throws -> ParsingRecoveryContext? {
     try service.database.adapterRead { try Self.context(in: $0, paperID: paperID) }
+  }
+
+  func presentation(paperID: UUID) throws -> Presentation {
+    try service.database.adapterRead { db in
+      let status = try ProductDatabase.fetchExtractionStatus(paperID: paperID, in: db)
+      // The displayed failure and its Retry action must use the same database snapshot.
+      let retry = status.state == "failed" ? try Self.context(in: db, paperID: paperID) : nil
+      return Presentation(status: status, retry: retry)
+    }
   }
 
   /// Rejects unavailable production boundaries before any persisted reservation or dispatch.
