@@ -83,6 +83,18 @@ public struct LibrarySummaryObservation: Sendable {
   /// Most recently inserted attempt for the exact Paper/generation/PDF, not current input/configuration.
   public let recentAttempt: LibrarySummaryRecentAttempt?
   public let availability: LibrarySummaryAvailability
+  // Nil means no current published extraction for the same Paper and PDF.
+  let source: LibrarySummarySource?
+}
+
+struct LibrarySummarySource: Sendable {
+  let sentences: Int
+  let geometryOwners: Int
+  let geometryBytes: Int
+
+  func fitsOwnerBudget(maximumSentences: Int) -> Bool {
+    geometryOwners > 0 && geometryOwners <= maximumSentences && geometryBytes <= SummaryOwnerArchive.maximumBytes
+  }
 }
 
 /// Parent supplies only accepted Reader/metadata values, bound to this exact Paper generation.

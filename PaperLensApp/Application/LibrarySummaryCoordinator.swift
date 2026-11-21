@@ -183,6 +183,22 @@ extension LibrarySummaryFailure {
 
   public func clearRequestFailure() { requestFailure = nil }
 
+  enum GenerationBlocker: Equatable {
+    case unconfirmed, needsParsing, geometryUnavailable, providerUnavailable, cleanupUnavailable
+  }
+
+  /// This observes prerequisites for the Library controls. Dispatch still checks
+  /// the current revision, original anchors, provider and leases independently.
+  func generationBlocker(for observation: LibrarySummaryObservation?, providerAvailable: Bool)
+    -> GenerationBlocker? {
+    guard cleanupDebt.isEmpty, producerCleanupDebt.isEmpty else { return .cleanupUnavailable }
+    guard let observation else { return .unconfirmed }
+    guard let source = observation.source else { return .needsParsing }
+    guard source.fitsOwnerBudget(maximumSentences: authority.limit("sentences")),
+      source.sentences == source.geometryOwners else { return .geometryUnavailable }
+    return providerAvailable ? nil : .providerUnavailable
+  }
+
   /// The retained application owner keeps generation alive when Library gives way
   /// to Reader. Only an explicit cancel, revocation or shutdown cancels the request.
   @discardableResult public func requestGeneration(paperID: UUID, generation: UUID,
@@ -376,19 +392,16 @@ extension LibrarySummaryFailure {
       guard let revision = (row["revision"] as String?).flatMap(UUID.init(uuidString:)) else {
         throw LibrarySummaryError.geometryUnavailable
       }
-      // Bound materialization using original owner storage, before reading any anchor BLOB.
-      guard let quota = try Row.fetchOne(db, sql: """
-        SELECT COUNT(*) AS n, COALESCE(SUM(length(originalAnchor)), 0) AS bytes
-        FROM extractionGeometryOwner WHERE revision = ?
-        """, arguments: [revision.uuidString]),
-        (quota["n"] as Int) > 0, (quota["n"] as Int) <= authority.limit("sentences"),
-        (quota["bytes"] as Int) <= SummaryOwnerArchive.maximumBytes else {
+      // Bound both original owners and sentence reads before materializing source content.
+      let source = try ProductDatabase.librarySummarySource(revision: revision, in: db)
+      guard source.fitsOwnerBudget(maximumSentences: authority.limit("sentences")) else {
         throw LibrarySummaryError.geometryUnavailable
       }
+      guard source.sentences == source.geometryOwners else { throw LibrarySummaryError.invalidGrounding }
       let rows = try Row.fetchAll(db, sql: """
         SELECT page, sentenceID, text FROM extractionSentence WHERE revision = ? ORDER BY sentenceID
         """, arguments: [revision.uuidString])
-      guard rows.count == (quota["n"] as Int) else { throw LibrarySummaryError.invalidGrounding }
+      guard rows.count == source.geometryOwners else { throw LibrarySummaryError.invalidGrounding }
       let sentences: [RequestSentence] = try rows.enumerated().map { index, row in
         guard (row["sentenceID"] as Int) == index else { throw LibrarySummaryError.invalidGrounding }
         return .init(anchor: .init(pageIndex: row["page"], sentenceID: index), quote: row["text"])

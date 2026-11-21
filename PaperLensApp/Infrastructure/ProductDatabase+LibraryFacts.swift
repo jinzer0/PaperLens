@@ -32,10 +32,22 @@ extension ProductDatabase {
     try adapterRead { try librarySortFacts(for: nil, in: $0) }
   }
 
+  static func librarySummarySource(revision: UUID, in db: Database) throws -> LibrarySummarySource {
+    guard let row = try Row.fetchOne(db, sql: """
+      SELECT (SELECT count(*) FROM extractionSentence WHERE revision = ?) AS sentences,
+        count(*) AS owners, coalesce(sum(length(originalAnchor)), 0) AS bytes
+      FROM extractionGeometryOwner WHERE revision = ?
+      """, arguments: [revision.uuidString, revision.uuidString])
+    else { throw ProductDatabaseError.invalidRecord }
+    return LibrarySummarySource(sentences: try row.decode(Int.self, forColumn: "sentences"),
+      geometryOwners: try row.decode(Int.self, forColumn: "owners"),
+      geometryBytes: try row.decode(Int.self, forColumn: "bytes"))
+  }
+
   func librarySortFacts(for paperIDs: Set<UUID>?, in db: Database) throws -> [OrganizationSortFacts] {
     if paperIDs?.isEmpty == true { return [] }
     return try Row.fetchAll(db, sql: """
-      SELECT p.id, p.generation, p.pdfSHA256, p.lastReadAt, m.payload
+      SELECT p.id, p.generation, p.pdfSHA256, p.lastReadAt, r.id AS sourceRevision, m.payload
       FROM paper p
       \(Self.currentLibraryMetadataJoins)
       WHERE p.status = 'ready' AND p.deletionID IS NULL
@@ -118,8 +130,10 @@ extension ProductDatabase {
           availability = .verificationFailed
         }
       }
+      let source = try row.decode(String?.self, forColumn: "sourceRevision")
+        .flatMap(UUID.init(uuidString:)).map { try Self.librarySummarySource(revision: $0, in: db) }
       let summary = LibrarySummaryObservation(record: record, recentAttempt: recentAttempt,
-        availability: availability)
+        availability: availability, source: source)
       return OrganizationSortFacts(paperID: paperID, generation: generationID,
         lastReadAt: timestamp.map(Date.init(timeIntervalSince1970:)), publicationYear: year,
         metadata: metadata, summary: summary)

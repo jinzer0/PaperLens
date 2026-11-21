@@ -868,7 +868,7 @@ public struct ProductWorkspaceView: View {
               invalidateDirectIntent()
               workspace.sheet = .folders
             },
-            summaries: workspace.summaries)
+            summaries: workspace.summaries, providerSettings: workspace.settings)
         }
       }
       if workspace.localImportID != nil, activeImportProgress.isEmpty {

@@ -13,6 +13,7 @@ public struct LibraryBrowserView: View {
   private let retryImportURL: URLImportRetryAction?
   private let manageFolders: @MainActor () -> Void
   @ObservedObject private var summaries: LibrarySummaryCoordinator
+  @ObservedObject private var providerSettings: ProviderSettingsService
   private let refreshRevision: Int
   private let metadataRevision: UUID?
   private let deletingPaperIDs: Set<UUID>
@@ -55,7 +56,7 @@ public struct LibraryBrowserView: View {
     retryImportPDF: @escaping @MainActor (UUID, UUID) -> Void,
     retryImportURL: URLImportRetryAction? = nil,
     manageFolders: @escaping @MainActor () -> Void,
-    summaries: LibrarySummaryCoordinator) {
+    summaries: LibrarySummaryCoordinator, providerSettings: ProviderSettingsService) {
     self.service = service; self.folderService = folderService
     self.readReadingRecords = readReadingRecords
     _filter = filter; self.refreshRevision = refreshRevision
@@ -70,6 +71,7 @@ public struct LibraryBrowserView: View {
     self.retryImportURL = retryImportURL
     self.manageFolders = manageFolders
     self.summaries = summaries
+    self.providerSettings = providerSettings
   }
 
   private var folderHeading: String {
@@ -93,7 +95,8 @@ public struct LibraryBrowserView: View {
   }
 
   private var libraryContent: some View {
-    VStack(alignment: .leading, spacing: 12) {
+    let providerAvailable = providerSettings.eligibleForEntry
+    return VStack(alignment: .leading, spacing: 12) {
       HStack {
         Text("Library").font(.largeTitle)
         Spacer()
@@ -168,7 +171,7 @@ public struct LibraryBrowserView: View {
           ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
               ForEach(snapshot.papers) { paper in
-                paperContent(paper)
+                paperContent(paper, providerAvailable: providerAvailable)
                   .padding(12)
                   .frame(maxWidth: .infinity, alignment: .leading)
                 Divider()
@@ -179,7 +182,8 @@ public struct LibraryBrowserView: View {
           ScrollView {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 260), alignment: .top)]) {
               ForEach(snapshot.papers) { paper in
-                paperContent(paper).padding().background(.background, in: RoundedRectangle(cornerRadius: 8))
+                paperContent(paper, providerAvailable: providerAvailable)
+                  .padding().background(.background, in: RoundedRectangle(cornerRadius: 8))
                   .overlay(RoundedRectangle(cornerRadius: 8).stroke(.secondary.opacity(0.3)))
               }
             }
@@ -376,7 +380,7 @@ public struct LibraryBrowserView: View {
     }
   }
 
-  @ViewBuilder private func paperContent(_ paper: OrganizedPaper) -> some View {
+  @ViewBuilder private func paperContent(_ paper: OrganizedPaper, providerAvailable: Bool) -> some View {
     let fact = currentFacts[paper.id].flatMap { $0.generation == paper.generation ? $0 : nil }
     let metadata = paper.sourceMetadataInvalid ? nil : fact?.metadata
     let deletionPending = deletingPaperIDs.contains(paper.id) || finishedDeletionIDs.contains(paper.id)
@@ -440,18 +444,8 @@ public struct LibraryBrowserView: View {
           ProgressView("요약 생성 중")
           Button("요약 취소") { summaries.cancel() }
         }.disabled(deletionPending)
-      } else {
-        if let attempt = fact?.summary?.recentAttempt, attempt.canRetry {
-          Button("요약 다시 시도") { retrySummary(paper, attempt: attempt) }
-            .disabled(deletionPending || !paper.readable || busy || loading || loadFailed || summaries.activePaperID != nil)
-            .accessibilityLabel("\(paper.title) 실패한 요약 다시 시도")
-        }
-        Menu(fact?.summary?.record == nil ? "요약 생성" : "요약 다시 생성") {
-          Button("한국어") { beginSummary(paper, language: "ko") }
-          Button("English") { beginSummary(paper, language: "en") }
-        }
-        .disabled(deletionPending || !paper.readable || busy || loading || loadFailed || summaries.activePaperID != nil)
-        .accessibilityLabel("\(paper.title) 근거 문장으로 요약 생성")
+      } else if paper.readable, !deletionPending {
+        summaryActions(for: paper, observation: fact?.summary, providerAvailable: providerAvailable)
       }
       if !paper.sourceMetadataInvalid {
         Text("초록 · \(LibraryMetadataPresentation.preview(metadata?.abstract, limit: 220))")
@@ -822,15 +816,55 @@ public struct LibraryBrowserView: View {
     }
   }
 
+  @ViewBuilder private func summaryActions(for paper: OrganizedPaper, observation: LibrarySummaryObservation?,
+    providerAvailable: Bool) -> some View {
+    if let blocker = summaries.generationBlocker(for: observation, providerAvailable: providerAvailable) {
+      Text(summaryAvailabilityLabel(blocker)).font(.caption)
+    } else {
+      if let attempt = observation?.recentAttempt, attempt.canRetry {
+        Button("요약 다시 시도") { retrySummary(paper, attempt: attempt) }
+          .accessibilityLabel("\(paper.title) 실패한 요약 다시 시도")
+          .disabled(!summaryActionsAvailable)
+      }
+      Menu(observation?.record == nil ? "요약 생성" : "요약 다시 생성") {
+        Button("한국어") { beginSummary(paper, language: "ko") }
+        Button("English") { beginSummary(paper, language: "en") }
+      }
+      .disabled(!summaryActionsAvailable)
+      .accessibilityLabel("\(paper.title) 근거 문장으로 요약 생성")
+    }
+  }
+
+  private func summaryAvailabilityLabel(_ blocker: LibrarySummaryCoordinator.GenerationBlocker) -> String {
+    switch blocker {
+    case .unconfirmed: return "요약 생성에 필요한 상태를 확인할 수 없습니다."
+    case .needsParsing: return "요약을 생성하려면 PDF의 파싱을 완료하세요."
+    case .geometryUnavailable: return "요약에 필요한 원문 위치 정보를 사용할 수 없습니다."
+    case .providerUnavailable: return "요약을 생성하려면 Settings에서 Provider 연결을 확인하세요."
+    case .cleanupUnavailable: return "이전 요약 작업의 종료를 확인할 수 없어 새 요약을 시작할 수 없습니다."
+    }
+  }
+
+  private var summaryActionsAvailable: Bool {
+    !nativeSheetPending && deleting == nil && !operationFailed && !busy && !loading && !loadFailed
+      && summaries.activePaperID == nil
+  }
+
+  private func canRequestSummary(for paper: OrganizedPaper) -> Bool {
+    guard summaryActionsAvailable, paper.readable, renderedPaperControls(for: paper),
+      !deletingPaperIDs.contains(paper.id), !finishedDeletionIDs.contains(paper.id),
+      let facts = currentFacts[paper.id], facts.generation == paper.generation else { return false }
+    return summaries.generationBlocker(for: facts.summary, providerAvailable: providerSettings.eligibleForEntry) == nil
+  }
+
   private func beginSummary(_ paper: OrganizedPaper, language: String) {
-    guard !nativeSheetPending, !busy else { return }
+    guard canRequestSummary(for: paper) else { return }
     summaries.requestGeneration(paperID: paper.id, generation: paper.generation,
       outputLanguage: language)
   }
 
   private func retrySummary(_ paper: OrganizedPaper, attempt: LibrarySummaryRecentAttempt) {
-    guard !nativeSheetPending, deleting == nil, !operationFailed, renderedPaperControls(for: paper),
-      paper.readable, attempt.canRetry, attempt.identity.paperID == paper.id,
+    guard canRequestSummary(for: paper), attempt.canRetry, attempt.identity.paperID == paper.id,
       attempt.identity.generation == paper.generation,
       currentFacts[paper.id]?.summary?.recentAttempt?.identity == attempt.identity
     else { return }

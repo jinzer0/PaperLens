@@ -906,6 +906,38 @@ final class LibrarySummaryServiceTests: XCTestCase {
       .write(to: paper.appendingPathComponent("document.pdf"))
   }
 
+  @MainActor func testLibraryGenerationReadinessFollowsPublishedSourceAndProviderWithoutDispatch() throws {
+    let f = try fixture()
+    defer { try? FileManager.default.removeItem(at: f.root) }
+    let provider = SummaryProvider()
+    let coordinator = LibrarySummaryCoordinator(database: f.db, epoch: UUID(), leases: SummaryLeases(),
+      authority: try ProviderRequest(), provider: provider)
+    func blocker(providerAvailable: Bool = true) throws -> LibrarySummaryCoordinator.GenerationBlocker? {
+      let facts = try f.db.organizationObservation(filter: .init()).facts.first
+      return coordinator.generationBlocker(for: try XCTUnwrap(facts?.summary),
+        providerAvailable: providerAvailable)
+    }
+
+    XCTAssertEqual(coordinator.generationBlocker(for: nil, providerAvailable: true), .unconfirmed)
+    XCTAssertEqual(try blocker(), .geometryUnavailable)
+    try prepareCoordinator(f)
+    XCTAssertNil(try blocker())
+    XCTAssertEqual(try blocker(providerAvailable: false), .providerUnavailable)
+    try f.db.adapterWrite { db in
+      try db.execute(sql: "DELETE FROM extractionGeometryOwner WHERE revision = ? AND sentenceID = 1",
+        arguments: [f.identity.revision.uuidString])
+    }
+    XCTAssertEqual(try blocker(), .geometryUnavailable, "A partial owner archive is not sufficient")
+    try f.db.adapterWrite { db in
+      try db.execute(sql: "DELETE FROM extractionVisible WHERE paperID = ?",
+        arguments: [f.identity.paperID.uuidString])
+    }
+    XCTAssertEqual(try blocker(), .needsParsing)
+    XCTAssertEqual(provider.calls, 0)
+    XCTAssertEqual(try f.db.adapterRead { try Int.fetchOne($0,
+      sql: "SELECT COUNT(*) FROM librarySummaryJob") }, 0)
+  }
+
   @MainActor func testExplicitCoordinatorDispatchPublishesGroundedResultAndRestoresWithoutRequest() async throws {
     let f = try fixture(tail: "appendix acknowledgments")
     defer { try? FileManager.default.removeItem(at: f.root) }
@@ -1121,8 +1153,9 @@ final class LibrarySummaryServiceTests: XCTestCase {
       .restore(paperID: f.identity.paperID))
     XCTAssertEqual(restored.id, previous.id)
     XCTAssertEqual(restored.claimAnchors, previous.claimAnchors)
-    XCTAssertEqual(try reopened.librarySortFacts().first?.summary?.recentAttempt?.failure,
-      .cleanupUnavailable)
+    let observation = try XCTUnwrap(try reopened.librarySortFacts().first?.summary)
+    XCTAssertEqual(observation.recentAttempt?.failure, .cleanupUnavailable)
+    XCTAssertEqual(coordinator.generationBlocker(for: observation, providerAvailable: true), .cleanupUnavailable)
     XCTAssertEqual(provider.calls, 2)
   }
 
