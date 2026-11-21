@@ -89,21 +89,26 @@ public struct PDFPageGeometry: Equatable, Sendable {
             throw PDFGeometryError.outsidePage
         }
         let canonical = PDFPoint(x: cropOrigin.x + point.x,
-                                 y: cropOrigin.y + height - point.y)
+                                 y: cropOrigin.y + (height - point.y))
         try validate(canonical)
         return canonical
     }
 
     public func rotatedTopLeft(fromCanonical point: PDFPoint) throws -> PDFPoint {
         try validate(point)
-        let x = point.x - cropOrigin.x
-        let y = point.y - cropOrigin.y
+        let x = localCoordinate(point.x, origin: cropOrigin.x, span: width)
+        let y = localCoordinate(point.y, origin: cropOrigin.y, span: height)
         switch rotation {
         case 0: return PDFPoint(x: x, y: height - y)
         case 90: return PDFPoint(x: y, y: x)
         case 180: return PDFPoint(x: width - x, y: y)
         default: return PDFPoint(x: height - y, y: width - x)
         }
+    }
+
+    private func localCoordinate(_ value: Double, origin: Double, span: Double) -> Double {
+        // Subtracting the origin from the rounded upper endpoint can exceed the span.
+        value == origin + span ? span : value - origin
     }
 
     public func canonical(fromRotatedTopLeft point: PDFPoint) throws -> PDFPoint {

@@ -173,7 +173,9 @@ final class PDFGeometryTests: XCTestCase {
         view.autoScales = false
         view.document = document
         defer { view.document = nil }
-        for source in SyntheticPDFGeometryCalibration.pages {
+        let sources = SyntheticPDFGeometryCalibration.pages
+        let first = try XCTUnwrap(sources.first)
+        for source in sources + [first] {
             let page = try XCTUnwrap(document.page(at: source.index))
             let crop = try PDFiumRawQuad(topLeftX: source.x, topLeftY: source.y + 300,
                 topRightX: source.x + 200, topRightY: source.y + 300,
@@ -185,6 +187,7 @@ final class PDFGeometryTests: XCTestCase {
                 view.go(to: page)
                 view.scaleFactor = zoom
                 view.layoutDocumentView()
+                XCTAssertTrue(view.currentPage === page)
                 let mapping = try OriginalPDFKitPageWitness.mapping(raw: raw, page: page, view: view)
                 XCTAssertEqual(mapping.page, try source.geometry())
                 let precision = try PDFGeometryPrecision(
@@ -422,6 +425,35 @@ final class PDFGeometryTests: XCTestCase {
             }
             assertError(.outsidePage) {
                 try rotated.canonical(fromRotatedTopLeft: PDFPoint(x: -Double.leastNonzeroMagnitude, y: 0))
+            }
+        }
+    }
+
+    func testFractionalCropEndpointsRoundTripExactlyAtEveryRotation() throws {
+        let origin = PDFPoint(x: 0.1, y: 0.1)
+        let width = 0.2, height = 0.3
+        let opposite = PDFPoint(x: origin.x + width, y: origin.y + height)
+        let bottomRight = PDFPoint(x: opposite.x, y: origin.y)
+        let topLeft = PDFPoint(x: origin.x, y: opposite.y)
+        let canonical = [origin, bottomRight, topLeft, opposite]
+        let rotated = [
+            [PDFPoint(x: 0, y: height), .init(x: width, y: height), .init(x: 0, y: 0), .init(x: width, y: 0)],
+            [PDFPoint(x: 0, y: 0), .init(x: 0, y: width), .init(x: height, y: 0), .init(x: height, y: width)],
+            [PDFPoint(x: width, y: 0), .init(x: 0, y: 0), .init(x: width, y: height), .init(x: 0, y: height)],
+            [PDFPoint(x: height, y: width), .init(x: height, y: 0), .init(x: 0, y: width), .init(x: 0, y: 0)],
+        ]
+        for (index, rotation) in [0, 90, 180, 270].enumerated() {
+            let geometry = try PDFPageGeometry(pageIndex: 0, cropOrigin: origin,
+                width: width, height: height, rotation: rotation)
+            XCTAssertEqual(try geometry.canonicalFromCropTopLeft(.init(x: 0, y: height)), origin)
+            XCTAssertEqual(try geometry.canonicalFromCropTopLeft(.init(x: width, y: height)), bottomRight)
+            for (point, expected) in zip(canonical, rotated[index]) {
+                let display = try geometry.rotatedTopLeft(fromCanonical: point)
+                XCTAssertEqual(display, expected)
+                XCTAssertEqual(try geometry.canonical(fromRotatedTopLeft: display), point)
+            }
+            assertError(.outsidePage) {
+                try geometry.rotatedTopLeft(fromCanonical: .init(x: opposite.x.nextUp, y: origin.y))
             }
         }
     }
