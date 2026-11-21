@@ -1,5 +1,18 @@
 import SwiftUI
 
+extension FolderImportError {
+  var reselectionMessage: String? {
+    switch self {
+    case .missingFolder:
+      "선택한 저장 폴더가 더 이상 없습니다. Library에서 다른 폴더나 ‘미분류’를 선택한 뒤 PDF를 다시 선택하세요."
+    case .sourceChanged, .invalidSource:
+      "원본 PDF가 변경되었거나 읽을 수 없습니다. PDF를 다시 선택하세요."
+    default:
+      nil
+    }
+  }
+}
+
 struct ImportConfirmationActionState {
   private(set) var consumed = false
 
@@ -111,7 +124,8 @@ public struct ImportConfirmationView: View {
               imported(id)
               dismiss()
             } catch {
-              errorMessage = "가져오기를 완료하지 못했습니다. 다시 시도하려면 PDF를 새로 선택하고 확인하세요."
+              errorMessage = (error as? FolderImportError)?.reselectionMessage
+                ?? "가져오기를 완료하지 못했습니다. 다시 시도하려면 PDF를 새로 선택하고 확인하세요."
             }
             working = false
           }

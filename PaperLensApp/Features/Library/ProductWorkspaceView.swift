@@ -245,7 +245,8 @@ public final class ProductWorkspace: ObservableObject {
     guard picker.runModal() == .OK, let source = picker.url else { return nil }
     return Task {
       do { return try await prepareImport(source: source) } catch {
-        failure = "PDF 가져오기를 준비하지 못했습니다. 원본 PDF를 다시 선택하세요."
+        failure = (error as? FolderImportError)?.reselectionMessage
+          ?? "PDF 가져오기를 준비하지 못했습니다. 원본 PDF를 다시 선택하세요."
         return nil
       }
     }
@@ -299,8 +300,11 @@ public final class ProductWorkspace: ObservableObject {
     if let diagnosticSource { picker.directoryURL = diagnosticSource.deletingLastPathComponent() }
     guard picker.runModal() == .OK, let source = picker.url else { return }
     Task {
-      do { try await prepareRetry(source: source, paperID: paperID, generation: generation) } catch
-      { failure = "PDF 재시도를 준비하지 못했습니다. 작업 상태를 확인하고 PDF를 다시 선택하세요." }
+      do { try await prepareRetry(source: source, paperID: paperID, generation: generation) }
+      catch {
+        failure = (error as? FolderImportError)?.reselectionMessage
+          ?? "PDF 재시도를 준비하지 못했습니다. 작업 상태를 확인하고 PDF를 다시 선택하세요."
+      }
     }
   }
 
@@ -324,7 +328,8 @@ public final class ProductWorkspace: ObservableObject {
         imported(paperID, localConfirmationID: id)
         return paperID
       } catch {
-        failure = "PDF 가져오기를 완료하지 못했습니다. Library에서 현재 상태를 확인하세요."
+        failure = (error as? FolderImportError)?.reselectionMessage
+          ?? "PDF 가져오기를 완료하지 못했습니다. Library에서 현재 상태를 확인하세요."
         revision += 1
         return nil
       }
@@ -392,7 +397,8 @@ public final class ProductWorkspace: ObservableObject {
   public func acceptDroppedPDF(_ source: URL) {
     Task {
       do { _ = try await prepareImport(source: source) } catch {
-        failure = "PDF 가져오기를 준비하지 못했습니다. 원본 PDF를 다시 선택하세요."
+        failure = (error as? FolderImportError)?.reselectionMessage
+          ?? "PDF 가져오기를 준비하지 못했습니다. 원본 PDF를 다시 선택하세요."
       }
     }
   }

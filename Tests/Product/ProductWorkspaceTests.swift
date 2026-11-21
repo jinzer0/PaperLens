@@ -1150,12 +1150,12 @@ private actor WorkspaceDeletionAgent: AgentLibraryPurging {
     try await f.workspace.prepareImport(source: f.source)
     let changed = try confirmation(f.workspace)
     try Data("%PDF-1.4\nchanged after confirmation\n%%EOF\n".utf8).write(to: f.source)
-    do {
-      _ = try await f.workspace.imports.continueImport(changed.id, destinationFolderID: nil)
-      XCTFail("Changed source must require another confirmation")
-    } catch { XCTAssertEqual(error as? FolderImportError, .sourceChanged) }
+    let importTask = try XCTUnwrap(f.workspace.startLocalImport(changed.id, destinationFolderID: nil))
     f.workspace.sheet = nil
-    _ = await f.workspace.dismissSheet()?.value
+    XCTAssertNil(f.workspace.presentationDidDismiss(confirmationID: changed.id))
+    let changedResult = await importTask.value
+    XCTAssertNil(changedResult)
+    XCTAssertEqual(f.workspace.failure, "원본 PDF가 변경되었거나 읽을 수 없습니다. PDF를 다시 선택하세요.")
     XCTAssertTrue(try f.database.libraryRecords().isEmpty)
     XCTAssertEqual(try f.database.adapterRead { try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM importJob") }, 0)
     XCTAssertFalse(FileManager.default.fileExists(atPath: f.database.root.appendingPathComponent("papers").path))
@@ -1167,6 +1167,45 @@ private actor WorkspaceDeletionAgent: AgentLibraryPurging {
     XCTAssertNil(f.workspace.sheet)
     XCTAssertFalse(f.workspace.preparing)
     XCTAssertTrue(try f.database.libraryRecords().isEmpty)
+  }
+
+  func testMissingConfirmedFolderExplainsRecoveryAndRequiresFreshImport() async throws {
+    let f = try await fixture()
+    let original = try await importSelected(f)
+    let removed = try await f.workspace.imports.createFolder(name: "Removed")
+    let destination = try await f.workspace.imports.createFolder(name: "Destination")
+    f.workspace.libraryFilter.folder = .folder(removed.id)
+    let obsoleteID = try await f.workspace.prepareImport(source: f.source)
+    XCTAssertEqual(try confirmation(f.workspace).destinationFolderID, removed.id)
+    try await f.workspace.imports.deleteFolder(id: removed.id)
+
+    let rejected = try XCTUnwrap(f.workspace.startLocalImport(obsoleteID, destinationFolderID: removed.id))
+    f.workspace.sheet = nil
+    XCTAssertNil(f.workspace.presentationDidDismiss(confirmationID: obsoleteID))
+    let rejectedPaper = await rejected.value
+    XCTAssertNil(rejectedPaper)
+    XCTAssertEqual(f.workspace.failure,
+      "선택한 저장 폴더가 더 이상 없습니다. Library에서 다른 폴더나 ‘미분류’를 선택한 뒤 PDF를 다시 선택하세요.")
+    XCTAssertEqual(try f.database.libraryRecords().map(\.id), [original])
+    XCTAssertEqual(try f.database.adapterRead { try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM importJob") }, 1)
+
+    f.workspace.libraryFilter.folder = .folder(destination.id)
+    let freshID = try await f.workspace.prepareImport(source: f.source)
+    let fresh = try confirmation(f.workspace)
+    XCTAssertEqual(fresh.destinationFolderID, destination.id)
+    XCTAssertEqual(fresh.matchingPaperIDs, [original])
+    let accepted = try XCTUnwrap(f.workspace.startLocalImport(freshID, destinationFolderID: destination.id))
+    f.workspace.sheet = nil
+    XCTAssertNil(f.workspace.presentationDidDismiss(confirmationID: freshID))
+    let acceptedPaper = await accepted.value
+    let duplicate = try XCTUnwrap(acceptedPaper)
+    XCTAssertNotEqual(duplicate, original)
+    XCTAssertNil(f.workspace.failure)
+    XCTAssertNil(f.workspace.reader)
+    XCTAssertEqual(f.workspace.latestLocalImport, duplicate)
+    let reopened = try ProductDatabase.open(at: f.database.root)
+    XCTAssertEqual(try reopened.folderID(for: duplicate), destination.id)
+    XCTAssertNil(try reopened.folderID(for: original))
   }
 
   func testReaderReturnDiscardsLeaseAndRestoresGuardedPositionFromSameDatabase() async throws {
