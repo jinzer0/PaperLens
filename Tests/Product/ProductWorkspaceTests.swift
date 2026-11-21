@@ -170,6 +170,50 @@ private actor WorkspaceDeletionAgent: AgentLibraryPurging {
     }, 1)
   }
 
+  func testURLImportUpdatesLibraryAndStartsParsingWithoutMountedView() async throws {
+    let f = try await fixture()
+    let graph = try MainPDFiumParsingComposition(lifecycle: f.lifecycle, authority: ProviderRequest())
+    let session = URLSessionConfiguration.ephemeral
+    session.protocolClasses = [ImportFixtureProtocol.self]
+    let workspace = try ProductWorkspace(database: f.database, lifecycle: f.lifecycle,
+      connection: f.connection, parsing: graph, diagnosticSource: nil, urlSessionConfiguration: session)
+    // Fail the reservation before a PDFium helper can start and permit durable recovery.
+    try f.database.adapterWrite { db in
+      try db.execute(sql: """
+        CREATE TRIGGER rejectFixtureParsing BEFORE INSERT ON extractionAttempt
+        WHEN NEW.state = 'running'
+        BEGIN SELECT RAISE(ABORT, 'fixture parsing unavailable'); END;
+        """)
+    }
+    let urls = workspace.urls
+    try urls.prepare("https://fixture.invalid/chunks", destination: "미분류", possibleDuplicate: true)
+    urls.continueImport(confirmationID: try XCTUnwrap(urls.confirmation).id)
+    let importDeadline = ContinuousClock.now + .seconds(5)
+    while workspace.failedInitialParsing.isEmpty && ContinuousClock.now < importDeadline {
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    guard case .ready(let paperID) = urls.state else {
+      return XCTFail("Fixture URL was not published")
+    }
+    XCTAssertEqual(workspace.failedInitialParsing, [paperID])
+    XCTAssertEqual(workspace.revision, 1)
+    XCTAssertEqual(try f.database.libraryRecords().first?.status, .ready)
+    let parsingStatus = try f.database.extractionStatus(paperID: paperID)
+    XCTAssertEqual(parsingStatus.state, "failed")
+    XCTAssertEqual(parsingStatus.failure, ExtractionError.reservationFailure.rawValue)
+
+    try urls.prepare("https://fixture.invalid/mime", destination: "미분류", possibleDuplicate: true)
+    urls.continueImport(confirmationID: try XCTUnwrap(urls.confirmation).id)
+    let failureDeadline = ContinuousClock.now + .seconds(5)
+    while workspace.revision < 2 && ContinuousClock.now < failureDeadline {
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    XCTAssertEqual(urls.state, .failed(.rejected))
+    XCTAssertEqual(workspace.revision, 2)
+    XCTAssertEqual(workspace.failedInitialParsing, [paperID])
+    XCTAssertEqual(try f.database.libraryRecords().filter { $0.status == .importFailed }.count, 1)
+  }
+
   func testReaderCanStartParsingAfterBothInitialWritesFail() async throws {
     let base = try await fixture()
     let id = try await importSelected(base)

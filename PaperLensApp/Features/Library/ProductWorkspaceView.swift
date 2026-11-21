@@ -52,6 +52,7 @@ public final class ProductWorkspace: ObservableObject {
   fileprivate let database: ProductDatabase
   private let diagnosticSource: URL?
   private let readLeases: LibraryReadLeaseProvider
+  private var urlImportObservation: AnyCancellable?
   private var scopedSource: URL?
   private var pendingConfirmation: UUID?
   private var continuedLocalConfirmation: UUID?
@@ -111,7 +112,8 @@ public final class ProductWorkspace: ObservableObject {
   internal init(
     database: ProductDatabase, lifecycle: LocalLibraryLifecycle,
     connection: NativeAPIKeyConnection, codex: NativeCodexConnection? = nil,
-    parsing: MainPDFiumParsingComposition? = nil, diagnosticSource: URL?
+    parsing: MainPDFiumParsingComposition? = nil, diagnosticSource: URL?,
+    urlSessionConfiguration: URLSessionConfiguration? = nil
   ) throws {
     self.database = database
     self.diagnosticSource = diagnosticSource
@@ -126,7 +128,7 @@ public final class ProductWorkspace: ObservableObject {
     imports = FolderImportService(database: database, lifecycle: lifecycle)
     settings = ProviderSettingsService(connection: connection, codex: codex)
     urls = URLImportService(
-      authority: try ProviderRequest(),
+      authority: try ProviderRequest(), sessionConfiguration: urlSessionConfiguration,
       grantWriter: {
         guard diagnosticSource == nil else { throw URLImportError.writerUnavailable }
         return try await lifecycle.grantURLImportWriter(for: $0)
@@ -140,6 +142,17 @@ public final class ProductWorkspace: ObservableObject {
       provider: SelectedLibrarySummaryProvider(database: database,
         apiKey: NativeAPIKeySummaryProvider(connection: connection, authority: summaryAuthority),
         chatGPT: NativeCodexSummaryProvider(connection: codex, authority: summaryAuthority)))
+    // Receive each terminal state after the service has settled its import,
+    // independently of SwiftUI mounting or coalescing view updates.
+    urlImportObservation = urls.$state
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] state in
+        switch state {
+        case .ready(let paper): self?.imported(paper)
+        case .failed: self?.revision += 1
+        default: break
+        }
+      }
   }
 
   public func sortFacts() async throws -> [OrganizationSortFacts] {
@@ -185,8 +198,6 @@ public final class ProductWorkspace: ObservableObject {
     else { throw URLImportError.writerUnavailable }
     return captured
   }
-
-  func refreshAfterURLImportFailure() { revision += 1 }
 
   @discardableResult public func prepareImport(source: URL) async throws -> UUID {
     try admitDiagnosticSource(source)
@@ -875,13 +886,6 @@ public struct ProductWorkspaceView: View {
         }
       } catch {
         if !Task.isCancelled { activeImportProgress = [:] }
-      }
-    }
-    .onChange(of: urls.state) { _, state in
-      switch state {
-      case .ready(let paper): workspace.imported(paper)
-      case .failed: workspace.refreshAfterURLImportFailure()
-      default: break
       }
     }
     .sheet(

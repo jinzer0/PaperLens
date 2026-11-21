@@ -344,7 +344,7 @@ private final class GrantRecorder: @unchecked Sendable {
   func record() { lock.withLock { value += 1 } }
 }
 
-private final class ImportFixtureProtocol: URLProtocol, @unchecked Sendable {
+final class ImportFixtureProtocol: URLProtocol, @unchecked Sendable {
   final class State: @unchecked Sendable {
     private let lock = NSLock()
     private var started: Set<String> = []
