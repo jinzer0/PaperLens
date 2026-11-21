@@ -199,7 +199,11 @@ import ProviderRequest
                 fd = os.open('codex/auth.json', os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
                 with os.fdopen(fd, 'w') as auth:
                     auth.write('{}')
-                result = dict(identity, instructions=dict(mode='browser', authUrl='https://example.invalid/login'))
+                if params['mode'] == 'browser':
+                    instructions = dict(mode='browser', authUrl='https://example.invalid/login')
+                else:
+                    instructions = dict(mode='device', verificationUrl='https://example.invalid/device', userCode='TEST-CODE')
+                result = dict(identity, instructions=instructions)
             elif \(syntheticLogin ? "True" : "False") and method == 'product.loginObserve':
                 assert params == identity
                 result = dict(identity, state='authenticated')
@@ -405,8 +409,22 @@ import ProviderRequest
     let workspace = try ProductWorkspace(database: database, lifecycle: library, connection: apiKey, codex: codex)
 
     workspace.sheet = .settings
+    let closeDuringStartup = codex.$phase.dropFirst().sink { phase in
+      if phase == .starting { workspace.sheet = nil }
+    }
+    codex.connect(mode: "browser")
+    closeDuringStartup.cancel()
+    let unstarted = try XCTUnwrap(prepared)
+    XCTAssertNil(workspace.sheet)
+    XCTAssertEqual(codex.phase, .idle)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: unstarted.path))
+    XCTAssertEqual(try database.providerConfiguration(), selected)
+    workspace.presentationDidDismiss()
+
+    workspace.sheet = .settings
     codex.connect(mode: "browser")
     let firstDirectory = try XCTUnwrap(prepared)
+    XCTAssertNotEqual(firstDirectory, unstarted)
     try await waitFor { codex.phase == .signingIn }
     codex.checkLogin()
     try await waitForMarker("probe-received", directory: firstDirectory)
@@ -451,6 +469,122 @@ import ProviderRequest
     try await waitForMarker("retirement-received", directory: retryDirectory)
     try Data().write(to: marker("release-retirement", directory: retryDirectory))
     try await waitFor { codex.phase == .idle }
+  }
+
+  func testReloginPreservesLastGoodUntilCurrentProbeCommitsAndOldOwnerRetires() async throws {
+    let (root, _, template) = try workerFixture(
+      script: controlWorkerScript(holdResult: false, syntheticLogin: true, holdProbe: true))
+    defer { try? FileManager.default.removeItem(at: root) }
+    let database = try ProductDatabase.open(at: root.appendingPathComponent("database"))
+    let configuration = try NativeOpenAIConfiguration(model: "fixture-model")
+    let apiKey = NativeAPIKeyConnection(configuration: configuration,
+      slots: try APIKeySlotStore(directory: root.appendingPathComponent("slots")),
+      persistence: DatabaseAPIKeySelector(database: database, configuration: configuration),
+      transport: RejectNetwork(), authority: try ProviderRequest())
+    apiKey.restore()
+    var prepared: [URL] = []
+    var summaryDirectory: URL?
+    let loginRoot = root.appendingPathComponent("codex-scopes", isDirectory: true)
+    let codex = NativeCodexConnection(database: database, root: loginRoot,
+      apiKey: apiKey) { namespace in
+        guard namespace.prepareBackupExclusionFixture(
+          agentScript: root.appendingPathComponent("resources/agent.py"),
+          interpreter: SyntheticPython.metadataInterpreter) else { return nil }
+        if namespace.directoryURL.deletingLastPathComponent().path == loginRoot.path {
+          prepared.append(namespace.directoryURL)
+        } else {
+          summaryDirectory = namespace.directoryURL
+        }
+        return .testing(namespace: namespace, interpreter: template.interpreter, script: template.script)
+      }
+    defer { codex.cancel() }
+    let beforeLogin = try database.providerConfiguration()
+    codex.connect(mode: "browser")
+    let initial = try XCTUnwrap(prepared.last)
+    try await waitFor { codex.phase == .signingIn }
+    codex.checkLogin()
+    try await waitForMarker("probe-received", directory: initial)
+    try Data().write(to: marker("release-probe", directory: initial))
+    try await waitFor { codex.eligibleForEntry }
+    let lastGood = try database.providerConfiguration()
+    XCTAssertEqual(lastGood.kind, .codexChatGPT)
+    XCTAssertEqual(lastGood.generation, beforeLogin.generation + 1)
+    XCTAssertTrue(codex.canStart)
+
+    codex.connect(mode: "device")
+    let cancelled = try XCTUnwrap(prepared.last)
+    XCTAssertNotEqual(cancelled, initial)
+    XCTAssertEqual(try database.providerConfiguration(), lastGood)
+    XCTAssertTrue(codex.eligibleForEntry)
+    try await waitFor { codex.phase == .signingIn }
+    XCTAssertEqual(codex.instructions?.userCode, "TEST-CODE")
+    codex.checkLogin()
+    try await waitForMarker("probe-received", directory: cancelled)
+    XCTAssertTrue(codex.eligibleForEntry)
+    codex.cancel()
+    XCTAssertEqual(try database.providerConfiguration(), lastGood)
+    XCTAssertTrue(codex.eligibleForEntry)
+    try Data().write(to: marker("release-probe", directory: cancelled))
+    try await waitForMarker("retirement-received", directory: cancelled)
+    XCTAssertFalse(codex.canStart)
+    try Data().write(to: marker("release-retirement", directory: cancelled))
+    try await waitFor { codex.phase == .connected && codex.canStart }
+    XCTAssertTrue(codex.offersRetry)
+    XCTAssertEqual(try database.providerConfiguration(), lastGood)
+    XCTAssertTrue(FileManager.default.fileExists(atPath: initial.path))
+    XCTAssertFalse(FileManager.default.fileExists(atPath: cancelled.path))
+
+    codex.connect(mode: "browser")
+    let retry = try XCTUnwrap(prepared.last)
+    XCTAssertEqual(prepared.count, 3)
+    XCTAssertNotEqual(retry, initial)
+    XCTAssertNotEqual(retry, cancelled)
+    try await waitFor { codex.phase == .signingIn }
+    XCTAssertTrue(codex.eligibleForEntry)
+    codex.checkLogin()
+    try await waitForMarker("probe-received", directory: retry)
+    XCTAssertEqual(try database.providerConfiguration(), lastGood)
+    let paperID = UUID()
+    let (authority, request, _) = try parameters(paperID: paperID)
+    let identity = LibrarySummaryIdentity(paperID: paperID, generation: UUID(), requestPaperGeneration: 1,
+      pdfSHA256: String(repeating: "a", count: 64), revision: UUID(),
+      configurationGeneration: lastGood.generation, job: UUID(), attempt: UUID(), fence: UUID(),
+      correlation: UUID(), input: UUID(), epoch: UUID())
+    let summary = Task { try await codex.executeLibrarySummary(request, identity: identity, authority: authority) }
+    defer { summary.cancel() }
+    try await waitFor { summaryDirectory != nil }
+    let summaryScope = try XCTUnwrap(summaryDirectory)
+    try await waitForMarker("retirement-received", directory: summaryScope)
+    try Data().write(to: marker("release-probe", directory: retry))
+    try await waitForMarker("retirement-received", directory: initial)
+    let winner = try database.providerConfiguration()
+    XCTAssertEqual(winner.kind, .codexChatGPT)
+    XCTAssertEqual(winner.generation, lastGood.generation + 1)
+    XCTAssertNotEqual(winner.slotID, lastGood.slotID)
+    XCTAssertEqual(codex.phase, .connected)
+    XCTAssertTrue(codex.eligibleForEntry)
+    XCTAssertFalse(codex.canStart)
+    XCTAssertTrue(FileManager.default.fileExists(atPath: initial.path))
+    XCTAssertTrue(FileManager.default.fileExists(atPath: summaryScope.path))
+    try Data().write(to: marker("release-retirement", directory: summaryScope))
+    do {
+      _ = try await summary.value
+      XCTFail("Old-generation result must not publish through the new connection")
+    } catch { XCTAssertEqual(error as? LibrarySummaryError, .staleIdentity) }
+    XCTAssertFalse(FileManager.default.fileExists(atPath: summaryScope.path))
+    try Data().write(to: marker("release-retirement", directory: initial))
+    try await waitFor { codex.canStart }
+    XCTAssertFalse(FileManager.default.fileExists(atPath: initial.path))
+    XCTAssertEqual(try database.providerConfiguration(), winner)
+    XCTAssertTrue(codex.eligibleForEntry)
+
+    codex.cancel()
+    try await waitForMarker("retirement-received", directory: retry)
+    try Data().write(to: marker("release-retirement", directory: retry))
+    try await waitFor { codex.phase == .idle }
+    XCTAssertFalse(codex.eligibleForEntry)
+    XCTAssertNil(try database.providerConfiguration().slotID)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: retry.path))
   }
 
   func testOtherPaperPurgeKeepsBoundSummaryAndRejectsUnownedEntry() async throws {

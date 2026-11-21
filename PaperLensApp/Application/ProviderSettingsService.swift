@@ -4,7 +4,8 @@ import Foundation
 import ProviderRequest
 #endif
 
-/// One user-triggered private SDK scope. SQLite remains the only provider selector.
+/// Retains the current login while one separately owned replacement is verified.
+/// SQLite remains the only provider selector.
 @MainActor
 public final class NativeCodexConnection: ObservableObject {
   public enum Phase: Equatable {
@@ -16,12 +17,13 @@ public final class NativeCodexConnection: ObservableObject {
   }
   private enum Operation { case login(mode: String), observe, probe }
   private enum Ending {
-    case cancelled, disconnected, failure(String)
+    case cancelled, disconnected, superseded, failure(String)
 
     var message: String {
       switch self {
       case .cancelled: return "ChatGPT 연결을 취소했습니다."
       case .disconnected: return "ChatGPT 연결을 해제했습니다."
+      case .superseded: return "이전 ChatGPT 연결을 교체했습니다."
       case .failure(let reason): return reason
       }
     }
@@ -29,6 +31,28 @@ public final class NativeCodexConnection: ObservableObject {
     var failed: Bool {
       if case .failure = self { return true }
       return false
+    }
+  }
+
+  @MainActor private final class LoginScope {
+    let namespace: TopologyOwnedFixtures
+    let expected: ProviderConfiguration
+    let intentID = UUID()
+    let stageID = UUID()
+    var owner: OwnedChildRetirement?
+    var lifecycle: AgentConnectionLifecycle?
+    var prepared = false
+    var committed: ProviderConfiguration?
+    var requests: [UUID: Operation] = [:]
+    var ending: Ending?
+
+    init(namespace: TopologyOwnedFixtures, expected: ProviderConfiguration) {
+      self.namespace = namespace
+      self.expected = expected
+    }
+
+    var identityParams: [String: Any] {
+      ["stageID": stageID.uuidString.lowercased(), "intentID": intentID.uuidString.lowercased()]
     }
   }
   @Published public private(set) var phase: Phase = .idle
@@ -41,15 +65,12 @@ public final class NativeCodexConnection: ObservableObject {
   private let apiKey: NativeAPIKeyConnection
   private var apiKeyObservation: AnyCancellable?
   private let prepareWorker: (TopologyOwnedFixtures) -> OwnedChildRetirement.WorkerLaunch?
-  private var namespace: TopologyOwnedFixtures?
-  private var owner: OwnedChildRetirement?
-  private var lifecycle: AgentConnectionLifecycle?
-  private var expected: ProviderConfiguration?
-  private var committed: ProviderConfiguration?
-  private var requests: [UUID: Operation] = [:]
+  private var candidate: LoginScope?
+  private var activeLogin: LoginScope?
+  private var predecessor: LoginScope?
   private var ending: Ending?
-  private var cancelled = false
-  private var retirementRequested = false
+  private var intendedPhase: Phase = .idle
+  private var publishingPhase = false
   private var summaryScopes: [UUID: NativeCodexSummaryScope] = [:]
   private var summaryNamespaceDebt: [TopologyOwnedFixtures] = []
 
@@ -58,7 +79,7 @@ public final class NativeCodexConnection: ObservableObject {
   public func executeLibrarySummary(_ request: AuthorizedProviderRequest,
     identity: LibrarySummaryIdentity, authority: ProviderRequest) async throws -> ValidatedProviderResult {
     try Task.checkCancellation()
-    guard eligibleForEntry, let loginNamespace = namespace, let selected = committed,
+    guard let login = usableActiveLogin, let selected = login.committed,
       selected.generation == identity.configurationGeneration, let model = selected.model,
       request.wire.operation == .librarySummary, summaryScopes.isEmpty,
       summaryNamespaceDebt.isEmpty else { throw LibrarySummaryError.providerUnavailable }
@@ -69,7 +90,7 @@ public final class NativeCodexConnection: ObservableObject {
     guard let target = TopologyOwnedFixtures(root: summaryRoot, runID: requestID.uuidString.lowercased())
     else { throw LibrarySummaryError.cleanupUnavailable }
     guard let launch = prepareWorker(target), target.prepareRuntimeDirectories(),
-      loginNamespace.copyLoginAuthentication(to: target) else {
+      login.namespace.copyLoginAuthentication(to: target) else {
       if !target.cleanupUnlaunchedWorkerNamespace() {
         summaryNamespaceDebt.append(target)
         throw LibrarySummaryError.cleanupUnavailable
@@ -134,170 +155,133 @@ public final class NativeCodexConnection: ObservableObject {
   }
 
   public var currentConfiguration: ProviderConfiguration? { try? database.providerConfiguration() }
-  internal var testingOwner: OwnedChildRetirement? { owner }
-  /// Even a successful login cannot authorize a second SDK scope or a provider switch.
+  internal var testingOwner: OwnedChildRetirement? { candidate?.owner ?? activeLogin?.owner }
+
+  /// Non-Codex replacement must wait for all of this coordinator's owners to drain.
   public var blocksReplacement: Bool {
-    namespace != nil || owner != nil || !summaryScopes.isEmpty || !summaryNamespaceDebt.isEmpty
+    candidate != nil || activeLogin != nil || predecessor != nil
+      || !summaryScopes.isEmpty || !summaryNamespaceDebt.isEmpty
   }
-  public var canStart: Bool { !blocksReplacement && apiKey.canReplaceOwner }
+
+  public var canStart: Bool {
+    guard !publishingPhase, candidate == nil, predecessor == nil, summaryNamespaceDebt.isEmpty,
+      apiKey.canReplaceOwner else { return false }
+    if activeLogin == nil { return phase == .idle && summaryScopes.isEmpty }
+    return phase == .connected && eligibleForEntry
+  }
+
   var hasPendingLogin: Bool {
-    switch phase {
-    case .starting, .signingIn, .observing, .probing: return true
-    case .idle, .connected, .retiring, .blocked: return false
-    }
+    guard let candidate else { return false }
+    return candidate.ending == nil && candidate.prepared
   }
+
+  var canDisconnect: Bool {
+    guard let activeLogin, activeLogin.ending == nil, let owner = activeLogin.owner,
+      owner.terminal == nil else { return false }
+    return candidate == nil || phase == .blocked
+  }
+
   var showsFailure: Bool { phase == .blocked || ending?.failed == true }
   var offersRetry: Bool {
-    guard phase == .idle, let ending else { return false }
-    if case .disconnected = ending { return false }
-    return true
+    switch ending {
+    case .cancelled, .failure: return candidate == nil && (phase == .idle || phase == .connected)
+    case .disconnected, .superseded, nil: return false
+    }
   }
-  public var eligibleForEntry: Bool {
-    guard phase == .connected, !cancelled, !retirementRequested,
-      let owner, owner.terminal == nil, let lifecycle,
-      lifecycle.connection.state == .ready, let committed,
-      committed.kind == .codexChatGPT,
-      committed.slotID?.uuidString.lowercased() == namespace?.runID,
-      currentConfiguration == committed
-    else { return false }
-    return true
+
+  public var eligibleForEntry: Bool { usableActiveLogin != nil }
+
+  private var usableActiveLogin: LoginScope? {
+    guard let login = activeLogin, login.ending == nil, let owner = login.owner,
+      owner.terminal == nil, login.lifecycle?.connection.state == .ready,
+      let committed = login.committed, committed.kind == .codexChatGPT,
+      committed.slotID?.uuidString.lowercased() == login.namespace.runID,
+      currentConfiguration == committed else { return nil }
+    return login
   }
 
   public func connect(mode: String) {
     guard canStart, mode == "browser" || mode == "device" else { return }
     ending = nil
-    do {
-      cancelled = false
-      retirementRequested = false
-      expected = try database.providerConfiguration()
-      guard let model = apiKey.configuration.model.nilIfEmpty else { return }
-      intentID = UUID()
-      stageID = UUID()
-      phase = .starting
-      message = "전용 ChatGPT 프로세스를 시작하고 있습니다."
-      let runID = UUID().uuidString.lowercased()
-      guard let namespace = TopologyOwnedFixtures(root: root, runID: runID) else {
-        phase = .blocked
-        message = "전용 로그인 저장소를 준비하지 못했습니다."
-        return
+    guard let expected = currentConfiguration,
+      let model = apiKey.configuration.model.nilIfEmpty else {
+      reportFailure("저장된 Provider 설정을 읽지 못했습니다.")
+      return
+    }
+    guard let namespace = TopologyOwnedFixtures(root: root, runID: UUID().uuidString.lowercased()) else {
+      reportFailure("전용 로그인 저장소를 준비하지 못했습니다.")
+      return
+    }
+    let login = LoginScope(namespace: namespace, expected: expected)
+    // Retain setup failures until their namespace closure can be proved.
+    candidate = login
+    intentID = login.intentID
+    stageID = login.stageID
+    guard let worker = prepareWorker(namespace) else {
+      block(login, "서명된 로그인 구성 요소 또는 비백업 저장소를 준비하지 못했습니다.")
+      return
+    }
+    login.prepared = true
+    publishPhase(.starting)
+    guard login.ending == nil else { return }
+    message = "전용 ChatGPT 프로세스를 시작하고 있습니다."
+    guard login.ending == nil else { return }
+    let deadline = DispatchTime.now().uptimeNanoseconds + 5_000_000_000
+    let owner = OwnedChildRetirement(worker: worker, deadlineUptimeNanoseconds: deadline)
+    login.owner = owner
+    owner.observeTerminal { [weak self, weak login] terminal in
+      Task { @MainActor in
+        guard let self, let login else { return }
+        self.finish(login, terminal: terminal)
       }
-      // Retain even setup failures: metadata/namespace cleanup is not fabricated.
-      self.namespace = namespace
-      guard let worker = prepareWorker(namespace) else {
-        phase = .blocked
-        message = "서명된 로그인 구성 요소 또는 비백업 저장소를 준비하지 못했습니다. 정리가 입증되지 않아 새 연결을 차단합니다."
-        return
-      }
-      let deadline = DispatchTime.now().uptimeNanoseconds + 5_000_000_000
-      let owner = OwnedChildRetirement(worker: worker, deadlineUptimeNanoseconds: deadline)
-      self.owner = owner
-      let intent = intentID
-      owner.observeTerminal { [weak self, weak owner] terminal in
-        Task { @MainActor in
-          guard let self, let owner, self.owner === owner else { return }
-          self.instructions = nil
-          switch terminal {
-          case .unknown:
-            self.phase = .blocked
-            self.message = self.endMessage(
-              followedBy: "프로세스 또는 전용 저장소 정리를 확인하지 못해 재연결과 Provider 교체가 차단됩니다.")
-          case .clean:
-            do {
-              if self.ending == nil {
-                self.ending = .failure("ChatGPT 연결 프로세스가 종료되었습니다.")
-              }
-              let selected = try self.database.providerConfiguration()
-              if selected.kind == .codexChatGPT,
-                selected.slotID?.uuidString.lowercased() == self.namespace?.runID {
-                _ = try self.database.compareAndSwapProviderConfiguration(expected: selected,
-                  replacementKind: nil, replacementSlotID: nil, replacementModel: nil)
-              }
-              self.lifecycle = nil
-              self.owner = nil
-              self.namespace = nil
-              self.committed = nil
-              self.expected = nil
-              self.requests.removeAll()
-              self.retirementRequested = false
-              self.phase = .idle
-              self.message = self.endMessage(followedBy: "전용 로그인 저장소 정리를 완료했습니다.")
-            } catch {
-              self.phase = .blocked
-              self.message = self.endMessage(
-                followedBy: "저장된 Provider 선택을 갱신하지 못했습니다. 설정을 확인하세요.")
-            }
-          }
+    }
+    owner.startProduct(startDeadlineUptimeNanoseconds: deadline) { [weak self, weak login] result in
+      guard let self, let login, self.candidate === login, let owner = login.owner,
+        owner.terminal == nil else { return }
+      switch result {
+      case .failure:
+        self.fail(login, "ChatGPT 연결 프로세스를 시작하지 못했습니다.")
+        owner.retire()
+      case .success(let lifecycle):
+        login.lifecycle = lifecycle
+        guard login.ending == nil else { owner.retire(); return }
+        lifecycle.onTerminal = { [weak self, weak login] id, terminal in
+          guard let self, let login else { return }
+          self.receive(login, id: id, terminal: terminal)
         }
+        var params = login.identityParams
+        params["mode"] = mode
+        params["model"] = model
+        params["expectedSelector"] = self.selector(login.expected)
+        self.send(.login(mode: mode), method: "product.loginStart", params: params, for: login)
       }
-      owner.startProduct(startDeadlineUptimeNanoseconds: deadline) {
-        [weak self, weak owner] result in
-        guard let self, let owner, self.owner === owner,
-          self.intentID == intent, !self.cancelled, owner.terminal == nil
-        else { return }
-        switch result {
-        case .failure:
-          self.failClosed("ChatGPT 연결 프로세스를 시작하지 못했습니다.")
-        case .success(let lifecycle):
-          self.lifecycle = lifecycle
-          lifecycle.onTerminal = { [weak self, weak lifecycle] id, terminal in
-            guard let self, let lifecycle, self.lifecycle === lifecycle else { return }
-            self.receive(id, terminal: terminal)
-          }
-          guard self.fenced else {
-            self.failClosed()
-            return
-          }
-          var params = self.identityParams
-          params["mode"] = mode
-          params["model"] = model
-          params["expectedSelector"] = self.selector(self.expected!)
-          self.send(.login(mode: mode), method: "product.loginStart", params: params)
-        }
-      }
-    } catch { failClosed("저장된 Provider 설정을 읽지 못했습니다.") }
+    }
   }
 
   /// Renew only the current intent's observation. The shared channel/session owns
   /// request and traffic limits; observation adds no polling interval or expiry.
   public func checkLogin() {
-    guard phase == .signingIn else { return }
-    guard fenced else {
-      failClosed("현재 로그인 요청을 확인할 수 없습니다.")
-      return
-    }
-    phase = .observing
-    send(.observe, method: "product.loginObserve", params: identityParams)
+    guard intendedPhase == .signingIn, let candidate else { return }
+    publishPhase(.observing)
+    send(.observe, method: "product.loginObserve", params: candidate.identityParams, for: candidate)
   }
 
   public func cancel() {
-    guard owner != nil, !retirementRequested else { return }
-    ending = phase == .connected ? .disconnected : .cancelled
-    cancelled = true
-    retirementRequested = true
-    instructions = nil
-    phase = .retiring
-    message = "로그인 취소와 종료를 요청했습니다. 실제 정리는 아직 입증되지 않았습니다."
-    for scope in summaryScopes.values { scope.cancel() }
-    // Only the final cancel frame retains bounded owner admission. Local publication
-    // is fenced already; SDK cancellation acceptance is never retirement proof.
-    if let lifecycle, lifecycle.connection.state == .ready, stageID != nil {
-      owner?.retire(cancelling: lifecycle, params: identityParams)
-    } else {
-      owner?.retire()
-    }
+    if hasPendingLogin { cancelUncommittedLogin() }
+    else { disconnect() }
   }
 
   func cancelUncommittedLogin() {
-    guard committed == nil, hasPendingLogin else { return }
-    cancel()
+    guard hasPendingLogin, let candidate else { return }
+    retire(candidate, because: .cancelled, sendCancel: true)
   }
 
-  private var identityParams: [String: Any] {
-    guard let stageID, let intentID else { return [:] }
-    return [
-      "stageID": stageID.uuidString.lowercased(), "intentID": intentID.uuidString.lowercased(),
-    ]
+  func disconnect() {
+    guard canDisconnect, let activeLogin else { return }
+    retire(activeLogin, because: .disconnected, sendCancel: true)
+    for scope in summaryScopes.values { scope.cancel() }
   }
+
   private func selector(_ value: ProviderConfiguration) -> [String: Any] {
     [
       "kind": value.kind.map { $0.rawValue as Any } ?? NSNull(),
@@ -305,44 +289,40 @@ public final class NativeCodexConnection: ObservableObject {
       "generation": value.generation, "model": value.model.map { $0 as Any } ?? NSNull(),
     ]
   }
-  private var fenced: Bool {
-    !cancelled && !retirementRequested && owner?.terminal == nil && owner != nil
-      && lifecycle?.connection.state == .ready && expected != nil
-      && currentConfiguration == expected
+
+  private func fenced(_ login: LoginScope) -> Bool {
+    candidate === login && login.ending == nil && login.owner?.terminal == nil
+      && login.lifecycle?.connection.state == .ready && currentConfiguration == login.expected
   }
-  private func send(_ operation: Operation, method: String, params: [String: Any]) {
-    guard let lifecycle else {
-      failClosed()
-      return
-    }
+
+  private func send(_ operation: Operation, method: String, params: [String: Any], for login: LoginScope) {
+    guard candidate === login, login.ending == nil else { return }
+    guard fenced(login), let lifecycle = login.lifecycle else { return fail(login) }
     do {
       // MainActor request does not suspend; correlation is installed before the writer can run.
       let id = try lifecycle.request(method: method, params: params, timeoutMs: 10_000)
-      requests[id] = operation
-    } catch { failClosed() }
+      login.requests[id] = operation
+    } catch { fail(login) }
   }
-  private func receive(_ id: UUID, terminal: AgentRPCConnection.Terminal) {
-    guard let operation = requests.removeValue(forKey: id) else { return }
-    guard !cancelled, !retirementRequested else { return }
+
+  private func receive(_ login: LoginScope, id: UUID, terminal: AgentRPCConnection.Terminal) {
+    guard candidate === login, login.ending == nil,
+      let operation = login.requests.removeValue(forKey: id) else { return }
     if case .failure(let failure) = terminal {
       switch failure {
       case .timeout, .remote("timeout"):
-        failClosed("ChatGPT 응답을 기다리다 시간이 초과되었습니다.")
+        fail(login, "ChatGPT 응답을 기다리다 시간이 초과되었습니다.")
       case .remote("cancelled"):
-        failClosed("ChatGPT 요청이 취소되었습니다.")
+        fail(login, "ChatGPT 요청이 취소되었습니다.")
       default:
-        if case .probe = operation { failClosed("ChatGPT 연결 테스트에 실패했습니다.") }
-        else { failClosed("ChatGPT 로그인 응답을 확인하지 못했습니다.") }
+        if case .probe = operation { fail(login, "ChatGPT 연결 테스트에 실패했습니다.") }
+        else { fail(login, "ChatGPT 로그인 응답을 확인하지 못했습니다.") }
       }
       return
     }
-    guard fenced, case .result(let result) = terminal,
-      result["stageID"] as? String == stageID?.uuidString.lowercased(),
-      result["intentID"] as? String == intentID?.uuidString.lowercased()
-    else {
-      failClosed()
-      return
-    }
+    guard fenced(login), case .result(let result) = terminal,
+      result["stageID"] as? String == login.stageID.uuidString.lowercased(),
+      result["intentID"] as? String == login.intentID.uuidString.lowercased() else { return fail(login) }
     switch operation {
     case .login(let requestedMode):
       guard let value = result["instructions"] as? [String: Any],
@@ -350,77 +330,185 @@ public final class NativeCodexConnection: ObservableObject {
         let address = value[mode == "browser" ? "authUrl" : "verificationUrl"] as? String,
         let url = URL(string: address), url.scheme == "https", url.host != nil,
         mode == "browser" || (mode == "device" && value["userCode"] is String)
-      else {
-        failClosed()
-        return
-      }
+      else { return fail(login) }
       instructions = Instructions(url: url, userCode: value["userCode"] as? String)
-      phase = .signingIn
+      guard login.ending == nil else { instructions = nil; return }
+      publishPhase(.signingIn)
+      guard login.ending == nil else { return }
       message = "로그인을 마친 뒤 ‘로그인 완료 확인’을 선택하세요. 인증 완료 후 실제 생성 검사에 사용량이 발생할 수 있습니다."
     case .observe:
       switch result["state"] as? String {
-      case "pending": phase = .signingIn
+      case "pending": publishPhase(.signingIn)
       case "authenticated":
         instructions = nil
-        phase = .probing
+        guard login.ending == nil else { return }
+        publishPhase(.probing)
+        guard login.ending == nil else { return }
         message = "인증된 세션에서 실제 PAPERLENS_OK 생성 응답을 확인합니다."
-        var params = identityParams
-        params["expectedSelector"] = selector(expected!)
-        send(.probe, method: "product.connectionTest", params: params)
-      case "failed": failClosed("ChatGPT 로그인에 실패했습니다.")
-      case "cancelled": failClosed("ChatGPT 로그인 요청이 취소되었습니다.")
-      case "timeout": failClosed("ChatGPT 로그인을 기다리다 시간이 초과되었습니다.")
-      case "exited": failClosed("ChatGPT 로그인 프로세스가 종료되었습니다.")
-      default: failClosed()
+        var params = login.identityParams
+        params["expectedSelector"] = selector(login.expected)
+        send(.probe, method: "product.connectionTest", params: params, for: login)
+      case "failed": fail(login, "ChatGPT 로그인에 실패했습니다.")
+      case "cancelled": fail(login, "ChatGPT 로그인 요청이 취소되었습니다.")
+      case "timeout": fail(login, "ChatGPT 로그인을 기다리다 시간이 초과되었습니다.")
+      case "exited": fail(login, "ChatGPT 로그인 프로세스가 종료되었습니다.")
+      default: fail(login)
       }
     case .probe:
-      guard result["state"] as? String == "usable", result["text"] as? String == "PAPERLENS_OK",
-        let observed = result["expectedSelector"] as? [String: Any], let expected,
-        NSDictionary(dictionary: observed).isEqual(to: selector(expected)), fenced,
-        let slotID = namespace.flatMap({ UUID(uuidString: $0.runID) })
-      else {
-        failClosed()
+      promote(login, result: result)
+    }
+  }
+
+  private func promote(_ login: LoginScope, result: [String: Any]) {
+    guard result["state"] as? String == "usable", result["text"] as? String == "PAPERLENS_OK",
+      let observed = result["expectedSelector"] as? [String: Any],
+      NSDictionary(dictionary: observed).isEqual(to: selector(login.expected)), fenced(login),
+      let slotID = UUID(uuidString: login.namespace.runID) else { return fail(login) }
+    do {
+      login.committed = try database.compareAndSwapProviderConfiguration(expected: login.expected,
+        replacementKind: .codexChatGPT, replacementSlotID: slotID, replacementModel: apiKey.configuration.model)
+    } catch { return fail(login, "새 Provider 설정을 저장하지 못했습니다.") }
+
+    // Own the winner before publishing, including synchronous Settings dismissal.
+    let previous = activeLogin
+    activeLogin = login
+    candidate = nil
+    predecessor = previous
+    if let previous { retire(previous, because: .superseded, sendCancel: true) }
+    do {
+      try apiKey.retireSupersededSelection()
+    } catch {
+      retire(login, because: .failure("새 설정을 저장한 뒤 이전 키를 정리하지 못해 연결을 중단했습니다."),
+        sendCancel: false)
+      return
+    }
+    guard login.ending == nil else { return }
+    ending = nil
+    if let previous {
+      if case .unknown = previous.owner?.terminal {
+        let reason = "새 ChatGPT 연결을 적용했습니다. 이전 연결의 정리를 확인하지 못해 다음 교체가 차단됩니다."
+        ending = .failure(reason)
+        message = reason
+      } else {
+        message = "새 ChatGPT 연결을 적용했습니다. 이전 연결의 프로세스와 전용 저장소를 정리합니다."
+      }
+    } else {
+      message = "ChatGPT 연결이 완료되었습니다. Library에서 논문 요약을 생성할 수 있습니다."
+    }
+    if login.ending == nil { publishPhase(.connected) }
+  }
+
+  private func fail(_ login: LoginScope, _ reason: String = "ChatGPT 연결을 검증하지 못했습니다.") {
+    retire(login, because: .failure(reason), sendCancel: false)
+  }
+
+  private func retire(_ login: LoginScope, because reason: Ending, sendCancel: Bool) {
+    guard login.ending == nil else { return }
+    // Fence result handling before any synchronous publication or cancellation callback.
+    login.ending = reason
+    login.requests.removeAll()
+    if predecessor !== login {
+      instructions = nil
+      ending = reason
+      publishPhase(.retiring)
+      message = "\(reason.message) 프로세스 종료와 전용 저장소 정리를 확인하고 있습니다."
+    }
+    guard let owner = login.owner else {
+      if login.namespace.cleanupUnlaunchedWorkerNamespace() { completeCleanLogin(login) }
+      else { block(login, "아직 시작하지 않은 로그인 저장소를 정리하지 못했습니다.") }
+      return
+    }
+    // If cancellation wins during startup, let the already admitted startup
+    // report its handoff so the owner can retire without dispatching login.
+    guard let lifecycle = login.lifecycle else { return }
+    if sendCancel, lifecycle.connection.state == .ready {
+      owner.retire(cancelling: lifecycle, params: login.identityParams)
+    } else {
+      owner.retire()
+    }
+  }
+
+  private func finish(_ login: LoginScope, terminal: OwnedChildRetirement.Terminal) {
+    guard candidate === login || activeLogin === login || predecessor === login else { return }
+    guard case .clean = terminal else {
+      block(login, "프로세스 또는 전용 저장소 정리를 확인하지 못했습니다.")
+      return
+    }
+    completeCleanLogin(login)
+  }
+
+  private func completeCleanLogin(_ login: LoginScope) {
+    if let committed = login.committed {
+      do {
+        // A predecessor owns only its exact committed selector, never a newer winner.
+        if try database.providerConfiguration() == committed {
+          _ = try database.compareAndSwapProviderConfiguration(expected: committed,
+            replacementKind: nil, replacementSlotID: nil, replacementModel: nil)
+        }
+      } catch {
+        block(login, "저장된 Provider 선택을 갱신하지 못했습니다.")
         return
       }
-      do {
-        committed = try database.compareAndSwapProviderConfiguration(
-          expected: expected,
-          replacementKind: .codexChatGPT, replacementSlotID: slotID,
-          replacementModel: apiKey.configuration.model)
-        try apiKey.retireSupersededSelection()
-        phase = .connected
-        message =
-          "ChatGPT 연결이 완료되었습니다. Library에서 논문 요약을 생성할 수 있습니다."
-      } catch {
-        failClosed(committed == nil
-          ? "새 Provider 설정을 저장하지 못했습니다."
-          : "새 설정을 저장한 뒤 이전 키를 정리하지 못해 연결을 중단했습니다.")
+    }
+    if predecessor === login {
+      predecessor = nil
+      if phase == .connected {
+        message = "새 ChatGPT 연결을 사용 중입니다. 이전 전용 로그인 저장소 정리를 완료했습니다."
+      } else if activeLogin == nil, candidate == nil {
+        publishPhase(.idle)
+        message = "이전 전용 로그인 저장소 정리를 완료했습니다."
+      }
+      return
+    }
+    if activeLogin === login {
+      activeLogin = nil
+      // The candidate has its own UI and will recheck the captured selector.
+      if candidate?.ending == nil, candidate != nil {
+        objectWillChange.send()
+        return
       }
     }
-  }
-
-  private func endMessage(followedBy status: String) -> String {
-    guard let ending else { return status }
-    return "\(ending.message) \(status)"
-  }
-
-  private func failClosed(_ reason: String = "ChatGPT 연결을 검증하지 못했습니다.") {
-    guard !retirementRequested else { return }
+    if candidate === login { candidate = nil }
+    let reason = login.ending ?? .failure("ChatGPT 연결 프로세스가 종료되었습니다.")
     instructions = nil
-    ending = .failure(reason)
-    if let owner, owner.terminal == nil {
-      retirementRequested = true
-      phase = .retiring
-      message = endMessage(followedBy: "재연결 전에 프로세스와 전용 저장소를 정리합니다.")
-      owner.retire()
-    } else if blocksReplacement {
-      phase = .blocked
-      message = endMessage(followedBy: "정리를 확인할 때까지 재연결을 차단합니다.")
+    ending = reason
+    if candidate != nil || predecessor != nil || (activeLogin != nil && !eligibleForEntry) {
+      publishPhase(.blocked)
     } else {
-      expected = nil
-      phase = .idle
-      message = endMessage(followedBy: "다시 연결할 수 있습니다.")
+      publishPhase(eligibleForEntry ? .connected : .idle)
     }
+    message = "\(reason.message) 전용 로그인 저장소 정리를 완료했습니다."
+  }
+
+  private func reportFailure(_ reason: String) {
+    ending = .failure(reason)
+    publishPhase(eligibleForEntry ? .connected : .idle)
+    message = reason
+  }
+
+  private func block(_ login: LoginScope, _ reason: String) {
+    let failure = Ending.failure("\(reason) 정리를 확인할 때까지 재연결과 Provider 교체가 차단됩니다.")
+    login.ending = failure
+    if activeLogin === login, candidate?.ending == nil, candidate != nil {
+      objectWillChange.send()
+      return
+    }
+    ending = failure
+    if predecessor !== login {
+      instructions = nil
+      publishPhase(.blocked)
+    }
+    message = failure.message
+  }
+
+  private func publishPhase(_ next: Phase) {
+    // A synchronous observer may close Settings while a candidate phase is emitted.
+    // Commit the latest phase after the outer notification finishes.
+    intendedPhase = next
+    guard !publishingPhase else { return }
+    publishingPhase = true
+    defer { publishingPhase = false }
+    while phase != intendedPhase { phase = intendedPhase }
   }
 }
 

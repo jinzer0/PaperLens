@@ -137,10 +137,10 @@ public struct NativeCodexConnectionView: View {
       Text("공식 로그인 후 실제 생성 응답을 검사합니다. 사용량이 발생할 수 있습니다. 연결한 ChatGPT 계정으로 API 키 없이 논문 요약을 생성할 수 있습니다.")
         .font(.callout)
       HStack {
-        Button(connection.offersRetry ? "브라우저 로그인 다시 시도" : "브라우저로 로그인") {
+        Button(browserTitle) {
           if isCurrent() { connection.connect(mode: "browser") }
         }
-        Button(connection.offersRetry ? "기기 코드 로그인 다시 시도" : "기기 코드로 로그인") {
+        Button(deviceTitle) {
           if isCurrent() { connection.connect(mode: "device") }
         }
       }
@@ -165,12 +165,12 @@ public struct NativeCodexConnectionView: View {
       if connection.hasPendingLogin {
         HStack {
           ProgressView().controlSize(.small).accessibilityLabel("ChatGPT 연결 진행 중")
-          Button("ChatGPT 연결 취소") { if isCurrent() { connection.cancel() } }
+          Button("ChatGPT 로그인 취소") { if isCurrent() { connection.cancelUncommittedLogin() } }
         }
       } else if connection.phase == .retiring {
         ProgressView("실제 종료 및 정리 확인 중")
-      } else if connection.phase == .connected {
-        Button("ChatGPT 연결 해제") { if isCurrent() { connection.cancel() } }
+      } else if connection.canDisconnect {
+        Button("ChatGPT 연결 해제") { if isCurrent() { connection.disconnect() } }
       }
       if connection.showsFailure {
         Label(connection.message, systemImage: "exclamationmark.triangle")
@@ -178,7 +178,10 @@ public struct NativeCodexConnectionView: View {
       } else {
         Text(connection.message)
       }
-      if connection.blocksReplacement {
+      if connection.canStart && connection.eligibleForEntry {
+        Text("새 로그인이 확인될 때까지 현재 ChatGPT 연결을 유지합니다.")
+          .font(.caption).foregroundStyle(.secondary)
+      } else if connection.blocksReplacement {
         Text(
           "프로세스 종료와 전용 저장소 정리가 끝난 뒤 재연결하거나 Provider를 교체할 수 있습니다. 로그인 취소만으로 정리가 완료되지는 않습니다."
         )
@@ -188,5 +191,15 @@ public struct NativeCodexConnectionView: View {
           .font(.caption).foregroundStyle(.secondary)
       }
     }
+  }
+
+  private var browserTitle: String {
+    if connection.offersRetry { return "브라우저 로그인 다시 시도" }
+    return connection.eligibleForEntry ? "브라우저로 다시 로그인" : "브라우저로 로그인"
+  }
+
+  private var deviceTitle: String {
+    if connection.offersRetry { return "기기 코드 로그인 다시 시도" }
+    return connection.eligibleForEntry ? "기기 코드로 다시 로그인" : "기기 코드로 로그인"
   }
 }
