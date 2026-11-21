@@ -196,6 +196,45 @@ final class ExtractionRevisionTests: XCTestCase {
     XCTAssertEqual(try db.searchExtraction(paperID: paper, matching: "original").count, 1)
   }
 
+  func testIncompleteFTSWithoutSQLErrorDoesNotReplaceUsableRevision() throws {
+    let (db, paper, generation, root) = try fixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let original = try identity(db, paper, generation)
+    try db.reserveExtraction(original)
+    try publishFixtureExtraction(db, original, sentences: rows("retained"))
+    try db.adapterWrite { sql in
+      try sql.execute(sql: """
+        DROP TRIGGER extractionSentenceInsert;
+        CREATE TRIGGER extractionSentenceInsert AFTER INSERT ON extractionSentence
+        WHEN new.text != 'unindexed' BEGIN
+          INSERT INTO extractionFTS(rowid, text) VALUES (new.id,
+            CASE WHEN new.text = 'misindexed' THEN 'incorrect' ELSE new.text END);
+        END;
+        """)
+    }
+
+    for text in ["unindexed", "misindexed"] {
+      let pending = try identity(db, paper, generation)
+      try db.reserveExtraction(pending)
+      let partial = rows("replacement") + [
+        .init(page: 0, sentenceID: 1, text: text, geometry: Data([4, 5, 6])),
+      ]
+      XCTAssertThrowsError(try publishFixtureExtraction(db, pending, sentences: partial)) {
+        XCTAssertEqual($0 as? ExtractionError, .storageFailure)
+      }
+      try db.failExtraction(pending, failure: .storageFailure)
+      let status = try db.extractionStatus(paperID: paper)
+      XCTAssertEqual(status.state, "failed")
+      XCTAssertEqual(status.usableRevision, original.revision)
+      XCTAssertEqual(try db.adapterRead { try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM extractionFTS") }, 1)
+      XCTAssertTrue(try db.searchExtraction(paperID: paper, matching: "replacement", revision: pending.revision).isEmpty)
+    }
+    let reopened = try ProductDatabase.open(at: root)
+    let hits = try reopened.searchExtraction(paperID: paper, matching: "retained")
+    XCTAssertEqual(hits.map(\.revision), [original.revision])
+    XCTAssertEqual(hits.first?.canonicalGeometry, Data([1, 2, 3]))
+  }
+
   func testEveryPersistedAttemptFenceIsRevalidatedBeforeWriting() throws {
     let (db, paper, generation, root) = try fixture()
     defer { try? FileManager.default.removeItem(at: root) }

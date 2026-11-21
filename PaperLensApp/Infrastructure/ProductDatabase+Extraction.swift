@@ -211,6 +211,13 @@ extension ProductDatabase {
         }
       }
       try checkBudget()
+      // Publish only when the new revision has a matching FTS entry for every sentence.
+      let indexedCount = try Int.fetchOne(db, sql: """
+        SELECT COUNT(*) FROM extractionSentence s
+        JOIN extractionFTS f ON f.rowid = s.id AND f.text = s.text
+        WHERE s.revision = ?
+        """, arguments: [identity.revision.uuidString])
+      guard indexedCount == sentences.count else { throw ExtractionError.storageFailure }
       try guardExtractionAttempt(db, identity)
       try db.execute(sql: """
         INSERT INTO extractionVisible(paperID, revision) VALUES (?, ?)
