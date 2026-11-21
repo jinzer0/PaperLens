@@ -201,7 +201,7 @@ public actor FolderImportService {
     let beforeOpen = beforeOpen
     let facts = try await Task.detached {
       try database.validateFolderDestination(destinationFolderID)
-      let digest = try Self.hashSelectedSource(source, close: closeSelectedSource, beforeOpen: beforeOpen)
+      let digest = try Self.hashLocalPDF(source, close: closeSelectedSource, beforeOpen: beforeOpen)
       return (digest, try database.contentHashMatches(digest))
     }.value
     try Task.checkCancellation()
@@ -226,7 +226,7 @@ public actor FolderImportService {
     let beforeOpen = beforeOpen
     let digest = try await Task.detached {
       try database.validateFolderDestination(destinationFolderID)
-      let digest = try Self.hashSelectedSource(intent.source, close: closeSelectedSource,
+      let digest = try Self.hashLocalPDF(intent.source, close: closeSelectedSource,
         beforeOpen: beforeOpen)
       guard digest == intent.digest else {
         throw FolderImportError.sourceChanged
@@ -245,7 +245,11 @@ public actor FolderImportService {
     }
   }
 
-  nonisolated static func hashSelectedSource(_ source: URL,
+  nonisolated static func hashOwnedPDF(_ source: URL) throws -> String {
+    try hashLocalPDF(source, validateSignature: false, close: { try $0.close() }, beforeOpen: nil)
+  }
+
+  private nonisolated static func hashLocalPDF(_ source: URL, validateSignature: Bool = true,
     close: @Sendable (FileHandle) throws -> Void,
     beforeOpen: (@Sendable (URL) throws -> Void)?) throws -> String {
     guard source.isFileURL else { throw FolderImportError.invalidSource }
@@ -287,7 +291,6 @@ public actor FolderImportService {
     let input = owner.handle
     var hash = SHA256()
     var bytes = 0
-    var first = true
     let clock = ContinuousClock()
     let start = clock.now
     var failure: (any Error)?
@@ -296,7 +299,8 @@ public actor FolderImportService {
       guard Darwin.fstat(input.fileDescriptor, &pinned) == 0,
         pinned.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG),
         pinned.st_dev == observed.st_dev, pinned.st_ino == observed.st_ino,
-        pinned.st_size > 0, pinned.st_size <= Int64(authority.limit("pdfBytes")) else {
+        pinned.st_size >= (validateSignature ? 1 : 0),
+        pinned.st_size <= Int64(authority.limit("pdfBytes")) else {
         throw FolderImportError.invalidSource
       }
       let size = Int(pinned.st_size)
@@ -309,14 +313,13 @@ public actor FolderImportService {
           !chunk.isEmpty else { break }
         try budget.observe("readBufferBytes", value: chunk.count)
         try budget.add("bodyBytes", delta: chunk.count)
-        if first {
+        if validateSignature && bytes == 0 {
           try authority.validatePDFSignature(prefix: chunk, mime: nil, sourceKind: "localPDF")
-          first = false
         }
         bytes += chunk.count
         hash.update(data: chunk)
       }
-      guard !first, bytes == size else { throw FolderImportError.sourceChanged }
+      guard bytes == size else { throw FolderImportError.sourceChanged }
     } catch { failure = error }
     do { try close(input) } catch {
       SelectedSourceReadRoots.shared.markUnknown(owner.id)

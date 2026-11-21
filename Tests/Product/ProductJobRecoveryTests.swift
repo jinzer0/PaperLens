@@ -363,6 +363,40 @@ final class ProductJobRecoveryTests: XCTestCase, @unchecked Sendable {
     assertUnchanged(beforeJob, try row("importJob", paper: paper))
   }
 
+  func testStartupIsolatesTruncatedAndInvalidOwnedPDFsWithoutReplayingImport() async throws {
+    let empty = try await ownedStartupImport("truncated")
+    let invalid = try await ownedStartupImport("invalid header")
+    let intact = try await ownedStartupImport("intact")
+    let intactPaper = try row("paper", paper: intact)
+    let intactJob = try row("importJob", paper: intact)
+    let corrupted = try [(empty, Data()), (invalid, Data("replaced bytes".utf8))].map { paper, bytes in
+      let record = try row("paper", paper: paper)
+      let job = try row("importJob", paper: paper)
+      XCTAssertEqual(job["state"] as String, "succeeded")
+      let source = root.appendingPathComponent("papers/\(paper.uuidString)/document.pdf")
+      try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: source.path)
+      try bytes.write(to: source)
+      try FileManager.default.setAttributes([.posixPermissions: 0o400], ofItemAtPath: source.path)
+      return (paper, record, job, source, bytes)
+    }
+
+    database = nil
+    database = try ProductDatabase.open(at: root)
+    _ = try await LocalLibraryLifecycle.open(database: database)
+
+    for (paper, record, job, source, bytes) in corrupted {
+      let after = try row("paper", paper: paper)
+      assertUnchanged(record, after, except: ["status", "pdfReference", "cleanupDebt"])
+      XCTAssertEqual(after["status"] as String, "importFailed")
+      XCTAssertTrue((after["pdfReference"] as DatabaseValue).isNull)
+      XCTAssertEqual(after["cleanupDebt"] as Int, 1)
+      assertUnchanged(job, try row("importJob", paper: paper))
+      XCTAssertEqual(try Data(contentsOf: source), bytes)
+    }
+    assertUnchanged(intactPaper, try row("paper", paper: intact))
+    assertUnchanged(intactJob, try row("importJob", paper: intact))
+  }
+
   func testUnavailableImportCASRejectsStaleCapturedGenerationSHAAndReference() async throws {
     let paper = try await ownedStartupImport("old capture")
     let newerPaper = try await ownedStartupImport("newer metadata")

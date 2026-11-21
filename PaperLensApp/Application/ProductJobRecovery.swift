@@ -262,9 +262,9 @@ public struct ProductJobRecovery: Sendable {
       if capture.reference != expected || values?.isRegularFile != true || values?.isSymbolicLink == true {
         unavailable = true
       } else {
-        // A post-close byte observation, not a physical pin or lasting integrity attestation.
-        let digest = try FolderImportService.hashSelectedSource(url,
-          close: { try $0.close() }, beforeOpen: nil)
+        // Compare the bounded, closed read with the digest of the admitted PDF.
+        // Even an empty file or invalid PDF header can produce a definitive mismatch.
+        let digest = try FolderImportService.hashOwnedPDF(url)
         try Task.checkCancellation()
         unavailable = digest != capture.sha256
       }
