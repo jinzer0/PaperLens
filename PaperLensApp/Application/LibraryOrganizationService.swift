@@ -131,9 +131,19 @@ public struct OrganizedPaper: Identifiable, Equatable, Sendable {
   public let organization: PaperOrganization
 }
 public struct OrganizationSnapshot: Sendable {
+  enum EmptyState: Equatable { case library, folder, noMatch }
+
   public let preferences: OrganizationPreferences
   public let totalCount: Int
+  /// Papers in the selected folder scope before applying search and filters.
+  let folderCount: Int
   public let papers: [OrganizedPaper]
+
+  var emptyState: EmptyState? {
+    guard papers.isEmpty else { return nil }
+    if totalCount == 0 { return .library }
+    return folderCount == 0 ? .folder : .noMatch
+  }
 }
 
 struct OrganizationObservation: Sendable {
@@ -247,7 +257,8 @@ public actor LibraryOrganizationService {
       }
       return lhs.id.uuidString < rhs.id.uuidString
     }
-    return OrganizationSnapshot(preferences: result.preferences, totalCount: result.totalCount, papers: papers)
+    return OrganizationSnapshot(preferences: result.preferences, totalCount: result.totalCount,
+      folderCount: result.folderCount, papers: papers)
   }
 
   public func tags() async throws -> [String] {

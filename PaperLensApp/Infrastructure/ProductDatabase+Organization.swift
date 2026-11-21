@@ -130,7 +130,8 @@ extension ProductDatabase {
         canRetryImport: canRetryImport,
         organization: PaperOrganization(readingStatus: readingStatus, favorite: favorite, tags: labels))
     }
-    return OrganizationSnapshot(preferences: OrganizationPreferences(presentation: presentation, sort: sort), totalCount: totalCount, papers: papers)
+    return OrganizationSnapshot(preferences: OrganizationPreferences(presentation: presentation, sort: sort),
+      totalCount: totalCount, folderCount: rows.count, papers: papers)
   }
 
   public func organizationTags() throws -> [String] {

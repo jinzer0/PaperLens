@@ -156,17 +156,8 @@ public struct LibraryBrowserView: View {
         Button("폴더 관리", action: requestManageFolders).disabled(busy)
           .focused($organizationFocus, equals: .manageUnavailableFolder)
       } else if let snapshot {
-        if snapshot.totalCount == 0 {
-          ContentUnavailableView("아직 논문이 없습니다", systemImage: "books.vertical",
-            description: Text("PDF 추가로 시작하세요."))
-          Button("PDF 추가", action: requestImport)
-            .focused($organizationFocus, equals: .importEmpty)
-            .disabled(!localPDFAvailable)
-        } else if snapshot.papers.isEmpty {
-          ContentUnavailableView("일치하는 논문 없음", systemImage: "line.3.horizontal.decrease.circle",
-            description: Text("저장된 논문은 있습니다. 검색과 필터를 변경하세요."))
-          Button("검색·조건 지우기") { filter = clearedConditions }
-            .focused($organizationFocus, equals: .clearNoMatch)
+        if let empty = snapshot.emptyState {
+          emptyLibraryContent(empty)
         } else if snapshot.preferences.presentation == .list {
           ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
@@ -190,6 +181,29 @@ public struct LibraryBrowserView: View {
           }
         }
       }
+    }
+  }
+
+  @ViewBuilder
+  private func emptyLibraryContent(_ state: OrganizationSnapshot.EmptyState) -> some View {
+    switch state {
+    case .library, .folder:
+      if state == .library {
+        ContentUnavailableView("아직 논문이 없습니다", systemImage: "books.vertical",
+          description: Text("PDF 추가로 시작하세요."))
+      } else if filter.folder == .unfiled {
+        ContentUnavailableView("미분류 논문이 없습니다", systemImage: "folder")
+      } else {
+        ContentUnavailableView("이 폴더에 논문이 없습니다", systemImage: "folder")
+      }
+      Button("PDF 추가", action: requestImport)
+        .focused($organizationFocus, equals: .importEmpty)
+        .disabled(!localPDFAvailable)
+    case .noMatch:
+      ContentUnavailableView("일치하는 논문 없음", systemImage: "line.3.horizontal.decrease.circle",
+        description: Text("검색과 필터를 변경하세요."))
+      Button("검색·조건 지우기") { filter = clearedConditions }
+        .focused($organizationFocus, equals: .clearNoMatch)
     }
   }
 

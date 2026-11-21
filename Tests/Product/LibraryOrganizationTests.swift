@@ -308,6 +308,41 @@ final class LibraryOrganizationTests: XCTestCase {
     XCTAssertEqual(noMatch.totalCount, 7)
   }
 
+  func testEmptyFolderAndNoMatchUseTheSameSnapshotAsThePaperRows() async throws {
+    let database = try ProductDatabase.open(at: root())
+    let occupied = try database.createFolder(name: "Occupied")
+    let empty = try database.createFolder(name: "Empty")
+    let lifecycle = try await LocalLibraryLifecycle.open(database: database)
+    let service = LibraryOrganizationService(database: database, lifecycle: lifecycle)
+    var filter = OrganizationFilter()
+    filter.search = "unmatched"
+    let emptyLibrary = try await service.observation(filter: filter).snapshot
+    XCTAssertEqual(emptyLibrary.emptyState, .library)
+
+    let (paperID, generation) = try seed(database, title: "Stored paper")
+    try database.movePaper(database.capturePaperPlacement(paperID: paperID, generation: generation),
+      to: occupied.id)
+    for selection in [LibraryFolderSelection.folder(empty.id), .unfiled] {
+      filter.folder = selection
+      let result = try await service.observation(filter: filter)
+      XCTAssertEqual(result.snapshot.totalCount, 1)
+      XCTAssertEqual(result.snapshot.folderCount, 0)
+      XCTAssertEqual(result.snapshot.emptyState, .folder)
+      XCTAssertTrue(result.snapshot.papers.isEmpty)
+    }
+
+    for selection in [LibraryFolderSelection.all, .folder(occupied.id)] {
+      filter.folder = selection
+      let result = try await service.observation(filter: filter).snapshot
+      XCTAssertEqual(result.folderCount, 1)
+      XCTAssertEqual(result.emptyState, .noMatch)
+    }
+    filter.search = ""
+    let populated = try await service.observation(filter: filter).snapshot
+    XCTAssertEqual(populated.papers.map(\.id), [paperID])
+    XCTAssertNil(populated.emptyState)
+  }
+
   func testMissingAndDeletedFolderNeverFallBackToAllOrRestoreTombstonedPaper() async throws {
     let database = try ProductDatabase.open(at: root())
     let folder = try database.createFolder(name: "Removed selection")
