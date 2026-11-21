@@ -818,7 +818,8 @@ public struct LibraryBrowserView: View {
 
   @ViewBuilder private func summaryActions(for paper: OrganizedPaper, observation: LibrarySummaryObservation?,
     providerAvailable: Bool) -> some View {
-    if let blocker = summaries.generationBlocker(for: observation, providerAvailable: providerAvailable) {
+    if let blocker = summaries.generationBlocker(paperID: paper.id, observation: observation,
+      providerAvailable: providerAvailable) {
       Text(summaryAvailabilityLabel(blocker)).font(.caption)
     } else {
       if let attempt = observation?.recentAttempt, attempt.canRetry {
@@ -854,7 +855,8 @@ public struct LibraryBrowserView: View {
     guard summaryActionsAvailable, paper.readable, renderedPaperControls(for: paper),
       !deletingPaperIDs.contains(paper.id), !finishedDeletionIDs.contains(paper.id),
       let facts = currentFacts[paper.id], facts.generation == paper.generation else { return false }
-    return summaries.generationBlocker(for: facts.summary, providerAvailable: providerSettings.eligibleForEntry) == nil
+    return summaries.generationBlocker(paperID: paper.id, observation: facts.summary,
+      providerAvailable: providerSettings.eligibleForEntry) == nil
   }
 
   private func beginSummary(_ paper: OrganizedPaper, language: String) {

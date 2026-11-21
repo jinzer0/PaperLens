@@ -164,8 +164,9 @@ extension LibrarySummaryFailure {
   private let provider: any LibrarySummaryProviding
   private var active: Task<LibrarySummaryRecord, any Error>?
   private var requested: Task<Void, Never>?
-  // Unknown physical staging closure keeps its exact owners alive and blocks replacement.
-  private var cleanupDebt: [(SummaryStage, any ReaderReadLease)] = []
+  // A stage and its lease belong to one paper directory. Unconfirmed producer
+  // retirement holds the provider boundary as well as the affected paper lease.
+  private var stageCleanupDebt: [UUID: (SummaryStage, any ReaderReadLease)] = [:]
   private var producerCleanupDebt: [any ReaderReadLease] = []
 
   private enum Generation {
@@ -189,9 +190,9 @@ extension LibrarySummaryFailure {
 
   /// This observes prerequisites for the Library controls. Dispatch still checks
   /// the current revision, original anchors, provider and leases independently.
-  func generationBlocker(for observation: LibrarySummaryObservation?, providerAvailable: Bool)
-    -> GenerationBlocker? {
-    guard cleanupDebt.isEmpty, producerCleanupDebt.isEmpty else { return .cleanupUnavailable }
+  func generationBlocker(paperID: UUID, observation: LibrarySummaryObservation?,
+    providerAvailable: Bool) -> GenerationBlocker? {
+    guard stageCleanupDebt[paperID] == nil, producerCleanupDebt.isEmpty else { return .cleanupUnavailable }
     guard let observation else { return .unconfirmed }
     guard let source = observation.source else { return .needsParsing }
     guard source.fitsOwnerBudget(maximumSentences: authority.limit("sentences")),
@@ -240,9 +241,8 @@ extension LibrarySummaryFailure {
   private func performGeneration(paperID: UUID, generation: UUID,
     action: Generation) async throws -> LibrarySummaryRecord {
     try Task.checkCancellation()
-    guard active == nil, cleanupDebt.isEmpty, producerCleanupDebt.isEmpty else {
-      throw LibrarySummaryError.requestInProgress
-    }
+    guard active == nil, producerCleanupDebt.isEmpty else { throw LibrarySummaryError.requestInProgress }
+    guard stageCleanupDebt[paperID] == nil else { throw LibrarySummaryError.cleanupUnavailable }
     let task = Task { try await self.execute(paperID: paperID, generation: generation, action: action) }
     active = task
     if activePaperID != paperID { activePaperID = paperID }
@@ -292,7 +292,10 @@ extension LibrarySummaryFailure {
       requestID: identity.correlation.uuidString.lowercased())
     let paper = try database.readerSnapshot(paperID: paperID)
     guard paper.generation == generation else { throw LibrarySummaryError.staleIdentity }
-    let lease = try leases.acquireReadLease(for: paper, onRevoked: { [weak self] in self?.cancel() })
+    let lease = try leases.acquireReadLease(for: paper, onRevoked: { [weak self] in
+      guard let self, self.activePaperID == paperID else { return }
+      self.cancel()
+    })
     var stage: SummaryStage?
     var reserved = false
     var awaitingProducer = false
@@ -356,7 +359,7 @@ extension LibrarySummaryFailure {
       if let stage {
         do { try stage.remove() } catch {
           recordFailure(.cleanupUnavailable)
-          cleanupDebt.append((stage, lease))
+          stageCleanupDebt[paperID] = (stage, lease)
           throw LibrarySummaryError.cleanupUnavailable
         }
       }

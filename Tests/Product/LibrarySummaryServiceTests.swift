@@ -15,10 +15,11 @@ final class LibrarySummaryServiceTests: XCTestCase {
     let result: ValidatedProviderResult
   }
 
-  private func fixture(tail: String? = nil, rankTail: Bool = false) throws -> Fixture {
-    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    // Parent must register registerLibrarySummaryMigrations in ProductDatabase.open first.
-    let db = try ProductDatabase.open(at: root)
+  private func fixture(tail: String? = nil, rankTail: Bool = false,
+    database: ProductDatabase? = nil) throws -> Fixture {
+    let db = try database ?? ProductDatabase.open(at:
+      FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
+    let root = db.root
     let paper = UUID(), generation = UUID(), revision = UUID()
     let hash = String(repeating: "a", count: 64)
     let identity = LibrarySummaryIdentity(paperID: paper, generation: generation, requestPaperGeneration: 1, pdfSHA256: hash,
@@ -851,11 +852,12 @@ final class LibrarySummaryServiceTests: XCTestCase {
 
   @MainActor private final class SummaryLeases: ReaderLeaseProvider {
     let lease = SummaryLease()
+    var paperLeases: [UUID: SummaryLease] = [:]
     var callback: (@MainActor () -> Void)?
     func acquireReadLease(for snapshot: ReaderPaperSnapshot,
       onRevoked: @escaping @MainActor () -> Void) throws -> any ReaderReadLease {
       callback = onRevoked
-      return lease
+      return paperLeases[snapshot.paperID] ?? lease
     }
     func revoke() { lease.revoked = true; callback?() }
   }
@@ -914,11 +916,12 @@ final class LibrarySummaryServiceTests: XCTestCase {
       authority: try ProviderRequest(), provider: provider)
     func blocker(providerAvailable: Bool = true) throws -> LibrarySummaryCoordinator.GenerationBlocker? {
       let facts = try f.db.organizationObservation(filter: .init()).facts.first
-      return coordinator.generationBlocker(for: try XCTUnwrap(facts?.summary),
-        providerAvailable: providerAvailable)
+      return coordinator.generationBlocker(paperID: f.identity.paperID,
+        observation: try XCTUnwrap(facts?.summary), providerAvailable: providerAvailable)
     }
 
-    XCTAssertEqual(coordinator.generationBlocker(for: nil, providerAvailable: true), .unconfirmed)
+    XCTAssertEqual(coordinator.generationBlocker(paperID: f.identity.paperID,
+      observation: nil, providerAvailable: true), .unconfirmed)
     XCTAssertEqual(try blocker(), .geometryUnavailable)
     try prepareCoordinator(f)
     XCTAssertNil(try blocker())
@@ -1115,10 +1118,12 @@ final class LibrarySummaryServiceTests: XCTestCase {
     }
   }
 
-  @MainActor func testSummaryStageCleanupFailureLeavesPreviousGroundedResultVisible() async throws {
+  @MainActor func testSummaryStageCleanupFailureBlocksOnlyItsPaperAndPreservesPreviousResult() async throws {
     let f = try fixture()
     defer { try? FileManager.default.removeItem(at: f.root) }
     try prepareCoordinator(f)
+    let otherPaper = try fixture(database: f.db)
+    try prepareCoordinator(otherPaper)
     let provider = SummaryProvider()
     let authority = try ProviderRequest(), epoch = UUID()
     let initial = LibrarySummaryCoordinator(database: f.db, epoch: epoch, leases: SummaryLeases(),
@@ -1153,10 +1158,42 @@ final class LibrarySummaryServiceTests: XCTestCase {
       .restore(paperID: f.identity.paperID))
     XCTAssertEqual(restored.id, previous.id)
     XCTAssertEqual(restored.claimAnchors, previous.claimAnchors)
-    let observation = try XCTUnwrap(try reopened.librarySortFacts().first?.summary)
+    let facts = try reopened.librarySortFacts()
+    let observation = try XCTUnwrap(facts.first { $0.paperID == f.identity.paperID }?.summary)
     XCTAssertEqual(observation.recentAttempt?.failure, .cleanupUnavailable)
-    XCTAssertEqual(coordinator.generationBlocker(for: observation, providerAvailable: true), .cleanupUnavailable)
+    XCTAssertEqual(coordinator.generationBlocker(paperID: f.identity.paperID,
+      observation: observation, providerAvailable: true), .cleanupUnavailable)
+    do {
+      _ = try await coordinator.generate(paperID: f.identity.paperID,
+        generation: f.identity.generation, outputLanguage: "en")
+      XCTFail("The affected paper must stay blocked while its stage and lease are retained")
+    } catch { XCTAssertEqual(error as? LibrarySummaryError, .cleanupUnavailable) }
     XCTAssertEqual(provider.calls, 2)
+
+    let otherPaperID = otherPaper.identity.paperID
+    let otherObservation = try XCTUnwrap(facts.first { $0.paperID == otherPaperID }?.summary)
+    XCTAssertNil(coordinator.generationBlocker(paperID: otherPaperID,
+      observation: otherObservation, providerAvailable: true))
+    let revokeFirst = try XCTUnwrap(leases.callback)
+    let otherLease = SummaryLease()
+    leases.paperLeases[otherPaperID] = otherLease
+    provider.beforeResult = nil
+    provider.suspend = true
+    XCTAssertTrue(coordinator.requestGeneration(paperID: otherPaperID,
+      generation: otherPaper.identity.generation, outputLanguage: "ko"))
+    for _ in 0..<1000 where provider.continuation == nil { await Task.yield() }
+    let completion = try XCTUnwrap(provider.continuation)
+    leases.lease.revoked = true
+    revokeFirst()
+    completion.resume(); provider.continuation = nil
+    for _ in 0..<1000 where coordinator.activePaperID != nil { await Task.yield() }
+    XCTAssertNil(coordinator.activePaperID)
+    XCTAssertNil(coordinator.requestFailure)
+    XCTAssertTrue(otherLease.closed)
+    XCTAssertFalse(leases.lease.closed)
+    XCTAssertEqual(provider.calls, 3)
+    XCTAssertEqual(try Data(contentsOf: foreign), foreignBytes)
+    XCTAssertNotNil(try LibrarySummaryService(database: reopened).restore(paperID: otherPaperID))
   }
 
   @MainActor func testLibraryRequestRetainsSafeFailureUntilDismissedWithoutRetry() async throws {
