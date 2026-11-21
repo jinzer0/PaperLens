@@ -182,10 +182,9 @@ extension LibrarySummaryFailure {
   @discardableResult public func requestGeneration(paperID: UUID, generation: UUID,
     outputLanguage: String) -> Bool {
     guard requested == nil, active == nil else { return false }
-    requestFailure = nil
-    activePaperID = paperID
+    // Published observers may synchronously cancel or try to submit another request.
     requested = Task {
-      defer { requested = nil; activePaperID = nil }
+      defer { activePaperID = nil; requested = nil }
       do {
         _ = try await performGeneration(paperID: paperID, generation: generation,
           outputLanguage: outputLanguage)
@@ -193,6 +192,8 @@ extension LibrarySummaryFailure {
         if !Task.isCancelled { requestFailure = .classify(error) }
       }
     }
+    requestFailure = nil
+    activePaperID = paperID
     return true
   }
 
@@ -205,14 +206,18 @@ extension LibrarySummaryFailure {
 
   private func performGeneration(paperID: UUID, generation: UUID,
     outputLanguage: String) async throws -> LibrarySummaryRecord {
+    try Task.checkCancellation()
     guard active == nil, cleanupDebt.isEmpty, producerCleanupDebt.isEmpty else {
       throw LibrarySummaryError.requestInProgress
     }
-    activePaperID = paperID
     let task = Task { try await self.execute(paperID: paperID, generation: generation,
       outputLanguage: outputLanguage) }
     active = task
-    defer { active = nil; activePaperID = nil }
+    if activePaperID != paperID { activePaperID = paperID }
+    defer {
+      if requested == nil { activePaperID = nil }
+      active = nil
+    }
     return try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
   }
 
@@ -284,9 +289,11 @@ extension LibrarySummaryFailure {
       try staged.rename()
       try apply(.renameFinished(line, permit: publication, succeeded: true))
       try Task.checkCancellation(); try lease.validate()
+      // Failure to retire the owned temporary files must leave the previous result visible.
+      try staged.remove()
+      try Task.checkCancellation()
       let record = try service.publish(result, request: request, identity: identity,
         snapshot: policy, permit: publication, resultID: resultID)
-      try staged.remove()
       lease.close()
       return record
     } catch {

@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import GRDB
 import XCTest
@@ -837,7 +838,11 @@ final class LibrarySummaryServiceTests: XCTestCase {
   @MainActor private final class SummaryLease: ReaderReadLease {
     var revoked = false
     var closed = false
-    func validate() throws { if revoked || closed { throw ReaderError.revoked } }
+    var onValidate: (() throws -> Void)?
+    func validate() throws {
+      if revoked || closed { throw ReaderError.revoked }
+      try onValidate?()
+    }
     func withReadAccess<T>(_ operation: () throws -> T) throws -> T {
       try validate(); let result = try operation(); try validate(); return result
     }
@@ -1008,6 +1013,86 @@ final class LibrarySummaryServiceTests: XCTestCase {
     XCTAssertTrue(leases.lease.closed)
     XCTAssertNil(try LibrarySummaryService(database: f.db).restore(paperID: f.identity.paperID))
     XCTAssertEqual(try f.db.librarySortFacts().first?.summary?.recentAttempt?.failure, .cancelled)
+  }
+
+  @MainActor func testSummaryAnnouncementCanCancelBeforeDispatchAndCannotAdmitSecondRequest() async throws {
+    for libraryRequest in [true, false] {
+      let f = try fixture()
+      defer { try? FileManager.default.removeItem(at: f.root) }
+      try prepareCoordinator(f)
+      let leases = SummaryLeases(), provider = SummaryProvider()
+      let coordinator = LibrarySummaryCoordinator(database: f.db, epoch: UUID(), leases: leases,
+        authority: try ProviderRequest(), provider: provider)
+      var announced = false
+      let subscription = coordinator.$activePaperID.sink { paperID in
+        guard !announced, paperID == f.identity.paperID else { return }
+        announced = true
+        XCTAssertFalse(coordinator.requestGeneration(paperID: f.identity.paperID,
+          generation: f.identity.generation, outputLanguage: "en"))
+        coordinator.cancel()
+      }
+      defer { subscription.cancel() }
+      if libraryRequest {
+        XCTAssertTrue(coordinator.requestGeneration(paperID: f.identity.paperID,
+          generation: f.identity.generation, outputLanguage: "ko"))
+        for _ in 0..<1000 where coordinator.activePaperID != nil { await Task.yield() }
+      } else {
+        do {
+          _ = try await coordinator.generate(paperID: f.identity.paperID,
+            generation: f.identity.generation, outputLanguage: "ko")
+          XCTFail("Cancellation at announcement must prevent dispatch")
+        } catch { XCTAssertTrue(error is CancellationError) }
+      }
+      XCTAssertTrue(announced)
+      XCTAssertNil(coordinator.activePaperID)
+      XCTAssertNil(coordinator.requestFailure)
+      XCTAssertEqual(provider.calls, 0)
+      XCTAssertEqual(try f.db.adapterRead { try Int.fetchOne($0,
+        sql: "SELECT COUNT(*) FROM librarySummaryJob") }, 0)
+    }
+  }
+
+  @MainActor func testSummaryStageCleanupFailureLeavesPreviousGroundedResultVisible() async throws {
+    let f = try fixture()
+    defer { try? FileManager.default.removeItem(at: f.root) }
+    try prepareCoordinator(f)
+    let provider = SummaryProvider()
+    let authority = try ProviderRequest(), epoch = UUID()
+    let initial = LibrarySummaryCoordinator(database: f.db, epoch: epoch, leases: SummaryLeases(),
+      authority: authority, provider: provider)
+    let previous = try await initial.generate(paperID: f.identity.paperID,
+      generation: f.identity.generation, outputLanguage: "ko")
+    var stagingDirectory: URL?
+    let leases = SummaryLeases()
+    let foreignBytes = Data("test-owned sentinel".utf8)
+    provider.beforeResult = { identity in
+      stagingDirectory = f.root.appendingPathComponent(
+        "papers/\(identity.paperID.uuidString)/.summary-\(identity.job.uuidString)")
+    }
+    leases.lease.onValidate = {
+      guard let stagingDirectory, FileManager.default.fileExists(atPath:
+        stagingDirectory.appendingPathComponent("result.json").path) else { return }
+      try foreignBytes.write(to: stagingDirectory.appendingPathComponent("foreign"))
+    }
+    let coordinator = LibrarySummaryCoordinator(database: f.db, epoch: epoch, leases: leases,
+      authority: authority, provider: provider)
+    do {
+      _ = try await coordinator.generate(paperID: f.identity.paperID,
+        generation: f.identity.generation, outputLanguage: "en")
+      XCTFail("Unconfirmed staging cleanup must prevent publication")
+    } catch { XCTAssertEqual(error as? LibrarySummaryError, .cleanupUnavailable) }
+
+    let foreign = try XCTUnwrap(stagingDirectory).appendingPathComponent("foreign")
+    XCTAssertEqual(try Data(contentsOf: foreign), foreignBytes)
+    XCTAssertFalse(leases.lease.closed)
+    let reopened = try ProductDatabase.open(at: f.root)
+    let restored = try XCTUnwrap(LibrarySummaryService(database: reopened)
+      .restore(paperID: f.identity.paperID))
+    XCTAssertEqual(restored.id, previous.id)
+    XCTAssertEqual(restored.claimAnchors, previous.claimAnchors)
+    XCTAssertEqual(try reopened.librarySortFacts().first?.summary?.recentAttempt?.failure,
+      .cleanupUnavailable)
+    XCTAssertEqual(provider.calls, 2)
   }
 
   @MainActor func testLibraryRequestRetainsSafeFailureUntilDismissedWithoutRetry() async throws {
