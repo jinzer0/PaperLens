@@ -169,6 +169,8 @@ public final class NativeAPIKeyConnection: ObservableObject {
   private var intent = UUID()
   private var running: Task<Void, Never>?
   private var publishingSelection = false
+  private var intendedPhase: APIKeyConnectionPhase = .idle
+  private var publishingPhase = false
   private var probes: Set<UUID> = []
   private var retired: Set<UUID> = []
   private var leases: [UUID: APIKeySelection] = [:]
@@ -177,6 +179,17 @@ public final class NativeAPIKeyConnection: ObservableObject {
   // separately validated last-good selection. It denies all replacement.
   private var unresolvedSlots = false
   private var ownerRetired = false
+
+  var hasUncommittedProbe: Bool { running != nil && !publishingSelection }
+
+  private func publishPhase(_ next: APIKeyConnectionPhase) {
+    // A synchronous Settings callback can cancel during the published setter.
+    intendedPhase = next
+    guard !publishingPhase else { return }
+    publishingPhase = true
+    defer { publishingPhase = false }
+    while phase != intendedPhase { phase = intendedPhase }
+  }
 
   /// Cancellation acceptance does not release transport or consumer references.
   public var canReplaceOwner: Bool {
@@ -198,7 +211,7 @@ public final class NativeAPIKeyConnection: ObservableObject {
     running?.cancel()
     running = nil
     eligibleForEntry = false
-    phase = .failed(.staleCandidate)
+    publishPhase(.failed(.staleCandidate))
   }
 
   public init(
@@ -234,8 +247,8 @@ public final class NativeAPIKeyConnection: ObservableObject {
       try reconcileSlotInventory(selected: selected)
       activeSelection = selected
       eligibleForEntry = selected != nil
-      phase = unresolvedSlots ? .failed(.cleanupBlocked)
-        : selected.map(APIKeyConnectionPhase.connected) ?? .idle
+      publishPhase(unresolvedSlots ? .failed(.cleanupBlocked)
+        : selected.map(APIKeyConnectionPhase.connected) ?? .idle)
     } catch {
       activeSelection = nil
       fail(error)
@@ -268,10 +281,10 @@ public final class NativeAPIKeyConnection: ObservableObject {
     retired.insert(previous.slotID)
     activeSelection = nil
     eligibleForEntry = false
-    phase = .idle
+    publishPhase(.idle)
     do { try drainRetired() } catch {
       storageBlocked = true
-      phase = .failed(.cleanupBlocked)
+      publishPhase(.failed(.cleanupBlocked))
       throw APIKeyConnectionError.cleanupBlocked
     }
   }
@@ -281,18 +294,18 @@ public final class NativeAPIKeyConnection: ObservableObject {
     guard !ownerRetired, !publishingSelection else { return }
     invalidateProbeIntent()
     running = nil
-    phase = unresolvedSlots ? .failed(.cleanupBlocked)
-      : activeSelection.map(APIKeyConnectionPhase.connected) ?? .idle
+    publishPhase(unresolvedSlots ? .failed(.cleanupBlocked)
+      : activeSelection.map(APIKeyConnectionPhase.connected) ?? .idle)
     publishOwnerReplacementAvailability()
   }
   public func cancel() {
     guard !publishingSelection else { return }
     invalidateCandidate()
-    phase = .failed(.cancelled)
+    publishPhase(.failed(.cancelled))
   }
 
   func cancelUncommittedProbe() {
-    guard phase == .probing, !publishingSelection else { return }
+    guard hasUncommittedProbe else { return }
     cancel()
   }
   public func connect(key: String) {
@@ -312,7 +325,7 @@ public final class NativeAPIKeyConnection: ObservableObject {
       guard let self else { return }
       await self.perform(key: key, attempt: attempt, replacing: expected, didPromote: didPromote)
     }
-    phase = .probing
+    publishPhase(.probing)
     publishOwnerReplacementAvailability()
   }
 
@@ -341,19 +354,19 @@ public final class NativeAPIKeyConnection: ObservableObject {
       try reconcileSlotInventory(selected: oldSelection)
       guard !unresolvedSlots else {
         // Preserve validated last-good availability; no stage or request is made.
-        phase = .failed(.cleanupBlocked)
+        publishPhase(.failed(.cleanupBlocked))
         return
       }
       let slot = try slots.create(key: key)
       staged = slot
       probes.insert(slot)
-      phase = .probing
       let context = try TrustedRequestContext(authority: authority, sources: .connectionTest)
       let request = try authority.buildRequest(
         sources: .connectionTest, context: context,
         requestID: UUID().uuidString.lowercased())
       let stagedKey = try slots.read(slot)
       guard stagedKey == key else { throw APIKeyConnectionError.unsafeStorage }
+      try Task.checkCancellation()
       let response = try await transport.probe(
         key: stagedKey, configuration: configuration,
         request: request, authority: authority)
@@ -389,7 +402,7 @@ public final class NativeAPIKeyConnection: ObservableObject {
       defer { publishingSelection = false }
       activeSelection = winner
       eligibleForEntry = true
-      phase = .connected(winner)
+      publishPhase(.connected(winner))
       didPromote?(winner)
       if let oldSelection { retired.insert(oldSelection.slotID) }
       try drainRetired()
@@ -401,20 +414,20 @@ public final class NativeAPIKeyConnection: ObservableObject {
           // publish a possibly selected candidate on the strength of that error.
           storageBlocked = true
           eligibleForEntry = false
-          phase = .failed(.persistenceFailure)
+          publishPhase(.failed(.persistenceFailure))
           return
         }
         retired.insert(staged)
         do { try drainRetired() } catch {
           storageBlocked = true
           eligibleForEntry = false
-          phase = .failed(.cleanupBlocked)
+          publishPhase(.failed(.cleanupBlocked))
           return
         }
       }
       if attempt == intent {
         if unresolvedSlots, !storageBlocked, error as? APIKeyConnectionError == .cleanupBlocked {
-          phase = .failed(.cleanupBlocked)
+          publishPhase(.failed(.cleanupBlocked))
         } else {
           fail(error)
         }
@@ -437,7 +450,7 @@ public final class NativeAPIKeyConnection: ObservableObject {
       storageBlocked = true
       eligibleForEntry = false
     }
-    phase = .failed(safe)
+    publishPhase(.failed(safe))
     publishOwnerReplacementAvailability()
   }
 
@@ -486,7 +499,7 @@ public final class NativeAPIKeyConnection: ObservableObject {
     do { try drainRetired() } catch {
       storageBlocked = true
       eligibleForEntry = false
-      phase = .failed(.cleanupBlocked)
+      publishPhase(.failed(.cleanupBlocked))
       throw APIKeyConnectionError.cleanupBlocked
     }
   }

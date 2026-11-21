@@ -139,6 +139,56 @@ final class ProviderSettingsTests: XCTestCase {
     XCTAssertEqual(try f.slots.validatedSlotIDs(), [committed.slotID])
   }
 
+  func testClosingSettingsDuringProbeStartKeepsLastGoodWithoutSending() async throws {
+    let f = try fixture()
+    defer { try? removeFixture(f.root) }
+    let database = try ProductDatabase.open(at: f.root.appendingPathComponent("database"))
+    let library = try await LocalLibraryLifecycle.open(database: database)
+    let workspace = try ProductWorkspace(database: database, lifecycle: library, connection: f.connection)
+    let lastGood = try XCTUnwrap(f.selector.selection)
+    workspace.sheet = .settings
+    let closing = f.connection.$phase.dropFirst().sink { phase in
+      if phase == .probing { workspace.sheet = nil }
+    }
+    defer { closing.cancel() }
+
+    workspace.settings.reconnect(key: "synthetic-dismissed-before-send")
+    XCTAssertNil(workspace.sheet)
+    XCTAssertEqual(workspace.settings.phase, .failed(.cancelled))
+    await waitUntil { f.connection.canReplaceOwner || f.transport.count > 0 }
+    XCTAssertEqual(f.transport.count, 0)
+    if f.transport.count > 0 { f.transport.fail(0) }
+    await waitUntil { f.connection.canReplaceOwner }
+    XCTAssertEqual(f.selector.commits, 0)
+    XCTAssertEqual(f.selector.selection, lastGood)
+    XCTAssertEqual(try f.slots.validatedSlotIDs(), [lastGood.slotID])
+    XCTAssertTrue(workspace.settings.eligibleForEntry)
+  }
+
+  func testEditingKeyDuringProbeStartInvalidatesCandidateBeforeSending() async throws {
+    let f = try fixture()
+    defer { try? removeFixture(f.root) }
+    let lastGood = try XCTUnwrap(f.selector.selection)
+    var entry = "synthetic-about-to-send"
+    let binding = providerSettingsKeyBinding(Binding(get: { entry }, set: { entry = $0 }),
+      service: f.service)
+    let editing = f.connection.$phase.dropFirst().sink { phase in
+      if phase == .probing { binding.wrappedValue = "synthetic-edited" }
+    }
+    defer { editing.cancel() }
+
+    f.service.reconnect(key: entry)
+    XCTAssertEqual(entry, "synthetic-edited")
+    XCTAssertFalse(f.service.isTesting)
+    XCTAssertEqual(f.service.phase, .connected(lastGood))
+    await waitUntil { f.connection.canReplaceOwner || f.transport.count > 0 }
+    XCTAssertEqual(f.transport.count, 0)
+    if f.transport.count > 0 { f.transport.fail(0) }
+    await waitUntil { f.connection.canReplaceOwner }
+    XCTAssertEqual(f.selector.commits, 0)
+    XCTAssertEqual(try f.slots.validatedSlotIDs(), [lastGood.slotID])
+  }
+
   func testChatGPTControlsObserveLeaseDrainAndCancelledProbeCompletion() async throws {
     let root = try fixtureRoot()
     defer { try? removeFixture(root) }

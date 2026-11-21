@@ -771,7 +771,7 @@ public final class ProviderSettingsService: ObservableObject {
       || (codex.blocksReplacement && codex.configurationAvailableForAPIKeyPromotion == nil)
   }
   public var model: String { connection.configuration.model }
-  public var isTesting: Bool { phase == .probing }
+  public var isTesting: Bool { connection.hasUncommittedProbe }
   public var availabilityMessage: String {
     if eligibleForEntry { return "현재 \(currentProviderLabel) 연결을 사용할 수 있습니다." }
     return "현재 선택을 사용할 수 없습니다. 명시적으로 연결 상태를 확인하세요."
