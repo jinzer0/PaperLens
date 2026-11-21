@@ -1,3 +1,4 @@
+import Combine
 import Darwin
 import Foundation
 import GRDB
@@ -158,6 +159,13 @@ public final class ProductDatabase: @unchecked Sendable {
     ValueObservation.tracking { db in
       try Self.fetchExtractionStatus(paperID: paperID, in: db)
     }.values(in: queue, bufferingPolicy: .bufferingNewest(1))
+  }
+
+  func libraryMetadataChanges() -> AnyPublisher<Void, Error> {
+    DatabaseRegionObservation(tracking: Table("extractionVisible"), Table("readerMetadata"))
+      .publisher(in: queue)
+      .map { _ in () }
+      .eraseToAnyPublisher()
   }
 
   func activeImportProgress() -> AsyncValueObservation<[UUID: Int64]> {

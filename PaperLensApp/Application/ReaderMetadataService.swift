@@ -48,6 +48,14 @@ public struct ReaderMetadataValue: Codable, Equatable, Sendable {
     text.utf8.count <= 262_144 && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
       && !sourceID.isEmpty && sourceID.utf8.count <= 4096
   }
+
+  @MainActor static func pdfTitle(in document: PDFDocument, pdfSHA256: String) -> Self? {
+    guard let title = document.documentAttributes?[PDFDocumentAttribute.titleAttribute] as? String else {
+      return nil
+    }
+    let candidate = Self(text: title, source: .source, sourceID: "pdf:\(pdfSHA256)")
+    return candidate.isValid ? candidate : nil
+  }
 }
 
 /// Multiple distinct candidates remain an explicit conflict, never a guessed winner.

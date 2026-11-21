@@ -15,11 +15,13 @@ public struct LibraryBrowserView: View {
   private let manageFolders: @MainActor () -> Void
   @ObservedObject private var summaries: LibrarySummaryCoordinator
   private let refreshRevision: Int
+  private let metadataRevision: UUID?
   private let deletingPaperIDs: Set<UUID>
   private let finishedDeletionIDs: Set<UUID>
   private let activeImportProgress: [UUID: Int64]
   private let localPDFAvailable: Bool
   @State private var observedImportIDs: Set<UUID> = []
+  @State private var observedMetadataRevision: UUID?
   @State private var query = OrganizationQueryState()
   @State private var currentFacts: [UUID: OrganizationSortFacts] = [:]
   @State private var folders: [LibraryFolder] = []
@@ -43,7 +45,7 @@ public struct LibraryBrowserView: View {
 
   public init(service: LibraryOrganizationService, folderService: FolderImportService,
     filter: Binding<OrganizationFilter>, refreshRevision: Int, deletingPaperIDs: Set<UUID>,
-    finishedDeletionIDs: Set<UUID>,
+    finishedDeletionIDs: Set<UUID>, metadataRevision: UUID? = nil,
     activeImportProgress: [UUID: Int64] = [:], localPDFAvailable: Bool = true,
     sortFacts: @escaping @Sendable () async throws -> [OrganizationSortFacts],
     readReadingRecords: @escaping @Sendable (UUID, UUID) async throws -> LibraryReadingRecords,
@@ -58,6 +60,7 @@ public struct LibraryBrowserView: View {
     self.service = service; self.folderService = folderService; self.sortFacts = sortFacts
     self.readReadingRecords = readReadingRecords
     _filter = filter; self.refreshRevision = refreshRevision
+    self.metadataRevision = metadataRevision
     self.openPaper = openPaper; self.importPDF = importPDF
     self.deletingPaperIDs = deletingPaperIDs; self.deletePaper = deletePaper
     self.finishedDeletionIDs = finishedDeletionIDs
@@ -319,6 +322,7 @@ public struct LibraryBrowserView: View {
       invalidateObservation()
     }
     .onChange(of: refreshRevision) { _, _ in refresh() }
+    .onChange(of: metadataRevision) { _, _ in refreshAfterBackgroundChange() }
     .onChange(of: finishedDeletionIDs) { _, _ in refreshAfterBackgroundChange() }
     .onChange(of: activeImportIDs) { _, _ in refreshAfterBackgroundChange() }
     .onChange(of: canRefreshAfterBackgroundChange) { _, ready in
@@ -745,7 +749,8 @@ public struct LibraryBrowserView: View {
 
   private func refreshAfterBackgroundChange() {
     guard canRefreshAfterBackgroundChange,
-      !finishedDeletionIDs.isEmpty || observedImportIDs != activeImportIDs else { return }
+      !finishedDeletionIDs.isEmpty || observedImportIDs != activeImportIDs
+        || observedMetadataRevision != metadataRevision else { return }
     refresh()
   }
 
@@ -841,6 +846,7 @@ public struct LibraryBrowserView: View {
     }
     guard rootMount != nil, !busy else { return }
     observedImportIDs = activeImportIDs
+    observedMetadataRevision = metadataRevision
     if !canPreserveOrganizationReturn(token) { organizationFocusToRestore = nil }
     let request = query.begin(filter: filter)
     if let receipt = organizationFocusToRestore {

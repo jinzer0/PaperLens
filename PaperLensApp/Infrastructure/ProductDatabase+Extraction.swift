@@ -174,7 +174,7 @@ extension ProductDatabase {
   }
 
   func publishExtraction(_ identity: ExtractionIdentity, sentences: [ValidatedExtractionSentence],
-    checkBudget: @Sendable () throws -> Void) throws {
+    sourceTitle: String? = nil, checkBudget: @Sendable () throws -> Void) throws {
     guard !sentences.isEmpty else { throw ExtractionError.invalidBatch }
     let ownedCount = sentences.reduce(0) { $0 + ($1.originalOwner == nil ? 0 : 1) }
     guard ownedCount == 0 || ownedCount == sentences.count else { throw ExtractionError.invalidBatch }
@@ -223,6 +223,11 @@ extension ProductDatabase {
         INSERT INTO extractionVisible(paperID, revision) VALUES (?, ?)
         ON CONFLICT(paperID) DO UPDATE SET revision = excluded.revision
         """, arguments: [identity.paperID.uuidString, identity.revision.uuidString])
+      if let sourceTitle {
+        let metadataIdentity = ReaderMetadataIdentity(paperID: identity.paperID, generation: identity.generation,
+          pdfSHA256: identity.pdfSHA256, pdfReference: identity.pdfReference, revisionID: identity.revision)
+        _ = try Self.mergeReaderSourceTitle(sourceTitle, for: metadataIdentity, in: db)
+      }
       try db.execute(sql: "UPDATE extractionAttempt SET state = 'succeeded', failure = NULL WHERE paperID = ?",
         arguments: [identity.paperID.uuidString])
       try checkBudget()

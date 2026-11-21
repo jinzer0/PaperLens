@@ -97,24 +97,25 @@ extension ProductDatabase {
 
   /// Merge a witnessed PDF title without overwriting candidates accepted by another reader.
   func mergeReaderSourceTitle(_ title: String, for identity: ReaderMetadataIdentity) throws -> ReaderMetadataSnapshot {
+    try adapterWrite { try Self.mergeReaderSourceTitle(title, for: identity, in: $0) }
+  }
+
+  static func mergeReaderSourceTitle(_ title: String, for identity: ReaderMetadataIdentity,
+    in db: Database) throws -> ReaderMetadataSnapshot {
     let candidate = ReaderMetadataValue(text: title, source: .source,
       sourceID: "pdf:\(identity.pdfSHA256)")
-    return try adapterWrite { db in
-      try Self.guardReaderMetadata(identity, in: db)
-      let data = try Data.fetchOne(db, sql: "SELECT payload FROM readerMetadata WHERE paperID = ? AND revisionID = ?",
-        arguments: [identity.paperID.uuidString, identity.revisionID.uuidString])
-      let existing = try data.map { try JSONDecoder().decode(ReaderMetadataSnapshot.self, from: $0) }
-        ?? ReaderMetadataSnapshot()
-      try existing.validate()
-      let merged = existing.addingOptionalPDFTitle(candidate)
-      guard merged.title.candidates.count != existing.title.candidates.count else { return existing }
-      try db.execute(sql: """
-        INSERT INTO readerMetadata(paperID, revisionID, payload) VALUES (?, ?, ?)
-        ON CONFLICT(paperID) DO UPDATE SET revisionID = excluded.revisionID, payload = excluded.payload
-        """, arguments: [identity.paperID.uuidString, identity.revisionID.uuidString,
-          try JSONEncoder().encode(merged)])
-      return merged
-    }
+    try guardReaderMetadata(identity, in: db)
+    let data = try Data.fetchOne(db, sql: "SELECT payload FROM readerMetadata WHERE paperID = ? AND revisionID = ?",
+      arguments: [identity.paperID.uuidString, identity.revisionID.uuidString])
+    let existing = try decodeLibraryMetadata(data) ?? ReaderMetadataSnapshot()
+    let merged = existing.addingOptionalPDFTitle(candidate)
+    guard merged.title.candidates.count != existing.title.candidates.count else { return existing }
+    try db.execute(sql: """
+      INSERT INTO readerMetadata(paperID, revisionID, payload) VALUES (?, ?, ?)
+      ON CONFLICT(paperID) DO UPDATE SET revisionID = excluded.revisionID, payload = excluded.payload
+      """, arguments: [identity.paperID.uuidString, identity.revisionID.uuidString,
+        try JSONEncoder().encode(merged)])
+    return merged
   }
 
   /// Atomically fences previous Reader sessions while retaining only current-revision candidates.

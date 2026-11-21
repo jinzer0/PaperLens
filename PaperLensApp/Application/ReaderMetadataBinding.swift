@@ -266,15 +266,11 @@ public struct ReaderMetadataBindingState {
     adapter: ReaderOutlineAdapter, context: ReaderMetadataContext?,
     observed: ReaderConfirmedLocation?) throws -> ReaderMetadataBindingState {
     var displayedMetadata = metadata
-    let attributes = document.documentAttributes
+    let candidate = ReaderMetadataValue.pdfTitle(in: document, pdfSHA256: documentIdentity.pdfSHA256)
     _ = try validate()
-    if let title = attributes?[PDFDocumentAttribute.titleAttribute] as? String {
-      let candidate = ReaderMetadataValue(text: title, source: .source,
-        sourceID: "pdf:\(documentIdentity.pdfSHA256)")
-      if candidate.isValid {
-        displayedMetadata = try identity.map { try service.recordSourceTitle(title, for: $0) }
-          ?? metadata.addingOptionalPDFTitle(candidate)
-      }
+    if let candidate {
+      displayedMetadata = try identity.map { try service.recordSourceTitle(candidate.text, for: $0) }
+        ?? metadata.addingOptionalPDFTitle(candidate)
     }
     // PDF creation/modification dates, subject and keywords have different semantics.
     return ReaderMetadataBindingState(presentation: .init(identity: identity, metadata: displayedMetadata),

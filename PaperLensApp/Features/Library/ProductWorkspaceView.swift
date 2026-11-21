@@ -53,6 +53,7 @@ public final class ProductWorkspace: ObservableObject {
   private let diagnosticSource: URL?
   private let readLeases: LibraryReadLeaseProvider
   private var urlImportObservation: AnyCancellable?
+  private var libraryMetadataObservation: AnyCancellable?
   private var scopedSource: URL?
   private var pendingConfirmation: UUID?
   private var continuedLocalConfirmation: UUID?
@@ -96,6 +97,7 @@ public final class ProductWorkspace: ObservableObject {
   @Published private(set) var finishedDeletionIDs: Set<UUID> = []
   @Published private(set) var failedInitialParsing: Set<UUID> = []
   @Published public private(set) var revision = 0
+  @Published private(set) var libraryMetadataRevision = UUID()
   @Published public private(set) var preparing = false
   @Published public private(set) var opening = false
   @Published public private(set) var failure: String?
@@ -153,6 +155,11 @@ public final class ProductWorkspace: ObservableObject {
         default: break
         }
       }
+    libraryMetadataObservation = database.libraryMetadataChanges()
+      .receive(on: DispatchQueue.main)
+      .sink(receiveCompletion: { _ in }, receiveValue: { [weak self] in
+        self?.libraryMetadataRevision = UUID()
+      })
   }
 
   public func sortFacts() async throws -> [OrganizationSortFacts] {
@@ -821,6 +828,7 @@ public struct ProductWorkspaceView: View {
             service: workspace.organization, folderService: workspace.imports,
             filter: $workspace.libraryFilter, refreshRevision: workspace.revision,
             deletingPaperIDs: workspace.deletingPaperIDs, finishedDeletionIDs: workspace.finishedDeletionIDs,
+            metadataRevision: workspace.libraryMetadataRevision,
             activeImportProgress: activeImportProgress, localPDFAvailable: workspace.localImportID == nil,
             sortFacts: { try await workspace.sortFacts() },
             readReadingRecords: { [annotations = workspace.annotations] paperID, generation in

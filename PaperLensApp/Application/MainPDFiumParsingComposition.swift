@@ -225,14 +225,14 @@ private struct OriginalPDFKitGeometryProducer: ExtractionBatchProducing {
     try await base.withBatches(identity) { batches, scope in
       try scope.checkBudget()
       let rawPages = try Self.pages(in: batches, identity: identity)
-      let binding = try await MainActor.run {
+      let witness = try await MainActor.run {
         try OriginalPDFKitPageWitness.capture(identity: identity, rawPages: rawPages,
           lifecycle: lifecycle, authority: authority, checkBudget: { try scope.checkBudget() })
       }
-      try validator.install(binding, identity: identity)
+      try validator.install(witness.geometry, identity: identity)
       defer { validator.remove(identity) }
       try scope.checkBudget()
-      try await consume(batches, scope)
+      try await consume(batches, scope.withSourceTitle(witness.sourceTitle))
     }
   }
 
@@ -270,14 +270,14 @@ enum OriginalPDFKitPageWitness {
 
   @MainActor static func capture(identity: ExtractionIdentity, rawPages: [Int: PDFiumRawPage],
     lifecycle: LocalLibraryLifecycle, authority: ProviderRequest,
-    checkBudget: () throws -> Void) throws -> PDFiumGeometryBinding {
+    checkBudget: () throws -> Void) throws -> (geometry: PDFiumGeometryBinding, sourceTitle: String?) {
     try checkBudget()
     let database = lifecycle.readLeaseDatabase
     let snapshot = try database.extractionReadSnapshot(identity)
     let lease = try LibraryReadLeaseProvider(lifecycle: lifecycle)
       .acquireReadLease(for: snapshot, onRevoked: {})
     defer { lease.close() }
-    let mappings: [Int: PDFiumPageMapping] = try lease.withReadAccess {
+    let (mappings, sourceTitle): ([Int: PDFiumPageMapping], String?) = try lease.withReadAccess {
       try autoreleasepool {
         let url = database.root.appendingPathComponent(snapshot.pdfReference)
         let values = try url.resourceValues(forKeys: [.fileSizeKey])
@@ -306,18 +306,20 @@ enum OriginalPDFKitPageWitness {
           view.layoutDocumentView()
           mappings[index] = try mapping(raw: raw, page: page, view: view)
         }
+        let title = ReaderMetadataValue.pdfTitle(in: document, pdfSHA256: identity.pdfSHA256)
         try checkBudget()
-        return mappings
+        return (mappings, title?.text)
       }
     }
     try lease.validate()
     try database.validateReaderSnapshot(snapshot)
     let precision = try PDFGeometryPrecision(maximumErrorPDFPoints: maximumErrorPDFPoints)
-    return PDFiumGeometryBinding(precision: precision, mapPage: { raw in
+    let geometry = PDFiumGeometryBinding(precision: precision, mapPage: { raw in
       guard let original = rawPages[raw.pageIndex], sameRawPage(original, raw),
         let mapping = mappings[raw.pageIndex] else { throw PDFGeometryError.identityMismatch }
       return mapping
     })
+    return (geometry, sourceTitle)
   }
 
   static func sameRawPage(_ lhs: PDFiumRawPage, _ rhs: PDFiumRawPage) -> Bool {

@@ -283,7 +283,8 @@ private actor WorkspaceDeletionAgent: AgentLibraryPurging {
     })
   }
 
-  private func publishMetadataRevision(_ f: Fixture, id: UUID) throws -> ReaderMetadataIdentity {
+  private func publishMetadataRevision(_ f: Fixture, id: UUID, sourceTitle: String? = nil) throws
+    -> ReaderMetadataIdentity {
     let paper = try f.database.annotationIdentity(paperID: id)
     let reference = try f.database.readerSnapshot(paperID: id).pdfReference
     let extraction = ExtractionIdentity(paperID: id, generation: paper.generation,
@@ -310,7 +311,8 @@ private actor WorkspaceDeletionAgent: AgentLibraryPurging {
     let scope = fixtureExtractionScope()
     let rows = try ExtractionRevisionService.validate([batch], identity: extraction,
       validator: validator, scope: scope)
-    try f.database.publishExtraction(extraction, sentences: rows, checkBudget: { try scope.checkBudget() })
+    try f.database.publishExtraction(extraction, sentences: rows, sourceTitle: sourceTitle,
+      checkBudget: { try scope.checkBudget() })
     return try XCTUnwrap(f.database.publishedMetadataPaperIdentity(paperID: id))
   }
 
@@ -1583,6 +1585,57 @@ private actor WorkspaceDeletionAgent: AgentLibraryPurging {
     await composition.start()
     XCTAssertTrue(composition.parsing === graph)
     XCTAssertTrue(composition.workspace === workspace)
+  }
+
+  func testLibraryObservesPublishedPDFTitleAndMetadataOnSameRevision() async throws {
+    let f = try await fixture()
+    let id = try await importSelected(f)
+    var observedRevisions: [UUID] = []
+    let observation = f.workspace.$libraryMetadataRevision.dropFirst().sink { observedRevisions.append($0) }
+    defer { observation.cancel() }
+
+    let sourceTitle = "원본 PDF 메타데이터 제목"
+    let identity = try publishMetadataRevision(f, id: id, sourceTitle: sourceTitle)
+    for _ in 0..<100 where observedRevisions.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+    XCTAssertEqual(observedRevisions.count, 1)
+    XCTAssertNil(f.workspace.reader)
+    let firstFacts = try await f.workspace.sortFacts()
+    let first = try XCTUnwrap(firstFacts.first?.metadata)
+    XCTAssertEqual(first, ReaderMetadataSnapshot(title: .init([
+      .init(text: sourceTitle, source: .source, sourceID: "pdf:\(identity.pdfSHA256)")
+    ])))
+    var filter = OrganizationFilter()
+    filter.search = sourceTitle
+    let result = try await f.workspace.organization.snapshot(filter: filter, facts: firstFacts)
+    XCTAssertEqual(result.papers.map(\.id), [id])
+
+    let accepted = ReaderMetadataSnapshot(title: first.title, year: .init([
+      .init(text: "2026", source: .acceptedExtraction, sourceID: identity.revisionID.uuidString)
+    ]), abstract: .init([
+      .init(text: "확인된 초록", source: .acceptedExtraction, sourceID: identity.revisionID.uuidString)
+    ]))
+    try f.database.saveReaderMetadata(accepted, for: identity)
+    for _ in 0..<100 where observedRevisions.count < 2 { try await Task.sleep(for: .milliseconds(10)) }
+    XCTAssertEqual(observedRevisions.count, 2)
+    XCTAssertEqual(try f.database.publishedMetadataPaperIdentity(paperID: id), identity)
+    let updatedFacts = try await f.workspace.sortFacts()
+    XCTAssertEqual(updatedFacts.first?.metadata, accepted)
+    XCTAssertEqual(updatedFacts.first?.publicationYear, 2026)
+
+    // Abort after the new revision and title were both written inside the transaction.
+    try f.database.adapterWrite { db in
+      try db.execute(sql: """
+        CREATE TRIGGER rejectPublication BEFORE UPDATE OF state ON extractionAttempt
+        WHEN NEW.state = 'succeeded' BEGIN SELECT RAISE(ABORT, 'synthetic publication failure'); END
+        """)
+    }
+    XCTAssertThrowsError(try publishMetadataRevision(f, id: id, sourceTitle: "Rolled back title"))
+    XCTAssertEqual(try f.database.publishedMetadataPaperIdentity(paperID: id), identity)
+    XCTAssertEqual(try f.database.librarySortFacts().first?.metadata, accepted)
+    await withCheckedContinuation { continuation in
+      DispatchQueue.main.async { continuation.resume() }
+    }
+    XCTAssertEqual(observedRevisions.count, 2)
   }
 
   func testYearFactsOnlyUseCurrentRevisionWithNoConflictPrecedence() async throws {

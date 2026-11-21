@@ -1,3 +1,4 @@
+import CoreGraphics
 import Darwin
 import Foundation
 import GRDB
@@ -100,7 +101,7 @@ import XCTest
     let raw = try PDFiumRawPage(pageIndex: 0, boundingBox: quad, mediaBox: nil,
       cropBox: quad, rotationQuarterTurns: 0)
     let authority = try ProviderRequest()
-    let binding = try OriginalPDFKitPageWitness.capture(identity: f.identity, rawPages: [0: raw],
+    let (binding, _) = try OriginalPDFKitPageWitness.capture(identity: f.identity, rawPages: [0: raw],
       lifecycle: f.lifecycle, authority: authority, checkBudget: {})
     XCTAssertEqual(try binding.mapPage(raw).page, try SyntheticPDFGeometryCalibration.pages[0].geometry())
     let otherPage = try PDFiumRawPage(pageIndex: 1, boundingBox: quad, mediaBox: nil,
@@ -121,6 +122,24 @@ import XCTest
       rawPages: [0: raw], lifecycle: f.lifecycle, authority: authority, checkBudget: {})) { error in
       XCTAssertEqual(error as? ExtractionError, .invalidBatch)
     }
+  }
+
+  func testOriginalReadLeaseCapturesEmbeddedTitle() async throws {
+    let bytes = NSMutableData()
+    let consumer = try XCTUnwrap(CGDataConsumer(data: bytes as CFMutableData))
+    let title = "PDF에 기록된 원본 제목"
+    var box = CGRect(x: 0, y: 0, width: 200, height: 300)
+    let pdf = try XCTUnwrap(CGContext(consumer: consumer, mediaBox: &box,
+      [kCGPDFContextTitle as String: title] as CFDictionary))
+    pdf.beginPDFPage(nil)
+    pdf.endPDFPage()
+    pdf.closePDF()
+
+    let f = try await fixture(pdfBytes: bytes as Data)
+    defer { try? FileManager.default.removeItem(at: f.temporary) }
+    let witness = try OriginalPDFKitPageWitness.capture(identity: f.identity, rawPages: [:],
+      lifecycle: f.lifecycle, authority: ProviderRequest(), checkBudget: {})
+    XCTAssertEqual(witness.sourceTitle, title)
   }
 
   func testInitialAdmissionCapturesFreshLineageAndNeverActsAsRetry() async throws {
