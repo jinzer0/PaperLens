@@ -31,7 +31,7 @@ public struct URLImportView<LibraryContent: View>: View {
   @State private var inputPresentation: InputPresentation?
   @State private var confirmationPresentation: ConfirmationPresentation?
 
-  private enum Opener: Hashable { case add, paste }
+  private enum Opener: Hashable { case add, paste, retry }
   private enum FocusReturn {
     case toolbar(Opener)
     case paper(@MainActor () -> Void)
@@ -47,6 +47,7 @@ public struct URLImportView<LibraryContent: View>: View {
     let opener: FocusReturn
     let mount: UUID?
     var interaction: UUID
+    var stateAfterCancel: URLImportService.State = .idle
     var appeared = false
     var cancelled = false
     var invalidated = false
@@ -345,7 +346,7 @@ public struct URLImportView<LibraryContent: View>: View {
     drag.interrupt()
     guard let presentation = confirmationPresentation else { return }
     if wasCurrent && (service.confirmation?.id == presentation.id
-      || (presentation.cancelled && service.confirmation == nil && service.state == .idle)) {
+      || (presentation.cancelled && service.confirmation == nil && service.state == presentation.stateAfterCancel)) {
       confirmationPresentation?.interaction = drag.interaction
     } else {
       confirmationPresentation?.invalidated = true
@@ -358,8 +359,8 @@ public struct URLImportView<LibraryContent: View>: View {
     confirmationPresentation = nil
     guard presentation.appeared, presentation.cancelled, !presentation.invalidated,
       drag.isCurrent(presentation.mount, presentation.interaction),
-      service.confirmation == nil, service.state == .idle,
-      !inputSheet, inputPresentation == nil, !invalidInput else { return }
+      service.confirmation == nil, service.state == presentation.stateAfterCancel,
+      !inputSheet, inputPresentation == nil, !invalidInput, !retryUnavailable else { return }
     // Cancelled URL recognition has no grant, writer, stage or network cleanup.
     // Continue is deliberately excluded: service state is not a closure receipt.
     switch presentation.opener {
@@ -395,13 +396,23 @@ public struct URLImportView<LibraryContent: View>: View {
     case .failed(let reason):
       HStack {
         Label(safeMessage(reason), systemImage: "exclamationmark.triangle")
-        Button("다시 시도") {
-          guard drag.isCurrent(mount, interaction), service.state == .failed(reason),
-            canPresentInput else { return }
-          drag.interrupt()
-          do { try service.retry() } catch { invalidInput = true }
+        if service.canRetry {
+          Button("다시 시도") {
+            guard drag.isCurrent(mount, interaction), service.state == .failed(reason),
+              service.canRetry, canPresentInput else { return }
+            drag.interrupt()
+            do {
+              try service.retry()
+              if let confirmation = service.confirmation {
+                confirmationPresentation = ConfirmationPresentation(id: confirmation.id,
+                  opener: .toolbar(.retry), mount: mount, interaction: drag.interaction,
+                  stateAfterCancel: .failed(reason))
+              }
+            } catch { retryUnavailable = true }
+          }
+          .focused($openerFocused, equals: .retry)
+          .disabled(!canPresentInput)
         }
-        .disabled(!canPresentInput)
       }
     }
   }

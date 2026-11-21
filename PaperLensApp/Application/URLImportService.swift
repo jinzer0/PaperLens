@@ -103,6 +103,20 @@ public final class URLImportService: ObservableObject {
   private var failedIntent: URLImportConfirmation?
   private var retryRecord: ImportRecoveryRecord?
   private var admittedFailure = false
+  private var failureBeforeRetry: URLImportError?
+
+  var canRetry: Bool {
+    guard case .failed = state, lastInput != nil else { return false }
+    return retryPurpose != nil
+  }
+
+  private var retryPurpose: URLImportConfirmation.Purpose? {
+    if let retryRecord { return .retry(retryRecord) }
+    guard !admittedFailure, let failedIntent, case .newPaper = failedIntent.purpose else {
+      return nil
+    }
+    return .newPaper
+  }
 
   public convenience init(authority: ProviderRequest,
     grantWriter: (@Sendable (URLImportConfirmation) async throws -> any URLImportWriter)? = nil) {
@@ -146,7 +160,8 @@ public final class URLImportService: ObservableObject {
   }
 
   private func prepare(_ input: String, destination: String, possibleDuplicate: Bool,
-    destinationFolderID: UUID?, purpose: URLImportConfirmation.Purpose) throws {
+    destinationFolderID: UUID?, purpose: URLImportConfirmation.Purpose,
+    restoringFailure: URLImportError? = nil) throws {
     guard !starting, operation == nil else { throw URLImportError.rejected }
     let route: ValidatedRequestURL
     do { route = try adapter.route(input) } catch { throw URLImportError.rejected }
@@ -154,9 +169,12 @@ public final class URLImportService: ObservableObject {
     lastDestination = destination
     lastDestinationFolderID = destinationFolderID
     lastDuplicate = possibleDuplicate
-    failedIntent = nil
-    retryRecord = nil
-    admittedFailure = false
+    failureBeforeRetry = restoringFailure
+    if restoringFailure == nil {
+      failedIntent = nil
+      retryRecord = nil
+      admittedFailure = false
+    }
     confirmation = URLImportConfirmation(id: UUID(), destination: destination,
       destinationFolderID: destinationFolderID, possibleDuplicate: possibleDuplicate,
       sourceKind: route.sourceKind, purpose: purpose, route: route)
@@ -167,8 +185,14 @@ public final class URLImportService: ObservableObject {
     guard !starting, state == .confirming else { return }
     confirmation?.admission.cancel()
     confirmation = nil
-    lastInput = nil
-    state = .idle
+    let failure = failureBeforeRetry
+    failureBeforeRetry = nil
+    if let failure {
+      state = .failed(failure)
+    } else {
+      lastInput = nil
+      state = .idle
+    }
   }
 
   public func continueImport(confirmationID: UUID) {
@@ -182,6 +206,7 @@ public final class URLImportService: ObservableObject {
       startCancellationRequested = false
     }
     confirmation = nil // Consume once, before any suspension or effect.
+    failureBeforeRetry = nil
     failedIntent = intent
     retryRecord = nil
     admittedFailure = false
@@ -251,16 +276,11 @@ public final class URLImportService: ObservableObject {
 
   /// A retry reopens confirmation, never automatically grants another writer/Job.
   public func retry() throws {
-    guard !starting, operation == nil, case .failed = state, let input = lastInput else { return }
-    if let record = retryRecord {
-      try prepareRetry(input, destination: lastDestination, possibleDuplicate: lastDuplicate,
-        destinationFolderID: lastDestinationFolderID, expected: record)
-    } else {
-      guard !admittedFailure, let failedIntent, case .newPaper = failedIntent.purpose else {
-        throw URLImportError.writerUnavailable
-      }
-      try prepare(input, destination: lastDestination, possibleDuplicate: lastDuplicate,
-        destinationFolderID: lastDestinationFolderID)
-    }
+    guard !starting, operation == nil, confirmation == nil,
+      case .failed(let reason) = state, let input = lastInput
+    else { return }
+    guard let purpose = retryPurpose else { throw URLImportError.writerUnavailable }
+    try prepare(input, destination: lastDestination, possibleDuplicate: lastDuplicate,
+      destinationFolderID: lastDestinationFolderID, purpose: purpose, restoringFailure: reason)
   }
 }

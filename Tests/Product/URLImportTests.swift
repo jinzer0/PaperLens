@@ -280,9 +280,21 @@ final class URLImportTests: XCTestCase {
     while service.state == .downloading { await Task.yield() }
     XCTAssertEqual(recorder.count, 1)
     XCTAssertEqual(service.state, .failed(.writerUnavailable))
+    XCTAssertTrue(service.canRetry)
     try service.retry()
     XCTAssertEqual(service.state, .confirming)
-    XCTAssertNotEqual(service.confirmation?.id, id)
+    let cancelledID = try XCTUnwrap(service.confirmation).id
+    XCTAssertNotEqual(cancelledID, id)
+    XCTAssertFalse(service.canRetry)
+    service.cancelConfirmation()
+    service.continueImport(confirmationID: cancelledID)
+    XCTAssertEqual(service.state, .failed(.writerUnavailable))
+    XCTAssertTrue(service.canRetry)
+    try service.retry()
+    let next = try XCTUnwrap(service.confirmation)
+    XCTAssertNotEqual(next.id, cancelledID)
+    XCTAssertEqual(next.destination, "Actual Folder")
+    XCTAssertTrue(next.possibleDuplicate)
     XCTAssertEqual(recorder.count, 1)
   }
 }

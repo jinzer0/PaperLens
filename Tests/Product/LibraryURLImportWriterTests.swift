@@ -51,6 +51,7 @@ final class LibraryURLImportWriterTests: XCTestCase, @unchecked Sendable {
     service.continueImport(confirmationID: firstConfirmation)
     while service.state == .downloading { await Task.yield() }
     XCTAssertEqual(service.state, .failed(.rejected))
+    XCTAssertTrue(service.canRetry)
     try service.retry()
     var retry = try XCTUnwrap(service.confirmation)
     guard case .retry(let firstRecord) = retry.purpose else {
@@ -112,9 +113,44 @@ final class LibraryURLImportWriterTests: XCTestCase, @unchecked Sendable {
     XCTAssertEqual(try db.libraryRecords().count, 1)
     XCTAssertEqual(try db.libraryRecords().first?.status, .importFailed)
     service.cancelConfirmation()
-    XCTAssertEqual(service.state, .idle)
+    XCTAssertEqual(service.state, .failed(.rejected))
+    XCTAssertTrue(service.canRetry)
+    try service.retry()
+    let reopened = try XCTUnwrap(service.confirmation)
+    XCTAssertNotEqual(reopened.id, next.id)
+    guard case .retry(let reopenedRecord) = reopened.purpose else {
+      return XCTFail("Cancelled Retry must retain same-Job authority")
+    }
+    XCTAssertEqual(reopenedRecord.encoded, secondRecord.encoded)
     XCTAssertEqual(try db.captureRetryableImport(paperID: first.paperID,
       generation: first.generation).encoded, secondRecord.encoded)
+  }
+
+  @MainActor
+  func testDeletedURLImportCannotOfferOrStartAnotherRetry() async throws {
+    let db = try database()
+    let agent = URLWriterAgent(root: db.root.appendingPathComponent("agent"))
+    let lifecycle = try await LocalLibraryLifecycle.open(database: db, agentPurge: agent)
+    let service = URLImportService(authority: try ProviderRequest(), grantWriter: { intent in
+      let writer = try await lifecycle.grantURLImportWriter(for: intent)
+      let paperID = try XCTUnwrap(writer as? LibraryURLImportWriter).identity.paperID
+      try await writer.abort(reason: .rejected)
+      try await lifecycle.delete(paperID: paperID)
+      throw URLImportError.rejected
+    })
+    try service.prepare("https://writer.invalid/pdf", destination: "Library", possibleDuplicate: false)
+    service.continueImport(confirmationID: try XCTUnwrap(service.confirmation).id)
+    while service.state == .downloading { await Task.yield() }
+
+    XCTAssertEqual(service.state, .failed(.rejected))
+    XCTAssertTrue(try db.libraryRecords().isEmpty)
+    XCTAssertFalse(service.canRetry)
+    XCTAssertThrowsError(try service.retry()) { error in
+      XCTAssertEqual(error as? URLImportError, .writerUnavailable)
+    }
+    XCTAssertNil(service.confirmation)
+    let storedStatuses = try db.adapterRead { try String.fetchAll($0, sql: "SELECT status FROM paper") }
+    XCTAssertEqual(storedStatuses, [LibraryStatus.tombstone.rawValue])
   }
 
   @MainActor
