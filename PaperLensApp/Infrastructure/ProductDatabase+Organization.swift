@@ -39,7 +39,9 @@ extension ProductDatabase {
     try adapterWrite { db in
       try db.execute(sql: "UPDATE organizationPreferences SET presentation = ?, sort = ? WHERE singleton = 1",
         arguments: [value.presentation.rawValue, value.sort.rawValue])
-      guard db.changesCount == 1 else { throw ProductDatabaseError.invalidRecord }
+      guard db.changesCount == 1, try organizationPreferences(in: db) == value else {
+        throw ProductDatabaseError.invalidRecord
+      }
     }
   }
 
@@ -58,11 +60,16 @@ extension ProductDatabase {
     }
   }
 
-  private func organizationSnapshot(filter: OrganizationFilter, in db: Database) throws -> OrganizationSnapshot {
+  private func organizationPreferences(in db: Database) throws -> OrganizationPreferences {
     guard let preference = try Row.fetchOne(db, sql: "SELECT presentation, sort FROM organizationPreferences WHERE singleton = 1"),
       let presentation = LibraryPresentation(rawValue: preference["presentation"]),
       let sort = LibrarySort(rawValue: preference["sort"])
     else { throw ProductDatabaseError.invalidRecord }
+    return OrganizationPreferences(presentation: presentation, sort: sort)
+  }
+
+  private func organizationSnapshot(filter: OrganizationFilter, in db: Database) throws -> OrganizationSnapshot {
+    let preferences = try organizationPreferences(in: db)
     let totalCount = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM paper WHERE status != 'tombstone'")!
     let folderPredicate: String
     let folderArguments: StatementArguments
@@ -131,8 +138,8 @@ extension ProductDatabase {
         canRetryImport: canRetryImport,
         organization: PaperOrganization(readingStatus: readingStatus, favorite: favorite, tags: labels))
     }
-    return OrganizationSnapshot(preferences: OrganizationPreferences(presentation: presentation, sort: sort),
-      totalCount: totalCount, folderCount: rows.count, papers: papers)
+    return OrganizationSnapshot(preferences: preferences, totalCount: totalCount,
+      folderCount: rows.count, papers: papers)
   }
 
   public func organizationTags() throws -> [String] {
@@ -152,7 +159,7 @@ extension ProductDatabase {
   public func updatePaperOrganization(paperID: UUID, generation: UUID,
     expected: PaperOrganization, value: PaperOrganization) throws {
     var normalized: Set<String> = []
-    let labels = try value.tags.map { label -> (String, String) in
+    let labels = try value.tags.map { label -> (label: String, normalized: String) in
       let label = label.trimmingCharacters(in: .whitespacesAndNewlines)
       let key = LibraryOrganizationService.normalized(label)
       guard !label.isEmpty, label.count <= 80, !label.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }),
@@ -160,6 +167,9 @@ extension ProductDatabase {
       return (label, key)
     }
     guard labels.count <= 100 else { throw OrganizationError.invalidTags }
+    let expectedLabels = Dictionary(uniqueKeysWithValues: labels.map {
+      (Data($0.normalized.utf8), Data($0.label.utf8))
+    })
     try adapterWrite { db in
       let row = try currentOrganizationPaper(db, paperID: paperID, generation: generation)
       try validateOrganizationPDF(row, verifyDigest: true)
@@ -183,10 +193,30 @@ extension ProductDatabase {
         ON CONFLICT(paperID) DO UPDATE SET generation = excluded.generation,
           readingStatus = excluded.readingStatus, favorite = excluded.favorite
         """, arguments: [paperID.uuidString, generation.uuidString, value.readingStatus.rawValue, value.favorite])
+      guard db.changesCount == 1 else { throw ProductDatabaseError.invalidRecord }
       try db.execute(sql: "DELETE FROM paperUserTag WHERE paperID = ?", arguments: [paperID.uuidString])
       for (label, key) in labels {
         try db.execute(sql: "INSERT INTO paperUserTag(paperID, label, normalized) VALUES (?, ?, ?)",
           arguments: [paperID.uuidString, label, key])
+        guard db.changesCount == 1 else { throw ProductDatabaseError.invalidRecord }
+      }
+      let saved = try Row.fetchOne(db, sql: """
+        SELECT o.readingStatus, o.favorite FROM paperOrganization o
+        JOIN paper p ON p.id = o.paperID AND p.generation = o.generation
+        WHERE p.id = ? AND p.generation = ? AND p.status = 'ready' AND p.deletionID IS NULL
+        """, arguments: [paperID.uuidString, generation.uuidString])
+      guard let saved, String.fromDatabaseValue(saved["readingStatus"]) == value.readingStatus.rawValue,
+        Int64.fromDatabaseValue(saved["favorite"]) == (value.favorite ? 1 : 0) else {
+        throw ProductDatabaseError.invalidRecord
+      }
+      let savedTags = try Row.fetchAll(db, sql: "SELECT label, normalized FROM paperUserTag WHERE paperID = ?",
+        arguments: [paperID.uuidString])
+      guard savedTags.count == expectedLabels.count, savedTags.allSatisfy({ row in
+        guard let key = String.fromDatabaseValue(row["normalized"]),
+          let label = String.fromDatabaseValue(row["label"]) else { return false }
+        return expectedLabels[Data(key.utf8)] == Data(label.utf8)
+      }) else {
+        throw ProductDatabaseError.invalidRecord
       }
     }
   }

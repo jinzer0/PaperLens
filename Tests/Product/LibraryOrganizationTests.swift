@@ -524,6 +524,72 @@ final class LibraryOrganizationTests: XCTestCase {
     }
   }
 
+  func testIncompleteOrganizationWritesKeepCommittedValuesOnReopen() async throws {
+    let original = PaperOrganization(readingStatus: .reading, favorite: true, tags: ["Keep"])
+    let replacement = PaperOrganization(readingStatus: .read, tags: ["New"])
+    var filter = OrganizationFilter()
+    filter.tag = "Keep"
+    filter.readingStatus = .reading
+    filter.favoritesOnly = true
+    let faults: [(statement: String, draft: PaperOrganization)] = [
+      ("BEFORE UPDATE ON paperOrganization BEGIN SELECT RAISE(IGNORE); END", replacement),
+      ("BEFORE INSERT ON paperUserTag BEGIN SELECT RAISE(IGNORE); END", replacement),
+      ("BEFORE DELETE ON paperUserTag BEGIN SELECT RAISE(IGNORE); END", .init(readingStatus: .read)),
+      ("""
+        AFTER INSERT ON paperUserTag BEGIN
+          UPDATE paperUserTag SET normalized = 'incorrect' WHERE paperID = NEW.paperID AND normalized = NEW.normalized;
+        END
+        """, replacement),
+      ("""
+        AFTER UPDATE ON paperOrganization WHEN NEW.favorite = 0 BEGIN
+          UPDATE paperOrganization SET favorite = 1 WHERE paperID = NEW.paperID;
+        END
+        """, replacement),
+    ]
+    for (statement, draft) in faults {
+      let database = try ProductDatabase.open(at: root())
+      let (id, generation) = try seed(database, title: "Organization write")
+      try database.updatePaperOrganization(paperID: id, generation: generation, expected: .init(), value: original)
+      let lifecycle = try await LocalLibraryLifecycle.open(database: database)
+      let service = LibraryOrganizationService(database: database, lifecycle: lifecycle)
+      let observed = try XCTUnwrap(database.organizationSnapshot(filter: .init()).papers.first)
+      try database.adapterWrite { db in try db.execute(sql: "CREATE TRIGGER partialSave \(statement)") }
+
+      do {
+        try await service.save(draft, for: observed)
+        XCTFail("Incomplete write reported success: \(statement)")
+      } catch { XCTAssertEqual(error as? ProductDatabaseError, .invalidRecord, statement) }
+
+      let reopened = try ProductDatabase.open(at: database.root)
+      let values = try reopened.organizationSnapshot(filter: filter).papers.map(\.organization)
+      guard values == [original] else {
+        XCTFail("Incomplete write replaced committed values: \(statement)")
+        continue
+      }
+      try database.adapterWrite { db in try db.execute(sql: "DROP TRIGGER partialSave") }
+      try await service.save(replacement, for: observed)
+      XCTAssertEqual(try reopened.organizationSnapshot(filter: .init()).papers.first?.organization, replacement)
+    }
+  }
+
+  func testOrganizationPreferenceSaveRejectsSilentlyRewrittenValues() throws {
+    let database = try ProductDatabase.open(at: root())
+    let saved = OrganizationPreferences(presentation: .grid, sort: .publicationYear)
+    try database.setOrganizationPreferences(saved)
+    try database.adapterWrite { db in
+      try db.execute(sql: """
+        CREATE TRIGGER rewritePreference AFTER UPDATE ON organizationPreferences WHEN NEW.sort = 'name' BEGIN
+          UPDATE organizationPreferences SET sort = 'recentlyAdded' WHERE singleton = NEW.singleton;
+        END;
+        """)
+    }
+    XCTAssertThrowsError(try database.setOrganizationPreferences(.init(presentation: .list, sort: .name))) {
+      XCTAssertEqual($0 as? ProductDatabaseError, .invalidRecord)
+    }
+    let reopened = try ProductDatabase.open(at: database.root)
+    XCTAssertEqual(try reopened.organizationSnapshot(filter: .init()).preferences, saved)
+  }
+
   func testFourComparatorsNullPlacementTiesAndStaleFacts() async throws {
     let database = try ProductDatabase.open(at: root())
     let a = try seed(database, title: "Zulu", createdAt: 10), b = try seed(database, title: "alpha", createdAt: 20)
