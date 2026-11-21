@@ -156,6 +156,7 @@ extension LibrarySummaryFailure {
 @MainActor public final class LibrarySummaryCoordinator: ObservableObject {
   @Published public private(set) var activePaperID: UUID?
   @Published public private(set) var requestFailure: LibrarySummaryFailure?
+  @Published private(set) var completionRevision: UUID?
   private let database: ProductDatabase
   private let epoch: UUID
   private let leases: any ReaderLeaseProvider
@@ -197,7 +198,11 @@ extension LibrarySummaryFailure {
     guard requested == nil, active == nil else { return false }
     // Published observers may synchronously cancel or try to submit another request.
     requested = Task {
-      defer { activePaperID = nil; requested = nil }
+      defer {
+        activePaperID = nil
+        completionRevision = UUID()
+        requested = nil
+      }
       do {
         _ = try await performGeneration(paperID: paperID, generation: generation, action: action)
       } catch {
@@ -226,7 +231,10 @@ extension LibrarySummaryFailure {
     active = task
     if activePaperID != paperID { activePaperID = paperID }
     defer {
-      if requested == nil { activePaperID = nil }
+      if requested == nil {
+        activePaperID = nil
+        completionRevision = UUID()
+      }
       active = nil
     }
     return try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
@@ -354,15 +362,20 @@ extension LibrarySummaryFailure {
     try database.adapterRead { db in
       guard let row = try Row.fetchOne(db, sql: """
         SELECT r.id AS revision, p.pdfSHA256 AS hash, c.generation AS configuration
-        FROM paper p JOIN extractionVisible v ON v.paperID = p.id
-        JOIN extractionRevision r ON r.id = v.revision CROSS JOIN providerConfig c
-        WHERE p.id = ? AND p.generation = ? AND p.status = 'ready' AND p.deletionID IS NULL
+        FROM paper p LEFT JOIN extractionVisible v ON v.paperID = p.id
+        LEFT JOIN extractionRevision r ON r.id = v.revision
           AND r.paperID = p.id AND r.generation = p.generation AND r.pdfSHA256 = p.pdfSHA256
-          AND r.pdfReference = p.pdfReference AND c.singleton = 1
+          AND r.pdfReference = p.pdfReference
+        CROSS JOIN providerConfig c
+        WHERE p.id = ? AND p.generation = ? AND p.status = 'ready' AND p.deletionID IS NULL
+          AND c.singleton = 1
           AND c.kind IN ('openAIAPIKey', 'codexChatGPT')
           AND c.slotID IS NOT NULL AND c.model IS NOT NULL
-        """, arguments: [paperID.uuidString, generation.uuidString]),
-        let revision = UUID(uuidString: row["revision"]) else { throw LibrarySummaryError.providerUnavailable }
+        """, arguments: [paperID.uuidString, generation.uuidString])
+      else { throw LibrarySummaryError.providerUnavailable }
+      guard let revision = (row["revision"] as String?).flatMap(UUID.init(uuidString:)) else {
+        throw LibrarySummaryError.geometryUnavailable
+      }
       // Bound materialization using original owner storage, before reading any anchor BLOB.
       guard let quota = try Row.fetchOne(db, sql: """
         SELECT COUNT(*) AS n, COALESCE(SUM(length(originalAnchor)), 0) AS bytes

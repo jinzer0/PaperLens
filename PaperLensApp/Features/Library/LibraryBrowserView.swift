@@ -21,6 +21,7 @@ public struct LibraryBrowserView: View {
   private let localPDFAvailable: Bool
   @State private var observedImportIDs: Set<UUID> = []
   @State private var observedMetadataRevision: UUID?
+  @State private var observedSummaryRevision: UUID?
   @State private var query = OrganizationQueryState()
   @State private var currentFacts: [UUID: OrganizationSortFacts] = [:]
   @State private var folders: [LibraryFolder] = []
@@ -326,9 +327,7 @@ public struct LibraryBrowserView: View {
     .onChange(of: canRefreshAfterBackgroundChange) { _, ready in
       if ready { refreshAfterBackgroundChange() }
     }
-    .onChange(of: summaries.activePaperID) { previous, current in
-      if previous != nil, current == nil { refresh() }
-    }
+    .onChange(of: summaries.completionRevision) { _, _ in refreshAfterBackgroundChange() }
     .onChange(of: filter) { _, _ in refresh() }
     .onChange(of: organizationFocus) { _, value in
       if let value, value != organizationFocusToRestore?.control { organizationFocusToRestore = nil }
@@ -764,7 +763,8 @@ public struct LibraryBrowserView: View {
   private func refreshAfterBackgroundChange() {
     guard canRefreshAfterBackgroundChange,
       !finishedDeletionIDs.isEmpty || observedImportIDs != activeImportIDs
-        || observedMetadataRevision != metadataRevision else { return }
+        || observedMetadataRevision != metadataRevision
+        || observedSummaryRevision != summaries.completionRevision else { return }
     refresh()
   }
 
@@ -870,6 +870,7 @@ public struct LibraryBrowserView: View {
     guard rootMount != nil, !busy else { return }
     observedImportIDs = activeImportIDs
     observedMetadataRevision = metadataRevision
+    observedSummaryRevision = summaries.completionRevision
     if !canPreserveOrganizationReturn(token) { organizationFocusToRestore = nil }
     let request = query.begin(filter: filter)
     if let receipt = organizationFocusToRestore {
