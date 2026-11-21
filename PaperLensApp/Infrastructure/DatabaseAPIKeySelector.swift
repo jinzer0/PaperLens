@@ -21,7 +21,7 @@ public final class DatabaseAPIKeySelector: APIKeySelectorPersistence {
     if snapshot.slotID == nil, firstObservedEmptySelection == nil {
       firstObservedEmptySelection = snapshot
     }
-    return snapshot.slotSelection
+    return snapshot.kind == .openAIAPIKey ? snapshot.slotSelection : nil
   }
 
   public func selectionMatchesConfiguration(_ configuration: NativeOpenAIConfiguration) throws -> Bool {
@@ -47,7 +47,7 @@ public final class DatabaseAPIKeySelector: APIKeySelectorPersistence {
     let snapshot: ProviderConfiguration
     if let expected {
       snapshot = try selectorSnapshot()
-      guard snapshot.slotSelection == expected else { return nil }
+      guard snapshot.kind == .openAIAPIKey, snapshot.slotSelection == expected else { return nil }
     } else {
       guard let firstObservedEmptySelection else { throw APIKeyConnectionError.persistenceFailure }
       snapshot = firstObservedEmptySelection

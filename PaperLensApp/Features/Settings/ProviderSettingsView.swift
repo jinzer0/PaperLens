@@ -70,7 +70,7 @@ public struct ProviderSettingsView: View {
         }
         candidateStatus
         if service.candidatesBlocked {
-          Text("ChatGPT SDK 범위의 실제 정리가 입증되지 않아 새 API 키와 Provider 교체가 차단됩니다. 기존 유효한 선택은 유지됩니다.")
+          Text("진행 중인 ChatGPT 로그인이나 전용 저장소 정리가 끝나면 새 키를 확인할 수 있습니다.")
             .foregroundStyle(.secondary)
         }
         Divider()
@@ -88,7 +88,7 @@ public struct ProviderSettingsView: View {
 
   private var actionTitle: String {
     if case .failed = service.phase { return "다시 시도" }
-    return service.activeSelection == nil ? "연결 확인 및 저장" : "새 키 확인 및 교체"
+    return service.eligibleForEntry ? "새 키 확인 및 교체" : "연결 확인 및 저장"
   }
 
   private func submit() {

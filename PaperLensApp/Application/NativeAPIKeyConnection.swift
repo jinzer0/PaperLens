@@ -278,7 +278,7 @@ public final class NativeAPIKeyConnection: ObservableObject {
 
   /// Edits invalidate intent immediately, even when the user has not pressed Retry.
   public func invalidateCandidate() {
-    guard !ownerRetired else { return }
+    guard !ownerRetired, !publishingSelection else { return }
     invalidateProbeIntent()
     running = nil
     phase = unresolvedSlots ? .failed(.cleanupBlocked)
@@ -286,6 +286,7 @@ public final class NativeAPIKeyConnection: ObservableObject {
     publishOwnerReplacementAvailability()
   }
   public func cancel() {
+    guard !publishingSelection else { return }
     invalidateCandidate()
     phase = .failed(.cancelled)
   }
@@ -295,6 +296,12 @@ public final class NativeAPIKeyConnection: ObservableObject {
     cancel()
   }
   public func connect(key: String) {
+    connect(key: key, replacing: nil, didPromote: nil)
+  }
+
+  func connect(key: String, replacing expected: ProviderConfiguration?,
+    didPromote: ((APIKeySelection) -> Void)?) {
+    guard !publishingSelection else { return }
     guard !ownerRetired else {
       fail(APIKeyConnectionError.staleCandidate)
       return
@@ -303,7 +310,7 @@ public final class NativeAPIKeyConnection: ObservableObject {
     let attempt = intent
     running = Task { [weak self] in
       guard let self else { return }
-      await self.perform(key: key, attempt: attempt)
+      await self.perform(key: key, attempt: attempt, replacing: expected, didPromote: didPromote)
     }
     phase = .probing
     publishOwnerReplacementAvailability()
@@ -314,7 +321,8 @@ public final class NativeAPIKeyConnection: ObservableObject {
     running?.cancel()
   }
 
-  private func perform(key: String, attempt: UUID) async {
+  private func perform(key: String, attempt: UUID, replacing previous: ProviderConfiguration?,
+    didPromote: ((APIKeySelection) -> Void)?) async {
     defer {
       if intent == attempt { running = nil }
       publishOwnerReplacementAvailability()
@@ -328,7 +336,8 @@ public final class NativeAPIKeyConnection: ObservableObject {
       // An empty selector still has a generation. Keep this attempt's complete
       // snapshot through the probe even if subsequent reads see a newer selection.
       let expected = try persistence.selectorSnapshot()
-      let oldSelection = expected.slotSelection
+      if let previous, previous != expected { throw APIKeyConnectionError.selectorConflict }
+      let oldSelection = expected.kind == .openAIAPIKey ? expected.slotSelection : nil
       try reconcileSlotInventory(selected: oldSelection)
       guard !unresolvedSlots else {
         // Preserve validated last-good availability; no stage or request is made.
@@ -381,6 +390,7 @@ public final class NativeAPIKeyConnection: ObservableObject {
       activeSelection = winner
       eligibleForEntry = true
       phase = .connected(winner)
+      didPromote?(winner)
       if let oldSelection { retired.insert(oldSelection.slotID) }
       try drainRetired()
     } catch {

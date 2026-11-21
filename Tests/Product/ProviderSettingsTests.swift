@@ -28,7 +28,7 @@ private final class SettingsSelectorFixture: APIKeySelectorPersistence {
 
 /// Synthetic correlated responses exercise arbitration, never real authentication.
 @MainActor
-private final class SettingsSuspendedTransport: NativeConnectionTestTransport {
+final class SettingsSuspendedTransport: NativeConnectionTestTransport {
   private var pending: [(AuthorizedProviderRequest, ProviderRequest,
     CheckedContinuation<NativeProbeResponse, any Error>)] = []
   var count: Int { pending.count }

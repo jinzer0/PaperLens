@@ -37,7 +37,7 @@ public struct APIKeyConnectionView: View {
       }
       status
       if provider.candidatesBlocked {
-        Text("ChatGPT SDK 정리가 입증되지 않아 새 키 입력과 Provider 교체가 차단됩니다. 기존 유효한 연결 선택은 유지됩니다.")
+        Text("진행 중인 ChatGPT 로그인이나 전용 저장소 정리가 끝나면 새 키를 확인할 수 있습니다.")
           .foregroundStyle(.secondary)
       }
       if connection.activeSelection != nil && !connection.eligibleForEntry {
@@ -73,7 +73,7 @@ public struct APIKeyConnectionView: View {
   }
   private func submit() {
     guard !key.isEmpty, connection.phase != .probing, !provider.candidatesBlocked else { return }
-    connection.connect(key: key)
+    provider.reconnect(key: key)
   }
   @ViewBuilder private var status: some View {
     switch connection.phase {

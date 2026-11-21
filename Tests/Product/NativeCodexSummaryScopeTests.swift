@@ -587,6 +587,113 @@ import ProviderRequest
     XCTAssertFalse(FileManager.default.fileExists(atPath: retry.path))
   }
 
+  func testSwitchingProviderPreservesLastGoodAndRetiresOnlySupersededResources() async throws {
+    let (root, _, template) = try workerFixture(
+      script: controlWorkerScript(holdResult: false, syntheticLogin: true, holdProbe: true))
+    defer { try? FileManager.default.removeItem(at: root) }
+    let database = try ProductDatabase.open(at: root.appendingPathComponent("database"))
+    let configuration = try NativeOpenAIConfiguration(model: "fixture-model")
+    let slots = try APIKeySlotStore(directory: root.appendingPathComponent("slots"))
+    let selector = DatabaseAPIKeySelector(database: database, configuration: configuration)
+    let transport = SettingsSuspendedTransport()
+    let apiKey = NativeAPIKeyConnection(configuration: configuration, slots: slots,
+      persistence: selector, transport: transport, authority: try ProviderRequest())
+    var prepared: [URL] = []
+    let codex = NativeCodexConnection(database: database, root: root.appendingPathComponent("login"),
+      apiKey: apiKey) { namespace in
+        guard namespace.prepareBackupExclusionFixture(
+          agentScript: root.appendingPathComponent("resources/agent.py"),
+          interpreter: SyntheticPython.metadataInterpreter) else { return nil }
+        prepared.append(namespace.directoryURL)
+        return .testing(namespace: namespace, interpreter: template.interpreter, script: template.script)
+      }
+    defer { codex.cancel() }
+    let settings = ProviderSettingsService(connection: apiKey, codex: codex)
+    settings.restore()
+    codex.connect(mode: "browser")
+    let first = try XCTUnwrap(prepared.last)
+    try await waitFor { codex.phase == .signingIn }
+    codex.checkLogin()
+    try await waitForMarker("probe-received", directory: first)
+    try Data().write(to: marker("release-probe", directory: first))
+    try await waitFor { codex.eligibleForEntry }
+    let lastGood = try database.providerConfiguration()
+    settings.restore()
+    XCTAssertNil(try selector.currentSelection())
+    XCTAssertEqual(settings.phase, .idle)
+    XCTAssertEqual(settings.currentProviderLabel, "ChatGPT")
+    XCTAssertTrue(settings.eligibleForEntry)
+    XCTAssertFalse(settings.candidatesBlocked)
+
+    settings.reconnect(key: "fixture-invalid")
+    try await waitFor { transport.count == 1 }
+    XCTAssertTrue(settings.eligibleForEntry)
+    XCTAssertFalse(codex.canStart)
+    transport.fail(0)
+    try await waitFor { settings.phase == .failed(.authentication) }
+    XCTAssertEqual(try database.providerConfiguration(), lastGood)
+    XCTAssertTrue(settings.eligibleForEntry)
+    XCTAssertTrue(try slots.validatedSlotIDs().isEmpty)
+
+    settings.reconnect(key: "fixture-cancelled")
+    try await waitFor { transport.count == 2 }
+    settings.cancelUncommittedConnections()
+    try transport.complete(1)
+    try await waitFor { codex.canStart }
+    XCTAssertEqual(settings.phase, .failed(.cancelled))
+    XCTAssertEqual(try database.providerConfiguration(), lastGood)
+    XCTAssertTrue(settings.eligibleForEntry)
+    XCTAssertTrue(try slots.validatedSlotIDs().isEmpty)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: marker("retirement-received", directory: first).path))
+
+    settings.reconnect(key: "fixture-validated")
+    try await waitFor { transport.count == 3 }
+    XCTAssertEqual(try database.providerConfiguration(), lastGood)
+    XCTAssertTrue(codex.eligibleForEntry)
+    try transport.complete(2)
+    try await waitForMarker("retirement-received", directory: first)
+    let winner = try database.providerConfiguration()
+    XCTAssertEqual(winner.kind, .openAIAPIKey)
+    XCTAssertEqual(winner.generation, lastGood.generation + 1)
+    XCTAssertEqual(settings.currentProviderLabel, "OpenAI API")
+    XCTAssertTrue(settings.eligibleForEntry)
+    XCTAssertTrue(settings.candidatesBlocked)
+    XCTAssertFalse(codex.eligibleForEntry)
+    XCTAssertTrue(FileManager.default.fileExists(atPath: first.path))
+    try Data().write(to: marker("release-retirement", directory: first))
+    try await waitFor { codex.phase == .idle && codex.canStart }
+    XCTAssertEqual(try database.providerConfiguration(), winner)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: first.path))
+
+    codex.connect(mode: "device")
+    let second = try XCTUnwrap(prepared.last)
+    XCTAssertNotEqual(first, second)
+    try await waitFor { codex.phase == .signingIn }
+    XCTAssertEqual(settings.currentProviderLabel, "OpenAI API")
+    let lease = try apiKey.acquireLease()
+    XCTAssertTrue(try apiKey.mayPublish(lease))
+    codex.checkLogin()
+    try await waitForMarker("probe-received", directory: second)
+    XCTAssertEqual(try database.providerConfiguration(), winner)
+    XCTAssertTrue(settings.eligibleForEntry)
+    try Data().write(to: marker("release-probe", directory: second))
+    try await waitFor { codex.eligibleForEntry }
+    let switchedBack = try database.providerConfiguration()
+    XCTAssertEqual(switchedBack.kind, .codexChatGPT)
+    XCTAssertEqual(switchedBack.generation, winner.generation + 1)
+    XCTAssertFalse(try apiKey.mayPublish(lease))
+    XCTAssertEqual(try apiKey.key(for: lease), "fixture-validated")
+    try apiKey.releaseAfterTermination(lease)
+    XCTAssertTrue(try slots.validatedSlotIDs().isEmpty)
+    XCTAssertEqual(try database.providerConfiguration(), switchedBack)
+
+    codex.disconnect()
+    try await waitForMarker("retirement-received", directory: second)
+    try Data().write(to: marker("release-retirement", directory: second))
+    try await waitFor { codex.phase == .idle }
+    XCTAssertFalse(FileManager.default.fileExists(atPath: second.path))
+  }
+
   func testOtherPaperPurgeKeepsBoundSummaryAndRejectsUnownedEntry() async throws {
     let (root, _, template) = try workerFixture(
       script: controlWorkerScript(holdResult: true, syntheticLogin: true))

@@ -106,14 +106,14 @@ public final class NativeCodexConnection: ObservableObject {
     summaryScopes[requestID] = scope
     do {
       let result = try await scope.execute()
-      summaryScopes.removeValue(forKey: requestID)
+      removeSummaryScope(requestID)
       guard currentConfiguration == selected, eligibleForEntry else {
         throw LibrarySummaryError.staleIdentity
       }
       try Task.checkCancellation()
       return try authority.wrapModelResult(result, request: request)
     } catch {
-      if scope.clean { summaryScopes.removeValue(forKey: requestID) }
+      if scope.clean { removeSummaryScope(requestID) }
       throw error
     }
   }
@@ -124,13 +124,19 @@ public final class NativeCodexConnection: ObservableObject {
     for (id, scope) in scopes {
       await scope.retireAndWait()
       guard scope.clean else { throw LocalLibraryError.producerClosureUnknown }
-      summaryScopes.removeValue(forKey: id)
+      removeSummaryScope(id)
     }
     // Another Paper may own the single admitted summary worker. Account for only
     // that live namespace by filesystem identity when observing the shared root.
     let other = summaryScopes.values.first { $0.paperID != paperID }?.activeNamespace
     try IsolatedAgentLibraryPurge.verifySummaryRoot(summaryRoot, allowing: other)
     return AgentLibraryPurgeReceipt(paperID: paperID, deletionID: deletionID)
+  }
+
+  private func removeSummaryScope(_ id: UUID) {
+    if summaryScopes.removeValue(forKey: id) != nil, summaryScopes.isEmpty {
+      objectWillChange.send()
+    }
   }
 
   public convenience init(database: ProductDatabase, root: URL, apiKey: NativeAPIKeyConnection) {
@@ -157,7 +163,7 @@ public final class NativeCodexConnection: ObservableObject {
   public var currentConfiguration: ProviderConfiguration? { try? database.providerConfiguration() }
   internal var testingOwner: OwnedChildRetirement? { candidate?.owner ?? activeLogin?.owner }
 
-  /// Non-Codex replacement must wait for all of this coordinator's owners to drain.
+  /// Replacing the coordinator itself must wait for all of its owners to drain.
   public var blocksReplacement: Bool {
     candidate != nil || activeLogin != nil || predecessor != nil
       || !summaryScopes.isEmpty || !summaryNamespaceDebt.isEmpty
@@ -190,6 +196,20 @@ public final class NativeCodexConnection: ObservableObject {
   }
 
   public var eligibleForEntry: Bool { usableActiveLogin != nil }
+
+  var configurationAvailableForAPIKeyPromotion: ProviderConfiguration? {
+    guard candidate == nil, predecessor == nil, summaryNamespaceDebt.isEmpty else { return nil }
+    return usableActiveLogin?.committed
+  }
+
+  func retireAfterAPIKeyPromotion(replacing expected: ProviderConfiguration,
+    winner: APIKeySelection) {
+    guard let activeLogin, activeLogin.committed == expected,
+      currentConfiguration == ProviderConfiguration(kind: .openAIAPIKey,
+        slotID: winner.slotID, generation: winner.configGeneration, model: apiKey.configuration.model)
+    else { return }
+    retire(activeLogin, because: .superseded, sendCancel: true)
+  }
 
   private var usableActiveLogin: LoginScope? {
     guard let login = activeLogin, login.ending == nil, let owner = login.owner,
@@ -646,7 +666,10 @@ public final class ProviderSettingsService: ObservableObject {
     }
     return activeSelection == nil ? "없음" : "OpenAI API"
   }
-  public var candidatesBlocked: Bool { codex?.blocksReplacement == true }
+  public var candidatesBlocked: Bool {
+    guard let codex else { return false }
+    return codex.blocksReplacement && codex.configurationAvailableForAPIKeyPromotion == nil
+  }
   public var model: String { connection.configuration.model }
   public var isTesting: Bool { phase == .probing }
   public var availabilityMessage: String {
@@ -658,8 +681,11 @@ public final class ProviderSettingsService: ObservableObject {
     connection.restore()
   }
   public func reconnect(key: String) {
-    guard !candidatesBlocked else { return }
-    connection.connect(key: key)
+    guard let codex, codex.blocksReplacement else { return connection.connect(key: key) }
+    guard let expected = codex.configurationAvailableForAPIKeyPromotion else { return }
+    connection.connect(key: key, replacing: expected) { [weak codex] winner in
+      codex?.retireAfterAPIKeyPromotion(replacing: expected, winner: winner)
+    }
   }
   public func cancel() { connection.cancel() }
   func cancelUncommittedConnections() {
