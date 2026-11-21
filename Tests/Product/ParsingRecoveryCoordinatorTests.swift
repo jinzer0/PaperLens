@@ -213,6 +213,11 @@ final class ParsingRecoveryCoordinatorTests: XCTestCase {
   func testConcurrentClicksFreshMainLineageAndPersistedRepeatedFailure() async throws {
     let (database, old, root) = try fixture()
     defer { try? FileManager.default.removeItem(at: root) }
+    let columns = "attempt, generation, pdfSHA256, pdfReference, job, correlation, input, epoch, "
+      + "configSlot, configGeneration, configKind, state, failure"
+    let historical = try database.adapterRead {
+      try XCTUnwrap(Row.fetchOne($0, sql: "SELECT \(columns) FROM extractionAttempt"))
+    }
     let producer = HeldFailureProducer(), epoch = UUID()
     let service = ExtractionRevisionService(database: database, producer: producer,
       geometryValidator: RejectingValidator())
@@ -245,6 +250,35 @@ final class ParsingRecoveryCoordinatorTests: XCTestCase {
     let reopened = try ProductDatabase.open(at: root)
     XCTAssertEqual(try reopened.extractionStatus(paperID: old.paperID).state, "failed")
     XCTAssertEqual(try invocationCount(reopened), 2)
+    let history = try reopened.adapterRead {
+      try Row.fetchAll($0, sql: "SELECT \(columns) FROM extractionAttemptHistory")
+    }
+    XCTAssertEqual(history, [historical])
+  }
+
+  func testFailedRetryReservationRollsBackHistoryAndKeepsCurrentFailure() async throws {
+    let (database, old, root) = try fixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let producer = HeldFailureProducer()
+    let coordinator = ParsingRecoveryCoordinator(service: .init(database: database,
+      producer: producer, geometryValidator: RejectingValidator()), currentEpoch: UUID())
+    let before = try await coordinator.context(paperID: old.paperID)
+    let context = try XCTUnwrap(before)
+    try database.adapterWrite { db in
+      try db.execute(sql: """
+        CREATE TRIGGER rejectNewAttempt BEFORE INSERT ON extractionAttempt BEGIN
+          SELECT RAISE(ABORT, 'fixture rejects replacement');
+        END;
+        """)
+    }
+    do { try await coordinator.retry(context); XCTFail("replacement was admitted") }
+    catch { XCTAssertTrue(error is DatabaseError) }
+    let after = try await coordinator.context(paperID: old.paperID)
+    XCTAssertEqual(after, context)
+    XCTAssertEqual(try invocationCount(database), 1)
+    XCTAssertEqual(try database.adapterRead {
+      try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM extractionAttemptHistory")
+    }, 0)
   }
 
   func testUsableRevisionChangeInvalidatesCapturedRetryAndRetainsReaderData() async throws {
@@ -289,6 +323,9 @@ final class ParsingRecoveryCoordinatorTests: XCTestCase {
     let context = try XCTUnwrap(captured)
     let first = Task { try await coordinator.retry(context) }
     await producer.waitForStart()
+    XCTAssertEqual(try database.adapterRead {
+      try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM extractionAttemptHistory")
+    }, 1)
     let saga = try XCTUnwrap(database.beginDeletion(old.paperID)).saga
     let deletedContext = try await coordinator.context(paperID: old.paperID)
     XCTAssertNil(deletedContext)
@@ -303,6 +340,9 @@ final class ParsingRecoveryCoordinatorTests: XCTestCase {
     do { try await coordinator.retry(context); XCTFail("deleted paper admitted") }
     catch { XCTAssertEqual(error as? ParsingRecoveryError, .staleContext) }
     XCTAssertEqual(try invocationCount(database), 0)
+    XCTAssertEqual(try database.adapterRead {
+      try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM extractionAttemptHistory")
+    }, 0)
     XCTAssertEqual(try database.extractionStatus(paperID: old.paperID).state, "unavailable")
   }
 

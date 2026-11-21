@@ -379,9 +379,10 @@ final class ProductCompositionTests: XCTestCase {
             before.generation, before.kind?.rawValue])
         // Reconstruct the exact preceding schema only in this private fixture.
         try db.execute(sql: """
+          DROP TABLE extractionAttemptHistory;
           ALTER TABLE providerConfig DROP COLUMN kind;
           ALTER TABLE extractionAttempt DROP COLUMN configKind;
-          DELETE FROM grdb_migrations WHERE identifier = 'providerSelectorKindV1';
+          DELETE FROM grdb_migrations WHERE identifier IN ('providerSelectorKindV1', 'extractionAttemptHistoryV1');
           """)
       }
       let reopened = try ProductDatabase.open(at: database.root)

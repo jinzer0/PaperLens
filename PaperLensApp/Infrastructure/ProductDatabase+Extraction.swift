@@ -66,6 +66,20 @@ extension ProductDatabase {
     }
   }
 
+  static func registerExtractionHistoryMigration(in migrator: inout DatabaseMigrator) {
+    migrator.registerMigration("extractionAttemptHistoryV1") { db in
+      try db.execute(sql: """
+        CREATE TABLE extractionAttemptHistory (
+          attempt TEXT PRIMARY KEY NOT NULL REFERENCES extractionInvocation(attempt) ON DELETE CASCADE,
+          generation TEXT NOT NULL, pdfSHA256 TEXT NOT NULL, pdfReference TEXT NOT NULL,
+          job TEXT NOT NULL, correlation TEXT NOT NULL, input TEXT NOT NULL, epoch TEXT NOT NULL,
+          configSlot TEXT, configGeneration INTEGER NOT NULL, configKind TEXT,
+          state TEXT NOT NULL CHECK(state IN ('failed', 'succeeded')), failure TEXT
+        );
+        """)
+    }
+  }
+
   private func guardExtractionPaper(_ db: Database, _ identity: ExtractionIdentity) throws {
     let count = try Int.fetchOne(db, sql: """
       SELECT COUNT(*) FROM paper, providerConfig
@@ -138,9 +152,7 @@ extension ProductDatabase {
           AND (state = 'running' OR attempt = ? OR revision = ?)
         """, arguments: [identity.paperID.uuidString, identity.attempt.uuidString,
           identity.revision.uuidString]) == 0 else { throw ExtractionError.staleAttempt }
-      try db.execute(sql: "DELETE FROM extractionAttempt WHERE paperID = ?",
-        arguments: [identity.paperID.uuidString])
-      try insertExtractionInvocation(db, identity)
+      try replaceExtractionAttempt(identity, in: db)
     }
   }
 
@@ -159,6 +171,25 @@ extension ProductDatabase {
       SELECT EXISTS (SELECT 1 FROM extractionInvocation WHERE paperID = ?)
         OR EXISTS (SELECT 1 FROM extractionAttempt WHERE paperID = ?)
       """, arguments: [paperID.uuidString, paperID.uuidString]) == 0
+  }
+
+  /// Preserve a terminal attempt in the same transaction as its replacement.
+  /// The invocation owns the archived row and cascades Paper deletion to it.
+  func replaceExtractionAttempt(_ identity: ExtractionIdentity, in db: Database) throws {
+    let paperID = identity.paperID.uuidString
+    try db.execute(sql: """
+      INSERT INTO extractionAttemptHistory(attempt, generation, pdfSHA256, pdfReference,
+        job, correlation, input, epoch, configSlot, configGeneration, configKind, state, failure)
+      SELECT a.attempt, a.generation, a.pdfSHA256, a.pdfReference, a.job, a.correlation,
+        a.input, a.epoch, a.configSlot, a.configGeneration, a.configKind, a.state, a.failure
+      FROM extractionAttempt a JOIN extractionInvocation i
+        ON i.attempt = a.attempt AND i.fence = a.fence AND i.revision = a.revision AND i.paperID = a.paperID
+      WHERE a.paperID = ? AND a.state IN ('failed', 'succeeded')
+      """, arguments: [paperID])
+    let archived = db.changesCount
+    try db.execute(sql: "DELETE FROM extractionAttempt WHERE paperID = ?", arguments: [paperID])
+    guard db.changesCount == archived else { throw ProductDatabaseError.invalidRecord }
+    try insertExtractionInvocation(db, identity)
   }
 
   private func insertExtractionInvocation(_ db: Database, _ identity: ExtractionIdentity,

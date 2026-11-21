@@ -130,6 +130,7 @@ public final class ProductDatabase: @unchecked Sendable {
         UPDATE extractionAttempt SET configKind = 'openAIAPIKey' WHERE configSlot IS NOT NULL;
         """)
     }
+    Self.registerExtractionHistoryMigration(in: &migrator)
     try migrator.migrate(queue)
     try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: databaseURL.path)
   }

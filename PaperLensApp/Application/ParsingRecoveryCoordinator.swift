@@ -88,23 +88,7 @@ public actor ParsingRecoveryCoordinator {
           arguments: [identity.revision.uuidString]) == 0 else {
         throw ExtractionError.staleAttempt
       }
-      try db.execute(sql: """
-        INSERT INTO extractionInvocation(attempt, fence, revision, paperID) VALUES (?, ?, ?, ?)
-        """, arguments: [identity.attempt.uuidString, identity.fence.uuidString,
-          identity.revision.uuidString, paperID.uuidString])
-      // Replace only the admitted failure; do not touch old revision/sentence/FTS rows.
-      try db.execute(sql: """
-        UPDATE extractionAttempt SET revision = ?, attempt = ?, fence = ?, correlation = ?,
-          input = ?, epoch = ?, configSlot = ?, configGeneration = ?, configKind = ?,
-          state = 'running', failure = NULL
-        WHERE paperID = ? AND state = 'failed' AND attempt = ? AND revision = ?
-        """, arguments: [identity.revision.uuidString, identity.attempt.uuidString,
-          identity.fence.uuidString, identity.correlation.uuidString, identity.input.uuidString,
-          identity.epoch.uuidString, identity.configuration.slotID?.uuidString,
-          identity.configuration.generation, identity.configuration.kind?.rawValue,
-          paperID.uuidString, old.attempt.uuidString,
-          old.revision.uuidString])
-      guard db.changesCount == 1 else { throw ParsingRecoveryError.staleContext }
+      try service.database.replaceExtractionAttempt(identity, in: db)
     }
     inFlight.insert(paperID)
     defer { inFlight.remove(paperID) }
