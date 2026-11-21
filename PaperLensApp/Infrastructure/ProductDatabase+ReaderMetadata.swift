@@ -121,10 +121,20 @@ extension ProductDatabase {
     try adapterWrite { db in
       try Self.guardReaderMetadata(identity, in: db)
       var previous: ReaderMetadataContext?
-      if let data = try Data.fetchOne(db, sql: "SELECT payload FROM readerMetadataContext WHERE paperID = ? AND revisionID = ?",
-        arguments: [identity.paperID.uuidString, identity.revisionID.uuidString]) {
-        previous = try JSONDecoder().decode(ReaderMetadataContext.self, from: data)
+      if let row = try Row.fetchOne(db, sql: """
+        SELECT sessionID, sequence, payload FROM readerMetadataContext
+        WHERE paperID = ? AND revisionID = ?
+        """, arguments: [identity.paperID.uuidString, identity.revisionID.uuidString]),
+        let sessionID = try? row.decode(String.self, forColumn: "sessionID"),
+        let sequence = try? row.decode(Int64.self, forColumn: "sequence"),
+        let payload = try? row.decode(Data.self, forColumn: "payload"),
+        let decoded = try? JSONDecoder().decode(ReaderMetadataContext.self, from: payload),
+        decoded.sessionID == UUID(uuidString: sessionID), decoded.sequence == sequence,
+        (0..<Int64.max).contains(sequence) {
+        previous = decoded
       }
+      // A damaged restoration value cannot prevent opening Contents. The new
+      // session ID fences old saves even when there is no usable sequence to carry forward.
       let context = ReaderMetadataContext(sessionID: UUID(), sequence: previous?.sequence ?? 0,
         location: previous?.location, sectionID: previous?.sectionID)
       let data = try JSONEncoder().encode(context)

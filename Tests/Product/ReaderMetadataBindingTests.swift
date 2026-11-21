@@ -501,6 +501,50 @@ private final class MetadataObservedPDFDocument: PDFDocument {
     XCTAssertEqual(refreshed.sections.map(\.title), state.sections.map(\.title))
   }
 
+  func testDamagedSavedPositionKeepsContentsAndAllowsANewConfirmedPosition() async throws {
+    for decodable in [false, true] {
+      let (db, _, identity, owner) = try await fixture(embeddedTitle: "Original title")
+      defer { owner.session.close() }
+      let service = ReaderMetadataService(database: db)
+      let previous = try service.beginSession(for: identity)
+      let saved = try service.saveConfirmed(.init(pageIndex: 0, x: 20, y: 450),
+        sectionID: "/0", expected: previous, for: identity)
+      let inconsistent = ReaderMetadataContext(sessionID: saved.sessionID,
+        sequence: saved.sequence + 1, location: saved.location, sectionID: saved.sectionID)
+      let damaged = decodable ? try JSONEncoder().encode(inconsistent) : Data("not JSON".utf8)
+      try db.adapterWrite {
+        try $0.execute(sql: "UPDATE readerMetadataContext SET payload = ? WHERE paperID = ?",
+          arguments: [damaged, identity.paperID.uuidString])
+      }
+      owner.session.close()
+      try owner.open(paperID: identity.paperID)
+      try outline(owner)
+
+      let binding = try mount(db, identity, owner)
+      let state = try XCTUnwrap(binding.state)
+      XCTAssertEqual(state.presentation.metadata.title.candidates.map(\.text), ["Original title"])
+      XCTAssertEqual(state.sections.map(\.title), ["Introduction", "Methods", "Foreign"])
+      XCTAssertNil(state.restorationCandidate)
+      XCTAssertFalse(try binding.restoreSavedPosition(onPage: 0))
+      XCTAssertEqual(owner.view.navigationCount, 0)
+      XCTAssertThrowsError(try service.saveConfirmed(
+        try XCTUnwrap(saved.location), sectionID: "/0", expected: saved, for: identity)) {
+        XCTAssertEqual($0 as? ReaderMetadataError, .staleConfirmation)
+      }
+      try binding.navigate(sectionID: "/1")
+      XCTAssertNil(binding.state?.activeSectionID)
+      let page = try XCTUnwrap(owner.view.document?.page(at: 0))
+      owner.view.observedDestination = PDFDestination(page: page, at: CGPoint(x: 20, y: 150))
+      try binding.observePosition()
+      XCTAssertEqual(binding.state?.activeSectionID, "/1")
+
+      let reopened = try ProductDatabase.open(at: db.root)
+      let recovered = try ReaderMetadataService(database: reopened).beginSession(for: identity)
+      XCTAssertEqual(recovered.location, .init(pageIndex: 0, x: 20, y: 150))
+      XCTAssertEqual(recovered.sectionID, "/1")
+    }
+  }
+
   func testBlankOrWrongTypedAttributesPreserveAdmittedFieldsWithoutDefaults() async throws {
     let (db, _, identity, owner) = try await fixture()
     defer { owner.session.close() }
