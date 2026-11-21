@@ -3,6 +3,8 @@ import copy
 from dataclasses import replace
 import json
 from pathlib import Path
+import signal
+import subprocess
 import sys
 import unittest
 from uuid import uuid4
@@ -11,6 +13,7 @@ SCRIPTS = Path(__file__).resolve().parents[2] / "scripts/topology"
 sys.path.insert(0, str(SCRIPTS))
 import verify_packaged_db as db
 import validate_dependency_lock as dependency_lock
+from run_synthetic_db_relaunch import collect_receipt
 
 
 def fixture(point="current/arm64", run=None, owner=None):
@@ -468,6 +471,39 @@ class PackagedDBTests(unittest.TestCase):
             serialized = json.dumps(result)
             for secret in ("PRIVATE", "TypeError", "ValueError", "Unicode", "Traceback"):
                 self.assertNotIn(secret, serialized)
+
+
+class RelaunchReceiptTests(unittest.TestCase):
+    def child(self, source):
+        return subprocess.Popen([sys.executable, "-c", source], stdout=subprocess.PIPE)
+
+    def test_exact_limit_is_accepted_after_normal_exit(self):
+        with self.child(f"import sys; sys.stdout.buffer.write(b'x' * {db.MAX_RECORD_BYTES})") as child:
+            self.assertEqual(collect_receipt(child, timeout=5), b"x" * db.MAX_RECORD_BYTES)
+            self.assertEqual(child.returncode, 0)
+
+    def test_overflow_stops_and_reaps_a_child_that_has_not_exited(self):
+        with self.child("import sys, time; "
+                        f"sys.stdout.buffer.write(b'x' * {db.MAX_RECORD_BYTES + 1}); "
+                        "sys.stdout.flush(); time.sleep(30)") as child:
+            with self.assertRaisesRegex(ValueError, "^phase_failed$"):
+                collect_receipt(child, timeout=5)
+            self.assertEqual(child.returncode, -signal.SIGKILL)
+
+    def test_timeout_covers_both_pipe_reads_and_exit_after_eof(self):
+        for source in ("import time; time.sleep(30)",
+                       "import os, time; os.write(1, b'{}'); os.close(1); time.sleep(30)"):
+            with self.subTest(source=source), self.child(source) as child:
+                with self.assertRaises(subprocess.TimeoutExpired):
+                    collect_receipt(child, timeout=0.3)
+                self.assertEqual(child.returncode, -signal.SIGKILL)
+
+    def test_rejects_empty_receipt_or_failed_exit(self):
+        for source in ("pass", "print('{}'); raise SystemExit(1)"):
+            with self.subTest(source=source), self.child(source) as child:
+                with self.assertRaisesRegex(ValueError, "^phase_failed$"):
+                    collect_receipt(child, timeout=5)
+                self.assertIsNotNone(child.returncode)
 
 
 if __name__ == "__main__":

@@ -21,6 +21,7 @@ import validate_dependency_lock as dependency_lock
 SPEC_COMMIT = "7b489572bdee826e4a14101ca0961e10d705e570"
 GRDB_COMMIT = "b83108d10f42680d78f23fe4d4d80fc88dab3212"
 SCHEMA = "packaged-db-fts5-evidence-v1"
+MAX_RECORD_BYTES = 16_384
 POINTS = dependency_lock.POINTS
 SCOPES = ("local_contract_only", "local_grdb_probe", "packaged_db_fts5")
 MIGRATIONS = ("probe_base_v1", "probe_fts_v2")
@@ -115,7 +116,7 @@ def exact(left, right):
 
 def bounded_json(data: bytes):
     """Strict UTF-8/duplicate-aware JSON, <=16384 bytes and container depth <=8."""
-    require(type(data) is bytes and 0 < len(data) <= 16384)
+    require(type(data) is bytes and 0 < len(data) <= MAX_RECORD_BYTES)
 
     def pairs(items):
         result = {}

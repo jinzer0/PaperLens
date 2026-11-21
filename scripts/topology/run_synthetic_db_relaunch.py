@@ -9,13 +9,15 @@ from pathlib import Path
 import platform
 import pwd
 import re
+import selectors
 import stat
 import subprocess
 import sys
+import time
 from uuid import uuid4
 
 from validate_dependency_lock import COMPILE_FACTS, sqlite_source_identity
-from verify_packaged_db import Invalid, bounded_json, exact
+from verify_packaged_db import MAX_RECORD_BYTES, Invalid, bounded_json, exact
 
 
 IDENTIFIER = "io.github.jinzer0.PaperLens"
@@ -72,19 +74,39 @@ def validate_provenance(observed, os_build):
             and all(observed[flag] for flag in PROVENANCE_FLAGS))
 
 
+def collect_receipt(child, timeout):
+    deadline = time.monotonic() + timeout
+    receipt = bytearray()
+    descriptor = child.stdout.fileno()
+    try:
+        with selectors.DefaultSelector() as reader:
+            reader.register(descriptor, selectors.EVENT_READ)
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or not reader.select(remaining):
+                    raise subprocess.TimeoutExpired(child.args, timeout)
+                # Read one byte beyond the limit to distinguish an exact-size receipt from overflow.
+                chunk = os.read(descriptor, MAX_RECORD_BYTES + 1 - len(receipt))
+                if not chunk:
+                    break
+                receipt.extend(chunk)
+                if len(receipt) > MAX_RECORD_BYTES:
+                    raise ValueError("phase_failed")
+        if child.wait(timeout=max(0, deadline - time.monotonic())) != 0 or not receipt:
+            raise ValueError("phase_failed")
+        return bytes(receipt)
+    finally:
+        if child.poll() is None:
+            child.kill()
+            child.wait()
+
+
 def launch(executable, phase, kind, ids, descriptors, identity):
     arguments = [executable, "--synthetic-packaged-db-relaunch", phase, kind, *ids,
                  *(str(value) for value in (*descriptors, *identity))]
     with subprocess.Popen(arguments, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                           stderr=subprocess.DEVNULL, pass_fds=descriptors) as child:
-        try:
-            receipt, _ = child.communicate(timeout=30)
-        except subprocess.TimeoutExpired:
-            child.kill()
-            child.wait()
-            raise
-        if child.returncode or not 0 < len(receipt) <= 16384:
-            raise ValueError("phase_failed")
+        receipt = collect_receipt(child, timeout=30)
     record = bounded_json(receipt)
     expected = {"phase": phase, "kind": kind, "closed": True, "cleaned": phase == "reopen"}
     steps = ("reopenedIntegrity",) if phase == "reopen" else ()
