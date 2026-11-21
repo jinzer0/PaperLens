@@ -39,6 +39,7 @@ public final class NativeCodexConnection: ObservableObject {
   private let database: ProductDatabase
   private let root: URL
   private let apiKey: NativeAPIKeyConnection
+  private var apiKeyObservation: AnyCancellable?
   private let prepareWorker: (TopologyOwnedFixtures) -> OwnedChildRetirement.WorkerLaunch?
   private var namespace: TopologyOwnedFixtures?
   private var owner: OwnedChildRetirement?
@@ -124,6 +125,9 @@ public final class NativeCodexConnection: ObservableObject {
     self.root = root
     self.apiKey = apiKey
     self.prepareWorker = prepareWorker
+    apiKeyObservation = apiKey.$ownerReplacementAvailable.dropFirst().sink { [weak self] _ in
+      self?.objectWillChange.send()
+    }
   }
 
   public var currentConfiguration: ProviderConfiguration? { try? database.providerConfiguration() }

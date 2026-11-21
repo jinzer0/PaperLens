@@ -1,3 +1,4 @@
+import Combine
 import Darwin
 import Foundation
 import SwiftUI
@@ -99,6 +100,68 @@ final class ProviderSettingsTests: XCTestCase {
 
   private func removeFixture(_ root: URL) throws {
     try FileManager.default.removeItem(at: root)
+  }
+
+  func testChatGPTControlsObserveLeaseDrainAndCancelledProbeCompletion() async throws {
+    let root = try fixtureRoot()
+    defer { try? removeFixture(root) }
+    let database = try ProductDatabase.open(at: root.appendingPathComponent("database"))
+    let slots = try APIKeySlotStore(directory: root.appendingPathComponent("slots"))
+    let configuration = try NativeOpenAIConfiguration(model: "fixture-snapshot")
+    let oldSlot = try slots.create(key: "fixture-last-good")
+    _ = try database.compareAndSwapProviderConfiguration(expected: database.providerConfiguration(),
+      replacementKind: .openAIAPIKey, replacementSlotID: oldSlot, replacementModel: configuration.model)
+    let transport = SettingsSuspendedTransport()
+    let apiKey = NativeAPIKeyConnection(configuration: configuration, slots: slots,
+      persistence: DatabaseAPIKeySelector(database: database, configuration: configuration),
+      transport: transport, authority: try ProviderRequest())
+    let codex = NativeCodexConnection(database: database, root: root, apiKey: apiKey,
+      prepareWorker: { _ in
+        XCTFail("ChatGPT was admitted while OpenAI still owned work")
+        return nil
+      })
+    let service = ProviderSettingsService(connection: apiKey, codex: codex)
+    service.restore()
+    var observedAvailability: [Bool] = []
+    let observation = codex.objectWillChange.sink { observedAvailability.append(codex.canStart) }
+    defer { observation.cancel() }
+    XCTAssertTrue(codex.canStart)
+
+    let firstLease = try service.acquireLease()
+    let finalLease = try service.acquireLease()
+    XCTAssertEqual(observedAvailability, [false])
+    XCTAssertFalse(codex.canStart)
+    service.reconnect(key: "fixture-new-selection")
+    await waitUntil { transport.count == 1 }
+    guard transport.count == 1 else { return }
+    try transport.complete(0)
+    await waitUntil { !service.isTesting }
+    let active = try XCTUnwrap(service.activeSelection)
+    XCTAssertNotEqual(active.slotID, oldSlot)
+    XCTAssertEqual(try slots.read(oldSlot), "fixture-last-good")
+    try service.releaseAfterTermination(firstLease)
+    XCTAssertEqual(observedAvailability, [false])
+    XCTAssertFalse(codex.canStart)
+    try service.releaseAfterTermination(finalLease)
+    XCTAssertEqual(try slots.validatedSlotIDs(), [active.slotID])
+    XCTAssertTrue(codex.canStart)
+    XCTAssertEqual(observedAvailability, [false, true])
+
+    service.reconnect(key: "fixture-cancelled-candidate")
+    XCTAssertFalse(codex.canStart)
+    codex.connect(mode: "device")
+    XCTAssertNil(codex.intentID)
+    await waitUntil { transport.count == 2 }
+    guard transport.count == 2 else { return }
+    service.cancel()
+    XCTAssertFalse(codex.canStart)
+    XCTAssertEqual(observedAvailability, [false, true, false])
+    try transport.complete(1)
+    await waitUntil { codex.canStart }
+    XCTAssertEqual(observedAvailability, [false, true, false, true])
+    XCTAssertEqual(service.phase, .failed(.cancelled))
+    XCTAssertEqual(try slots.validatedSlotIDs(), [active.slotID])
+    XCTAssertEqual(try database.providerConfiguration().slotID, active.slotID)
   }
 
   func testSettingsRejectsStaleEmptySelectorAndRetriesAfterChatGPTDisconnect() async throws {

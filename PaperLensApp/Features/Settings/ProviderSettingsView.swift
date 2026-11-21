@@ -172,6 +172,9 @@ public struct NativeCodexConnectionView: View {
           "프로세스 종료와 전용 저장소 정리가 끝난 뒤 재연결하거나 Provider를 교체할 수 있습니다. 로그인 취소만으로 정리가 완료되지는 않습니다."
         )
         .font(.caption).foregroundStyle(.secondary)
+      } else if !connection.canStart {
+        Text("OpenAI API 작업 종료와 키 저장소 정리가 확인되면 ChatGPT에 연결할 수 있습니다.")
+          .font(.caption).foregroundStyle(.secondary)
       }
     }
   }

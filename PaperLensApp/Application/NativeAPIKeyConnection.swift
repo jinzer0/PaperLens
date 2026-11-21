@@ -160,6 +160,7 @@ public final class NativeAPIKeyConnection: ObservableObject {
   @Published public private(set) var phase: APIKeyConnectionPhase = .idle
   @Published public private(set) var activeSelection: APIKeySelection?
   @Published public private(set) var eligibleForEntry = false
+  @Published private(set) var ownerReplacementAvailable = true
   public let configuration: NativeOpenAIConfiguration
   private let slots: APIKeySlotStore
   private let persistence: (any APIKeySelectorPersistence)?
@@ -179,12 +180,18 @@ public final class NativeAPIKeyConnection: ObservableObject {
   /// Cancellation acceptance does not release transport or consumer references.
   public var canReplaceOwner: Bool {
     !ownerRetired && !storageBlocked && !unresolvedSlots
-      && probes.isEmpty && leases.isEmpty && retired.isEmpty
+      && running == nil && probes.isEmpty && leases.isEmpty && retired.isEmpty
+  }
+
+  private func publishOwnerReplacementAvailability() {
+    let available = canReplaceOwner
+    if ownerReplacementAvailable != available { ownerReplacementAvailable = available }
   }
 
   /// MainActor arbitration fences all future references before a replacement exists.
   public func retireAfterDrain() throws {
     guard canReplaceOwner else { throw APIKeyConnectionError.staleCandidate }
+    defer { publishOwnerReplacementAvailability() }
     ownerRetired = true
     intent = UUID()
     running?.cancel()
@@ -208,6 +215,7 @@ public final class NativeAPIKeyConnection: ObservableObject {
   /// Startup never replays a probe or infers a selection from files. Only recorded
   /// crash orphans under the store's exclusive lifetime lock can be removed.
   public func restore() {
+    defer { publishOwnerReplacementAvailability() }
     eligibleForEntry = false
     do {
       guard !ownerRetired else { throw APIKeyConnectionError.staleCandidate }
@@ -255,6 +263,7 @@ public final class NativeAPIKeyConnection: ObservableObject {
     guard try persistence.currentSelection() != previous else {
       throw APIKeyConnectionError.selectorConflict
     }
+    defer { publishOwnerReplacementAvailability() }
     retired.insert(previous.slotID)
     activeSelection = nil
     eligibleForEntry = false
@@ -269,11 +278,11 @@ public final class NativeAPIKeyConnection: ObservableObject {
   /// Edits invalidate intent immediately, even when the user has not pressed Retry.
   public func invalidateCandidate() {
     guard !ownerRetired else { return }
-    intent = UUID()
-    running?.cancel()
+    invalidateProbeIntent()
     running = nil
     phase = unresolvedSlots ? .failed(.cleanupBlocked)
       : activeSelection.map(APIKeyConnectionPhase.connected) ?? .idle
+    publishOwnerReplacementAvailability()
   }
   public func cancel() {
     invalidateCandidate()
@@ -284,16 +293,26 @@ public final class NativeAPIKeyConnection: ObservableObject {
       fail(APIKeyConnectionError.staleCandidate)
       return
     }
-    invalidateCandidate()
+    invalidateProbeIntent()
     let attempt = intent
-    phase = .probing
     running = Task { [weak self] in
       guard let self else { return }
       await self.perform(key: key, attempt: attempt)
     }
+    phase = .probing
+    publishOwnerReplacementAvailability()
+  }
+
+  private func invalidateProbeIntent() {
+    intent = UUID()
+    running?.cancel()
   }
 
   private func perform(key: String, attempt: UUID) async {
+    defer {
+      if intent == attempt { running = nil }
+      publishOwnerReplacementAvailability()
+    }
     var staged: UUID?
     do {
       try Task.checkCancellation()
@@ -401,6 +420,7 @@ public final class NativeAPIKeyConnection: ObservableObject {
       eligibleForEntry = false
     }
     phase = .failed(safe)
+    publishOwnerReplacementAvailability()
   }
 
   public func acquireLease() throws -> APIKeyConnectionLease {
@@ -417,6 +437,7 @@ public final class NativeAPIKeyConnection: ObservableObject {
     let lease = APIKeyConnectionLease(id: UUID(), selection: selection,
       retention: APIKeyLeaseRetention(ownership: slots.ownership))
     leases[lease.id] = selection
+    publishOwnerReplacementAvailability()
     return lease
   }
   public func key(for lease: APIKeyConnectionLease) throws -> String {
@@ -441,6 +462,7 @@ public final class NativeAPIKeyConnection: ObservableObject {
   /// Invoke only after the caller's transport/work has really terminated, not on cancel acceptance.
   public func releaseAfterTermination(_ lease: APIKeyConnectionLease) throws {
     guard leases[lease.id] == lease.selection else { throw APIKeyConnectionError.staleCandidate }
+    defer { publishOwnerReplacementAvailability() }
     leases.removeValue(forKey: lease.id)
     lease.retention.ownership = nil
     do { try drainRetired() } catch {
