@@ -11,14 +11,16 @@ import ProviderRequest
 private final class SettingsSelectorFixture: APIKeySelectorPersistence {
   var selection: APIKeySelection?
   var commits = 0
-  func currentSelection() throws -> APIKeySelection? { selection }
+  func selectorSnapshot() throws -> ProviderConfiguration {
+    ProviderConfiguration(kind: selection.map { _ in .openAIAPIKey }, slotID: selection?.slotID,
+      generation: selection?.configGeneration ?? 0, model: selection.map { _ in "fixture-snapshot" })
+  }
   func selectionMatchesConfiguration(_ configuration: NativeOpenAIConfiguration) throws -> Bool {
     selection != nil && configuration.model == "fixture-snapshot"
   }
-  func compareAndSwap(expected: APIKeySelection?, slotID: UUID) throws -> APIKeySelection? {
-    guard selection == expected else { return nil }
-    let winner = APIKeySelection(slotID: slotID,
-      configGeneration: (selection?.configGeneration ?? 0) + 1)
+  func compareAndSwap(expected: ProviderConfiguration, slotID: UUID) throws -> APIKeySelection? {
+    guard try selectorSnapshot() == expected else { return nil }
+    let winner = APIKeySelection(slotID: slotID, configGeneration: expected.generation + 1)
     selection = winner
     commits += 1
     return winner
@@ -59,7 +61,7 @@ final class ProviderSettingsTests: XCTestCase {
     let service: ProviderSettingsService
   }
 
-  private func fixture(lastGood: Bool = true) throws -> Fixture {
+  private func fixtureRoot() throws -> URL {
     let alias = FileManager.default.temporaryDirectory
       .appendingPathComponent("paperlens-settings-fixture-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: alias, withIntermediateDirectories: false,
@@ -68,7 +70,11 @@ final class ProviderSettingsTests: XCTestCase {
       throw APIKeyConnectionError.unsafeStorage
     }
     defer { free(physicalPath) }
-    let root = URL(fileURLWithPath: String(cString: physicalPath), isDirectory: true)
+    return URL(fileURLWithPath: String(cString: physicalPath), isDirectory: true)
+  }
+
+  private func fixture(lastGood: Bool = true) throws -> Fixture {
+    let root = try fixtureRoot()
     let slots = try APIKeySlotStore(directory: root.appendingPathComponent("slots", isDirectory: true))
     let selector = SettingsSelectorFixture()
     if lastGood {
@@ -95,6 +101,48 @@ final class ProviderSettingsTests: XCTestCase {
 
   private func removeFixture(_ root: URL) throws {
     try FileManager.default.removeItem(at: root)
+  }
+
+  func testSettingsRejectsStaleEmptySelectorAndRetriesAfterChatGPTDisconnect() async throws {
+    let root = try fixtureRoot()
+    defer { try? removeFixture(root) }
+    let database = try ProductDatabase.open(at: root.appendingPathComponent("database"))
+    let slots = try APIKeySlotStore(directory: root.appendingPathComponent("slots"))
+    let configuration = try NativeOpenAIConfiguration(model: "fixture-snapshot")
+    let selector = DatabaseAPIKeySelector(database: database, configuration: configuration)
+    let transport = SettingsSuspendedTransport()
+    let connection = NativeAPIKeyConnection(configuration: configuration, slots: slots,
+      persistence: selector, transport: transport, authority: try ProviderRequest())
+    let service = ProviderSettingsService(connection: connection)
+    service.restore()
+    service.reconnect(key: "fixture-stale-candidate")
+    await waitUntil { transport.count == 1 }
+    guard transport.count == 1 else { return }
+
+    // Reproduce the durable selector transitions made by Codex activation and cleanup.
+    let codex = try database.compareAndSwapProviderConfiguration(expected: selector.selectorSnapshot(),
+      replacementKind: .codexChatGPT, replacementSlotID: UUID(), replacementModel: configuration.model)
+    let cleared = try database.compareAndSwapProviderConfiguration(expected: codex,
+      replacementKind: nil, replacementSlotID: nil, replacementModel: nil)
+    try transport.complete(0)
+    await waitUntil { service.phase == .failed(.selectorConflict) }
+    XCTAssertEqual(try database.providerConfiguration(), cleared)
+    XCTAssertFalse(service.eligibleForEntry)
+    XCTAssertTrue(try slots.validatedSlotIDs().isEmpty)
+    XCTAssertEqual(transport.count, 1)
+
+    service.reconnect(key: "fixture-fresh-candidate")
+    await waitUntil { transport.count == 2 }
+    guard transport.count == 2 else { return }
+    try transport.complete(1)
+    await waitUntil { !service.isTesting }
+    let winner = try XCTUnwrap(service.activeSelection)
+    XCTAssertTrue(service.eligibleForEntry)
+    XCTAssertEqual(winner.configGeneration, cleared.generation + 1)
+    XCTAssertEqual(try ProductDatabase.open(at: database.root).providerConfiguration(),
+      ProviderConfiguration(kind: .openAIAPIKey, slotID: winner.slotID,
+        generation: winner.configGeneration, model: configuration.model))
+    XCTAssertEqual(try slots.read(winner.slotID), "fixture-fresh-candidate")
   }
 
   func testKeyBindingInvalidatesSharedCandidateBeforeChangedEntryWriteAndRejectsLateSuccess() async throws {

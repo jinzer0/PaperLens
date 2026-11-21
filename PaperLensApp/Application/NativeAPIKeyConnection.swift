@@ -41,14 +41,26 @@ public struct APIKeySelection: Equatable, Sendable {
   }
 }
 
+extension ProviderConfiguration {
+  var slotSelection: APIKeySelection? {
+    slotID.map { APIKeySelection(slotID: $0, configGeneration: generation) }
+  }
+}
+
 /// The product DB adapter owns the only selector. CAS and generation allocation MUST
 /// occur in one durable transaction; nil means comparison failed (never a local winner).
 /// These synchronous calls do not suspend Application's winner/lease serialization.
 @MainActor
 public protocol APIKeySelectorPersistence: AnyObject {
-  func currentSelection() throws -> APIKeySelection?
+  func selectorSnapshot() throws -> ProviderConfiguration
   func selectionMatchesConfiguration(_ configuration: NativeOpenAIConfiguration) throws -> Bool
-  func compareAndSwap(expected: APIKeySelection?, slotID: UUID) throws -> APIKeySelection?
+  func compareAndSwap(expected: ProviderConfiguration, slotID: UUID) throws -> APIKeySelection?
+}
+
+extension APIKeySelectorPersistence {
+  public func currentSelection() throws -> APIKeySelection? {
+    try selectorSnapshot().slotSelection
+  }
 }
 
 public struct NativeOpenAIConfiguration: Equatable, Sendable {
@@ -278,8 +290,11 @@ public final class NativeAPIKeyConnection: ObservableObject {
       guard intent == attempt else { throw APIKeyConnectionError.staleCandidate }
       guard !storageBlocked else { throw APIKeyConnectionError.cleanupBlocked }
       guard let persistence else { throw APIKeyConnectionError.persistenceUnavailable }
-      let expected = try persistence.currentSelection()
-      try reconcileSlotInventory(selected: expected)
+      // An empty selector still has a generation. Keep this attempt's complete
+      // snapshot through the probe even if subsequent reads see a newer selection.
+      let expected = try persistence.selectorSnapshot()
+      let oldSelection = expected.slotSelection
+      try reconcileSlotInventory(selected: oldSelection)
       guard !unresolvedSlots else {
         // Preserve validated last-good availability; no stage or request is made.
         phase = .failed(.cleanupBlocked)
@@ -316,7 +331,7 @@ public final class NativeAPIKeyConnection: ObservableObject {
         throw APIKeyConnectionError.selectorConflict
       }
       // CAS returning a malformed receipt is ambiguous: keep the staged secret and block.
-      guard winner.slotID == slot, winner.configGeneration > (expected?.configGeneration ?? 0),
+      guard winner.slotID == slot, winner.configGeneration > expected.generation,
         try persistence.currentSelection() == winner,
         try persistence.selectionMatchesConfiguration(configuration)
       else {
@@ -329,7 +344,7 @@ public final class NativeAPIKeyConnection: ObservableObject {
       activeSelection = winner
       eligibleForEntry = true
       phase = .connected(winner)
-      if let expected { retired.insert(expected.slotID) }
+      if let oldSelection { retired.insert(oldSelection.slotID) }
       try drainRetired()
     } catch {
       if let staged {

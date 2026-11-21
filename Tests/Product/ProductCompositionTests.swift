@@ -94,7 +94,8 @@ final class ProductCompositionTests: XCTestCase {
     let slot = try store.create(key: "synthetic-key-not-a-credential")
     let adapter = DatabaseAPIKeySelector(database: database, configuration: configuration)
     XCTAssertNil(try adapter.currentSelection())
-    let committed = try XCTUnwrap(adapter.compareAndSwap(expected: nil, slotID: slot))
+    let committed = try XCTUnwrap(adapter.compareAndSwap(
+      expected: adapter.selectorSnapshot(), slotID: slot))
     let reopened = try ProductDatabase.open(at: database.root)
     let restored = DatabaseAPIKeySelector(database: reopened, configuration: configuration)
     XCTAssertEqual(try restored.currentSelection(), committed)
@@ -120,7 +121,8 @@ final class ProductCompositionTests: XCTestCase {
     let configuration = try NativeOpenAIConfiguration(model: "fixture-model")
     let selector = DatabaseAPIKeySelector(database: database, configuration: configuration)
     XCTAssertNil(try selector.currentSelection())
-    let selected = try XCTUnwrap(selector.compareAndSwap(expected: nil, slotID: selectedID))
+    let selected = try XCTUnwrap(selector.compareAndSwap(
+      expected: selector.selectorSnapshot(), slotID: selectedID))
     let transport = CompositionProbe()
     let composition = ProductAppComposition(root: root, transport: transport)
     await composition.start()
@@ -156,7 +158,8 @@ final class ProductCompositionTests: XCTestCase {
     let configuration = try NativeOpenAIConfiguration(model: "fixture-model")
     let selector = DatabaseAPIKeySelector(database: database, configuration: configuration)
     XCTAssertNil(try selector.currentSelection())
-    let selected = try XCTUnwrap(selector.compareAndSwap(expected: nil, slotID: selectedID))
+    let selected = try XCTUnwrap(selector.compareAndSwap(
+      expected: selector.selectorSnapshot(), slotID: selectedID))
     let transport = CompositionProbe()
     let competing = ProductAppComposition(root: root, transport: transport)
     await competing.start()
@@ -190,7 +193,7 @@ final class ProductCompositionTests: XCTestCase {
     let slot = try slots.create(key: "synthetic-selected-key")
     let adapter = DatabaseAPIKeySelector(database: database, configuration: configuration)
     XCTAssertNil(try adapter.currentSelection())
-    _ = try XCTUnwrap(adapter.compareAndSwap(expected: nil, slotID: slot))
+    _ = try XCTUnwrap(adapter.compareAndSwap(expected: adapter.selectorSnapshot(), slotID: slot))
     let native = try database.providerConfiguration()
     XCTAssertEqual(native.kind, .openAIAPIKey)
     let transport = CompositionProbe()
@@ -213,7 +216,7 @@ final class ProductCompositionTests: XCTestCase {
     XCTAssertEqual(try connection.key(for: oldLease), "synthetic-selected-key")
     XCTAssertFalse(try connection.mayPublish(oldLease))
     let nativeSlot = try slots.create(key: "synthetic-new-native-key")
-    let token = try XCTUnwrap(adapter.currentSelection())
+    let token = try adapter.selectorSnapshot()
     _ = try XCTUnwrap(adapter.compareAndSwap(expected: token, slotID: nativeSlot))
     XCTAssertEqual(try database.providerConfiguration().kind, .openAIAPIKey)
     XCTAssertTrue(try adapter.selectionMatchesConfiguration(configuration))
@@ -325,21 +328,18 @@ final class ProductCompositionTests: XCTestCase {
     let configuration = try NativeOpenAIConfiguration(model: "fixture-model")
     let adapter = DatabaseAPIKeySelector(database: database, configuration: configuration)
     XCTAssertNil(try adapter.currentSelection())
-    let initial = try database.providerConfiguration()
+    let initial = try adapter.selectorSnapshot()
     let selected = try database.compareAndSwapProviderConfiguration(expected: initial,
       replacementKind: .openAIAPIKey, replacementSlotID: UUID(), replacementModel: configuration.model)
     let cleared = try database.compareAndSwapProviderConfiguration(expected: selected,
       replacementKind: nil, replacementSlotID: nil, replacementModel: nil)
     XCTAssertNil(try adapter.currentSelection())
-    XCTAssertNil(try adapter.compareAndSwap(expected: nil, slotID: UUID()))
+    XCTAssertNil(try adapter.compareAndSwap(expected: initial, slotID: UUID()))
     XCTAssertEqual(try database.providerConfiguration(), cleared)
-    let retry = DatabaseAPIKeySelector(database: database, configuration: configuration)
-    XCTAssertNil(try retry.currentSelection())
-    let winner = try XCTUnwrap(retry.compareAndSwap(expected: nil, slotID: UUID()))
+    let winner = try XCTUnwrap(adapter.compareAndSwap(
+      expected: adapter.selectorSnapshot(), slotID: UUID()))
     XCTAssertGreaterThan(winner.configGeneration, selected.generation)
-    XCTAssertNil(try adapter.compareAndSwap(
-      expected: APIKeySelection(slotID: selected.slotID!, configGeneration: selected.generation),
-      slotID: UUID()))
+    XCTAssertNil(try adapter.compareAndSwap(expected: selected, slotID: UUID()))
   }
 
   func testFailedStoredSelectionRevalidationRevokesEntryWithoutDroppingExistingLease() throws {
@@ -353,7 +353,7 @@ final class ProductCompositionTests: XCTestCase {
       let slot = try slots.create(key: "synthetic-revalidation-key")
       let adapter = DatabaseAPIKeySelector(database: database, configuration: configuration)
       XCTAssertNil(try adapter.currentSelection())
-      _ = try XCTUnwrap(adapter.compareAndSwap(expected: nil, slotID: slot))
+      _ = try XCTUnwrap(adapter.compareAndSwap(expected: adapter.selectorSnapshot(), slotID: slot))
       let transport = CompositionProbe()
       let connection = NativeAPIKeyConnection(configuration: configuration, slots: slots,
         persistence: adapter, transport: transport, authority: try ProviderRequest())
@@ -392,7 +392,7 @@ final class ProductCompositionTests: XCTestCase {
     let oldSlot = try slots.create(key: "synthetic-old-selected-key")
     let adapter = DatabaseAPIKeySelector(database: database, configuration: configuration)
     XCTAssertNil(try adapter.currentSelection())
-    _ = try XCTUnwrap(adapter.compareAndSwap(expected: nil, slotID: oldSlot))
+    _ = try XCTUnwrap(adapter.compareAndSwap(expected: adapter.selectorSnapshot(), slotID: oldSlot))
     let transport = CompositionProbe()
     let connection = NativeAPIKeyConnection(configuration: configuration, slots: slots,
       persistence: adapter, transport: transport, authority: try ProviderRequest())
