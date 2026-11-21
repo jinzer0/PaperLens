@@ -303,7 +303,7 @@ class DependencyLockTests(unittest.TestCase):
             matrix["cells"][0]["blockers"] = blockers
             self.invalid(self.validate(matrix))
 
-    def complete_fixture(self):
+    def complete_fixture(self, *, different_current_package=False):
         matrix = copy.deepcopy(self.matrix)
         artifacts, evidence = {}, {}
         for cell in matrix["cells"]:
@@ -311,7 +311,9 @@ class DependencyLockTests(unittest.TestCase):
             cell["osBuild"] = "24A335" if cell["osRole"] == "minimum" else "25G241"
             cell["status"] = "verified"
             cell["blockers"] = []
-            artifacts[point] = ("actual synthetic packaged bytes " + point).encode()
+            artifacts[point] = b"synthetic arm64 package"
+            if different_current_package and point == "current/arm64":
+                artifacts[point] = b"different synthetic arm64 package"
             bindings = {"point": point, "lockSha256": matrix["lockSha256"],
                         "sourceSha256": matrix["sourceSha256"]}
             artifact_hash = lock_validator.digest(artifacts[point])
@@ -337,12 +339,18 @@ class DependencyLockTests(unittest.TestCase):
 
     def test_complete_synthetic_bytes_are_only_conformance_never_promotion(self):
         matrix, artifacts, evidence = self.complete_fixture()
+        self.assertEqual(artifacts["minimum/arm64"], artifacts["current/arm64"])
+        self.assertNotEqual(evidence["minimum/arm64"], evidence["current/arm64"])
         code, output = self.validate(matrix, artifacts=artifacts, evidence=evidence)
         self.assertEqual(code, 2)
         self.assertEqual(output, {"conformant": True, "promotion": "not_promoted",
                                   "diagnostics": []})
         self.assertNotIn("P1", json.dumps(output))
         self.assertNotIn("P2", json.dumps(output))
+
+    def test_different_arm64_packages_rejected_even_when_each_receipt_matches(self):
+        matrix, artifacts, evidence = self.complete_fixture(different_current_package=True)
+        self.invalid(self.validate(matrix, artifacts=artifacts, evidence=evidence), "IDENTITY_MISMATCH")
 
     def test_sqlite_source_identity_excludes_raw_timestamp_even_in_bound_receipt(self):
         for source_id in ("2026-01-01 00:00:00 " + "ab" * 20,
@@ -443,10 +451,10 @@ class DependencyLockTests(unittest.TestCase):
             changed["cells"][1][field] = copy.deepcopy(changed["cells"][0][field])
             self.invalid(self.validate(changed, artifacts=artifacts, evidence=evidence))
         changed = copy.deepcopy(matrix)
-        reused = dict(artifacts)
+        reused = dict(evidence)
         reused["current/arm64"] = reused["minimum/arm64"]
-        changed["cells"][1]["artifact"]["sha256"] = lock_validator.digest(reused["current/arm64"])
-        self.invalid(self.validate(changed, artifacts=reused, evidence=evidence),
+        changed["cells"][1]["evidence"]["sha256"] = lock_validator.digest(reused["current/arm64"])
+        self.invalid(self.validate(changed, artifacts=artifacts, evidence=reused),
                      "MATRIX_POINT_DUPLICATE")
 
     def test_artifact_and_evidence_refs_have_closed_keys_and_types(self):

@@ -17,7 +17,11 @@ import sys
 
 SPEC_COMMIT = "33dcd8db20a122d13a6ce0a16b92077f278facb6"
 MINIMUM_OS_BUILD = "24A335"
-POINTS = ("minimum/arm64", "current/arm64")
+OS_TARGETS = {
+    "minimum": ("15.0", MINIMUM_OS_BUILD),
+    "current": ("26.7.1", "25G241"),
+}
+POINTS = tuple(f"{role}/arm64" for role in OS_TARGETS)
 # Approved semantic identity; whitespace and object order are not pin identity.
 APPROVED_CANONICAL_SHA256 = "c95fca4915010196524bb616ec4caeba0c65f416096642a38e7fd67fe0eabe90"
 
@@ -132,6 +136,7 @@ def candidate_matrix(lock_bytes, source_bytes):
     cells = []
     for point in POINTS:
         role, cpu = point.split("/")
+        version, build = OS_TARGETS[role]
         blockers = []
         if role == "minimum":
             blockers.append("NATIVE_EXEC_UNAVAILABLE")
@@ -139,8 +144,7 @@ def candidate_matrix(lock_bytes, source_bytes):
         blockers.extend(("ARTIFACT_MISSING", "ARTIFACT_UNVERIFIED",
                          "SQLITE_PROVENANCE_MISSING"))
         cells.append({"cpu": cpu, "osRole": role,
-                      "osVersion": "15.0" if role == "minimum" else "26.7.1",
-                      "osBuild": MINIMUM_OS_BUILD if role == "minimum" else "25G241",
+                      "osVersion": version, "osBuild": build,
                       "status": "not_run" if point == "current/arm64" else "blocked",
                       "blockers": blockers, "artifact": None, "evidence": None,
                       "sqlite": None})
@@ -206,7 +210,7 @@ def validate_matrix(value, lock_bytes, source_bytes, artifacts=None, evidence=No
     cells = value["cells"]
     require(type(cells) is list, "IDENTITY_MISMATCH", "/matrix")
     seen = set()
-    used_artifacts = set()
+    arm64_artifact_hash = None
     used_evidence = set()
     diagnostics = []
     for cell in cells:
@@ -219,13 +223,12 @@ def validate_matrix(value, lock_bytes, source_bytes, artifacts=None, evidence=No
         require(point not in seen, "MATRIX_POINT_DUPLICATE", point)
         seen.add(point)
         minimum = cell["osRole"] == "minimum"
-        require(cell["osVersion"] == ("15.0" if minimum else "26.7.1"),
-                "IDENTITY_MISMATCH", point)
+        target_version, target_build = OS_TARGETS[cell["osRole"]]
+        require(exact(cell["osVersion"], target_version), "IDENTITY_MISMATCH", point)
         build = cell["osBuild"]
         require(not minimum or build is not None, "MIN_OS_BUILD_UNPINNED", point)
         # Public target identity is not evidence of native execution.
-        require(exact(build, MINIMUM_OS_BUILD if minimum else "25G241"),
-                "IDENTITY_MISMATCH", point)
+        require(exact(build, target_build), "IDENTITY_MISMATCH", point)
         status = cell["status"]
         require(type(status) is str and status in ("blocked", "not_run", "failed", "verified"),
                 "IDENTITY_MISMATCH", point)
@@ -258,8 +261,10 @@ def validate_matrix(value, lock_bytes, source_bytes, artifacts=None, evidence=No
                     "IDENTITY_MISMATCH", point)
             hash_bytes(artifacts.get(point), artifact["sha256"], point,
                        "ARTIFACT_MISSING", "ARTIFACT_CHANGED")
-            require(artifact["sha256"] not in used_artifacts, "MATRIX_POINT_DUPLICATE", point)
-            used_artifacts.add(artifact["sha256"])
+            # The two independent OS executions use the same arm64 package.
+            require(arm64_artifact_hash is None or artifact["sha256"] == arm64_artifact_hash,
+                    "IDENTITY_MISMATCH", point)
+            arm64_artifact_hash = artifact["sha256"]
         if proof is None:
             expected.append("ARTIFACT_UNVERIFIED")
             require(point not in evidence, "IDENTITY_MISMATCH", point)

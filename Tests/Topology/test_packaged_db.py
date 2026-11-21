@@ -325,16 +325,26 @@ class PackagedDBTests(unittest.TestCase):
         self.check_result(db.validate_cell(db.json_bytes(self.record),
                          dict(self.record["bindings"]), self.supplied))
         self.check_result(self.validate(supplied=replace(self.supplied, grdbSource=b"")))
-        changed, expected, supplied = fixture("minimum/arm64")
-        expected = replace(expected, osBuild=None)
-        receipt_bindings = db.expected_bindings(expected)
-        del receipt_bindings["receipt"]
-        receipt = db.json_bytes({"bindings": receipt_bindings})
-        expected = replace(expected, receipt=db.digest(receipt))
-        supplied = replace(supplied, receipt=receipt)
-        changed["bindings"] = db.expected_bindings(expected)
-        changed["sqlite"]["osBuild"] = None
-        self.check_result(self.validate(changed, expected, supplied), True)
+
+    def test_packaged_assertions_require_exact_os_build_even_with_rebound_receipt(self):
+        for point, wrong_builds in (("minimum/arm64", ("24A348", "25G241")),
+                                    ("current/arm64", ("25G242", "24A335"))):
+            for build in (None, *wrong_builds):
+                with self.subTest(point=point, build=build):
+                    changed, expected, supplied = fixture(point)
+                    expected = replace(expected, osBuild=build)
+                    receipt_bindings = db.expected_bindings(expected)
+                    del receipt_bindings["receipt"]
+                    receipt = db.json_bytes({"bindings": receipt_bindings})
+                    expected = replace(expected, receipt=db.digest(receipt))
+                    supplied = replace(supplied, receipt=receipt)
+                    changed["bindings"] = db.expected_bindings(expected)
+                    changed["sqlite"]["osBuild"] = build
+                    self.check_result(self.validate(changed, expected, supplied))
+                    if build is None:
+                        changed["phases"] = [{"phase": "unavailable", "reason": "binding_mismatch",
+                                               "sqliteCode": None}]
+                        self.check_result(self.validate(changed, expected, supplied), True)
 
     def test_owner_uuid_native_cell_and_copied_lineage_bindings(self):
         for name in ("run", "owner", "attempt", "lineage"):

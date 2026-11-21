@@ -15,11 +15,13 @@ import json
 import re
 from uuid import UUID
 
+import validate_dependency_lock as dependency_lock
+
 # Immutable probe-intent provenance, not approval of active matrix membership.
 SPEC_COMMIT = "7b489572bdee826e4a14101ca0961e10d705e570"
 GRDB_COMMIT = "b83108d10f42680d78f23fe4d4d80fc88dab3212"
 SCHEMA = "packaged-db-fts5-evidence-v1"
-POINTS = ("minimum/arm64", "current/arm64")
+POINTS = dependency_lock.POINTS
 SCOPES = ("local_contract_only", "local_grdb_probe", "packaged_db_fts5")
 MIGRATIONS = ("probe-baseline-v1", "probe-fts5-v2")
 REASONS = ("grdb_unavailable", "binding_mismatch", "db_open_failed",
@@ -46,7 +48,7 @@ class OwnerExpectedBindings:
     Hashes bind actual bytes, including the separately supplied package receipt.
     Receipt bytes are the closed {"bindings": ...} projection without their own
     receipt hash (no circular hash). Hashing is identity, not authentication.
-    osBuild=None intentionally blocks minimum-build-unpinned configurations.
+    osBuild=None can record unavailability or local observations without an OS binding.
     """
     point: str
     osBuild: str | None
@@ -170,8 +172,9 @@ def _hex(value, lengths=(64,)):
 def _owner(expected, supplied):
     require(type(expected) is OwnerExpectedBindings and type(supplied) is SuppliedBytes)
     require(type(expected.point) is str and expected.point in POINTS)
-    require(expected.osBuild is None or (type(expected.osBuild) is str and
-            re.fullmatch(r"[0-9]{2}[A-Z][0-9]{1,4}[a-z]?", expected.osBuild) is not None))
+    role = expected.point.split("/")[0]
+    _, required_build = dependency_lock.OS_TARGETS[role]
+    require(expected.osBuild is None or exact(expected.osBuild, required_build))
     for name in ("run", "owner", "attempt", "lineage"):
         _uuid(getattr(expected, name))
     require(len({expected.run, expected.owner, expected.attempt, expected.lineage}) == 4)
@@ -182,7 +185,6 @@ def _owner(expected, supplied):
         require(type(actual) is bytes and bool(actual), "grdb_unavailable" if name == "grdbSource" else "binding_mismatch")
         require(digest(actual) == wanted)
     # Reuse the approved 1.4 inventory's sole canonical pin authority.
-    import validate_dependency_lock as dependency_lock
     try:
         dependency_lock.validate_lock(supplied.lock)
     except dependency_lock.Invalid:
@@ -202,10 +204,11 @@ def _owner(expected, supplied):
 def expected_bindings(expected: OwnerExpectedBindings) -> dict:
     """Closed owner projection; only explicitly approved code/artifact hashes."""
     role, cpu = expected.point.split("/")
+    os_version, _ = dependency_lock.OS_TARGETS[role]
     return {**{name: getattr(expected, name) for name in BYTE_FIELDS},
             "issue": 8, "specCommit": SPEC_COMMIT, "grdbCommit": GRDB_COMMIT,
             "grdbVersion": "7.11.1", "codeCommit": expected.codeCommit,
-            "point": expected.point, "osVersion": "15.0" if role == "minimum" else "26.7.1",
+            "point": expected.point, "osVersion": os_version,
             "osBuild": expected.osBuild, "artifactCPU": cpu, "hardwareCPU": cpu,
             "processCPU": cpu, "native": True, "translated": False,
             **{name: getattr(expected, name) for name in ("run", "owner", "attempt", "lineage")}}
@@ -313,6 +316,7 @@ def validate_cell(record_bytes: bytes, expected: OwnerExpectedBindings,
             code = failure["sqliteCode"]
             require(code is None or (type(code) is int and code in SQLITE_CODES))
             return _result(True, failure["reason"], "unavailable", code)
+        require(record["scope"] != "packaged_db_fts5" or expected.osBuild is not None)
         wanted = required_phases(len(lengths))
         require(len(phases) == len(wanted))
         for actual, assertion in zip(phases, wanted):
