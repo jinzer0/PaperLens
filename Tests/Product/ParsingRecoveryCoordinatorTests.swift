@@ -1,5 +1,7 @@
+import AppKit
 import Foundation
 import GRDB
+import SwiftUI
 import XCTest
 @testable import PaperLensProduct
 
@@ -436,6 +438,34 @@ final class ParsingRecoveryCoordinatorTests: XCTestCase {
         "원문 파싱에 실패했습니다. 다시 시도하세요.")
     }
     XCTAssertNil(ParsingFailureNotice.message(status: nil, unavailable: false))
+  }
+
+  @MainActor func testParsingStatusDeliversAndClearsNoticeAtReaderSplitBoundary() async throws {
+    let (database, identity, root) = try fixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let reported = expectation(description: "Failure reaches the Reader outside the right panel")
+    let cleared = expectation(description: "Deletion clears the Reader failure notice")
+    var didReportFailure = false
+    let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 560),
+      styleMask: [.borderless], backing: .buffered, defer: true)
+    window.isReleasedWhenClosed = false
+    defer { window.close() }
+    window.contentView = NSHostingView(rootView: HSplitView {
+      Color.clear.frame(minWidth: 240)
+      ParsingStatusView(database: database, paperID: identity.paperID,
+        onUsableRevisionChange: { true }).frame(minWidth: 240)
+    }.onPreferenceChange(ParsingFailureNotice.self) { message in
+      if !didReportFailure, message == "원문 파싱 결과를 검증하지 못했습니다. 다시 시도하세요." {
+        didReportFailure = true
+        reported.fulfill()
+      } else if didReportFailure, message == nil {
+        cleared.fulfill()
+      }
+    })
+    window.contentView?.layoutSubtreeIfNeeded()
+    await fulfillment(of: [reported], timeout: 4)
+    _ = try XCTUnwrap(database.beginDeletion(identity.paperID))
+    await fulfillment(of: [cleared], timeout: 4)
   }
 
   func testFailureMessagesNeverExposeWorkerDiagnostics() {

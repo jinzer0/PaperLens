@@ -1,3 +1,4 @@
+import Accessibility
 import AppKit
 import PDFKit
 import SwiftUI
@@ -674,6 +675,24 @@ import SwiftUI
       }
     }
     .padding()
+    .overlayPreferenceValue(ParsingFailureNotice.self, alignment: .bottomTrailing) { message in
+      if let message {
+        Label(message, systemImage: "exclamationmark.triangle")
+          .font(.callout)
+          .padding(12)
+          .frame(maxWidth: 360, alignment: .leading)
+          .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+          .overlay(RoundedRectangle(cornerRadius: 10).stroke(.secondary.opacity(0.4)))
+          .shadow(radius: 3)
+          .padding(20)
+          .allowsHitTesting(false)
+          .accessibilityElement(children: .ignore)
+          .accessibilityLabel("파싱 실패 알림. \(message)")
+          .onChange(of: message, initial: true) {
+            AccessibilityNotification.Announcement("파싱 실패 알림. \(message)").post()
+          }
+      }
+    }
     .onAppear { presentation.open(paperID: paperID) }
     .onChange(of: metadataIdentity) { presentation.replaceMetadataIdentity(metadataIdentity) }
     .onChange(of: presentation.annotationContext != nil) {

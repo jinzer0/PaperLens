@@ -31,8 +31,14 @@ struct ParsingMetadataReconciliation {
   }
 }
 
-/// Presentation only: unavailable reads cannot leave an old failure presented as current.
-enum ParsingFailureNotice {
+/// The Reader receives safe display text from its single parsing status panel.
+enum ParsingFailureNotice: PreferenceKey {
+  static var defaultValue: String? { nil }
+
+  static func reduce(value: inout String?, nextValue: () -> String?) {
+    if let message = nextValue() { value = message }
+  }
+
   static func message(status: ExtractionStatus?, unavailable: Bool) -> String? {
     guard !unavailable, let status, status.state == "failed" else { return nil }
     return ParsingFailureMessage.korean(status.failure)
@@ -119,24 +125,7 @@ public struct ParsingStatusView: View {
       Button("상태 새로 고침") { Task { _ = await recoverTracking(key: key) } }
     }
     .textSelection(.enabled)
-    .overlay(alignment: .bottomTrailing) {
-      if let message = failureNotice {
-        Label(message, systemImage: "exclamationmark.triangle")
-          .font(.callout)
-          .padding(12)
-          .frame(maxWidth: 360, alignment: .leading)
-          .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
-          .overlay(RoundedRectangle(cornerRadius: 10).stroke(.secondary.opacity(0.4)))
-          .shadow(radius: 3)
-          .fixedSize(horizontal: false, vertical: true)
-          // Float below the status block, not over its existing refresh/Retry controls.
-          .alignmentGuide(.bottom) { $0[.top] - 8 }
-          .allowsHitTesting(false)
-          .accessibilityElement(children: .ignore)
-          .accessibilityLabel("파싱 실패 알림. \(message)")
-      }
-    }
-    .zIndex(1)
+    .preference(key: ParsingFailureNotice.self, value: failureNotice)
     .task(id: key) {
       guard isCurrent(key), !Task.isCancelled else { return }
       if presentationPaperID != key.paperID {
