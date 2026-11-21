@@ -73,6 +73,7 @@ private final class NativeExtraction: @unchecked Sendable {
   var sequence = 0
   var sentenceCount = 0
   var textBytes = 0
+  private var sourceTextBytes = 0
   var quadCount = 0
   var workspace: PageWorkspace?
   var pending: (PDFiumRawPage, PDFiumSentence)?
@@ -84,8 +85,8 @@ private final class NativeExtraction: @unchecked Sendable {
     let page: PDFiumRawPage
     let text: String
     let glyphs: [PDFiumGlyph]
-    let ranges: [NSRange]
-    var nextRange: Int
+    let spans: [PDFiumSentenceSegmentation.Span]
+    var nextSpan: Int
     var nextGlyph: Int
   }
   init(request: PDFiumExtractionRequest, pdf: FileHandle) {
@@ -205,7 +206,7 @@ private final class NativeExtraction: @unchecked Sendable {
     let count = Int(FPDFText_CountChars(text))
     try check()
     guard count >= 0 else { throw PDFiumFailure(code: .invalidPDF) }
-    guard count <= request.limits.maximumTextBytes - textBytes else {
+    guard count <= request.limits.maximumTextBytes - sourceTextBytes else {
       throw PDFiumFailure(code: .resourceExceeded)
     }
     // Grow only after checking actual RSS. Do not pretend that a record-count
@@ -250,7 +251,7 @@ private final class NativeExtraction: @unchecked Sendable {
       }
       let scalarString = String(scalar)
       let scalarBytes = scalarString.utf8.count
-      guard pageBytes <= request.limits.maximumTextBytes - textBytes - scalarBytes,
+      guard pageBytes <= request.limits.maximumTextBytes - sourceTextBytes - scalarBytes,
         utf16Position <= Int.max - scalarString.utf16.count else {
         throw PDFiumFailure(code: .resourceExceeded)
       }
@@ -264,33 +265,11 @@ private final class NativeExtraction: @unchecked Sendable {
       try check()
     }
     let pageText = String(source)
-    var ranges: [NSRange] = []
-    var enumerationError: Error?
-    var coveredUTF16 = 0
-    pageText.enumerateSubstrings(in: pageText.startIndex..<pageText.endIndex,
-      options: [.bySentences, .substringNotRequired]) { _, _, enclosing, stop in
-      do {
-        try self.check()
-        let range = NSRange(enclosing, in: pageText)
-        // Use enclosing ranges to retain spaces and separators without shortening.
-        guard range.location == coveredUTF16, range.length > 0,
-          ranges.count < self.request.limits.maximumSentences - self.sentenceCount else {
-          throw PDFiumFailure(code: .unmappableText)
-        }
-        ranges.append(range); coveredUTF16 += range.length
-        try self.check()
-      } catch { enumerationError = error; stop = true }
-    }
-    if let enumerationError { throw enumerationError }
-    if coveredUTF16 != utf16Position {
-      // A whitespace-only page has no usable sentence but still advances real
-      // completeness. No visible source scalar may be discarded by enumeration.
-      guard ranges.isEmpty, pageText.unicodeScalars.allSatisfy({ CharacterSet.whitespacesAndNewlines.contains($0) }),
-        glyphs.allSatisfy({ $0.rawQuad == nil }) else { throw PDFiumFailure(code: .unmappableText) }
-    }
-    try check()
-    workspace = PageWorkspace(page: rawPage, text: pageText, glyphs: glyphs, ranges: ranges,
-      nextRange: 0, nextGlyph: 0)
+    let spans = try PDFiumSentenceSegmentation.spans(in: pageText, glyphs: glyphs,
+      maximumSentences: request.limits.maximumSentences - sentenceCount, check: check)
+    sourceTextBytes += pageBytes
+    workspace = PageWorkspace(page: rawPage, text: pageText, glyphs: glyphs, spans: spans,
+      nextSpan: 0, nextGlyph: 0)
   }
   private func nextSentence() throws -> (PDFiumRawPage, PDFiumSentence)? {
     while true {
@@ -301,27 +280,19 @@ private final class NativeExtraction: @unchecked Sendable {
         try loadWorkspace()
       }
       guard var current = workspace else { throw PDFiumFailure(code: .protocolViolation) }
-      if current.nextRange == current.ranges.count {
+      if current.nextSpan == current.spans.count {
         workspace = nil; processedPages += 1
         continue
       }
-      let range = current.ranges[current.nextRange]
+      let span = current.spans[current.nextSpan]
+      let range = span.utf16Range
       let first = current.nextGlyph
-      guard let swiftRange = Range(range, in: current.text),
-        first < current.glyphs.count, current.glyphs[first].utf16Start == range.location else {
+      let last = span.endGlyph
+      guard let swiftRange = Range(range, in: current.text) else {
         throw PDFiumFailure(code: .unmappableText)
       }
-      let finish = range.location.addingReportingOverflow(range.length)
-      guard !finish.overflow else { throw PDFiumFailure(code: .unmappableText) }
-      var last = first
-      var quads = 0
-      while last < current.glyphs.count && current.glyphs[last].utf16Start < finish.partialValue {
-        try check()
-        if current.glyphs[last].rawQuad != nil { quads += 1 }
-        last += 1
-      }
-      guard last > first, current.glyphs[last - 1].utf16Start + current.glyphs[last - 1].utf16Length == finish.partialValue,
-        quads > 0, quads <= request.limits.maximumQuadsPerSentence,
+      let quads = span.quadCount
+      guard quads <= request.limits.maximumQuadsPerSentence,
         quadCount <= request.limits.maximumQuads - quads,
         sentenceCount < request.limits.maximumSentences else { throw PDFiumFailure(code: .resourceExceeded) }
       let slice = current.text[swiftRange]
@@ -351,7 +322,7 @@ private final class NativeExtraction: @unchecked Sendable {
         sourceUTF16Start: range.location, sourceUTF16Length: range.length,
         glyphs: Array(current.glyphs[first..<last]))
       sentenceCount += 1; textBytes += bytes; quadCount += quads
-      current.nextRange += 1; current.nextGlyph = last; workspace = current
+      current.nextSpan += 1; current.nextGlyph = last; workspace = current
       try check()
       return (current.page, sentence)
     }

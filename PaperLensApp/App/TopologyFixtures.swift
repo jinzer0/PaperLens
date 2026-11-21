@@ -647,6 +647,66 @@ public final class PDFiumGlyph: NSObject, NSSecureCoding, @unchecked Sendable {
   }
 }
 
+enum PDFiumSentenceSegmentation {
+  struct Span {
+    var utf16Range: NSRange
+    var endGlyph: Int
+    let quadCount: Int
+  }
+
+  static func spans(in text: String, glyphs: [PDFiumGlyph], maximumSentences: Int,
+    check: @escaping () throws -> Void) throws -> [Span] {
+    var spans: [Span] = []
+    var coveredUTF16 = 0
+    var nextGlyph = 0
+    var enumerationError: Error?
+    text.enumerateSubstrings(in: text.startIndex..<text.endIndex,
+      options: [.bySentences, .substringNotRequired]) { _, _, enclosing, stop in
+      do {
+        try check()
+        let range = NSRange(enclosing, in: text)
+        let end = NSMaxRange(range)
+        guard range.location == coveredUTF16, range.length > 0 else {
+          throw PDFiumFailure(code: .unmappableText)
+        }
+        var quads = 0
+        while coveredUTF16 < end {
+          try check()
+          guard nextGlyph < glyphs.count,
+            glyphs[nextGlyph].utf16Start == coveredUTF16,
+            glyphs[nextGlyph].utf16Length <= end - coveredUTF16 else {
+            throw PDFiumFailure(code: .unmappableText)
+          }
+          let glyph = glyphs[nextGlyph]
+          if glyph.rawQuad != nil { quads += 1 }
+          coveredUTF16 += glyph.utf16Length
+          nextGlyph += 1
+        }
+        if quads > 0 {
+          guard spans.count < maximumSentences else { throw PDFiumFailure(code: .resourceExceeded) }
+          // Preserve leading separators on the first drawable sentence.
+          let start = spans.isEmpty ? 0 : range.location
+          spans.append(Span(utf16Range: NSRange(location: start, length: end - start),
+            endGlyph: nextGlyph, quadCount: quads))
+        } else if let last = spans.indices.last {
+          // Glyph construction allows absent geometry only for whitespace.
+          spans[last].utf16Range.length = end - spans[last].utf16Range.location
+          spans[last].endGlyph = nextGlyph
+        }
+      } catch { enumerationError = error; stop = true }
+    }
+    if let enumerationError { throw enumerationError }
+    if coveredUTF16 != text.utf16.count || nextGlyph != glyphs.count {
+      // Foundation can omit ranges entirely on a whitespace-only page.
+      guard coveredUTF16 == 0, text.unicodeScalars.allSatisfy({
+        CharacterSet.whitespacesAndNewlines.contains($0)
+      }), glyphs.allSatisfy({ $0.rawQuad == nil }) else { throw PDFiumFailure(code: .unmappableText) }
+    }
+    try check()
+    return spans
+  }
+}
+
 @objc(PaperLensPDFiumSentence)
 public final class PDFiumSentence: NSObject, NSSecureCoding, @unchecked Sendable {
   public static var supportsSecureCoding: Bool { true }

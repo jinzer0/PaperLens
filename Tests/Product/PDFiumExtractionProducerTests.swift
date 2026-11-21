@@ -90,6 +90,51 @@ final class PDFiumExtractionProducerTests: XCTestCase {
       pdfSHA256: id.pdfSHA256, pdfReference: id.pdfReference)
   }
 
+  private func glyphs(for source: String) throws -> [PDFiumGlyph] {
+    let quad = try PDFiumRawQuad(topLeftX: 10, topLeftY: 20, topRightX: 20, topRightY: 20,
+      bottomRightX: 20, bottomRightY: 10, bottomLeftX: 10, bottomLeftY: 10)
+    var utf16Start = 0
+    return try source.unicodeScalars.enumerated().map { index, scalar in
+      let whitespace = CharacterSet.whitespacesAndNewlines.contains(scalar)
+      let length = String(scalar).utf16.count
+      defer { utf16Start += length }
+      return try PDFiumGlyph(nativeCharacterIndex: index, unicodeScalar: scalar.value,
+        utf16Start: utf16Start, utf16Length: length, generated: whitespace,
+        matrixA: 1, matrixB: 0, matrixC: 0, matrixD: 1, matrixE: 0, matrixF: 0,
+        rawQuad: whitespace ? nil : quad)
+    }
+  }
+
+  func testSentenceSegmentationRetainsSeparatorsAndExactGlyphSpans() throws {
+    let first = "\r\nOne 😀.\r\n\r\n"
+    let second = "Two.\r\n\r\n"
+    let source = first + second
+    let glyphs = try glyphs(for: source)
+    let spans = try PDFiumSentenceSegmentation.spans(in: source, glyphs: glyphs,
+      maximumSentences: 2, check: {})
+    XCTAssertEqual(spans.map(\.utf16Range), [
+      NSRange(location: 0, length: first.utf16.count),
+      NSRange(location: first.utf16.count, length: second.utf16.count),
+    ])
+    XCTAssertEqual(spans.map(\.endGlyph), [first.unicodeScalars.count, glyphs.count])
+    XCTAssertEqual(spans.map(\.quadCount), [5, 4])
+    XCTAssertThrowsError(try PDFiumSentenceSegmentation.spans(in: source, glyphs: glyphs,
+      maximumSentences: 1, check: {})) {
+      XCTAssertEqual(($0 as? PDFiumFailure)?.code, .resourceExceeded)
+    }
+  }
+
+  func testSentenceSegmentationSkipsPageWithoutDrawableGlyphs() throws {
+    let source = " \r\n\r\n "
+    let glyphs = try glyphs(for: source)
+    XCTAssertTrue(try PDFiumSentenceSegmentation.spans(in: source, glyphs: glyphs,
+      maximumSentences: 0, check: {}).isEmpty)
+    XCTAssertThrowsError(try PDFiumSentenceSegmentation.spans(in: source, glyphs: glyphs,
+      maximumSentences: 0, check: { throw PDFiumFailure(code: .cancelled) })) {
+      XCTAssertEqual(($0 as? PDFiumFailure)?.code, .cancelled)
+    }
+  }
+
   func testSenderDrainDoesNotReleasePinAndDisposalPrecedesAccounting() async throws {
     let state = FixtureState()
     let (owner, url) = try input(identity(), state: state)
