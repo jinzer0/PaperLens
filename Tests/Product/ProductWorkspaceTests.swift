@@ -1185,7 +1185,15 @@ private actor WorkspaceDeletionAgent: AgentLibraryPurging {
   func testWorkspaceDeletionLeavesOtherPapersUsableAndRetriesSameSaga() async throws {
     let agent = WorkspaceDeletionAgent()
     let f = try await fixture(agentPurge: agent)
-    let removalID = try await importSelected(f)
+    try await f.workspace.prepareImport(source: f.source)
+    let selected = try confirmation(f.workspace)
+    let importTask = try XCTUnwrap(f.workspace.startLocalImport(
+      selected.id, destinationFolderID: selected.destinationFolderID))
+    f.workspace.sheet = nil
+    XCTAssertNil(f.workspace.presentationDidDismiss(confirmationID: selected.id))
+    let importedID = await importTask.value
+    let removalID = try XCTUnwrap(importedID)
+    XCTAssertEqual(f.workspace.latestLocalImport, removalID)
     let removal = try await paper(f, id: removalID)
     let otherSource = f.source.deletingLastPathComponent().appendingPathComponent("other.pdf")
     try Data("%PDF-1.4\nsecond workspace fixture\n%%EOF\n".utf8).write(to: otherSource)
@@ -1197,6 +1205,9 @@ private actor WorkspaceDeletionAgent: AgentLibraryPurging {
     defer { lease.close() }
     let deletion = try XCTUnwrap(f.workspace.requestDeletion(removal, retry: false))
     XCTAssertEqual(f.workspace.deletingPaperIDs, [removalID])
+    XCTAssertNil(f.workspace.latestLocalImport)
+    XCTAssertNil(f.workspace.imported(removalID, localConfirmationID: selected.id))
+    XCTAssertNil(f.workspace.failure, "A stale completion must not surface a new import result")
     XCTAssertNil(f.workspace.requestDeletion(removal, retry: false))
     do {
       try await f.workspace.open(removal)
@@ -1239,6 +1250,7 @@ private actor WorkspaceDeletionAgent: AgentLibraryPurging {
     let remaining = try await f.workspace.organization.snapshot(filter: .init(), facts: [])
     XCTAssertEqual(remaining.papers.map(\.id), [otherID])
     XCTAssertTrue(try XCTUnwrap(remaining.papers.first).organization.favorite)
+    XCTAssertNil(f.workspace.latestLocalImport)
     XCTAssertTrue(FileManager.default.fileExists(atPath: f.source.path))
   }
 

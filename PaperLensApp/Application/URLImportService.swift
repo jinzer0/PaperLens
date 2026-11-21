@@ -90,8 +90,10 @@ public final class URLImportService: ObservableObject {
   @Published public private(set) var confirmation: URLImportConfirmation?
   private let adapter: HTTPSPDFImportAdapter
   private let grant: (@Sendable (URLImportConfirmation) async throws -> any URLImportWriter)?
+  private let sessionConfiguration: URLSessionConfiguration?
   private var writer: (any URLImportWriter)?
   private var operation: Task<Void, Never>?
+  private var dismissedReadyPaperIDs: Set<UUID> = []
   private var starting = false
   private var startCancellationRequested = false
   private var lastInput: String?
@@ -102,10 +104,24 @@ public final class URLImportService: ObservableObject {
   private var retryRecord: ImportRecoveryRecord?
   private var admittedFailure = false
 
-  public init(authority: ProviderRequest,
+  public convenience init(authority: ProviderRequest,
     grantWriter: (@Sendable (URLImportConfirmation) async throws -> any URLImportWriter)? = nil) {
+    self.init(authority: authority, sessionConfiguration: nil, grantWriter: grantWriter)
+  }
+
+  init(authority: ProviderRequest, sessionConfiguration: URLSessionConfiguration?,
+    grantWriter: (@Sendable (URLImportConfirmation) async throws -> any URLImportWriter)?) {
     adapter = HTTPSPDFImportAdapter(authority: authority)
+    self.sessionConfiguration = sessionConfiguration
     grant = grantWriter
+  }
+
+  func dismissReadyStatus(for paperID: UUID) {
+    if state == .ready(paperID) { state = .idle }
+    else if state == .downloading {
+      // A committed URL import can report success after its Library row is deleted.
+      dismissedReadyPaperIDs.insert(paperID)
+    }
   }
 
   /// Destination and duplicate information come from the actual Library caller.
@@ -172,6 +188,11 @@ public final class URLImportService: ObservableObject {
     guard let grant else { state = .failed(.writerUnavailable); return }
     state = .downloading
     operation = Task {
+      defer {
+        dismissedReadyPaperIDs.removeAll()
+        writer = nil
+        operation = nil
+      }
       var ownedWriter: (any URLImportWriter)?
       do {
         try Task.checkCancellation()
@@ -183,7 +204,8 @@ public final class URLImportService: ObservableObject {
         let download = Task {
           try await adapter.download(route: intent.route,
             stagingDirectory: capability.stagingDirectory,
-            assertCurrent: { try capability.assertCurrent() })
+            assertCurrent: { try capability.assertCurrent() },
+            configuration: sessionConfiguration ?? .ephemeral, effects: .actual)
         }
         // This main-actor child cannot begin until registration completes. Bind the
         // exact task, not the mutable service operation (which may later be a retry).
@@ -194,7 +216,7 @@ public final class URLImportService: ObservableObject {
         try Task.checkCancellation()
         try capability.assertCurrent()
         let paper = try await capability.publish(closed)
-        state = .ready(paper) // Library stays put; navigation belongs to explicit UI action.
+        state = dismissedReadyPaperIDs.contains(paper) ? .idle : .ready(paper)
         lastInput = nil
         failedIntent = nil
       } catch {
@@ -216,8 +238,6 @@ public final class URLImportService: ObservableObject {
         }
         state = .failed(safe)
       }
-      writer = nil
-      operation = nil
     }
     // Published setters may synchronously request Cancel before this Task exists.
     if startCancellationRequested { operation?.cancel() }

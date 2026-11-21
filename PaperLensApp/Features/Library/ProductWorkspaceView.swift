@@ -151,6 +151,8 @@ public final class ProductWorkspace: ObservableObject {
       retry == (paper.status == .deletionFailed), !finishedDeletionIDs.contains(paper.id),
       deletingPaperIDs.insert(paper.id).inserted
     else { return nil }
+    if latestLocalImport == paper.id { latestLocalImport = nil }
+    urls.dismissReadyStatus(for: paper.id)
     let message = "‘\(paper.title)’ 삭제를 완료하지 못했습니다."
     if failure == message { failure = nil }
     return Task {
@@ -317,9 +319,7 @@ public final class ProductWorkspace: ObservableObject {
       }
       do {
         let paperID = try await imports.continueImport(id, destinationFolderID: destinationFolderID)
-        if !deletingPaperIDs.contains(paperID), !finishedDeletionIDs.contains(paperID) {
-          imported(paperID, localConfirmationID: id)
-        }
+        imported(paperID, localConfirmationID: id)
         return paperID
       } catch {
         failure = "PDF 가져오기를 완료하지 못했습니다. Library에서 현재 상태를 확인하세요."
@@ -421,6 +421,7 @@ public final class ProductWorkspace: ObservableObject {
   @discardableResult public func imported(
     _ paperID: UUID, localConfirmationID: UUID? = nil
   ) -> Task<Void, Never>? {
+    guard !deletingPaperIDs.contains(paperID), !finishedDeletionIDs.contains(paperID) else { return nil }
     revision += 1
     do {
       let record = try database.libraryRecords().first(where: { $0.id == paperID })

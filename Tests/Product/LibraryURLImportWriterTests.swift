@@ -194,6 +194,45 @@ final class LibraryURLImportWriterTests: XCTestCase, @unchecked Sendable {
       .contains("https://writer.invalid"), "The retry URL must not enter durable history")
   }
 
+  @MainActor
+  func testDismissedURLImportStatusStaysHiddenWhenPublicationArrivesLate() async throws {
+    let db = try database()
+    let lifecycle = try await LocalLibraryLifecycle.open(database: db)
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [URLWriterFixture.self]
+    let service = URLImportService(authority: try ProviderRequest(), sessionConfiguration: configuration,
+      grantWriter: { try await lifecycle.grantURLImportWriter(for: $0) })
+
+    for dismissBeforeReady in [false, true] {
+      let original = try await continued()
+      let granted = try await lifecycle.grantURLImportWriter(for: original)
+      let writer = try XCTUnwrap(granted as? LibraryURLImportWriter)
+      try await writer.abort(reason: .rejected)
+      let paperID = writer.identity.paperID
+      let expected = try db.captureRetryableImport(paperID: paperID, generation: writer.identity.generation)
+      try service.prepareRetry("https://writer.invalid/pdf", destination: "Library",
+        possibleDuplicate: false, expected: expected)
+      service.continueImport(confirmationID: try XCTUnwrap(service.confirmation).id)
+      XCTAssertEqual(service.state, .downloading)
+      let unrelatedPaper = UUID()
+      service.dismissReadyStatus(for: unrelatedPaper)
+      if dismissBeforeReady { service.dismissReadyStatus(for: paperID) }
+
+      let deadline = ContinuousClock.now + .seconds(5)
+      while service.state == .downloading && ContinuousClock.now < deadline {
+        try await Task.sleep(for: .milliseconds(10))
+      }
+      XCTAssertEqual(try db.libraryRecords().first { $0.id == paperID }?.status, .ready)
+      if !dismissBeforeReady {
+        XCTAssertEqual(service.state, .ready(paperID))
+        service.dismissReadyStatus(for: unrelatedPaper)
+        XCTAssertEqual(service.state, .ready(paperID))
+        service.dismissReadyStatus(for: paperID)
+      }
+      XCTAssertEqual(service.state, .idle)
+    }
+  }
+
   func testActualValidationClosesOnceReleasesQuotaAndCanPublishReopen() async throws {
     let db = try database()
     let pool = try RequestResourcePool(authority: ProviderRequest(), kind: "import")
