@@ -313,11 +313,15 @@ public final class URLImportService: ObservableObject {
 
   /// A retry reopens confirmation, never automatically grants another writer/Job.
   public func retry() throws {
+    try retry(destination: lastDestination, destinationFolderID: lastDestinationFolderID)
+  }
+
+  func retry(destination: String, destinationFolderID: UUID?) throws {
     guard !starting, operation == nil, confirmation == nil,
       case .failed(let reason) = state, let input = lastInput
     else { return }
     guard let purpose = retryPurpose else { throw URLImportError.writerUnavailable }
-    try prepare(input, destination: lastDestination, possibleDuplicate: lastDuplicate,
-      destinationFolderID: lastDestinationFolderID, purpose: purpose, restoringFailure: reason)
+    try prepare(input, destination: destination, possibleDuplicate: lastDuplicate,
+      destinationFolderID: destinationFolderID, purpose: purpose, restoringFailure: reason)
   }
 }

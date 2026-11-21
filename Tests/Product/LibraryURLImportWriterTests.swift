@@ -88,6 +88,76 @@ final class LibraryURLImportWriterTests: XCTestCase, @unchecked Sendable {
   }
 
   @MainActor
+  func testURLRetryPublishesSameJobToNewlySelectedFolderAfterOriginalFolderIsDeleted() async throws {
+    let db = try database()
+    let original = try db.createFolder(name: "Original destination")
+    let replacement = try db.createFolder(name: "New destination")
+    let lifecycle = try await LocalLibraryLifecycle.open(database: db)
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [URLRouteFixture.self]
+    let service = URLImportService(authority: try ProviderRequest(), sessionConfiguration: configuration,
+      grantWriter: { intent in
+        let writer = try await lifecycle.grantURLImportWriter(for: intent)
+        if intent.destinationFolderID == original.id {
+          try await writer.abort(reason: .rejected)
+          throw URLImportError.rejected
+        }
+        return writer
+      })
+    let url = "https://writer.invalid/download"
+    try service.prepare(url, destination: original.name, possibleDuplicate: true,
+      destinationFolderID: original.id)
+    let initial = try XCTUnwrap(service.confirmation)
+    service.continueImport(confirmationID: initial.id)
+    let failureDeadline = ContinuousClock.now + .seconds(5)
+    while service.state == .downloading && ContinuousClock.now < failureDeadline {
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    XCTAssertEqual(service.state, .failed(.rejected))
+    let failedPaper = try XCTUnwrap(db.organizationSnapshot(filter: .init()).papers.first)
+    let expected = try db.captureRetryableImport(paperID: failedPaper.id, generation: failedPaper.generation)
+    let failed = try expected.journal.currentCapture().identity
+    try db.deleteFolder(id: original.id)
+
+    try service.retry(destination: "미분류", destinationFolderID: nil)
+    let cancelled = try XCTUnwrap(service.confirmation)
+    XCTAssertNil(cancelled.destinationFolderID)
+    service.cancelConfirmation()
+    service.continueImport(confirmationID: cancelled.id)
+    XCTAssertEqual(try db.captureRetryableImport(paperID: failed.paperID,
+      generation: failed.generation).encoded, expected.encoded)
+
+    try service.retry(destination: replacement.name, destinationFolderID: replacement.id)
+    let retry = try XCTUnwrap(service.confirmation)
+    XCTAssertNotEqual(retry.id, initial.id)
+    XCTAssertNotEqual(retry.id, cancelled.id)
+    XCTAssertEqual(retry.destination, replacement.name)
+    XCTAssertEqual(retry.destinationFolderID, replacement.id)
+    XCTAssertTrue(retry.possibleDuplicate)
+    XCTAssertEqual(try db.captureRetryableImport(paperID: failed.paperID,
+      generation: failed.generation).encoded, expected.encoded)
+
+    service.continueImport(confirmationID: retry.id)
+    let retryDeadline = ContinuousClock.now + .seconds(5)
+    while service.state == .downloading && ContinuousClock.now < retryDeadline {
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    XCTAssertEqual(service.state, .ready(failed.paperID))
+    XCTAssertEqual(try db.libraryRecords().map(\.id), [failed.paperID])
+    XCTAssertEqual(try db.folderID(for: failed.paperID), replacement.id)
+    let published = try db.readerSnapshot(paperID: failed.paperID)
+    XCTAssertEqual(try Data(contentsOf: db.root.appendingPathComponent(published.pdfReference)),
+      try XCTUnwrap(URLRouteFixture.documents[url]))
+    let row = try db.adapterRead { db in
+      try XCTUnwrap(Row.fetchOne(db, sql: "SELECT id, attempt, state FROM importJob WHERE paperID = ?",
+        arguments: [failed.paperID.uuidString]))
+    }
+    XCTAssertEqual(row["id"] as String, failed.jobID.uuidString)
+    XCTAssertNotEqual(row["attempt"] as String, failed.attempt.uuidString)
+    XCTAssertEqual(row["state"] as String, "succeeded")
+  }
+
+  @MainActor
   func testActualAbortedURLRetryRetainsJobAndRequiresFreshConfirmationWithoutNetwork() async throws {
     let db = try database()
     let lifecycle = try await LocalLibraryLifecycle.open(database: db)

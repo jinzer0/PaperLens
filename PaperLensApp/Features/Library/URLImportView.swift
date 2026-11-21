@@ -408,8 +408,10 @@ public struct URLImportView<LibraryContent: View>: View {
             guard drag.isCurrent(mount, interaction), service.state == .failed(reason),
               service.canRetry, canPresentInput else { return }
             drag.interrupt()
+            let folder = folders.first { $0.id == destinationFolderID }
+            guard destinationFolderID == nil || folder != nil else { retryUnavailable = true; return }
             do {
-              try service.retry()
+              try service.retry(destination: folder?.name ?? "미분류", destinationFolderID: folder?.id)
               if let confirmation = service.confirmation {
                 confirmationPresentation = ConfirmationPresentation(id: confirmation.id,
                   opener: .toolbar(.retry), mount: mount, interaction: drag.interaction,
