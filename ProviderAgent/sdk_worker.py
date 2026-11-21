@@ -671,38 +671,58 @@ class OfficialSDKWorker:
         stage.turn_ids.append(turn_id)
         if type(turn_id) is not str or not turn_id:
             raise ProtocolError('unavailable')
+        answer = self._read_final_answer(request_id, thread_id, turn_id, len(_MARKER), stage=stage)
+        if answer != _MARKER:
+            raise ProtocolError('unavailable')
+        return {'stageID': stage.stage_id, 'intentID': stage.intent_id,
+                'expectedSelector': dict(stage.selector), 'state': 'usable', 'text': _MARKER}
+
+    def _read_final_answer(self, request_id, thread_id, turn_id, max_bytes, *, stage=None):
+        # In SDK 0.160.0, item/completed delivers the answer. turn/completed
+        # confirms success and carries at most a summary of the turn's items.
+        final = None
+        unphased = None
         for _ in range(256):
-            self._check(request_id)
-            if stage.stale:
-                raise ProtocolError('cancelled')
             notification = self._notification(lambda: self.client.next_turn_notification(turn_id),
                                               stage=stage, request_id=request_id)
-            if self.unknown:
-                return None
-            if notification.method != 'turn/completed':
-                continue
+            with self.state_lock:
+                self._admit(request_id, stage)
+            method = notification.method
             payload = notification.payload
-            if not self._valid_marker(payload, thread_id, turn_id):
+            if method in ('item/started', 'item/completed'):
+                if payload.thread_id != thread_id or payload.turn_id != turn_id:
+                    raise ProtocolError('unavailable')
+                item = payload.item.root
+                if item.type not in ('userMessage', 'agentMessage', 'reasoning'):
+                    raise ProtocolError('unavailable')
+                if method == 'item/completed' and item.type == 'agentMessage':
+                    phase = _value(item.phase)
+                    if phase is None:
+                        unphased = item
+                    elif phase == 'final_answer':
+                        if final is not None:
+                            raise ProtocolError('unavailable')
+                        final = item
+            elif method == 'turn/completed':
+                turn = payload.turn
+                answer = final if final is not None else unphased
+                if (payload.thread_id != thread_id or turn.id != turn_id
+                        or _value(turn.status) != 'completed' or turn.error is not None or answer is None):
+                    raise ProtocolError('unavailable')
+                if not answer.id or len(answer.text.encode('utf-8')) > max_bytes:
+                    raise ProtocolError('unavailable')
+                view = _value(turn.items_view)
+                if view == 'notLoaded' and not turn.items and final is not None:
+                    return answer.text
+                if view == 'summary' and len(turn.items) == 1:
+                    item = turn.items[0].root
+                    if (item.type == 'agentMessage' and item.id == answer.id and item.text == answer.text
+                            and _value(item.phase) == _value(answer.phase)):
+                        return answer.text
                 raise ProtocolError('unavailable')
-            self._check(request_id)
-            if stage.stale:
-                raise ProtocolError('cancelled')
-            return {'stageID': stage.stage_id, 'intentID': stage.intent_id,
-                    'expectedSelector': dict(stage.selector), 'state': 'usable', 'text': _MARKER}
-        self.loop.call_soon_threadsafe(self._session_limit)
+        if stage is not None:
+            self.loop.call_soon_threadsafe(self._session_limit)
         raise ProtocolError('unavailable')
-
-    @staticmethod
-    def _valid_marker(payload, thread_id, turn_id):
-        turn = payload.turn
-        if (payload.thread_id != thread_id or turn.id != turn_id
-                or _value(turn.status) != 'completed' or turn.error is not None
-                or _value(turn.items_view) != 'full'):
-            return False
-        messages = [item.root for item in turn.items
-                    if getattr(item.root, 'type', None) == 'agentMessage'
-                    and _value(getattr(item.root, 'phase', None)) == 'final_answer']
-        return len(messages) == 1 and messages[0].text == _MARKER
 
     def _cancel(self, request_id, stage):
         from account_login import validate_cancel_status
@@ -770,38 +790,11 @@ class OfficialSDKWorker:
         turn_id = turn.turn.id
         if type(turn_id) is not str or not turn_id:
             raise ProtocolError('unavailable')
-        for _ in range(256):
-            notification = self._notification(lambda: self.client.next_turn_notification(turn_id),
-                                              request_id=request_id)
-            method = notification.method
-            # No execution event is permissible even if an upstream runtime
-            # unexpectedly exposes a tool despite the disabled environment.
-            if method in ('item/started', 'item/completed'):
-                item = getattr(notification.payload, 'item', None)
-                item = getattr(item, 'root', item)
-                if getattr(item, 'type', None) not in ('userMessage', 'agentMessage', 'reasoning'):
-                    raise ProtocolError('unavailable')
-            if method != 'turn/completed':
-                continue
-            payload = notification.payload
-            completed = payload.turn
-            if (payload.thread_id != thread_id or completed.id != turn_id
-                    or _value(completed.status) != 'completed' or completed.error is not None
-                    or _value(completed.items_view) != 'full'):
-                raise ProtocolError('unavailable')
-            items = [item.root for item in completed.items]
-            if any(getattr(item, 'type', None) not in ('userMessage', 'agentMessage', 'reasoning') for item in items):
-                raise ProtocolError('unavailable')
-            final = [item.text for item in items if getattr(item, 'type', None) == 'agentMessage'
-                     and _value(getattr(item, 'phase', None)) == 'final_answer']
-            if len(final) != 1 or len(final[0].encode('utf-8')) > 2048:
-                raise ProtocolError('unavailable')
-            # The native authority validates the result against its original
-            # unforgeable authorization and immutable grounding after drainage.
-            self._check(request_id)
-            return {key: params[key] for key in ('requestID', 'paperID', 'paperGeneration',
-                'configGeneration', 'model')} | {'resultJSON': final[0]}
-        raise ProtocolError('unavailable')
+        answer = self._read_final_answer(request_id, thread_id, turn_id, 2048)
+        # The native authority validates the result against its original
+        # unforgeable authorization and immutable grounding after drainage.
+        return {key: params[key] for key in ('requestID', 'paperID', 'paperGeneration',
+            'configGeneration', 'model')} | {'resultJSON': answer}
 
     async def dispatch(self, method, params, *, request_id, deadline):
         self._check(request_id)

@@ -62,11 +62,20 @@ def notification(method, payload):
     return SimpleNamespace(method=method, payload=ScriptedPublicModel(payload=payload))
 
 
+def turn_item(*, kind='agentMessage', text='PAPERLENS_OK', phase='final_answer',
+              item_id='answer-actual'):
+    return SimpleNamespace(root=SimpleNamespace(type=kind, phase=phase, text=text, id=item_id))
+
+
+def item_event(thread='thread-actual', turn='turn-actual', *, method='item/completed', **fields):
+    return SimpleNamespace(method=method, payload=SimpleNamespace(
+        thread_id=thread, turn_id=turn, item=turn_item(**fields)))
+
+
 def completion(thread='thread-actual', turn='turn-actual', status='completed',
-               text='PAPERLENS_OK', phase='final_answer', error=None,
-               items_view='full', count=1):
-    items = [SimpleNamespace(root=SimpleNamespace(type='agentMessage', phase=phase, text=text))
-             for _ in range(count)]
+               error=None, items_view='summary', items=None):
+    if items is None:
+        items = [turn_item()]
     return SimpleNamespace(method='turn/completed', payload=SimpleNamespace(
         thread_id=thread, turn=SimpleNamespace(id=turn, status=status, error=error,
                                               items=items, items_view=items_view)))
@@ -121,6 +130,10 @@ class ScriptedPublicClient:
     def next_turn_notification(self, turn_id):
         self.calls.append(('next_turn_notification', turn_id))
         return self.turn_notifications.get()
+
+    def complete_turn(self, text='PAPERLENS_OK'):
+        self.turn_notifications.put(item_event(text=text))
+        self.turn_notifications.put(completion(items=[turn_item(text=text)]))
 
     def turn_interrupt(self, thread_id, turn_id):
         self.calls.append(('turn_interrupt', thread_id, turn_id))
@@ -226,7 +239,7 @@ class ScriptedDispatchTests(unittest.IsolatedAsyncioTestCase):
     async def test_exact_probe_fields_and_authoritative_completion_only(self):
         await self.authenticate('device')
         self.owner.client.turn_notifications.put(notification('item/agentMessage/delta', {'delta': 'PAPERLENS_OK'}))
-        self.owner.client.turn_notifications.put(completion())
+        self.owner.client.complete_turn()
         result = await self.call('product.connectionTest', dict(self.bound, expectedSelector=self.expected))
         self.assertEqual(result, dict(self.bound, expectedSelector=self.expected,
                                       state='usable', text='PAPERLENS_OK'))
@@ -245,6 +258,13 @@ class ScriptedDispatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(getattr(turn[3], 'output_schema', None))
         with self.assertRaises(ProtocolError):
             await self.call('product.connectionTest', dict(self.bound, expectedSelector=self.expected))
+
+    async def test_probe_rejects_a_final_reply_other_than_the_fixed_marker(self):
+        await self.authenticate()
+        self.owner.client.complete_turn(text='PaperLens_OK')
+        with self.assertRaises(ProtocolError):
+            await self.call('product.connectionTest', dict(self.bound, expectedSelector=self.expected))
+        self.assertFalse(self.owner.stage.probe_validated)
 
     async def test_cancel_is_once_reserved_actual_call_not_cleanup(self):
         await self.login()
@@ -415,14 +435,16 @@ class ScriptedDispatchTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_probe_cancel_uses_known_actual_turn_on_reserved_lane(self):
         await self.authenticate()
+        self.owner.client.turn_notifications.put(item_event())
         task = asyncio.create_task(self.call('product.connectionTest',
             dict(self.bound, expectedSelector=self.expected)))
         for _ in range(1000):
-            if self.owner.stage.turn_ids:
+            if self.owner.client.calls.count(('next_turn_notification', 'turn-actual')) == 2:
                 break
             await asyncio.sleep(0.001)
         else:
-            self.fail('scripted turn request was not issued')
+            self.fail('scripted final answer did not arrive before turn completion')
+        self.assertFalse(self.owner.stage.probe_validated)
         self.assertTrue((await self.call('product.loginCancel', self.bound))['accepted'])
         self.assertIn(('turn_interrupt', 'thread-actual', 'turn-actual'), self.owner.client.calls)
         self.owner.client.turn_notifications.put(completion())
@@ -433,7 +455,7 @@ class ScriptedDispatchTests(unittest.IsolatedAsyncioTestCase):
     async def _held_result_loses_authority(self, probe, action):
         if probe:
             await self.authenticate()
-            self.owner.client.turn_notifications.put(completion())
+            self.owner.client.complete_turn()
             method = 'product.connectionTest'
             params = dict(self.bound, expectedSelector=self.expected)
         else:
@@ -608,7 +630,7 @@ class ScriptedDispatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.owner.jobs, jobs)
         self.assertEqual(self.owner.readers, readers)
         if pending is not None:
-            self.owner.client.turn_notifications.put(completion())
+            self.owner.client.complete_turn()
             self.assertEqual((await pending)['state'], 'usable')
             self.assertTrue(stage.probe_validated)
         else:
@@ -852,19 +874,49 @@ class LifecycleContractTests(unittest.TestCase):
             self.assertTrue(owner.sdk_start_attempted)
 
 
-class MarkerContractTests(unittest.TestCase):
-    def test_rejects_failed_interrupted_partial_mismatched_and_invalid_markers(self):
-        invalid = [dict(status='failed'), dict(status='interrupted'), dict(status='inProgress'),
-                   dict(thread='other'), dict(turn='other'), dict(error=SimpleNamespace()),
-                   dict(items_view='partial'), dict(count=0), dict(count=2), dict(phase='commentary'),
-                   dict(text=' PAPERLENS_OK'), dict(text='PAPERLENS_OK\n'),
-                   dict(text='PAPERLENS_OK.'), dict(text='{"text":"PAPERLENS_OK"}')]
-        for values in invalid:
-            with self.subTest(values=values):
-                self.assertFalse(sdk_worker.OfficialSDKWorker._valid_marker(
-                    completion(**values).payload, 'thread-actual', 'turn-actual'))
-        self.assertTrue(sdk_worker.OfficialSDKWorker._valid_marker(
-            completion().payload, 'thread-actual', 'turn-actual'))
+class TurnCompletionTests(unittest.TestCase):
+    def read_answer(self, events):
+        worker = scripted_worker()
+        worker.client.next_turn_notification = Mock(side_effect=events)
+        return worker._read_final_answer('wire-request', 'thread-actual', 'turn-actual', len('PAPERLENS_OK'))
+
+    def test_final_item_with_pinned_completion_projections(self):
+        for terminal in (completion(), completion(items_view='notLoaded', items=[])):
+            with self.subTest(items_view=terminal.payload.turn.items_view):
+                self.assertEqual(self.read_answer([item_event(phase='commentary'), item_event(), terminal]),
+                                 'PAPERLENS_OK')
+
+    def test_message_without_phase_requires_matching_summary(self):
+        event = item_event(phase=None)
+        self.assertEqual(self.read_answer([item_event(phase=None, item_id='earlier', text='Draft'),
+            event, completion(items=[turn_item(phase=None)])]), 'PAPERLENS_OK')
+        with self.assertRaises(ProtocolError):
+            self.read_answer([event, completion(items_view='notLoaded', items=[])])
+
+    def test_fails_closed_on_failed_foreign_or_inconsistent_events(self):
+        final, terminal = item_event(), completion()
+        invalid = {
+            'summary-only': [terminal],
+            'delta-only': [notification('item/agentMessage/delta', {'delta': 'PAPERLENS_OK'}), terminal],
+            'started-only': [item_event(method='item/started'), terminal],
+            'commentary-only': [item_event(phase='commentary'), terminal],
+            'foreign-item-thread': [item_event(thread='other'), terminal],
+            'foreign-item-turn': [item_event(turn='other'), terminal],
+            'duplicate-final-item': [final, item_event(item_id='second'), terminal],
+            'oversized-final-item': [item_event(text='PAPERLENS_OK\n'),
+                                     completion(items=[turn_item(text='PAPERLENS_OK\n')])],
+            'tool-started': [item_event(method='item/started', kind='commandExecution'), final, terminal],
+            'tool-completed': [item_event(kind='mcpToolCall'), final, terminal],
+        }
+        for fields in (dict(status='failed'), dict(status='interrupted'), dict(status='inProgress'),
+                       dict(thread='other'), dict(turn='other'), dict(error=SimpleNamespace()),
+                       dict(items_view='full'), dict(items_view='notLoaded'), dict(items=[]),
+                       dict(items=[turn_item(), turn_item(item_id='second')]),
+                       dict(items=[turn_item(item_id='different')]), dict(items=[turn_item(text='changed')])):
+            invalid[str(fields)] = [final, completion(**fields)]
+        for case, events in invalid.items():
+            with self.subTest(case=case), self.assertRaises(ProtocolError):
+                self.read_answer(events)
 
     def test_unexpected_approval_raises_not_default_accept(self):
         with self.assertRaises(sdk_worker.ClosedApproval):
@@ -1098,14 +1150,12 @@ class IsolatedSummaryTests(unittest.TestCase):
             config=public_model(payload=self.config))
         self.owner.client.thread_start.return_value = SimpleNamespace(thread=SimpleNamespace(id='thread-actual'))
         self.owner.client.turn_start.return_value = SimpleNamespace(turn=SimpleNamespace(id='turn-actual'))
-        self.owner.client.next_turn_notification.return_value = completion(text=self.result)
         self.owner._sdk_module = Mock(return_value=self.authority)
 
     def test_summary_uses_empty_environments_and_private_read_only_permissions(self):
-        complete = completion(text=self.result)
-        complete.payload.turn.items[:0] = [SimpleNamespace(root=SimpleNamespace(type='userMessage')),
-            SimpleNamespace(root=SimpleNamespace(type='reasoning'))]
-        self.owner.client.next_turn_notification.return_value = complete
+        self.owner.client.next_turn_notification.side_effect = [item_event(kind='userMessage'),
+            item_event(kind='reasoning'), item_event(text=self.result),
+            completion(items_view='notLoaded', items=[])]
         result = self.owner._library_summary('wire-summary', self.params)
         self.assertEqual(result['resultJSON'], self.result)
         self.assertEqual(result['paperID'], self.params['paperID'])
@@ -1146,10 +1196,9 @@ class IsolatedSummaryTests(unittest.TestCase):
         self.owner.client.request.assert_not_called()
 
     def test_unexpected_tool_completion_or_oversized_model_text_is_not_published(self):
-        tool = completion(text=self.result)
-        tool.payload.turn.items.append(SimpleNamespace(root=SimpleNamespace(type='commandExecution')))
-        for notification_value in [tool, completion(text='x' * 2049)]:
-            self.owner.client.next_turn_notification.return_value = notification_value
+        for events in ([item_event(kind='commandExecution')], [item_event(text='한' * 683),
+                completion(items=[turn_item(text='한' * 683)])]):
+            self.owner.client.next_turn_notification.side_effect = events
             with self.assertRaises(ProtocolError):
                 self.owner._library_summary('wire-summary', self.params)
 
