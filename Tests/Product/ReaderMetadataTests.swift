@@ -136,9 +136,13 @@ final class ReaderMetadataTests: XCTestCase {
   func testConfirmedDestinationValidationEdges() {
     let bounds = CGRect(x: 0, y: 0, width: 200, height: 300)
     XCTAssertTrue(ReaderConfirmedLocation(pageIndex: 0, x: 10, y: 20).isValid(pageCount: 1, bounds: bounds))
+    let corner = ReaderConfirmedLocation(pageIndex: 0, x: bounds.maxX, y: bounds.maxY)
+    XCTAssertTrue(corner.isValid(pageCount: 1, bounds: bounds))
+    XCTAssertFalse(corner.isValid(pageCount: 1, bounds: .infinite))
     for location in [ReaderConfirmedLocation(pageIndex: -1, x: 10, y: 20),
       .init(pageIndex: 1, x: 10, y: 20), .init(pageIndex: 0, x: .nan, y: 20),
-      .init(pageIndex: 0, x: 10, y: .infinity), .init(pageIndex: 0, x: 201, y: 20)] {
+      .init(pageIndex: 0, x: 10, y: .infinity), .init(pageIndex: 0, x: bounds.maxX.nextUp, y: 20),
+      .init(pageIndex: 0, x: 10, y: bounds.maxY.nextUp)] {
       XCTAssertFalse(location.isValid(pageCount: 1, bounds: bounds))
     }
   }

@@ -498,6 +498,49 @@ private final class MetadataObservedPDFDocument: PDFDocument {
     XCTAssertEqual(persisted.sectionID, "/1")
   }
 
+  func testOutlineDestinationOnCropEdgeNavigatesAndRestoresAfterObservedArrival() async throws {
+    let (db, _, identity, owner) = try await fixture()
+    defer { owner.session.close() }
+    let document = try XCTUnwrap(owner.view.document)
+    let page = try XCTUnwrap(document.page(at: 1))
+    let crop = CGRect(x: 20, y: 30, width: 200, height: 300)
+    page.setBounds(crop, for: .cropBox)
+    let point = CGPoint(x: crop.minX, y: crop.maxY)
+    let location = ReaderConfirmedLocation(pageIndex: 1, x: Double(point.x), y: Double(point.y))
+    let root = PDFOutline(), chapter = PDFOutline(), outside = PDFOutline()
+    chapter.label = "Chapter start"
+    chapter.destination = PDFDestination(page: page, at: point)
+    outside.label = "Outside the page"
+    outside.destination = PDFDestination(page: page, at: CGPoint(x: point.x, y: point.y + 1))
+    root.insertChild(chapter, at: 0)
+    root.insertChild(outside, at: 1)
+    document.outlineRoot = root
+
+    let binding = try mount(db, identity, owner)
+    XCTAssertEqual(binding.state?.sections.first?.location, location)
+    XCTAssertNil(binding.state?.sections.last?.location)
+    XCTAssertThrowsError(try binding.navigate(sectionID: "/1")) {
+      XCTAssertEqual($0 as? ReaderMetadataError, .invalidDestination)
+    }
+    XCTAssertEqual(owner.view.navigationCount, 0)
+    try binding.navigate(sectionID: "/0")
+    XCTAssertEqual(owner.view.requestedLocation, location)
+    XCTAssertNil(binding.state?.observedLocation)
+    XCTAssertNil(binding.state?.activeSectionID)
+
+    owner.view.observedDestination = PDFDestination(page: page, at: point)
+    try binding.observePosition()
+    XCTAssertEqual(binding.state?.observedLocation, location)
+    XCTAssertEqual(binding.state?.activeSectionID, "/0")
+
+    let reopened = try ProductDatabase.open(at: db.root)
+    let restored = try mount(reopened, identity, owner)
+    XCTAssertEqual(restored.state?.restorationCandidate, location)
+    XCTAssertTrue(try restored.restoreSavedPosition(onPage: 1))
+    XCTAssertEqual(owner.view.requestedLocation, location)
+    XCTAssertNil(restored.state?.activeSectionID)
+  }
+
   func testValidatedRestorationIsNotObservedAndSavedSectionIsNotTrusted() async throws {
     let (db, _, identity, owner) = try await fixture()
     defer { owner.session.close() }

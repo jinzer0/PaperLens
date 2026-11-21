@@ -87,8 +87,12 @@ public struct ReaderConfirmedLocation: Codable, Equatable, Sendable {
     self.pageIndex = pageIndex; self.x = x; self.y = y
   }
   public func isValid(pageCount: Int, bounds: CGRect) -> Bool {
-    pageIndex >= 0 && pageIndex < pageCount && x.isFinite && y.isFinite
-      && !bounds.isEmpty && bounds.contains(CGPoint(x: x, y: y))
+    let left = Double(bounds.minX), right = Double(bounds.maxX)
+    let bottom = Double(bounds.minY), top = Double(bounds.maxY)
+    // A PDF destination can lie exactly on any CropBox edge, including the top of a page.
+    return pageIndex >= 0 && pageIndex < pageCount && !bounds.isInfinite
+      && [x, y, left, right, bottom, top].allSatisfy(\.isFinite)
+      && left < right && bottom < top && left <= x && x <= right && bottom <= y && y <= top
   }
 }
 
