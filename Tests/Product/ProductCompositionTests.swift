@@ -4,6 +4,7 @@ import GRDB
 import XCTest
 import PDFKit
 import ProviderRequest
+import SQLite3
 @testable import PaperLensProduct
 
 /// Synthetic replies and synthetic keys only. These tests never perform networking,
@@ -24,7 +25,7 @@ private final class CompositionProbe: NativeConnectionTestTransport {
 @MainActor
 final class ProductCompositionTests: XCTestCase {
   func testStartupRefusesDanglingLibraryStoreEntries() async throws {
-    for entry in ["library.sqlite", "papers"] {
+    for entry in ["library.sqlite", "papers", "library.sqlite-journal", "library.sqlite-wal", "library.sqlite-shm"] {
       let root = try privateRoot()
       defer { try? FileManager.default.removeItem(at: root) }
       let store = root.appendingPathComponent("database", isDirectory: true)
@@ -47,10 +48,71 @@ final class ProductCompositionTests: XCTestCase {
       XCTAssertEqual(transport.calls, 0)
       XCTAssertFalse(FileManager.default.fileExists(atPath: missing.path))
       XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: link.path), missing.path)
-      if entry == "papers" {
+      if entry != "library.sqlite" {
         XCTAssertFalse(FileManager.default.fileExists(atPath: store.appendingPathComponent("library.sqlite").path))
       }
     }
+  }
+
+  func testStartupPreservesUnexpectedSQLiteStoreEntries() throws {
+    let root = try privateRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = root.appendingPathComponent("database", isDirectory: true)
+    try FileManager.default.createDirectory(at: store, withIntermediateDirectories: false)
+    let unrelated = root.appendingPathComponent("unrelated")
+    let contents = Data("fixture outside the SQLite store".utf8)
+    try contents.write(to: unrelated)
+    let journal = store.appendingPathComponent("library.sqlite-journal")
+    XCTAssertEqual(link(unrelated.path, journal.path), 0)
+
+    XCTAssertThrowsError(try ProductDatabase.open(at: store)) {
+      XCTAssertEqual($0 as? ProductDatabaseError, .unsafeRoot)
+    }
+    XCTAssertEqual(try Data(contentsOf: unrelated), contents)
+    var info = stat()
+    XCTAssertEqual(lstat(journal.path, &info), 0)
+    XCTAssertEqual(info.st_nlink, 2)
+    XCTAssertEqual(unlink(journal.path), 0)
+
+    let shm = store.appendingPathComponent("library.sqlite-shm", isDirectory: true)
+    try FileManager.default.createDirectory(at: shm, withIntermediateDirectories: false)
+    XCTAssertThrowsError(try ProductDatabase.open(at: store)) {
+      XCTAssertEqual($0 as? ProductDatabaseError, .unsafeRoot)
+    }
+    XCTAssertTrue(try shm.resourceValues(forKeys: [.isDirectoryKey]).isDirectory == true)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: store.appendingPathComponent("library.sqlite").path))
+  }
+
+  func testStartupReopensDatabaseWithSQLiteWALSidecars() throws {
+    let root = try privateRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = root.appendingPathComponent("database", isDirectory: true)
+    let id = UUID()
+    do {
+      _ = try ProductDatabase.open(at: store)
+      let url = store.appendingPathComponent("library.sqlite")
+      let fixture = try DatabaseQueue(path: url.path)
+      try fixture.writeWithoutTransaction { db in
+        XCTAssertEqual(try String.fetchOne(db, sql: "PRAGMA journal_mode = WAL"), "wal")
+        let connection = try XCTUnwrap(db.sqliteConnection)
+        var persist: Int32 = 1
+        XCTAssertEqual(sqlite3_file_control(connection, "main", SQLITE_FCNTL_PERSIST_WAL, &persist), SQLITE_OK)
+        try db.execute(sql: """
+          INSERT INTO paper(id, generation, title, status, createdAt)
+          VALUES (?, ?, 'WAL fixture', 'importFailed', 0)
+          """, arguments: [id.uuidString, UUID().uuidString])
+      }
+      try fixture.close()
+    }
+    for suffix in ["-wal", "-shm"] {
+      var info = stat()
+      let url = store.appendingPathComponent("library.sqlite" + suffix)
+      XCTAssertEqual(lstat(url.path, &info), 0)
+      XCTAssertEqual(info.st_mode & S_IFMT, S_IFREG)
+      XCTAssertEqual(info.st_nlink, 1)
+    }
+    let reopened = try ProductDatabase.open(at: store)
+    XCTAssertEqual(try reopened.libraryRecords().map(\.id), [id])
   }
 
   func testProductionServicesImportOpenAndDeletePreserveOriginalWithoutNetwork() async throws {

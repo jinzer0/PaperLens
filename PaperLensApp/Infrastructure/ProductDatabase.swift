@@ -67,15 +67,12 @@ public final class ProductDatabase: @unchecked Sendable {
     guard values.isDirectory == true, values.isSymbolicLink != true else {
       throw ProductDatabaseError.unsafeRoot
     }
-    for child in ["library.sqlite", "papers"] {
-      let url = root.appendingPathComponent(child)
-      // A dangling symlink is still an occupied entry and SQLite must not open it.
-      var info = stat()
-      if lstat(url.path, &info) == 0 {
-        guard info.st_mode & S_IFMT != S_IFLNK else { throw ProductDatabaseError.unsafeRoot }
-      } else if errno != ENOENT {
-        throw ProductDatabaseError.unsafeRoot
-      }
+    let databaseName = "library.sqlite"
+    let databaseURL = root.appendingPathComponent(databaseName)
+    try Self.validateStoreEntry(root.appendingPathComponent("papers"), expectedType: S_IFDIR)
+    // SQLite may read, write or remove these files during open and recovery.
+    for suffix in ["", "-journal", "-wal", "-shm"] {
+      try Self.validateStoreEntry(root.appendingPathComponent(databaseName + suffix), expectedType: S_IFREG)
     }
     try fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: root.path)
     self.root = root
@@ -84,8 +81,7 @@ public final class ProductDatabase: @unchecked Sendable {
       try db.execute(sql: "PRAGMA foreign_keys = ON")
       try db.execute(sql: "PRAGMA synchronous = FULL")
     }
-    queue = try DatabaseQueue(path: root.appendingPathComponent("library.sqlite").path,
-      configuration: configuration)
+    queue = try DatabaseQueue(path: databaseURL.path, configuration: configuration)
     var migrator = DatabaseMigrator()
     migrator.registerMigration("localLibraryV1") { db in
       try db.execute(sql: """
@@ -134,8 +130,19 @@ public final class ProductDatabase: @unchecked Sendable {
         """)
     }
     try migrator.migrate(queue)
-    try fm.setAttributes([.posixPermissions: 0o600],
-      ofItemAtPath: root.appendingPathComponent("library.sqlite").path)
+    try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: databaseURL.path)
+  }
+
+  private static func validateStoreEntry(_ url: URL, expectedType: mode_t) throws {
+    var info = stat()
+    if lstat(url.path, &info) != 0 {
+      guard errno == ENOENT else { throw ProductDatabaseError.unsafeRoot }
+      return
+    }
+    guard info.st_mode & S_IFMT == expectedType,
+      expectedType != S_IFREG || info.st_nlink == 1 else {
+      throw ProductDatabaseError.unsafeRoot
+    }
   }
 
   // Feature persistence adapters share this queue; Domain and UI do not execute SQL.
