@@ -743,6 +743,55 @@ import ProviderRequest
     XCTAssertFalse(FileManager.default.fileExists(atPath: second.path))
   }
 
+  func testUnownedLoginEntryAppearingDuringProbePreventsPromotion() async throws {
+    let (root, _, template) = try workerFixture(script: controlWorkerScript(
+      holdResult: false, syntheticLogin: true, holdProbe: true, closeAfterProbe: true))
+    defer { try? FileManager.default.removeItem(at: root) }
+    let database = try ProductDatabase.open(at: root.appendingPathComponent("database"))
+    let configuration = try NativeOpenAIConfiguration(model: "fixture-model")
+    let slots = try APIKeySlotStore(directory: root.appendingPathComponent("slots"))
+    let slot = try slots.create(key: "fixture-last-good")
+    let selected = try database.compareAndSwapProviderConfiguration(
+      expected: database.providerConfiguration(), replacementKind: .openAIAPIKey,
+      replacementSlotID: slot, replacementModel: configuration.model)
+    let apiKey = NativeAPIKeyConnection(configuration: configuration, slots: slots,
+      persistence: DatabaseAPIKeySelector(database: database, configuration: configuration),
+      transport: RejectNetwork(), authority: try ProviderRequest())
+    apiKey.restore()
+    let loginRoot = root.appendingPathComponent("codex-scopes", isDirectory: true)
+    var loginDirectory: URL?
+    let codex = NativeCodexConnection(database: database, root: loginRoot, apiKey: apiKey) { namespace in
+      guard namespace.prepareBackupExclusionFixture(
+        agentScript: root.appendingPathComponent("resources/agent.py"),
+        interpreter: SyntheticPython.metadataInterpreter) else { return nil }
+      loginDirectory = namespace.directoryURL
+      return .testing(namespace: namespace, interpreter: template.interpreter, script: template.script)
+    }
+    codex.connect(mode: "browser")
+    let login = try XCTUnwrap(loginDirectory)
+    try await waitFor { codex.phase == .signingIn }
+    codex.checkLogin()
+    try await waitForMarker("probe-received", directory: login)
+    let unknown = loginRoot.appendingPathComponent(UUID().uuidString.lowercased())
+    try FileManager.default.createDirectory(at: unknown, withIntermediateDirectories: false,
+      attributes: [.posixPermissions: 0o700])
+    try Data().write(to: marker("release-probe", directory: login))
+    try await waitFor { codex.loginStorageBlocked }
+    XCTAssertEqual(try database.providerConfiguration(), selected)
+    XCTAssertTrue(apiKey.eligibleForEntry)
+    try Data().write(to: marker("close-product-output", directory: login))
+    try await waitForMarker("retirement-received", directory: login)
+    try Data().write(to: marker("release-retirement", directory: login))
+    try await waitFor { codex.phase == .idle }
+
+    XCTAssertFalse(codex.canStart)
+    XCTAssertFalse(codex.blocksReplacement)
+    XCTAssertEqual(try database.providerConfiguration(), selected)
+    XCTAssertTrue(apiKey.eligibleForEntry)
+    XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: loginRoot.path),
+      [unknown.lastPathComponent])
+  }
+
   func testApplicationTerminationStartsAllOwnedDrainsBeforeWaitingAndPreservesSelection() async throws {
     let (root, _, template) = try workerFixture(script: controlWorkerScript(
       holdResult: true, syntheticLogin: true, holdProbe: true))

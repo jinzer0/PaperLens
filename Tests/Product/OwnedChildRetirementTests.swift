@@ -716,7 +716,8 @@ final class OwnedChildRetirementTests: XCTestCase {
       transport: transport, authority: try ProviderRequest())
     apiKey.restore()
     var prepared: TopologyOwnedFixtures?
-    let candidate = NativeCodexConnection(database: database, root: root, apiKey: apiKey,
+    let candidate = NativeCodexConnection(database: database,
+      root: root.appendingPathComponent("codex-scopes"), apiKey: apiKey,
       prepareWorker: { namespace in
         prepared = namespace
         guard namespace.prepareBackupExclusionFixture(
@@ -826,7 +827,7 @@ final class OwnedChildRetirementTests: XCTestCase {
     apiKey.restore()
     var prepared: TopologyOwnedFixtures?
     let candidate = NativeCodexConnection(
-      database: database, root: root, apiKey: apiKey,
+      database: database, root: root.appendingPathComponent("codex-scopes"), apiKey: apiKey,
       prepareWorker: { namespace in
         prepared = namespace
         guard

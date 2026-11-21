@@ -2048,6 +2048,56 @@ final class TopologyOwnedFixtures: @unchecked Sendable {
       && referenceHasBackupExclusion(permit: permit) && matchesOwnedNamespace(permit: permit)
   }
 
+  /// Inspect only immediate names and inode metadata. A process-local owner can
+  /// vouch for its exact entry, but a previous process's directory cannot be adopted.
+  static func verifyInventory(at root: URL, allowing owners: [TopologyOwnedFixtures]) -> Bool {
+    guard root.isFileURL else { return false }
+    guard let retained = TopologyFixtures.directory(root, create: false) else {
+      return errno == ENOENT && owners.isEmpty
+    }
+    defer { close(retained) }
+    var before = stat()
+    guard TopologyFixtures.privateDirectory(retained, info: &before) else { return false }
+    let scan = openat(retained, ".", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+    guard scan >= 0 else { return false }
+    guard let entries = fdopendir(scan) else { close(scan); return false }
+    defer { closedir(entries) }
+
+    var remaining = owners
+    while true {
+      errno = 0
+      guard let entry = readdir(entries) else {
+        guard errno == 0, remaining.isEmpty else { return false }
+        break
+      }
+      let name = withUnsafePointer(to: &entry.pointee.d_name) {
+        $0.withMemoryRebound(to: CChar.self, capacity: Int(entry.pointee.d_namlen) + 1) {
+          String(validatingCString: $0)
+        }
+      }
+      guard let name else { return false }
+      if name == "." || name == ".." { continue }
+      guard let index = remaining.firstIndex(where: { $0.runID == name }) else { return false }
+      let owner = remaining.remove(at: index)
+      var info = stat()
+      guard owner.directoryURL.deletingLastPathComponent().path == root.path,
+        fstatat(retained, name, &info, AT_SYMLINK_NOFOLLOW) == 0,
+        info.st_mode & S_IFMT == S_IFDIR, info.st_uid == getuid(), info.st_mode & 0o7777 == 0o700,
+        info.st_ino == owner.directoryInode, info.st_dev == owner.directoryDevice
+      else { return false }
+    }
+
+    guard let named = TopologyFixtures.directory(root, create: false) else { return false }
+    defer { close(named) }
+    var after = stat()
+    return TopologyFixtures.privateDirectory(named, info: &after)
+      && before.st_dev == after.st_dev && before.st_ino == after.st_ino
+      && before.st_mtimespec.tv_sec == after.st_mtimespec.tv_sec
+      && before.st_mtimespec.tv_nsec == after.st_mtimespec.tv_nsec
+      && before.st_ctimespec.tv_sec == after.st_ctimespec.tv_sec
+      && before.st_ctimespec.tv_nsec == after.st_ctimespec.tv_nsec
+  }
+
   func matchesDirectoryEntry(_ url: URL) -> Bool {
     var info = stat()
     return url.path == directoryURL.path && lstat(url.path, &info) == 0

@@ -659,6 +659,88 @@ final class ProductCompositionTests: XCTestCase {
     XCTAssertEqual(transport.calls, 1)
   }
 
+  func testStartupUnownedLoginEntriesBlockChatGPTRetryAndPreserveExplicitAPISwitch() async throws {
+    for fixture in ["previous-directory", "root-symlink", "child-symlink"] {
+      let root = try privateRoot()
+      defer { try? FileManager.default.removeItem(at: root) }
+      let database = try ProductDatabase.open(at: root.appendingPathComponent("database"))
+      let slotID = UUID()
+      let previous = try database.compareAndSwapProviderConfiguration(
+        expected: database.providerConfiguration(), replacementKind: .codexChatGPT,
+        replacementSlotID: slotID, replacementModel: "saved-model")
+      let loginRoot = root.appendingPathComponent("codex-scopes", isDirectory: true)
+      let retainedEntry: URL
+      let sentinel: URL
+      let bytes = Data("synthetic previous-run login data".utf8)
+      if fixture == "root-symlink" {
+        let external = root.appendingPathComponent("unrelated-directory", isDirectory: true)
+        try FileManager.default.createDirectory(at: external, withIntermediateDirectories: false,
+          attributes: [.posixPermissions: 0o700])
+        sentinel = external.appendingPathComponent("untouched")
+        try bytes.write(to: sentinel)
+        try FileManager.default.createSymbolicLink(at: loginRoot, withDestinationURL: external)
+        retainedEntry = loginRoot
+      } else {
+        try FileManager.default.createDirectory(at: loginRoot, withIntermediateDirectories: false,
+          attributes: [.posixPermissions: 0o700])
+        retainedEntry = loginRoot.appendingPathComponent(slotID.uuidString.lowercased(), isDirectory: true)
+        if fixture == "child-symlink" {
+          sentinel = root.appendingPathComponent("unrelated-data")
+          try bytes.write(to: sentinel)
+          try FileManager.default.createSymbolicLink(at: retainedEntry, withDestinationURL: sentinel)
+        } else {
+          try FileManager.default.createDirectory(at: retainedEntry, withIntermediateDirectories: false,
+            attributes: [.posixPermissions: 0o700])
+          sentinel = retainedEntry.appendingPathComponent("auth.json")
+          try bytes.write(to: sentinel)
+        }
+      }
+      var entryBefore = stat()
+      XCTAssertEqual(lstat(retainedEntry.path, &entryBefore), 0)
+      let contentsBefore = try FileManager.default.contentsOfDirectory(atPath: loginRoot.path)
+      let transport = CompositionProbe()
+      let composition = ProductAppComposition(root: root, transport: transport)
+      await composition.start()
+      guard case .connection(let connection) = composition.phase else {
+        return XCTFail("Saved ChatGPT selection must remain available for explicit recovery")
+      }
+      let codex = try XCTUnwrap(composition.codex)
+      XCTAssertTrue(codex.loginStorageBlocked, fixture)
+      XCTAssertFalse(codex.canStart, fixture)
+      XCTAssertFalse(codex.eligibleForEntry, fixture)
+      XCTAssertEqual(codex.currentConfiguration, previous)
+      for mode in ["browser", "device"] {
+        codex.connect(mode: mode)
+        XCTAssertNil(codex.intentID, fixture)
+        XCTAssertNil(codex.testingOwner, fixture)
+        XCTAssertNil(codex.instructions, fixture)
+        XCTAssertEqual(try database.providerConfiguration(), previous)
+      }
+      XCTAssertEqual(transport.calls, 0)
+      XCTAssertEqual(try Data(contentsOf: sentinel), bytes)
+      XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: loginRoot.path), contentsBefore)
+
+      transport.evidence = .authenticatedGenerationResponse
+      ProviderSettingsService(connection: connection, codex: codex).reconnect(key: "fixture-replacement")
+      try await waitForProbe(connection)
+      let next = try database.providerConfiguration()
+      XCTAssertEqual(next.kind, .openAIAPIKey)
+      XCTAssertEqual(next.model, previous.model)
+      XCTAssertEqual(next.generation, previous.generation + 1)
+      XCTAssertEqual(transport.calls, 1)
+      XCTAssertTrue(composition.canEnterLibrary)
+      try composition.continueToLibrary()
+      XCTAssertNotNil(composition.workspace)
+      XCTAssertEqual(try Data(contentsOf: sentinel), bytes)
+      XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: loginRoot.path), contentsBefore)
+      var entryAfter = stat()
+      XCTAssertEqual(lstat(retainedEntry.path, &entryAfter), 0)
+      XCTAssertEqual(entryAfter.st_dev, entryBefore.st_dev)
+      XCTAssertEqual(entryAfter.st_ino, entryBefore.st_ino)
+      XCTAssertEqual(entryAfter.st_mode, entryBefore.st_mode)
+    }
+  }
+
   func testLegacySelectorWithoutModelCannotRestoreEntry() async throws {
     let root = try privateRoot()
     defer { try? FileManager.default.removeItem(at: root) }

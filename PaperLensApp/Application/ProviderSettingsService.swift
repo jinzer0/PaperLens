@@ -61,6 +61,7 @@ public final class NativeCodexConnection: ObservableObject {
   @Published public private(set) var phase: Phase = .idle
   @Published public private(set) var instructions: Instructions?
   @Published public private(set) var message = "브라우저 또는 기기 코드로 ChatGPT에 연결하세요."
+  @Published private(set) var loginStorageBlocked: Bool
   public private(set) var intentID: UUID?
   public private(set) var stageID: UUID?
   private let database: ProductDatabase
@@ -159,6 +160,7 @@ public final class NativeCodexConnection: ObservableObject {
     self.root = root
     self.apiKey = apiKey
     self.prepareWorker = prepareWorker
+    loginStorageBlocked = !TopologyOwnedFixtures.verifyInventory(at: root, allowing: [])
     apiKeyObservation = apiKey.$ownerReplacementAvailable.dropFirst().sink { [weak self] _ in
       self?.objectWillChange.send()
     }
@@ -174,7 +176,7 @@ public final class NativeCodexConnection: ObservableObject {
   }
 
   public var canStart: Bool {
-    guard !preparingForApplicationTermination, !publishingPhase, candidate == nil,
+    guard !loginStorageBlocked, !preparingForApplicationTermination, !publishingPhase, candidate == nil,
       predecessor == nil, summaryNamespaceDebt.isEmpty,
       apiKey.canReplaceOwner else { return false }
     if activeLogin == nil { return phase == .idle && summaryScopes.isEmpty }
@@ -198,13 +200,20 @@ public final class NativeCodexConnection: ObservableObject {
   }
 
   var statusMessage: String {
-    savedConnectionNeedsLogin
+    if loginStorageBlocked {
+      let blocked = "이전 ChatGPT 전용 저장소의 상태를 확인할 수 없어 새 로그인을 중단했습니다."
+      return blocksReplacement ? blocked : "\(blocked) OpenAI API 키를 연결할 수 있습니다."
+    }
+    return savedConnectionNeedsLogin
       ? "저장된 ChatGPT 연결을 사용할 수 없습니다. 다시 로그인하거나 OpenAI API 키를 연결하세요."
       : message
   }
 
-  var showsFailure: Bool { phase == .blocked || ending?.failed == true || savedConnectionNeedsLogin }
+  var showsFailure: Bool {
+    loginStorageBlocked || phase == .blocked || ending?.failed == true || savedConnectionNeedsLogin
+  }
   var offersRetry: Bool {
+    guard !loginStorageBlocked else { return false }
     if savedConnectionNeedsLogin { return true }
     switch ending {
     case .cancelled, .applicationTermination, .failure:
@@ -240,7 +249,7 @@ public final class NativeCodexConnection: ObservableObject {
   }
 
   public func connect(mode: String) {
-    guard canStart, mode == "browser" || mode == "device" else { return }
+    guard canStart, mode == "browser" || mode == "device", validateLoginStorage() else { return }
     ending = nil
     guard let expected = currentConfiguration,
       let model = apiKey.configuration.model.nilIfEmpty else {
@@ -252,6 +261,13 @@ public final class NativeCodexConnection: ObservableObject {
       return
     }
     let login = LoginScope(namespace: namespace, expected: expected)
+    guard validateLoginStorage(staging: namespace) else {
+      if !namespace.cleanupUnlaunchedWorkerNamespace() {
+        candidate = login
+        block(login, "아직 시작하지 않은 로그인 저장소를 정리하지 못했습니다.")
+      }
+      return
+    }
     // Retain setup failures until their namespace closure can be proved.
     candidate = login
     intentID = login.intentID
@@ -301,8 +317,19 @@ public final class NativeCodexConnection: ObservableObject {
   /// request and traffic limits; observation adds no polling interval or expiry.
   public func checkLogin() {
     guard intendedPhase == .signingIn, let candidate else { return }
+    guard validateLoginStorage(staging: candidate.namespace) else { return fail(candidate) }
     publishPhase(.observing)
     send(.observe, method: "product.loginObserve", params: candidate.identityParams, for: candidate)
+  }
+
+  private func validateLoginStorage(staging namespace: TopologyOwnedFixtures? = nil) -> Bool {
+    guard !loginStorageBlocked else { return false }
+    let owned = [activeLogin?.namespace, namespace].compactMap { $0 }
+    guard TopologyOwnedFixtures.verifyInventory(at: root, allowing: owned) else {
+      loginStorageBlocked = true
+      return false
+    }
+    return true
   }
 
   public func cancel() {
@@ -405,6 +432,7 @@ public final class NativeCodexConnection: ObservableObject {
       case "pending": publishPhase(.signingIn)
       case "authenticated":
         instructions = nil
+        guard validateLoginStorage(staging: login.namespace) else { return fail(login) }
         guard login.ending == nil else { return }
         publishPhase(.probing)
         guard login.ending == nil else { return }
@@ -428,6 +456,7 @@ public final class NativeCodexConnection: ObservableObject {
       let observed = result["expectedSelector"] as? [String: Any],
       NSDictionary(dictionary: observed).isEqual(to: selector(login.expected)), fenced(login),
       let slotID = UUID(uuidString: login.namespace.runID) else { return fail(login) }
+    guard validateLoginStorage(staging: login.namespace) else { return fail(login) }
     do {
       login.committed = try database.compareAndSwapProviderConfiguration(expected: login.expected,
         replacementKind: .codexChatGPT, replacementSlotID: slotID, replacementModel: apiKey.configuration.model)

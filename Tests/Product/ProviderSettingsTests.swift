@@ -152,7 +152,8 @@ final class ProviderSettingsTests: XCTestCase {
     let apiKey = NativeAPIKeyConnection(configuration: configuration, slots: slots,
       persistence: DatabaseAPIKeySelector(database: database, configuration: configuration),
       transport: transport, authority: try ProviderRequest())
-    let codex = NativeCodexConnection(database: database, root: root, apiKey: apiKey,
+    let codex = NativeCodexConnection(database: database,
+      root: root.appendingPathComponent("codex-scopes"), apiKey: apiKey,
       prepareWorker: { _ in
         XCTFail("ChatGPT was admitted while OpenAI still owned work")
         return nil

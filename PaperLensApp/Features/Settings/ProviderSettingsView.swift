@@ -181,12 +181,12 @@ public struct NativeCodexConnectionView: View {
       if connection.canStart && connection.eligibleForEntry {
         Text("새 로그인이 확인될 때까지 현재 ChatGPT 연결을 유지합니다.")
           .font(.caption).foregroundStyle(.secondary)
-      } else if connection.blocksReplacement {
+      } else if !connection.loginStorageBlocked && connection.blocksReplacement {
         Text(
           "프로세스 종료와 전용 저장소 정리가 끝난 뒤 재연결하거나 Provider를 교체할 수 있습니다. 로그인 취소만으로 정리가 완료되지는 않습니다."
         )
         .font(.caption).foregroundStyle(.secondary)
-      } else if !connection.canStart {
+      } else if !connection.loginStorageBlocked && !connection.canStart {
         Text("OpenAI API 작업 종료와 키 저장소 정리가 확인되면 ChatGPT에 연결할 수 있습니다.")
           .font(.caption).foregroundStyle(.secondary)
       }
