@@ -216,16 +216,19 @@ private final class HTTPSPDFProducer: NSObject, URLSessionDataDelegate, @uncheck
     continuation: CheckedContinuation<ClosedHTTPSPDFStage, any Error>) {
     queue.async {
       self.continuation = continuation
-      // Rooted producer owns the admitted lease before any FD or session effects.
+      // Revocation can arrive after admission and before this queue runs.
+      do { try self.check() } catch {
+        let reason = error as? URLImportError ??
+          ((error as? LocalLibraryError) == .cancelled ? .cancelled : .rejected)
+        self.finishBeforeStart(self.failure ?? reason)
+        return
+      }
       let descriptor = self.stage.withUnsafeFileSystemRepresentation { path in
         guard let path else { return Int32(-1) }
         return Darwin.open(path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, mode_t(0o600))
       }
       guard descriptor >= 0 else {
-        self.fileClosed = true // No descriptor was ever acquired.
-        self.networkDrained = true // No session was ever created.
-        self.failure = .writerUnavailable
-        self.finish(removeStage: false)
+        self.finishBeforeStart(.writerUnavailable)
         return
       }
       self.output = FileHandle(fileDescriptor: descriptor, closeOnDealloc: false)
@@ -249,9 +252,16 @@ private final class HTTPSPDFProducer: NSObject, URLSessionDataDelegate, @uncheck
         do { try self.check() } catch { self.fail(.rejected) }
       }
       timer.resume()
-      if self.cancelled { self.fail(.cancelled) } else { self.request() }
+      self.request()
       if let session = self.session { self.effects.sessionStarted(session) }
     }
+  }
+
+  private func finishBeforeStart(_ reason: URLImportError) {
+    fileClosed = true // No descriptor was ever acquired.
+    networkDrained = true // No session was ever created.
+    failure = reason
+    finish(removeStage: false)
   }
 
   func cancel() {

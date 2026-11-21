@@ -237,6 +237,32 @@ final class URLImportTests: XCTestCase {
     XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: directory.path).isEmpty)
   }
 
+  func testRevocationAfterAdmissionBlocksQueuedStageAndSessionCreation() async throws {
+    let authority = try ProviderRequest()
+    let adapter = HTTPSPDFImportAdapter(authority: authority)
+    let pool = try RequestResourcePool(authority: authority, kind: "import")
+    let before = pool.active
+    let roots = HTTPSPDFImportAdapter.rootedProducerIDs
+    let directory = try directory()
+    let cancellation = ImportCancellation()
+    let observations = HTTPSCloseObservations(pool: pool)
+    do {
+      _ = try await adapter.download(route: adapter.route("https://fixture.invalid/chunks"),
+        stagingDirectory: directory, assertCurrent: {
+          try cancellation.check()
+          cancellation.cancel()
+        }, configuration: configuration(), effects: observations.effects())
+      XCTFail("Revoked writer was allowed to start producing")
+    } catch { XCTAssertEqual(error as? URLImportError, .cancelled) }
+    XCTAssertNil(observations.snapshot.descriptor)
+    XCTAssertEqual(observations.snapshot.attempts, 0)
+    XCTAssertEqual(observations.snapshot.sessions, 0)
+    XCTAssertEqual(observations.snapshot.drains, 0)
+    XCTAssertEqual(pool.active, before)
+    XCTAssertEqual(HTTPSPDFImportAdapter.rootedProducerIDs, roots)
+    XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: directory.path).isEmpty)
+  }
+
   func testPDFBudgetNotRPCBodyBudgetAndOneOverIsSticky() throws {
     let authority = try ProviderRequest()
     let budget = try RequestResourceBudget(authority: authority, kind: "import")
@@ -376,6 +402,7 @@ private final class HTTPSCloseObservations: @unchecked Sendable {
     var descriptor: Int32?
     var attempts = 0
     var mode: Int?
+    var sessions = 0
     var drains = 0
     var activeAtDrain: Int?
   }
@@ -398,6 +425,7 @@ private final class HTTPSCloseObservations: @unchecked Sendable {
       if failClose { throw URLImportError.closureUnknown }
       try handle.close()
     }, sessionStarted: { session in
+      self.lock.withLock { self.value.sessions += 1 }
       if invalidateImmediately { session.invalidateAndCancel() }
     }, finalNetworkDrain: {
       let active = self.pool.active
