@@ -60,8 +60,19 @@ private final class URLImportAdmission: @unchecked Sendable {
   func cancel() { lock.withLock { if phase == .confirming { phase = .cancelled } } }
 }
 
+private extension ImportRecoveryRecord {
+  var paperID: UUID? { try? journal.currentCapture().identity.paperID }
+}
+
 public struct URLImportConfirmation: Identifiable, Sendable {
-  enum Purpose: Sendable { case newPaper, retry(ImportRecoveryRecord) }
+  enum Purpose: Sendable {
+    case newPaper, retry(ImportRecoveryRecord)
+
+    fileprivate var retryPaperID: UUID? {
+      guard case .retry(let record) = self else { return nil }
+      return record.paperID
+    }
+  }
   public let id: UUID
   public let destination: String
   public let destinationFolderID: UUID?
@@ -93,7 +104,7 @@ public final class URLImportService: ObservableObject {
   private let sessionConfiguration: URLSessionConfiguration?
   private var writer: (any URLImportWriter)?
   private var operation: Task<Void, Never>?
-  private var dismissedReadyPaperIDs: Set<UUID> = []
+  private var dismissedPaperIDs: Set<UUID> = []
   private var starting = false
   private var startCancellationRequested = false
   private var lastInput: String?
@@ -130,12 +141,30 @@ public final class URLImportService: ObservableObject {
     grant = grantWriter
   }
 
-  func dismissReadyStatus(for paperID: UUID) {
-    if state == .ready(paperID) { state = .idle }
-    else if state == .downloading {
-      // A committed URL import can report success after its Library row is deleted.
-      dismissedReadyPaperIDs.insert(paperID)
+  func dismissStatus(for paperID: UUID) {
+    switch state {
+    case .ready(let readyPaperID) where readyPaperID == paperID:
+      state = .idle
+    case .downloading:
+      // Publication or failure capture can return after Library starts deleting the row.
+      dismissedPaperIDs.insert(paperID)
+    case .failed, .confirming:
+      guard (confirmation?.purpose.retryPaperID ?? retryRecord?.paperID) == paperID else { return }
+      confirmation?.admission.cancel()
+      confirmation = nil
+      discardFailure()
+    default:
+      break
     }
+  }
+
+  private func discardFailure() {
+    lastInput = nil
+    failedIntent = nil
+    retryRecord = nil
+    admittedFailure = false
+    failureBeforeRetry = nil
+    state = .idle
   }
 
   /// Destination and duplicate information come from the actual Library caller.
@@ -214,7 +243,7 @@ public final class URLImportService: ObservableObject {
     state = .downloading
     operation = Task {
       defer {
-        dismissedReadyPaperIDs.removeAll()
+        dismissedPaperIDs.removeAll()
         writer = nil
         operation = nil
       }
@@ -241,7 +270,7 @@ public final class URLImportService: ObservableObject {
         try Task.checkCancellation()
         try capability.assertCurrent()
         let paper = try await capability.publish(closed)
-        state = dismissedReadyPaperIDs.contains(paper) ? .idle : .ready(paper)
+        state = dismissedPaperIDs.contains(paper) ? .idle : .ready(paper)
         lastInput = nil
         failedIntent = nil
       } catch {
@@ -261,7 +290,14 @@ public final class URLImportService: ObservableObject {
           // revalidates the genuine original history with the exact durable CAS.
           retryRecord = expected
         }
-        state = .failed(safe)
+        if !dismissedPaperIDs.isEmpty,
+          let paperID = (ownedWriter as? LibraryURLImportWriter)?.identity.paperID
+            ?? retryRecord?.paperID ?? intent.purpose.retryPaperID,
+          dismissedPaperIDs.contains(paperID) {
+          discardFailure()
+        } else {
+          state = .failed(safe)
+        }
       }
     }
     // Published setters may synchronously request Cancel before this Task exists.

@@ -188,7 +188,7 @@ public final class ProductWorkspace: ObservableObject {
     else { return nil }
     if latestLocalImport == paper.id { latestLocalImport = nil }
     failedInitialParsing.remove(paper.id)
-    urls.dismissReadyStatus(for: paper.id)
+    urls.dismissStatus(for: paper.id)
     let message = "‘\(paper.title)’ 삭제를 완료하지 못했습니다."
     if failure == message { failure = nil }
     return Task {

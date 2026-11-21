@@ -251,8 +251,8 @@ final class LibraryURLImportWriterTests: XCTestCase, @unchecked Sendable {
       service.continueImport(confirmationID: try XCTUnwrap(service.confirmation).id)
       XCTAssertEqual(service.state, .downloading)
       let unrelatedPaper = UUID()
-      service.dismissReadyStatus(for: unrelatedPaper)
-      if dismissBeforeReady { service.dismissReadyStatus(for: paperID) }
+      service.dismissStatus(for: unrelatedPaper)
+      if dismissBeforeReady { service.dismissStatus(for: paperID) }
 
       let deadline = ContinuousClock.now + .seconds(5)
       while service.state == .downloading && ContinuousClock.now < deadline {
@@ -261,9 +261,9 @@ final class LibraryURLImportWriterTests: XCTestCase, @unchecked Sendable {
       XCTAssertEqual(try db.libraryRecords().first { $0.id == paperID }?.status, .ready)
       if !dismissBeforeReady {
         XCTAssertEqual(service.state, .ready(paperID))
-        service.dismissReadyStatus(for: unrelatedPaper)
+        service.dismissStatus(for: unrelatedPaper)
         XCTAssertEqual(service.state, .ready(paperID))
-        service.dismissReadyStatus(for: paperID)
+        service.dismissStatus(for: paperID)
       }
       XCTAssertEqual(service.state, .idle)
     }

@@ -214,6 +214,61 @@ private actor WorkspaceDeletionAgent: AgentLibraryPurging {
     XCTAssertEqual(try f.database.libraryRecords().filter { $0.status == .importFailed }.count, 1)
   }
 
+  func testDeletingFailedURLImportDismissesItsRetryAtEveryStage() async throws {
+    enum RetryStage: CaseIterable { case failureBanner, confirmation, cancellingDownload }
+
+    let agentRoot = try privateRoot().appendingPathComponent("unused-agent-papers")
+    let f = try await fixture(agentPurge: NativeOnlyAgentLibraryPurge(unsupportedPaperRoot: agentRoot))
+    let session = URLSessionConfiguration.ephemeral
+    session.protocolClasses = [ImportFixtureProtocol.self]
+    let workspace = try ProductWorkspace(database: f.database, lifecycle: f.lifecycle,
+      connection: f.connection, diagnosticSource: nil, urlSessionConfiguration: session)
+    let urls = workspace.urls
+
+    for stage in RetryStage.allCases {
+      try urls.prepare("https://fixture.invalid/mime", destination: "미분류", possibleDuplicate: false)
+      urls.continueImport(confirmationID: try XCTUnwrap(urls.confirmation).id)
+      let failureDeadline = ContinuousClock.now + .seconds(5)
+      while urls.state == .downloading && ContinuousClock.now < failureDeadline {
+        try await Task.sleep(for: .milliseconds(10))
+      }
+      XCTAssertEqual(urls.state, .failed(.rejected))
+      urls.dismissStatus(for: UUID())
+      XCTAssertTrue(urls.canRetry, "Deleting a different paper must preserve Retry")
+      let failedPaper = try XCTUnwrap(f.database.organizationSnapshot(filter: .init()).papers.first)
+      XCTAssertEqual(failedPaper.status, .importFailed)
+
+      var obsoleteConfirmationID: UUID?
+      if stage != .failureBanner {
+        try urls.retry()
+        let confirmationID = try XCTUnwrap(urls.confirmation).id
+        obsoleteConfirmationID = confirmationID
+        if stage == .cancellingDownload {
+          urls.continueImport(confirmationID: confirmationID)
+          urls.cancelDownload()
+          XCTAssertEqual(urls.state, .downloading)
+        }
+      }
+      let deletion = try XCTUnwrap(workspace.requestDeletion(failedPaper, retry: false))
+      if let obsoleteConfirmationID { urls.continueImport(confirmationID: obsoleteConfirmationID) }
+      XCTAssertNil(urls.confirmation)
+      XCTAssertFalse(urls.canRetry)
+      await deletion.value
+      let dismissalDeadline = ContinuousClock.now + .seconds(5)
+      while urls.state == .downloading && ContinuousClock.now < dismissalDeadline {
+        try await Task.sleep(for: .milliseconds(10))
+      }
+
+      XCTAssertEqual(urls.state, .idle)
+      try urls.retry()
+      XCTAssertNil(urls.confirmation)
+      XCTAssertNil(workspace.failure)
+      XCTAssertTrue(try f.database.libraryRecords().isEmpty)
+      XCTAssertThrowsError(try f.database.captureRetryableImport(
+        paperID: failedPaper.id, generation: failedPaper.generation))
+    }
+  }
+
   func testReaderCanStartParsingAfterBothInitialWritesFail() async throws {
     let base = try await fixture()
     let id = try await importSelected(base)
