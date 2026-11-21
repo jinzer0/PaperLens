@@ -186,7 +186,7 @@ extension LibrarySummaryFailure {
   public func clearRequestFailure() { requestFailure = nil }
 
   enum GenerationBlocker: Equatable {
-    case unconfirmed, needsParsing, geometryUnavailable, providerUnavailable, cleanupUnavailable
+    case unconfirmed, terminationUnconfirmed, needsParsing, geometryUnavailable, providerUnavailable, cleanupUnavailable
   }
 
   /// This observes prerequisites for the Library controls. Dispatch still checks
@@ -195,6 +195,7 @@ extension LibrarySummaryFailure {
     providerAvailable: Bool) -> GenerationBlocker? {
     guard stageCleanupDebt[paperID] == nil, producerCleanupDebt.isEmpty else { return .cleanupUnavailable }
     guard let observation else { return .unconfirmed }
+    guard observation.recentAttempt?.activity != .running else { return .terminationUnconfirmed }
     guard let source = observation.source else { return .needsParsing }
     guard source.fitsOwnerBudget(maximumSentences: authority.limit("sentences")),
       source.sentences == source.geometryOwners else { return .geometryUnavailable }
@@ -224,7 +225,9 @@ extension LibrarySummaryFailure {
       do {
         _ = try await performGeneration(paperID: paperID, generation: generation, action: action)
       } catch {
-        if !Task.isCancelled { requestFailure = .classify(error) }
+        if !Task.isCancelled || error as? LibrarySummaryError == .persistenceFailure {
+          requestFailure = .classify(error)
+        }
       }
     }
     requestFailure = nil
@@ -297,6 +300,8 @@ extension LibrarySummaryFailure {
       guard let self, self.activePaperID == paperID else { return }
       self.cancel()
     })
+    var retainLease = false
+    defer { if !retainLease { lease.close() } }
     var stage: SummaryStage?
     var reserved = false
     var awaitingProducer = false
@@ -318,10 +323,10 @@ extension LibrarySummaryFailure {
         policy = decision.snapshot
       }
       try apply(.claim(line)); try apply(.acquireWriter(line, permit: writer)); try apply(.dispatch(line))
-      // Reserve succeeds before provider execution; failure cleanup below targets exact identity only.
-      reserved = true
-      awaitingProducer = true
-      let result = try await service.dispatch(request, identity: identity, snapshot: policy, retrying: failed)
+      let result = try await service.dispatch(request, identity: identity, snapshot: policy, retrying: failed) {
+        reserved = true
+        awaitingProducer = true
+      }
       awaitingProducer = false
       try Task.checkCancellation()
       try lease.validate()
@@ -343,30 +348,26 @@ extension LibrarySummaryFailure {
       try Task.checkCancellation()
       let record = try service.publish(result, request: request, identity: identity,
         snapshot: policy, permit: publication, resultID: resultID)
-      lease.close()
       return record
     } catch {
-      let cause = error
-      func recordFailure(_ reason: LibrarySummaryFailure) {
-        if reserved { try? database.failLibrarySummary(identity, reason: reason) }
-      }
+      var failure = error
       // An isolated producer may report unknown physical retirement. Keep the
       // paper lease held so deletion cannot remove a producer's remaining input.
-      if awaitingProducer, cause as? LibrarySummaryError == .cleanupUnavailable {
-        recordFailure(.cleanupUnavailable)
+      if awaitingProducer, error as? LibrarySummaryError == .cleanupUnavailable {
+        retainLease = true
         producerCleanupDebt.append(lease)
-        throw cause
-      }
-      if let stage {
+      } else if let stage {
         do { try stage.remove() } catch {
-          recordFailure(.cleanupUnavailable)
+          retainLease = true
           stageCleanupDebt[paperID] = (stage, lease)
-          throw LibrarySummaryError.cleanupUnavailable
+          failure = LibrarySummaryError.cleanupUnavailable
         }
       }
-      recordFailure(.classify(cause))
-      lease.close()
-      throw cause
+      if reserved {
+        do { try database.failLibrarySummary(identity, reason: .classify(failure)) }
+        catch { throw LibrarySummaryError.persistenceFailure }
+      }
+      throw failure
     }
   }
 

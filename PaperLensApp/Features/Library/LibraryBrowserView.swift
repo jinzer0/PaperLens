@@ -853,6 +853,7 @@ public struct LibraryBrowserView: View {
   private func summaryAvailabilityLabel(_ blocker: LibrarySummaryCoordinator.GenerationBlocker) -> String {
     switch blocker {
     case .unconfirmed: return "요약 생성에 필요한 상태를 확인할 수 없습니다."
+    case .terminationUnconfirmed: return "이전 요약 작업의 종료 상태를 확인할 수 없습니다. 앱을 다시 열어 확인하세요."
     case .needsParsing: return "요약을 생성하려면 PDF의 파싱을 완료하세요."
     case .geometryUnavailable: return "요약에 필요한 원문 위치 정보를 사용할 수 없습니다."
     case .providerUnavailable: return "요약을 생성하려면 Settings에서 Provider 연결을 확인하세요."
@@ -1219,7 +1220,7 @@ private struct LibraryIdentification {
         if let attempt = observation.recentAttempt,
           attempt.identity.paperID == paper.id, attempt.identity.generation == paper.generation {
           switch attempt.activity {
-          case .running: Text("최근 요약 시도 · 준비 중")
+          case .running: Text("최근 요약 시도 · 종료 기록 없음")
           case .failed:
             Text("최근 요약 시도 · 실패")
             Text((attempt.failure ?? .terminated).koreanMessage)

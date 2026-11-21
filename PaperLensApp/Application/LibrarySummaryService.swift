@@ -86,12 +86,19 @@ public struct LibrarySummaryService: Sendable {
   @MainActor public func dispatch(_ request: AuthorizedProviderRequest, identity: LibrarySummaryIdentity,
     snapshot: JobRecoveryPolicy.Snapshot, retrying failed: LibrarySummaryIdentity? = nil) async throws
     -> ValidatedProviderResult {
+    try await dispatch(request, identity: identity, snapshot: snapshot, retrying: failed, didReserve: {})
+  }
+
+  @MainActor func dispatch(_ request: AuthorizedProviderRequest, identity: LibrarySummaryIdentity,
+    snapshot: JobRecoveryPolicy.Snapshot, retrying failed: LibrarySummaryIdentity?, didReserve: () -> Void) async throws
+    -> ValidatedProviderResult {
     guard let provider else { throw LibrarySummaryError.providerUnavailable }
     guard let geometry else { throw LibrarySummaryError.geometryUnavailable }
     try identity.check(snapshot)
     guard snapshot.current.dispatch == .intentRecorded else { throw LibrarySummaryError.staleIdentity }
     let frozen = try LibrarySummaryFrozen(request: request)
     try database.reserveLibrarySummary(identity, frozen: frozen, geometry: geometry, retrying: failed)
+    didReserve()
     try Task.checkCancellation()
     // Any thrown/ambiguous return retains intent. Parent must terminate/drain, not auto-replay.
     let result = try await provider.execute(request, identity: identity)
