@@ -87,10 +87,13 @@ def launch(executable, phase, kind, ids, descriptors, identity):
             raise ValueError("phase_failed")
     record = bounded_json(receipt)
     expected = {"phase": phase, "kind": kind, "closed": True, "cleaned": phase == "reopen"}
+    steps = ("reopenedIntegrity",) if phase == "reopen" else ()
     if kind == "normal":
-        expected["checks"] = [{"phase": step, "passed": True} for step in NORMAL_CHECKS[phase]]
+        steps += NORMAL_CHECKS[phase]
     else:
         expected.update(rollbackVersion=0 if kind == "m1" else 1, failure=FAILURE_CODES)
+    if steps:
+        expected["checks"] = [{"phase": step, "passed": True} for step in steps]
     if (type(record) is not dict or "provenance" not in record
             or not exact({k: v for k, v in record.items() if k != "provenance"}, expected)):
         raise ValueError("phase_receipt_invalid")
@@ -125,9 +128,10 @@ def run_case(executable, parent, kind):
                 or not exact(first["provenance"], second["provenance"])):
             raise ValueError("relaunch_unconfirmed")
         result = {"kind": kind, "firstClosedAndExited": True, "sameDatabaseReopened": True,
-                  "secondClosedAndCleaned": True, "provenance": second["provenance"]}
+                  "secondClosedAndCleaned": True, "provenance": second["provenance"],
+                  "reopenChecks": second["checks"]}
         if kind == "normal":
-            result.update(firstChecks=first["checks"], reopenChecks=second["checks"])
+            result["firstChecks"] = first["checks"]
         else:
             result.update(rollbackVersion=second["rollbackVersion"], failure=second["failure"])
         return result
@@ -183,7 +187,7 @@ def main():
     except (Invalid, OSError, ValueError, subprocess.SubprocessError):
         print("synthetic_db_relaunch_unconfirmed", file=sys.stderr)
         return 1
-    print(json.dumps({"schema": "paperlens-synthetic-db-relaunch-v2", "storyDone": False,
+    print(json.dumps({"schema": "paperlens-synthetic-db-relaunch-v3", "storyDone": False,
                       "p2Passed": False, "normal": normal, "faults": faults,
                       "sqliteOrigin": "apple-system" if verified_sqlite else "sqlite_origin_unverified",
                       "runtime": {"osVersion": os_version, "osBuild": os_build,

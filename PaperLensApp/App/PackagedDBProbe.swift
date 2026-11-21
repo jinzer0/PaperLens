@@ -11,6 +11,7 @@ enum PackagedDBReason: String, Sendable {
   case bindingMismatch = "binding_mismatch"
   case dbOpenFailed = "db_open_failed"
   case migrationFailed = "migration_failed"
+  case reopenFailed = "reopen_failed"
   case provenanceOverflow = "provenance_overflow"
   case cleanupFailed = "cleanup_failed"
   case unexpectedFailure = "unexpected_failure"
@@ -491,6 +492,19 @@ final class PackagedDBProbe: @unchecked Sendable {
         throw PackagedDBFailure(.migrationFailed, error: error)
       }
       return try inspect(queue)
+    }
+  }
+
+  func verifyReopenedIntegrity() throws {
+    try operation { queue in
+      do {
+        let rows = try queue.read { db in
+          try Self.boundedStrings(db, sql: "PRAGMA main.integrity_check(1)", limit: 1)
+        }
+        guard rows == ["ok"] else { throw PackagedDBFailure(.reopenFailed) }
+      } catch {
+        throw PackagedDBFailure(.reopenFailed, error: error)
+      }
     }
   }
 

@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import GRDB
 import XCTest
 @testable import PaperLensProduct
 
@@ -46,8 +47,9 @@ final class SyntheticPackagedDBSmokeTests: XCTestCase {
     XCTAssertTrue(report.cleanupConfirmed)
     XCTAssertEqual(report.cases.map(\.kind), [.normal, .m1, .m2])
     XCTAssertTrue(report.cases.allSatisfy(\.passed))
-    XCTAssertEqual(report.cases.map { $0.checks.count }, [9, 8, 8])
+    XCTAssertEqual(report.cases.map { $0.checks.count }, [10, 9, 9])
     for result in report.cases {
+      XCTAssertTrue(result.checks.contains { $0.phase == .reopenedIntegrity && $0.passed })
       let initial = try XCTUnwrap(result.initialProvenance)
       let reopened = try XCTUnwrap(result.reopenedProvenance)
       XCTAssertEqual(initial, reopened)
@@ -75,7 +77,7 @@ final class SyntheticPackagedDBSmokeTests: XCTestCase {
     let bytes = try Data(contentsOf: reportURL)
     XCTAssertLessThanOrEqual(bytes.count, 16_384)
     let object = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
-    XCTAssertEqual(object["schema"] as? String, "paperlens-synthetic-packaged-db-v2")
+    XCTAssertEqual(object["schema"] as? String, "paperlens-synthetic-packaged-db-v3")
     XCTAssertEqual(object["scope"] as? String, "synthetic_sql_behavior_and_loaded_image")
     XCTAssertEqual(object["runID"] as? String, id)
     XCTAssertEqual(object["behaviorPassed"] as? Bool, true)
@@ -120,6 +122,45 @@ final class SyntheticPackagedDBSmokeTests: XCTestCase {
     if probe.hasObservedClose, owner.entries() == [] {
       try FileManager.default.removeItem(at: root)
     }
+  }
+
+  func testRelaunchRejectsInvalidSQLiteIntegrityBeforeMigrationRetry() throws {
+    let root = try temporaryRoot()
+    let parent = root.appendingPathComponent("runs", isDirectory: true)
+    let files = try SyntheticPackagedDBFiles(parentURL: parent, runID: UUID().uuidString.lowercased())
+    let owner = try files.reserveCase()
+    var safeToRemove = false
+    defer { if safeToRemove { try? FileManager.default.removeItem(at: root) } }
+    // Leave the version and probe schema consistent with an M1 rollback.
+    do {
+      let queue = try DatabaseQueue(path: owner.databasePath)
+      try queue.write { db in
+        try db.execute(sql: "CREATE TABLE integrity_fixture (value INTEGER CHECK (value > 0))")
+        try db.execute(sql: "PRAGMA ignore_check_constraints = ON")
+        try db.execute(sql: "INSERT INTO integrity_fixture VALUES (0)")
+      }
+      try queue.close()
+    }
+
+    let arguments = [SyntheticPackagedDBSmoke.relaunchFlag, "reopen", "m1", owner.ownerID,
+      owner.runID, owner.attemptID, String(owner.worktree), String(owner.topology),
+      String(owner.namespace), String(owner.databaseIdentity.st_dev),
+      String(owner.databaseIdentity.st_ino)]
+    XCTAssertThrowsError(try SyntheticPackagedDBSmoke.runRelaunchPhase(arguments, parentURL: parent)) { error in
+      XCTAssertEqual((error as? PackagedDBFailure)?.reason, .reopenFailed)
+    }
+    XCTAssertTrue(owner.validate())
+    XCTAssertEqual(owner.entries(), ["db.sqlite"])
+    let queue = try DatabaseQueue(path: owner.databasePath)
+    try queue.read { db in
+      XCTAssertEqual(try Int.fetchOne(db, sql: "SELECT value FROM integrity_fixture"), 0)
+      XCTAssertEqual(try Int.fetchOne(db, sql: """
+        SELECT count(*) FROM sqlite_schema WHERE name = 'grdb_migrations'
+        """), 0)
+    }
+    try queue.close()
+    safeToRemove = owner.validate() && owner.entries() == ["db.sqlite"]
+    XCTAssertTrue(safeToRemove)
   }
 
   func testSourceIdentityProjectionPreservesTimestampFreeHashAndOfficialMarkers() {

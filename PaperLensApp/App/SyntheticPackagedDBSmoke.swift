@@ -22,7 +22,7 @@ enum SyntheticPackagedDBSmoke {
   }
   enum Phase: String, Codable, Sendable {
     case initial, base, migrations, fts, deletion, firstFailure, rollback
-    case closeBeforeReopen, reopen, repeatedFailure, finalClose, cleanup
+    case closeBeforeReopen, reopenedIntegrity, reopen, repeatedFailure, finalClose, cleanup
   }
   struct Check: Codable, Sendable {
     let phase: Phase
@@ -53,8 +53,8 @@ enum SyntheticPackagedDBSmoke {
     var passed: Bool {
       let expected: [Phase] = kind == .normal
         ? [.initial, .base, .migrations, .fts, .deletion, .closeBeforeReopen,
-           .reopen, .finalClose, .cleanup]
-        : [.initial, .firstFailure, .rollback, .closeBeforeReopen, .reopen,
+           .reopenedIntegrity, .reopen, .finalClose, .cleanup]
+        : [.initial, .firstFailure, .rollback, .closeBeforeReopen, .reopenedIntegrity, .reopen,
            .repeatedFailure, .finalClose, .cleanup]
       return reason == nil && checks.map(\.phase) == expected
         && checks.allSatisfy(\.passed)
@@ -62,7 +62,7 @@ enum SyntheticPackagedDBSmoke {
     }
   }
   struct Report: Encodable, Sendable {
-    let schema = "paperlens-synthetic-packaged-db-v2"
+    let schema = "paperlens-synthetic-packaged-db-v3"
     let scope = "synthetic_sql_behavior_and_loaded_image"
     let sqliteOrigin: String
     let storyDone = false
@@ -126,6 +126,7 @@ enum SyntheticPackagedDBSmoke {
     let probe = try PackagedDBProbe(owner: owner, fault: kind.fault,
       reopeningClosedFixture: phase == .reopen)
     defer { if !probe.hasObservedClose { probe.closeAndDrain() } }
+    if phase == .reopen { try probe.verifyReopenedIntegrity() }
     let initial = try probe.snapshot()
     guard !probe.isReady else { throw PackagedDBFailure(.unexpectedFailure) }
     var result = RelaunchResult(phase: phase, kind: kind, provenance: try probe.provenance())
@@ -147,6 +148,7 @@ enum SyntheticPackagedDBSmoke {
     if phase == .reopen {
       guard probe.cleanup(), ContinuousClock.now < deadline
       else { throw PackagedDBFailure(.cleanupFailed) }
+      result.checks = [Check(phase: .reopenedIntegrity, passed: true)] + (result.checks ?? [])
       result.cleaned = true
     }
     return try JSONEncoder().encode(result)
@@ -275,6 +277,8 @@ enum SyntheticPackagedDBSmoke {
         let deleted = try migrateAndDelete(opened, check: check)
         try check(.closeBeforeReopen, opened.closeAndDrain() && opened.hasObservedClose && owner.validate())
         try opened.reopen()
+        try opened.verifyReopenedIntegrity()
+        try check(.reopenedIntegrity, true)
         let reopened = try opened.migrate()
         result.reopenedProvenance = try opened.provenance()
         try check(.reopen, reopened == deleted && owner.validate() && opened.isReady
@@ -285,6 +289,8 @@ enum SyntheticPackagedDBSmoke {
         try check(.rollback, matchesSchemaBeforeFTS(rolledBack, baselineCommitted: kind == .m2))
         try check(.closeBeforeReopen, opened.closeAndDrain() && opened.hasObservedClose && owner.validate())
         try opened.reopen()
+        try opened.verifyReopenedIntegrity()
+        try check(.reopenedIntegrity, true)
         let reopened = try opened.snapshot()
         result.reopenedProvenance = try opened.provenance()
         try check(.reopen, reopened == rolledBack && owner.validate() && !opened.isReady)
