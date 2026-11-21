@@ -713,7 +713,7 @@ final class LibrarySummaryServiceTests: XCTestCase {
     let authority = try ProviderRequest()
     XCTAssertEqual(try authority.encodeRequest(restored.authorized(using: authority)), f.frozen.request)
     XCTAssertEqual(try restored.validate(result: ProviderRequest.canonicalBytes(f.result.value)), f.result)
-    for text in ["   ", "line one\nline two"] {
+    for text in ["   ", "line one\nline two", "line one\r\nline two"] {
       let raw = try JSONSerialization.data(withJSONObject: ["schemaVersion": f.result.schemaVersion,
         "requestID": f.result.requestID, "operation": "librarySummary",
         "result": ["summary": ["text": text, "kind": "paper", "evidenceIndices": [0]], "insufficiency": "none"]])

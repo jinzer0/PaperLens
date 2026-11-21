@@ -1443,7 +1443,9 @@ public final class ProviderRequest: Sendable {
       case .librarySummary:
         let summary = RequestGrounded(member["summary"])
         guard ["paper", "insufficient"].contains(summary.kind),
-          !strings(policy("summaryLineSeparators")).contains(where: summary.text.contains)
+          !strings(policy("summaryLineSeparators")).contains(where: {
+            summary.text.range(of: $0, options: .literal) != nil
+          })
         else { throw RequestContractError("invalidResult", "result") }
         segments = [summary]
         typed = .librarySummary(summary, insufficiency: insufficiency)

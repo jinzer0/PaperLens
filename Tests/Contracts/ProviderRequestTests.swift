@@ -1082,9 +1082,10 @@ final class ProviderRequestTests: XCTestCase {
       try api.wrapModelResult(
         bytes(result(String(repeating: "é", count: outputCap / 2) + "x")), request: summary)
     }
-    for separator in api.contract["policies"]["summaryLineSeparators"].array {
+    let separators = api.contract["policies"]["summaryLineSeparators"].array.map(\.string)
+    for separator in separators + ["\r\n"] {
       rejects("invalidResult") {
-        try api.wrapModelResult(bytes(result("a" + separator.string + "b")), request: summary)
+        try api.wrapModelResult(bytes(result("a" + separator + "b")), request: summary)
       }
     }
     rejects("invalidResult") {
