@@ -1019,19 +1019,21 @@ private actor WorkspaceDeletionAgent: AgentLibraryPurging {
     f.workspace.libraryFilter.favoritesOnly = true
     try await f.workspace.prepareImport(source: f.source)
     let selected = try confirmation(f.workspace)
-    let paperID = try await f.workspace.imports.continueImport(
-      selected.id, destinationFolderID: selected.destinationFolderID)
-    f.workspace.imported(paperID, localConfirmationID: UUID())
-    XCTAssertNil(f.workspace.latestLocalImport)
-    f.workspace.imported(paperID, localConfirmationID: selected.id)
+    let operation = try XCTUnwrap(f.workspace.startLocalImport(
+      selected.id, destinationFolderID: selected.destinationFolderID))
+    f.workspace.sheet = nil
+    XCTAssertNil(f.workspace.presentationDidDismiss(confirmationID: selected.id))
+    XCTAssertFalse(f.workspace.sheetCleanupPending)
+    let imported = await operation.value
+    let paperID = try XCTUnwrap(imported)
     XCTAssertEqual(f.workspace.latestLocalImport, paperID)
     XCTAssertNil(f.workspace.reader, "Import success keeps the user in the Library")
-
-    f.workspace.sheet = nil
-    await f.workspace.openImportedPDF(paperID)
-    XCTAssertNil(f.workspace.reader, "Reader waits for the owned sheet cleanup")
-    let cleanup = try XCTUnwrap(f.workspace.presentationDidDismiss(confirmationID: selected.id))
-    _ = await cleanup.value
+    // An obsolete completion cannot replace the success for the accepted confirmation.
+    let unrelatedID = try await f.lifecycle.importPDF(from: f.source)
+    XCTAssertNotEqual(unrelatedID, paperID)
+    f.workspace.imported(unrelatedID, localConfirmationID: UUID())
+    XCTAssertEqual(f.workspace.latestLocalImport, paperID)
+    XCTAssertNil(f.workspace.presentationDidDismiss(confirmationID: selected.id))
     let filtered = try await f.workspace.organization.snapshot(
       filter: f.workspace.libraryFilter, facts: f.workspace.sortFacts())
     XCTAssertFalse(filtered.papers.contains { $0.id == paperID })
@@ -1251,10 +1253,13 @@ private actor WorkspaceDeletionAgent: AgentLibraryPurging {
     let f = try await fixture(agentPurge: NativeOnlyAgentLibraryPurge(unsupportedPaperRoot: unavailableAgentRoot),
       copyEffects: copyEffects)
     let original = try Data(contentsOf: f.source)
+    let folder = try await f.workspace.imports.createFolder(name: "Import destination")
+    f.workspace.libraryFilter.folder = .folder(folder.id)
     let confirmationID = try await f.workspace.prepareImport(source: f.source)
+    XCTAssertEqual(try confirmation(f.workspace).destinationFolderID, folder.id)
     XCTAssertTrue(try f.database.libraryRecords().isEmpty)
-    let imported = try XCTUnwrap(f.workspace.startLocalImport(confirmationID, destinationFolderID: nil))
-    XCTAssertNil(f.workspace.startLocalImport(confirmationID, destinationFolderID: nil))
+    let imported = try XCTUnwrap(f.workspace.startLocalImport(confirmationID, destinationFolderID: folder.id))
+    XCTAssertNil(f.workspace.startLocalImport(confirmationID, destinationFolderID: folder.id))
     f.workspace.sheet = nil
     XCTAssertNil(f.workspace.presentationDidDismiss(confirmationID: confirmationID))
     XCTAssertFalse(f.workspace.sheetCleanupPending)
@@ -1271,6 +1276,12 @@ private actor WorkspaceDeletionAgent: AgentLibraryPurging {
     XCTAssertEqual(importing.status, .importing)
     XCTAssertEqual(importing.bytesCopied, Int64(original.count))
     XCTAssertFalse(importing.readable)
+    // Folder placement is published with the ready PDF. Progress can still show the hidden import.
+    XCTAssertTrue(try f.database.organizationSnapshot(filter: f.workspace.libraryFilter).papers.isEmpty)
+    var progress = f.database.activeImportProgress().makeAsyncIterator()
+    let activeProgress = try await progress.next()
+    XCTAssertEqual(activeProgress, [importing.id: Int64(original.count)])
+    f.workspace.libraryFilter = .init()
     let deletion = try XCTUnwrap(f.workspace.requestDeletion(importing, retry: false))
 
     let deletionDeadline = clock.now + .seconds(3)

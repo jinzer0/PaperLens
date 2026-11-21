@@ -106,6 +106,15 @@ public struct LibraryBrowserView: View {
         .textFieldStyle(.roundedBorder)
         .accessibilityLabel("라이브러리 제목 또는 사용자 태그 검색")
         .focused($organizationFocus, equals: .search)
+      if let snapshot, filter != OrganizationFilter(), !loading, !loadFailed {
+        let hiddenImports = activeImportIDs.subtracting(snapshot.papers.map(\.id))
+        if !hiddenImports.isEmpty {
+          HStack {
+            ProgressView("현재 조건에 표시되지 않는 PDF \(hiddenImports.count)개를 가져오는 중")
+            Button("전체 논문 보기") { filter = OrganizationFilter() }
+          }.disabled(busy || nativeSheetPending)
+        }
+      }
       if let snapshot {
         HStack {
           Picker("표시", selection: Binding(get: { snapshot.preferences.presentation }, set: { value in
