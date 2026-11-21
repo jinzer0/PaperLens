@@ -4,7 +4,6 @@ import SwiftUI
 public struct LibraryBrowserView: View {
   private let service: LibraryOrganizationService
   private let folderService: FolderImportService
-  private let sortFacts: @Sendable () async throws -> [OrganizationSortFacts]
   private let readReadingRecords: @Sendable (UUID, UUID) async throws -> LibraryReadingRecords
   private let openPaper: @MainActor (OrganizedPaper) async throws -> Void
   private let deletePaper: @MainActor (OrganizedPaper, Bool) -> Void
@@ -47,7 +46,6 @@ public struct LibraryBrowserView: View {
     filter: Binding<OrganizationFilter>, refreshRevision: Int, deletingPaperIDs: Set<UUID>,
     finishedDeletionIDs: Set<UUID>, metadataRevision: UUID? = nil,
     activeImportProgress: [UUID: Int64] = [:], localPDFAvailable: Bool = true,
-    sortFacts: @escaping @Sendable () async throws -> [OrganizationSortFacts],
     readReadingRecords: @escaping @Sendable (UUID, UUID) async throws -> LibraryReadingRecords,
     openPaper: @escaping @MainActor (OrganizedPaper) async throws -> Void,
     deletePaper: @escaping @MainActor (OrganizedPaper, Bool) -> Void,
@@ -57,7 +55,7 @@ public struct LibraryBrowserView: View {
     retryImportURL: URLImportRetryAction? = nil,
     manageFolders: @escaping @MainActor () -> Void,
     summaries: LibrarySummaryCoordinator) {
-    self.service = service; self.folderService = folderService; self.sortFacts = sortFacts
+    self.service = service; self.folderService = folderService
     self.readReadingRecords = readReadingRecords
     _filter = filter; self.refreshRevision = refreshRevision
     self.metadataRevision = metadataRevision
@@ -908,8 +906,7 @@ public struct LibraryBrowserView: View {
       tagsFailed = true
     }
     do {
-      let facts = try await sortFacts()
-      let value = try await service.snapshot(filter: request.filter, facts: facts)
+      let (value, facts) = try await service.snapshot(filter: request.filter)
       guard query.accept(value, request: request, currentFilter: filter) else { return }
       if !refreshingDeletions.isEmpty { acknowledgeDeletionRefresh(refreshingDeletions) }
       folders = observedFolders

@@ -448,8 +448,7 @@ public final class ProductWorkspace: ObservableObject {
     guard canOpenReader else { return }
     do {
       try await openReader {
-        let facts = try await sortFacts()
-        let snapshot = try await organization.snapshot(filter: .init(), facts: facts)
+        let (snapshot, _) = try await organization.snapshot(filter: .init())
         guard let paper = snapshot.papers.first(where: { $0.id == paperID }) else {
           throw OrganizationError.stalePaper
         }
@@ -844,7 +843,6 @@ public struct ProductWorkspaceView: View {
             deletingPaperIDs: workspace.deletingPaperIDs, finishedDeletionIDs: workspace.finishedDeletionIDs,
             metadataRevision: workspace.libraryMetadataRevision,
             activeImportProgress: activeImportProgress, localPDFAvailable: workspace.localImportID == nil,
-            sortFacts: { try await workspace.sortFacts() },
             readReadingRecords: { [annotations = workspace.annotations] paperID, generation in
               try await Task.detached {
                 try annotations.libraryReadingRecords(paperID: paperID, generation: generation)

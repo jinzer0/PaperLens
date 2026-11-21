@@ -166,6 +166,18 @@ public actor LibraryOrganizationService {
   public func snapshot(filter: OrganizationFilter, facts: [OrganizationSortFacts]) async throws -> OrganizationSnapshot {
     let database = database
     let result = try await Task.detached { try database.organizationSnapshot(filter: filter) }.value
+    return try Self.sorted(result, facts: facts)
+  }
+
+  public func snapshot(filter: OrganizationFilter) async throws
+    -> (snapshot: OrganizationSnapshot, facts: [OrganizationSortFacts]) {
+    let database = database
+    let result = try await Task.detached { try database.organizationObservation(filter: filter) }.value
+    return (try Self.sorted(result.snapshot, facts: result.facts), result.facts)
+  }
+
+  private static func sorted(_ result: OrganizationSnapshot, facts: [OrganizationSortFacts]) throws
+    -> OrganizationSnapshot {
     var byID: [UUID: OrganizationSortFacts] = [:]
     for fact in facts {
       guard byID.updateValue(fact, forKey: fact.paperID) == nil,

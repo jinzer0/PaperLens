@@ -44,80 +44,93 @@ extension ProductDatabase {
   }
 
   public func organizationSnapshot(filter: OrganizationFilter) throws -> OrganizationSnapshot {
+    try adapterRead { try organizationSnapshot(filter: filter, in: $0) }
+  }
+
+  /// Search, sort and detail facts must see the same committed Library revision.
+  func organizationObservation(filter: OrganizationFilter) throws
+    -> (snapshot: OrganizationSnapshot, facts: [OrganizationSortFacts]) {
     try adapterRead { db in
-      guard let preference = try Row.fetchOne(db, sql: "SELECT presentation, sort FROM organizationPreferences WHERE singleton = 1"),
-        let presentation = LibraryPresentation(rawValue: preference["presentation"]),
-        let sort = LibrarySort(rawValue: preference["sort"])
-      else { throw ProductDatabaseError.invalidRecord }
-      let totalCount = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM paper WHERE status != 'tombstone'")!
-      let folderPredicate: String
-      let folderArguments: StatementArguments
-      switch filter.folder {
-      case .all:
-        folderPredicate = "1"
-        folderArguments = []
-      case .unfiled:
-        folderPredicate = "NOT EXISTS (SELECT 1 FROM paperFolder pf WHERE pf.paperID = p.id)"
-        folderArguments = []
-      case .folder(let id):
-        folderPredicate = "EXISTS (SELECT 1 FROM paperFolder pf WHERE pf.paperID = p.id AND pf.folderID = ?)"
-        folderArguments = [id.uuidString]
-      }
-      let rows = try Row.fetchAll(db, sql: """
-        SELECT p.*, j.id AS importJobID, j.state AS importJobState,
-          j.recoveryJournal IS NOT NULL AS hasImportHistory,
-          CASE WHEN p.status IN ('deleting', 'deletionFailed') THEN p.deletionFailure
-            ELSE j.failure END AS failure,
-          COALESCE(j.bytesCopied, 0) AS bytesCopied,
-          COALESCE(o.readingStatus, 'unread') AS readingStatus,
-          COALESCE(o.favorite, 0) AS favorite, m.payload AS metadataPayload
-        FROM paper p LEFT JOIN importJob j ON j.paperID = p.id
-        LEFT JOIN paperOrganization o ON o.paperID = p.id AND o.generation = p.generation
-        \(Self.currentLibraryMetadataJoins)
-        WHERE p.status != 'tombstone' AND (\(folderPredicate)) ORDER BY p.id
-        """, arguments: folderArguments)
-      let tagRows = try Row.fetchAll(db, sql: """
-        SELECT t.paperID, t.label FROM paperUserTag t
-        JOIN paperOrganization o ON o.paperID = t.paperID
-        JOIN paper p ON p.id = o.paperID AND p.generation = o.generation
-        WHERE p.status != 'tombstone' ORDER BY t.normalized, t.label
-        """)
-      var tags: [String: [String]] = [:]
-      for row in tagRows { tags[row["paperID"], default: []].append(row["label"]) }
-      let search = LibraryOrganizationService.normalized(filter.search.trimmingCharacters(in: .whitespacesAndNewlines))
-      let tag = filter.tag.map(LibraryOrganizationService.normalized)
-      let papers = try rows.compactMap { row -> OrganizedPaper? in
-        let idString: String = row["id"], generationString: String = row["generation"]
-        guard let id = UUID(uuidString: idString), let generation = UUID(uuidString: generationString),
-          let status = LibraryStatus(rawValue: row["status"]),
-          let readingStatus = PaperReadingStatus(rawValue: row["readingStatus"])
-        else { throw ProductDatabaseError.invalidRecord }
-        let labels = tags[idString] ?? []
-        let normalizedTags = labels.map(LibraryOrganizationService.normalized)
-        let favorite: Bool = row["favorite"]
-        guard tag.map(normalizedTags.contains) ?? true,
-          filter.readingStatus.map({ $0 == readingStatus }) ?? true,
-          !filter.favoritesOnly || favorite else { return nil }
-        let title: String = row["title"]
-        let metadata = try Self.libraryMetadataObservation(row.decode(Data?.self, forColumn: "metadataPayload"))
-        let sourceTitle = metadata.snapshot?.title
-        let resolvedTitle = sourceTitle.flatMap { $0.isConflict ? nil : $0.candidates.first?.text }
-        guard search.isEmpty || LibraryOrganizationService.normalized(title).contains(search)
-          || resolvedTitle.map({ LibraryOrganizationService.normalized($0).contains(search) }) == true
-          || normalizedTags.contains(where: { $0.contains(search) }) else { return nil }
-        let failure = try Self.libraryFailure(row, status: status, in: db)
-        let canRetryImport = status == .importFailed && failure != "missingPDF"
-          && String.fromDatabaseValue(row["importJobState"]) == "failed"
-          && (row["hasImportHistory"] as Bool) && !(row["cleanupDebt"] as Bool)
-        return OrganizedPaper(id: id, generation: generation, title: title, sourceTitle: sourceTitle,
-          sourceMetadataInvalid: metadata.invalid, status: status,
-          failure: failure, bytesCopied: row["bytesCopied"], createdAt: Date(timeIntervalSince1970: row["createdAt"]),
-          readable: (try? validateOrganizationPDF(row, verifyDigest: true)) != nil,
-          canRetryImport: canRetryImport,
-          organization: PaperOrganization(readingStatus: readingStatus, favorite: favorite, tags: labels))
-      }
-      return OrganizationSnapshot(preferences: OrganizationPreferences(presentation: presentation, sort: sort), totalCount: totalCount, papers: papers)
+      let snapshot = try organizationSnapshot(filter: filter, in: db)
+      let ids = Set(snapshot.papers.filter { $0.status == .ready }.map(\.id))
+      let facts = try librarySortFacts(for: ids, in: db)
+      return (snapshot, facts)
     }
+  }
+
+  private func organizationSnapshot(filter: OrganizationFilter, in db: Database) throws -> OrganizationSnapshot {
+    guard let preference = try Row.fetchOne(db, sql: "SELECT presentation, sort FROM organizationPreferences WHERE singleton = 1"),
+      let presentation = LibraryPresentation(rawValue: preference["presentation"]),
+      let sort = LibrarySort(rawValue: preference["sort"])
+    else { throw ProductDatabaseError.invalidRecord }
+    let totalCount = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM paper WHERE status != 'tombstone'")!
+    let folderPredicate: String
+    let folderArguments: StatementArguments
+    switch filter.folder {
+    case .all:
+      folderPredicate = "1"
+      folderArguments = []
+    case .unfiled:
+      folderPredicate = "NOT EXISTS (SELECT 1 FROM paperFolder pf WHERE pf.paperID = p.id)"
+      folderArguments = []
+    case .folder(let id):
+      folderPredicate = "EXISTS (SELECT 1 FROM paperFolder pf WHERE pf.paperID = p.id AND pf.folderID = ?)"
+      folderArguments = [id.uuidString]
+    }
+    let rows = try Row.fetchAll(db, sql: """
+      SELECT p.*, j.id AS importJobID, j.state AS importJobState,
+        j.recoveryJournal IS NOT NULL AS hasImportHistory,
+        CASE WHEN p.status IN ('deleting', 'deletionFailed') THEN p.deletionFailure
+          ELSE j.failure END AS failure,
+        COALESCE(j.bytesCopied, 0) AS bytesCopied,
+        COALESCE(o.readingStatus, 'unread') AS readingStatus,
+        COALESCE(o.favorite, 0) AS favorite, m.payload AS metadataPayload
+      FROM paper p LEFT JOIN importJob j ON j.paperID = p.id
+      LEFT JOIN paperOrganization o ON o.paperID = p.id AND o.generation = p.generation
+      \(Self.currentLibraryMetadataJoins)
+      WHERE p.status != 'tombstone' AND (\(folderPredicate)) ORDER BY p.id
+      """, arguments: folderArguments)
+    let tagRows = try Row.fetchAll(db, sql: """
+      SELECT t.paperID, t.label FROM paperUserTag t
+      JOIN paperOrganization o ON o.paperID = t.paperID
+      JOIN paper p ON p.id = o.paperID AND p.generation = o.generation
+      WHERE p.status != 'tombstone' ORDER BY t.normalized, t.label
+      """)
+    var tags: [String: [String]] = [:]
+    for row in tagRows { tags[row["paperID"], default: []].append(row["label"]) }
+    let search = LibraryOrganizationService.normalized(filter.search.trimmingCharacters(in: .whitespacesAndNewlines))
+    let tag = filter.tag.map(LibraryOrganizationService.normalized)
+    let papers = try rows.compactMap { row -> OrganizedPaper? in
+      let idString: String = row["id"], generationString: String = row["generation"]
+      guard let id = UUID(uuidString: idString), let generation = UUID(uuidString: generationString),
+        let status = LibraryStatus(rawValue: row["status"]),
+        let readingStatus = PaperReadingStatus(rawValue: row["readingStatus"])
+      else { throw ProductDatabaseError.invalidRecord }
+      let labels = tags[idString] ?? []
+      let normalizedTags = labels.map(LibraryOrganizationService.normalized)
+      let favorite: Bool = row["favorite"]
+      guard tag.map(normalizedTags.contains) ?? true,
+        filter.readingStatus.map({ $0 == readingStatus }) ?? true,
+        !filter.favoritesOnly || favorite else { return nil }
+      let title: String = row["title"]
+      let metadata = try Self.libraryMetadataObservation(row.decode(Data?.self, forColumn: "metadataPayload"))
+      let sourceTitle = metadata.snapshot?.title
+      let resolvedTitle = sourceTitle.flatMap { $0.isConflict ? nil : $0.candidates.first?.text }
+      guard search.isEmpty || LibraryOrganizationService.normalized(title).contains(search)
+        || resolvedTitle.map({ LibraryOrganizationService.normalized($0).contains(search) }) == true
+        || normalizedTags.contains(where: { $0.contains(search) }) else { return nil }
+      let failure = try Self.libraryFailure(row, status: status, in: db)
+      let canRetryImport = status == .importFailed && failure != "missingPDF"
+        && String.fromDatabaseValue(row["importJobState"]) == "failed"
+        && (row["hasImportHistory"] as Bool) && !(row["cleanupDebt"] as Bool)
+      return OrganizedPaper(id: id, generation: generation, title: title, sourceTitle: sourceTitle,
+        sourceMetadataInvalid: metadata.invalid, status: status,
+        failure: failure, bytesCopied: row["bytesCopied"], createdAt: Date(timeIntervalSince1970: row["createdAt"]),
+        readable: (try? validateOrganizationPDF(row, verifyDigest: true)) != nil,
+        canRetryImport: canRetryImport,
+        organization: PaperOrganization(readingStatus: readingStatus, favorite: favorite, tags: labels))
+    }
+    return OrganizationSnapshot(preferences: OrganizationPreferences(presentation: presentation, sort: sort), totalCount: totalCount, papers: papers)
   }
 
   public func organizationTags() throws -> [String] {

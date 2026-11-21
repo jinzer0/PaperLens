@@ -1638,6 +1638,58 @@ private actor WorkspaceDeletionAgent: AgentLibraryPurging {
     XCTAssertEqual(observedRevisions.count, 2)
   }
 
+  func testLibraryBrowserUsesCurrentSearchAndYearFactsAcrossPresentations() async throws {
+    let f = try await fixture()
+    let first = try await importSelected(f)
+    let second = try await importSelected(f)
+    let firstRevision = try publishMetadataRevision(f, id: first, sourceTitle: "Study earlier title")
+    let secondRevision = try publishMetadataRevision(f, id: second, sourceTitle: "Study second")
+    let firstFacts = try XCTUnwrap(f.database.librarySortFacts().first { $0.paperID == first })
+    let secondFacts = try XCTUnwrap(f.database.librarySortFacts().first { $0.paperID == second })
+    let old = try XCTUnwrap(firstFacts.metadata)
+    let stable = try XCTUnwrap(secondFacts.metadata)
+    try f.database.saveReaderMetadata(ReaderMetadataSnapshot(title: old.title, year: .init([
+      .init(text: "2030", source: .acceptedExtraction, sourceID: firstRevision.revisionID.uuidString)
+    ])), for: firstRevision)
+    try f.database.saveReaderMetadata(ReaderMetadataSnapshot(title: stable.title, year: .init([
+      .init(text: "2024", source: .acceptedExtraction, sourceID: secondRevision.revisionID.uuidString)
+    ])), for: secondRevision)
+    let service = f.workspace.organization
+    var filter = OrganizationFilter()
+    filter.search = "study"
+    try await service.savePreferences(.init(sort: .publicationYear))
+    let initial = try await service.snapshot(filter: filter)
+    XCTAssertEqual(initial.snapshot.papers.map(\.id), [first, second])
+
+    let next = try publishMetadataRevision(f, id: first, sourceTitle: "Study revised title")
+    let updatedMetadata = ReaderMetadataSnapshot(title: .init([
+      .init(text: "Study revised title", source: .source, sourceID: "pdf:\(next.pdfSHA256)")
+    ]), year: .init([
+      .init(text: "2000", source: .acceptedExtraction, sourceID: next.revisionID.uuidString)
+    ]))
+    try f.database.saveReaderMetadata(updatedMetadata, for: next)
+    for presentation in LibraryPresentation.allCases {
+      try await service.savePreferences(.init(presentation: presentation, sort: .publicationYear))
+      let updated = try await service.snapshot(filter: filter)
+      XCTAssertEqual(updated.snapshot.preferences.presentation, presentation)
+      XCTAssertEqual(updated.snapshot.papers.map(\.id), [second, first])
+      XCTAssertEqual(updated.snapshot.papers.last?.generation, initial.snapshot.papers.first?.generation)
+      XCTAssertEqual(updated.snapshot.papers.last?.sourceTitle, updatedMetadata.title)
+      XCTAssertEqual(updated.facts.first { $0.paperID == first }?.metadata, updatedMetadata)
+      XCTAssertEqual(updated.facts.first { $0.paperID == first }?.publicationYear, 2000)
+    }
+    filter.search = "revised title"
+    let matched = try await service.snapshot(filter: filter)
+    XCTAssertEqual(matched.snapshot.totalCount, 2)
+    XCTAssertEqual(matched.snapshot.papers.map(\.id), [first])
+    XCTAssertEqual(matched.facts.map(\.paperID), [first])
+    filter.search = "earlier title"
+    let unmatched = try await service.snapshot(filter: filter)
+    XCTAssertEqual(unmatched.snapshot.totalCount, 2)
+    XCTAssertTrue(unmatched.snapshot.papers.isEmpty)
+    XCTAssertTrue(unmatched.facts.isEmpty)
+  }
+
   func testYearFactsOnlyUseCurrentRevisionWithNoConflictPrecedence() async throws {
     let f = try await fixture()
     let id = try await importSelected(f)
