@@ -188,6 +188,8 @@ private final class MetadataObservedPDFDocument: PDFDocument {
     presentation.open(paperID: identity.paperID)
     let old = try XCTUnwrap(presentation.metadataBinding)
     let document = try XCTUnwrap(presentation.pdfView.document)
+    presentation.toggleAnnotations()
+    let annotations = try XCTUnwrap(presentation.annotationContext)
     try db.adapterWrite {
       try $0.execute(sql: "UPDATE paper SET pdfSHA256 = ? WHERE id = ?",
         arguments: [String(repeating: "b", count: 64), identity.paperID.uuidString])
@@ -197,6 +199,8 @@ private final class MetadataObservedPDFDocument: PDFDocument {
     XCTAssertNil(presentation.metadataBinding)
     XCTAssertNotNil(presentation.metadataFailure)
     XCTAssertTrue(presentation.pdfView.document === document)
+    XCTAssertFalse(annotations.isActive)
+    XCTAssertNil(presentation.annotationContext)
   }
 
   func testNativeRefreshCannotOverwriteSamePositionObservedAgainstNewOutline() async throws {
@@ -1179,14 +1183,16 @@ private final class MetadataObservedPDFDocument: PDFDocument {
     presentation.replaceMetadataIdentity(nil)
     XCTAssertNil(binding.state)
     XCTAssertThrowsError(try binding.navigate(sectionID: "/0"))
-    XCTAssertFalse(annotations.isActive)
-    XCTAssertNil(presentation.annotationContext)
+    XCTAssertTrue(annotations.isActive)
+    XCTAssertTrue(presentation.annotationContext === annotations)
     XCTAssertNotNil(document)
     let replacement = try XCTUnwrap(presentation.metadataBinding)
     XCTAssertNil(replacement.identity)
     XCTAssertNotNil(replacement.state)
     session.close()
     XCTAssertNil(replacement.state)
+    XCTAssertFalse(annotations.isActive)
+    XCTAssertNil(presentation.annotationContext)
     XCTAssertNil(presentation.pdfView.document)
     XCTAssertNil(document)
   }

@@ -170,7 +170,11 @@ import SwiftUI
   func replaceMetadataIdentity(_ identity: ReaderMetadataIdentity?) {
     guard identity != metadataIdentity else { return }
     closeMetadata()
-    closeAnnotations()
+    // Extraction revisions do not own personal notes. Recheck the drawer against the admitted PDF.
+    if let context = annotationContext {
+      _ = try? context.records()
+      if annotationContext === context && !context.isActive { closeAnnotations() }
+    }
     metadataIdentity = identity
     if opened { mountMetadata() }
   }

@@ -175,6 +175,46 @@ private final class AnnotationPageDelegate: NSObject, PDFDocumentDelegate {
     return reader
   }
 
+  func testPublishedMetadataChangePreservesAndLetsReaderSavePendingNote() async throws {
+    let (_, db, lifecycle, id, _) = try await fixture()
+    let reader = try presentation(database: db, lifecycle: lifecycle, paperID: id)
+    defer { reader.session.close() }
+    let document = try XCTUnwrap(reader.pdfView.document)
+    reader.pdfView.go(to: try XCTUnwrap(document.page(at: 1)))
+    reader.pdfView.currentSelection = try XCTUnwrap(document.findString("alpha", withOptions: []).last)
+    reader.addNote()
+    let context = try XCTUnwrap(reader.annotationContext)
+    let draft = try XCTUnwrap(context.editor.draft)
+    try context.publishEditor { context.editor.text = "Read this passage again" }
+    let originalBinding = try XCTUnwrap(reader.metadataBinding)
+    let reference = try db.readerSnapshot(paperID: id).pdfReference
+    let revision = UUID()
+    try db.adapterWrite { sql in
+      try sql.execute(sql: """
+        INSERT INTO extractionRevision(id, paperID, generation, pdfSHA256, pdfReference)
+        VALUES (?, ?, ?, ?, ?)
+        """, arguments: [revision.uuidString, id.uuidString, context.identity.generation.uuidString,
+          context.identity.pdfSHA256, reference])
+      try sql.execute(sql: "INSERT INTO extractionVisible(paperID, revision) VALUES (?, ?)",
+        arguments: [id.uuidString, revision.uuidString])
+    }
+
+    reader.replaceMetadataIdentity(try db.publishedMetadataPaperIdentity(paperID: id))
+
+    XCTAssertNil(originalBinding.state)
+    XCTAssertEqual(reader.metadataBinding?.identity?.revisionID, revision)
+    XCTAssertTrue(reader.annotationContext === context)
+    XCTAssertTrue(context.isActive)
+    XCTAssertEqual(context.editor.draft, draft)
+    XCTAssertEqual(context.editor.text, "Read this passage again")
+    XCTAssertTrue(reader.pdfView.document === document)
+    XCTAssertEqual(document.index(for: try XCTUnwrap(reader.pdfView.currentPage)), 1)
+    let saved = try context.createNote(XCTUnwrap(context.editor.draft), text: context.editor.text)
+    XCTAssertEqual(saved.selection.locations.map(\.pageIndex), [1])
+    XCTAssertEqual(try AnnotationService(database: db).libraryReadingRecords(
+      paperID: id, generation: context.identity.generation).annotations, [saved])
+  }
+
   private func settleSearch(_ reader: ReaderPresentation) async {
     for _ in 0..<1000 {
       if reader.searchState != .searching { return }
