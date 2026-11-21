@@ -29,6 +29,7 @@ import SwiftUI
   private var searchTask: Task<Void, Never>?
   private var searchGeneration = UUID()
   private var restoring = false
+  private weak var admittedDocument: PDFDocument?
   private weak var scrollClipView: NSClipView?
   private var scrollOrigin: CGPoint?
   private var pendingScrollPosition: Task<Void, Never>?
@@ -65,7 +66,6 @@ import SwiftUI
       trackPDFScrolling()
     }
     enum RestorationInterrupted: Error { case admissionChanged }
-    weak var admittedDocument: PDFDocument?
     do {
       let position = try session.open(paperID: paperID, validateDocument: { url in
         for directory in [url.deletingLastPathComponent(),
@@ -167,6 +167,7 @@ import SwiftUI
       pdfView.highlightedSelections = nil
       matches.removeAll()
       pdfView.document = nil
+      admittedDocument = nil
     }
     searchState = .idle
     currentMatchNumber = 0
@@ -183,7 +184,10 @@ import SwiftUI
       if annotationContext === context && !context.isActive { closeAnnotations() }
     }
     metadataIdentity = identity
-    if opened { mountMetadata() }
+    if opened {
+      mountMetadata()
+      if let identity, metadataBinding?.identity == identity { observeMetadataPosition() }
+    }
   }
 
   private func closeMetadata() {
@@ -291,16 +295,17 @@ import SwiftUI
   @objc private func positionChanged(_ notification: Notification) {
     guard opened, !restoring else { return }
     do {
-      try session.withReadAccess {
-        guard let document = pdfView.document, let page = pdfView.currentPage else {
-          throw ReaderError.invalidDocument
-        }
-        pageIndex = document.index(for: page)
-        zoom = Double(pdfView.scaleFactor)
-      }
-      try session.save(ReaderPosition(pageIndex: pageIndex, zoom: zoom))
+      let position = try readCurrentPosition()
+      try session.save(position)
+      pageIndex = position.pageIndex
+      guard opened else { return }
+      zoom = position.zoom
+      guard opened else { return }
       failure = nil
-    } catch { failure = "Reading position was not saved: \(error)" }
+    } catch {
+      guard opened else { return }
+      failure = "Reading position was not saved: \(error)"
+    }
     observeMetadataPosition()
   }
 
@@ -336,13 +341,6 @@ import SwiftUI
       self.pendingScrollPosition = nil
       self.observeMetadataPosition()
     }
-  }
-
-  private func flushScrollPosition() {
-    guard let pendingScrollPosition else { return }
-    pendingScrollPosition.cancel()
-    self.pendingScrollPosition = nil
-    observeMetadataPosition()
   }
 
   private func observeMetadataPosition() {
@@ -460,30 +458,56 @@ import SwiftUI
 
   func leave(onReturn: () -> Void) {
     guard opened else { session.close(); onReturn(); return }
-    flushScrollPosition()
     do {
+      try saveLastMetadataPosition()
       try session.leave(at: readCurrentPosition())
       onReturn()
-    } catch { failure = "Cannot leave without saving: \(error). Retry or explicitly discard." }
+    } catch {
+      guard opened else { onReturn(); return }
+      failure = "Cannot leave without saving: \(error). Retry or explicitly discard."
+    }
   }
 
   func disappear(reportFailure: (Error) -> Void) {
     if opened {
-      flushScrollPosition()
-      do { try session.save(readCurrentPosition()) }
-      catch { reportFailure(error) }
+      do {
+        try saveLastMetadataPosition()
+        try session.save(readCurrentPosition())
+      } catch { reportFailure(error) }
     }
     session.close()
+  }
+
+  private func saveLastMetadataPosition() throws {
+    let hadPendingScroll = pendingScrollPosition != nil
+    pendingScrollPosition?.cancel()
+    pendingScrollPosition = nil
+    // The last within-page destination may have moved without a new bounds notification.
+    guard !restoring, let binding = metadataBinding, hadPendingScroll || binding.identity != nil else { return }
+    do { try binding.observePosition() }
+    catch ReaderMetadataError.invalidDestination, ReaderMetadataError.staleIdentity {
+      // A missing destination or superseded extraction can still save the native page and zoom.
+    }
   }
 
   private func readCurrentPosition() throws -> ReaderPosition {
     // The toolbar may still reflect the previous position when PDFKit changes the view.
     try session.withReadAccess {
-      guard let document = pdfView.document, let page = pdfView.currentPage else {
+      guard let document = admittedDocument, pdfView.document === document,
+        let page = pdfView.currentPage, page.document === document,
+        let paper = session.currentPaper else {
         throw ReaderError.invalidDocument
       }
       let position = ReaderPosition(pageIndex: document.index(for: page), zoom: Double(pdfView.scaleFactor))
       try position.validate(pageCount: document.pageCount)
+      // A superseded extraction may lose its Contents context, while the PDF must
+      // still be the same admitted object and stored identity to save page and zoom.
+      let identity = ReaderMetadataDocumentIdentity(paperID: annotationIdentity.id,
+        generation: annotationIdentity.generation, pdfSHA256: annotationIdentity.pdfSHA256,
+        pdfReference: paper.pdfReference)
+      guard pdfView.document === document,
+        try metadataService.documentIdentity(paperID: paper.paperID) == identity
+      else { throw ReaderError.invalidDocument }
       return position
     }
   }
