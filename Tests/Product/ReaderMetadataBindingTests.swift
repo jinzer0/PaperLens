@@ -84,7 +84,7 @@ private final class MetadataObservedPDFDocument: PDFDocument {
 }
 
 @MainActor final class ReaderMetadataBindingTests: XCTestCase {
-  private func fixture(publishExtraction: Bool = true) async throws
+  private func fixture(publishExtraction: Bool = true, embeddedTitle: String? = nil) async throws
     -> (ProductDatabase, LocalLibraryLifecycle, ReaderMetadataIdentity, MetadataBindingOwner) {
     let temporary = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
@@ -92,7 +92,8 @@ private final class MetadataObservedPDFDocument: PDFDocument {
     let bytes = NSMutableData()
     let consumer = try XCTUnwrap(CGDataConsumer(data: bytes as CFMutableData))
     var box = CGRect(x: 0, y: 0, width: 400, height: 600)
-    let pdf = try XCTUnwrap(CGContext(consumer: consumer, mediaBox: &box, nil))
+    let attributes = embeddedTitle.map { [kCGPDFContextTitle as String: $0] as CFDictionary }
+    let pdf = try XCTUnwrap(CGContext(consumer: consumer, mediaBox: &box, attributes))
     for _ in 0..<2 { pdf.beginPDFPage(nil); pdf.endPDFPage() }
     pdf.closePDF()
     let source = temporary.appendingPathComponent("synthetic.pdf")
@@ -477,6 +478,57 @@ private final class MetadataObservedPDFDocument: PDFDocument {
     try binding.refresh()
     XCTAssertEqual(binding.state?.presentation.metadata, accepted)
     XCTAssertTrue(binding.state?.sections.isEmpty == true)
+  }
+
+  func testOversizedEmbeddedTitleKeepsNativeContentsAndAcceptedMetadata() async throws {
+    // Use an actual PDF Info title within the PDF size limit but over the field's UTF-8 limit.
+    let title = String(repeating: "한", count: 87_382)
+    let (db, _, identity, owner) = try await fixture(embeddedTitle: title)
+    defer { owner.session.close() }
+    let document = try XCTUnwrap(owner.view.document)
+    let sourceTitle = try XCTUnwrap(document.documentAttributes?[PDFDocumentAttribute.titleAttribute] as? String)
+    XCTAssertEqual(sourceTitle.utf8.count, title.utf8.count)
+    try outline(owner)
+    let native = try mount(db, nil, owner)
+    XCTAssertTrue(try XCTUnwrap(native.state).presentation.metadata.title.candidates.isEmpty)
+    XCTAssertNotNil(native.state?.sections.first?.location)
+    try native.navigate(sectionID: "/0")
+    XCTAssertEqual(owner.view.requestedLocation, .init(pageIndex: 0, x: 20, y: 500))
+    native.invalidate()
+
+    let sourceID = identity.revisionID.uuidString
+    let accepted = ReaderMetadataSnapshot(
+      title: .init([.init(text: "Accepted title", source: .acceptedExtraction, sourceID: sourceID)]),
+      year: .init([.init(text: "2024", source: .acceptedExtraction, sourceID: sourceID)]),
+      abstract: .init([.init(text: "Accepted abstract", source: .acceptedExtraction, sourceID: sourceID)]),
+      topics: .init([.init(text: "Accepted topic", source: .acceptedExtraction, sourceID: sourceID)]))
+    let service = ReaderMetadataService(database: db)
+    try service.accept(accepted, for: identity)
+    let binding = try mount(db, identity, owner)
+    XCTAssertEqual(binding.state?.presentation.metadata, accepted)
+    try binding.refresh()
+    try binding.navigate(sectionID: "/1")
+    XCTAssertEqual(owner.view.requestedLocation, .init(pageIndex: 0, x: 20, y: 200))
+    XCTAssertEqual(try service.metadata(for: identity), accepted)
+  }
+
+  func testFullTitleFieldKeepsExistingCandidatesAndContents() async throws {
+    let (db, _, identity, owner) = try await fixture(embeddedTitle: "An additional source title")
+    defer { owner.session.close() }
+    try outline(owner)
+    let service = ReaderMetadataService(database: db)
+    let titles = (1...64).map {
+      ReaderMetadataValue(text: "Title \($0)", source: .acceptedExtraction,
+        sourceID: identity.revisionID.uuidString)
+    }
+    let accepted = ReaderMetadataSnapshot(title: .init(titles))
+    try service.accept(accepted, for: identity)
+    let binding = try mount(db, identity, owner)
+    XCTAssertEqual(binding.state?.presentation.metadata, accepted)
+    XCTAssertEqual(binding.state?.sections.map(\.title), ["Introduction", "Methods", "Foreign"])
+    try binding.navigate(sectionID: "/1")
+    XCTAssertEqual(owner.view.requestedLocation, .init(pageIndex: 0, x: 20, y: 200))
+    XCTAssertEqual(try service.metadata(for: identity), accepted)
   }
 
   func testActualOutlineIntentDoesNotConfirmButObservationPersists() async throws {

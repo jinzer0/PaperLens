@@ -106,10 +106,8 @@ extension ProductDatabase {
       let existing = try data.map { try JSONDecoder().decode(ReaderMetadataSnapshot.self, from: $0) }
         ?? ReaderMetadataSnapshot()
       try existing.validate()
-      if existing.title.candidates.contains(candidate) { return existing }
-      let merged = ReaderMetadataSnapshot(title: .init(existing.title.candidates + [candidate]),
-        year: existing.year, abstract: existing.abstract, topics: existing.topics)
-      try merged.validate()
+      let merged = existing.addingOptionalPDFTitle(candidate)
+      guard merged.title.candidates.count != existing.title.candidates.count else { return existing }
       try db.execute(sql: """
         INSERT INTO readerMetadata(paperID, revisionID, payload) VALUES (?, ?, ?)
         ON CONFLICT(paperID) DO UPDATE SET revisionID = excluded.revisionID, payload = excluded.payload

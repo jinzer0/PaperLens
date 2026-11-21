@@ -265,24 +265,19 @@ public struct ReaderMetadataBindingState {
   private func makeState(metadata: ReaderMetadataSnapshot, document: PDFDocument,
     adapter: ReaderOutlineAdapter, context: ReaderMetadataContext?,
     observed: ReaderConfirmedLocation?) throws -> ReaderMetadataBindingState {
-    var retainedMetadata = metadata
-    var titles = metadata.title.candidates
+    var displayedMetadata = metadata
     let attributes = document.documentAttributes
     _ = try validate()
-    if let title = attributes?[PDFDocumentAttribute.titleAttribute] as? String,
-      !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+    if let title = attributes?[PDFDocumentAttribute.titleAttribute] as? String {
       let candidate = ReaderMetadataValue(text: title, source: .source,
         sourceID: "pdf:\(documentIdentity.pdfSHA256)")
-      if let identity {
-        retainedMetadata = try service.recordSourceTitle(title, for: identity)
-        titles = retainedMetadata.title.candidates
-      } else if !titles.contains(candidate) { titles.append(candidate) }
+      if candidate.isValid {
+        displayedMetadata = try identity.map { try service.recordSourceTitle(title, for: $0) }
+          ?? metadata.addingOptionalPDFTitle(candidate)
+      }
     }
     // PDF creation/modification dates, subject and keywords have different semantics.
-    let combined = ReaderMetadataSnapshot(title: .init(titles), year: retainedMetadata.year,
-      abstract: retainedMetadata.abstract, topics: retainedMetadata.topics)
-    try combined.validate()
-    return ReaderMetadataBindingState(presentation: .init(identity: identity, metadata: combined),
+    return ReaderMetadataBindingState(presentation: .init(identity: identity, metadata: displayedMetadata),
       sections: adapter.sections.map {
         ReaderMetadataOutlineRow(id: $0.id, title: $0.title, depth: $0.depth, location: $0.location)
       }, restorationCandidate: context.flatMap { adapter.validatedRestoration($0) }, observedLocation: observed,

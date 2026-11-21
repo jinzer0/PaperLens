@@ -43,6 +43,11 @@ public struct ReaderMetadataValue: Codable, Equatable, Sendable {
   public init(text: String, source: Source, sourceID: String) {
     self.text = text; self.source = source; self.sourceID = sourceID
   }
+
+  var isValid: Bool {
+    text.utf8.count <= 262_144 && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      && !sourceID.isEmpty && sourceID.utf8.count <= 4096
+  }
 }
 
 /// Multiple distinct candidates remain an explicit conflict, never a guessed winner.
@@ -58,6 +63,7 @@ public struct ReaderMetadataField: Codable, Equatable, Sendable {
 }
 
 public struct ReaderMetadataSnapshot: Codable, Equatable, Sendable {
+  private static let maximumCandidates = 64
   public let title: ReaderMetadataField
   public let year: ReaderMetadataField
   public let abstract: ReaderMetadataField
@@ -69,13 +75,16 @@ public struct ReaderMetadataSnapshot: Codable, Equatable, Sendable {
   }
   func validate() throws {
     for field in [title, year, abstract, topics] {
-      guard field.candidates.count <= 64 else { throw ReaderMetadataError.invalidMetadata }
-      for value in field.candidates {
-        guard !value.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-          !value.sourceID.isEmpty, value.text.utf8.count <= 262_144,
-          value.sourceID.utf8.count <= 4096 else { throw ReaderMetadataError.invalidMetadata }
+      guard field.candidates.count <= Self.maximumCandidates, field.candidates.allSatisfy(\.isValid) else {
+        throw ReaderMetadataError.invalidMetadata
       }
     }
+  }
+
+  func addingOptionalPDFTitle(_ candidate: ReaderMetadataValue) -> Self {
+    guard candidate.isValid, title.candidates.count < Self.maximumCandidates,
+      !title.candidates.contains(candidate) else { return self }
+    return Self(title: .init(title.candidates + [candidate]), year: year, abstract: abstract, topics: topics)
   }
 }
 
