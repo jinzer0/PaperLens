@@ -23,7 +23,7 @@ GRDB_COMMIT = "b83108d10f42680d78f23fe4d4d80fc88dab3212"
 SCHEMA = "packaged-db-fts5-evidence-v1"
 POINTS = dependency_lock.POINTS
 SCOPES = ("local_contract_only", "local_grdb_probe", "packaged_db_fts5")
-MIGRATIONS = ("probe-baseline-v1", "probe-fts5-v2")
+MIGRATIONS = ("probe_base_v1", "probe_fts_v2")
 REASONS = ("grdb_unavailable", "binding_mismatch", "db_open_failed",
            "migration_failed", "fts_unavailable", "fts_failed", "rollback_failed",
            "reopen_failed", "sqlite_origin_unverified", "provenance_overflow",
@@ -221,13 +221,13 @@ def required_phases(row_count: int) -> list[dict]:
     Separate fault fixtures must preserve earlier commits on unchanged reopen.
     watchdogSeconds declares the configured limit, never an observed duration.
     """
-    require(type(row_count) is int and 1 <= row_count <= 4)
+    require(type(row_count) is int and row_count == 4)
 
     def state(version):
         return {"version": version, "registry": list(MIGRATIONS[:version]),
-                "tables": ["probe_state"] if version == 1 else
-                (["probe_state", "probe_fts", "probe_fts_data", "probe_fts_idx",
-                  "probe_fts_content", "probe_fts_docsize", "probe_fts_config"] if version == 2 else []),
+                "tables": ["probe_base"] if version == 1 else
+                (["probe_base", "probe_fts", "probe_fts_config", "probe_fts_content",
+                  "probe_fts_data", "probe_fts_docsize", "probe_fts_idx"] if version == 2 else []),
                 "rows": 0}
 
     def phase(name, fixture="success", **values):
@@ -238,7 +238,7 @@ def required_phases(row_count: int) -> list[dict]:
         phases.append(phase("migration", migration=migration, before=state(index),
                             after=state(index + 1), atomic=True))
     phases += [phase("fts_create", after=state(2)),
-               phase("fts_query", rows=row_count, ids=list(range(1, row_count + 1))),
+               phase("fts_query", rows=2, ids=[1, 3]),
                phase("fts_delete", rows=0, ids=[]), phase("close", drained=True, activeQueues=0),
                phase("reopen", queueCount=1, watchdogSeconds=30,
                      before=state(2), after=state(2), migrationsRun=[]),
@@ -246,9 +246,9 @@ def required_phases(row_count: int) -> list[dict]:
                phase("close_reopened", drained=True, activeQueues=0)]
     for index, migration in enumerate(MIGRATIONS):
         fixture = "baseline_failure" if index == 0 else "fts_failure"
-        phases += [phase("fault_open", fixture, queueCount=1, watchdogSeconds=30, before=state(index)),
+        phases += [phase("fault_open", fixture, queueCount=1, watchdogSeconds=30, before=state(0)),
                    phase("injected_failure", fixture, migration=migration,
-                         injection="after_changes_before_completion", reason="migration_failed", sqliteCode=1),
+                         injection="after_changes_before_completion", reason="migration_failed", sqliteCode=19),
                    phase("rollback", fixture, after=state(index), atomic=True),
                    phase("fault_close", fixture, drained=True, activeQueues=0),
                    phase("failure_reopen", fixture, queueCount=1, watchdogSeconds=30,
@@ -321,7 +321,8 @@ def validate_cell(record_bytes: bytes, expected: OwnerExpectedBindings,
         require(len(phases) == len(wanted))
         for actual, assertion in zip(phases, wanted):
             if assertion["phase"] == "injected_failure":
-                require(type(actual) is dict and type(actual.get("sqliteCode")) is int and actual["sqliteCode"] in SQLITE_CODES,
+                require(type(actual) is dict and type(actual.get("sqliteCode")) is int
+                        and actual["sqliteCode"] in (19, 1555),
                         "migration_failed", "injected_failure")
                 assertion["sqliteCode"] = actual["sqliteCode"]
             require(exact(actual, assertion), "binding_mismatch", assertion["phase"])

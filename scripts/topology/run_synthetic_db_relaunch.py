@@ -1,16 +1,21 @@
-"""Run the signed arm64 app twice per migration fault on independently reserved fixtures."""
+"""Run normal and faulted SQL cases across separate launches of the signed arm64 app."""
 
 import argparse
 from contextlib import ExitStack
+import hashlib
 import json
 import os
 from pathlib import Path
 import platform
 import pwd
+import re
 import stat
 import subprocess
 import sys
 from uuid import uuid4
+
+from validate_dependency_lock import COMPILE_FACTS, sqlite_source_identity
+from verify_packaged_db import Invalid, bounded_json, exact
 
 
 IDENTIFIER = "io.github.jinzer0.PaperLens"
@@ -22,6 +27,11 @@ REQUIREMENT = (
 )
 DIRECTORY_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 FAILURE_CODES = {"primary": 19, "extended": 1555}
+NORMAL_CHECKS = {
+    "first": ("initial", "base", "migrations", "fts", "deletion"),
+    "reopen": ("initial", "reopen"),
+}
+PROVENANCE_FLAGS = ("sameConnection", "symbolsBoundToImage", "sharedCacheImage", "metadataMatches")
 
 
 def directory(path, lifetime, parent=None):
@@ -33,6 +43,33 @@ def directory(path, lifetime, parent=None):
 def reserve_directory(name, parent, lifetime):
     os.mkdir(name, 0o700, dir_fd=parent)
     return directory(name, lifetime, parent)
+
+
+def validate_provenance(observed, os_build):
+    identity_fields = {"osBuild", "imageIdentity", "sqliteVersion", "sqliteSourceId"}
+    required = {"compileOptions", "inspectedEntries", "maxEntryBytes"}.union(PROVENANCE_FLAGS)
+    if (type(observed) is not dict
+            or not required <= observed.keys() <= required | identity_fields):
+        raise ValueError("invalid_provenance_receipt")
+    options = observed["compileOptions"]
+    if (any(type(observed[flag]) is not bool for flag in PROVENANCE_FLAGS)
+            or ("osBuild" in observed and observed["osBuild"] != os_build)
+            or ("imageIdentity" in observed and (type(observed["imageIdentity"]) is not str
+                or not re.fullmatch(r"[0-9a-f]{64}", observed["imageIdentity"])
+                or len(set(observed["imageIdentity"])) < 2))
+            or ("sqliteVersion" in observed and (type(observed["sqliteVersion"]) is not str
+                or not re.fullmatch(r"[0-9]{1,3}(\.[0-9]{1,3}){2}", observed["sqliteVersion"])))
+            or ("sqliteSourceId" in observed and not sqlite_source_identity(observed["sqliteSourceId"]))
+            or type(options) is not list or len(options) > 16
+            or not all(type(option) is str and option in COMPILE_FACTS for option in options)
+            or len(set(options)) != len(options)
+            or type(observed["inspectedEntries"]) is not int
+            or not len(options) <= observed["inspectedEntries"] <= 256
+            or type(observed["maxEntryBytes"]) is not int
+            or not max(map(len, options), default=0) <= observed["maxEntryBytes"] <= 256):
+        raise ValueError("invalid_provenance_receipt")
+    return (identity_fields <= observed.keys() and "ENABLE_FTS5" in options
+            and all(observed[flag] for flag in PROVENANCE_FLAGS))
 
 
 def launch(executable, phase, kind, ids, descriptors, identity):
@@ -48,20 +85,19 @@ def launch(executable, phase, kind, ids, descriptors, identity):
             raise
         if child.returncode or not 0 < len(receipt) <= 16384:
             raise ValueError("phase_failed")
-    record = json.loads(receipt)
-    expected = {"phase": phase, "kind": kind, "rollbackVersion": 0 if kind == "m1" else 1,
-                "failure": FAILURE_CODES, "closed": True, "cleaned": phase == "reopen"}
-    if not isinstance(record, dict) or set(record) != set(expected) | {"provenance"}:
-        raise ValueError("phase_receipt_invalid")
-    if any(type(record[key]) is not type(value) or record[key] != value
-           for key, value in expected.items()):
-        raise ValueError("phase_receipt_invalid")
-    if not isinstance(record["provenance"], dict):
+    record = bounded_json(receipt)
+    expected = {"phase": phase, "kind": kind, "closed": True, "cleaned": phase == "reopen"}
+    if kind == "normal":
+        expected["checks"] = [{"phase": step, "passed": True} for step in NORMAL_CHECKS[phase]]
+    else:
+        expected.update(rollbackVersion=0 if kind == "m1" else 1, failure=FAILURE_CODES)
+    if (type(record) is not dict or "provenance" not in record
+            or not exact({k: v for k, v in record.items() if k != "provenance"}, expected)):
         raise ValueError("phase_receipt_invalid")
     return child.pid, record
 
 
-def run_fault(executable, parent, kind):
+def run_case(executable, parent, kind):
     owner_id, case_id = str(uuid4()), str(uuid4())
     entry = f"local-grdb-probe-{case_id}"
     with ExitStack() as lifetime:
@@ -85,11 +121,29 @@ def run_fault(executable, parent, kind):
             raise ValueError("fixture_replaced")
         second_pid, second = launch(executable, "reopen", kind,
                                     (owner_id, case_id, str(uuid4())), descriptors, identity)
-        if first_pid == second_pid or os.listdir(topology) or first["provenance"] != second["provenance"]:
+        if (first_pid == second_pid or os.listdir(topology)
+                or not exact(first["provenance"], second["provenance"])):
             raise ValueError("relaunch_unconfirmed")
-        return {"kind": kind, "firstClosedAndExited": True, "sameDatabaseReopened": True,
-                "rollbackVersion": second["rollbackVersion"], "failure": second["failure"],
-                "secondClosedAndCleaned": True, "provenance": second["provenance"]}
+        result = {"kind": kind, "firstClosedAndExited": True, "sameDatabaseReopened": True,
+                  "secondClosedAndCleaned": True, "provenance": second["provenance"]}
+        if kind == "normal":
+            result.update(firstChecks=first["checks"], reopenChecks=second["checks"])
+        else:
+            result.update(rollbackVersion=second["rollbackVersion"], failure=second["failure"])
+        return result
+
+
+def executable_sha256(executable):
+    digest = hashlib.sha256()
+    with executable.open("rb") as binary:
+        for chunk in iter(lambda: binary.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def verify_bundle(app):
+    subprocess.run(["/usr/bin/codesign", "--verify", "--deep", "--strict", "-R",
+                    "=" + REQUIREMENT, app], check=True, timeout=30, stderr=subprocess.DEVNULL)
 
 
 def main():
@@ -104,8 +158,12 @@ def main():
         if subprocess.check_output(["/usr/bin/lipo", "-archs", executable], timeout=30,
                                    stderr=subprocess.DEVNULL).strip() != b"arm64":
             raise ValueError("arm64_bundle_required")
-        subprocess.run(["/usr/bin/codesign", "--verify", "--deep", "--strict", "-R",
-                        "=" + REQUIREMENT, app], check=True, timeout=30, stderr=subprocess.DEVNULL)
+        verify_bundle(app)
+        executable_digest = executable_sha256(executable)
+        os_version = subprocess.check_output(["/usr/bin/sw_vers", "-productVersion"],
+                                             timeout=5).decode("ascii").strip()
+        os_build = subprocess.check_output(["/usr/bin/sw_vers", "-buildVersion"],
+                                           timeout=5).decode("ascii").strip()
         home = Path(pwd.getpwuid(os.getuid()).pw_dir)
         components = ("Library", "Containers", IDENTIFIER, "Data", "Library",
                       "Application Support", "PaperLensSyntheticPackagedDB")
@@ -116,12 +174,21 @@ def main():
             info = os.fstat(parent)
             if info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700:
                 raise ValueError("fixture_parent_invalid")
-            results = [run_fault(executable, parent, kind) for kind in ("m1", "m2")]
-    except (OSError, ValueError, subprocess.SubprocessError):
+            normal, *faults = [run_case(executable, parent, kind) for kind in ("normal", "m1", "m2")]
+        verify_bundle(app)
+        if (executable_sha256(executable) != executable_digest
+                or any(not exact(fault["provenance"], normal["provenance"]) for fault in faults)):
+            raise ValueError("runtime_binding_changed")
+        verified_sqlite = validate_provenance(normal["provenance"], os_build)
+    except (Invalid, OSError, ValueError, subprocess.SubprocessError):
         print("synthetic_db_relaunch_unconfirmed", file=sys.stderr)
         return 1
-    print(json.dumps({"schema": "paperlens-synthetic-db-relaunch-v1", "storyDone": False,
-                      "p2Passed": False, "faults": results}, sort_keys=True))
+    print(json.dumps({"schema": "paperlens-synthetic-db-relaunch-v2", "storyDone": False,
+                      "p2Passed": False, "normal": normal, "faults": faults,
+                      "sqliteOrigin": "apple-system" if verified_sqlite else "sqlite_origin_unverified",
+                      "runtime": {"osVersion": os_version, "osBuild": os_build,
+                                  "architecture": "arm64",
+                                  "signedExecutableSHA256": executable_digest}}, sort_keys=True))
     return 0
 
 

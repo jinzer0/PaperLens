@@ -35,7 +35,7 @@ def fixture(point="current/arm64", run=None, owner=None):
               "inspection": {"entries": 1, "maxEntryBytes": 11, "complete": True}}
     record = {"schemaRevision": db.SCHEMA, "scope": "packaged_db_fts5",
               "bindings": db.expected_bindings(expected), "sqlite": sqlite,
-              "corpus": {"payloadByteLengths": [256] * 4, "queryByteLength": 64},
+              "corpus": {"payloadByteLengths": [12, 11, 12, 13], "queryByteLength": 5},
               "phases": db.required_phases(4)}
     return record, expected, db.SuppliedBytes(**blobs)
 
@@ -89,7 +89,7 @@ class PackagedDBTests(unittest.TestCase):
             self.assertEqual(set(diagnostic), {"reason", "phase", "sqliteCode"})
             self.assertIn(diagnostic["reason"], db.REASONS)
             self.assertIn(diagnostic["phase"], {"input", "provenance", "offline_only", "unavailable"} |
-                          {p["phase"] for p in db.required_phases(1)})
+                          {p["phase"] for p in db.required_phases(4)})
             self.assertTrue(diagnostic["sqliteCode"] is None or
                             type(diagnostic["sqliteCode"]) is int and diagnostic["sqliteCode"] in db.SQLITE_CODES)
 
@@ -99,6 +99,33 @@ class PackagedDBTests(unittest.TestCase):
             changed["scope"] = scope
             self.check_result(self.validate(changed), True)
         self.assertEqual(self.validate(), self.validate())
+
+    def test_fixed_probe_migrations_match_results_and_fresh_fault_fixtures(self):
+        phases = self.record["phases"]
+        self.assertEqual([p["migration"] for p in phases if p["phase"] == "migration"],
+                         ["probe_base_v1", "probe_fts_v2"])
+        self.assertEqual(phases[1]["after"]["tables"], ["probe_base"])
+        self.assertEqual(phases[2]["after"]["tables"], [
+            "probe_base", "probe_fts", "probe_fts_config", "probe_fts_content",
+            "probe_fts_data", "probe_fts_docsize", "probe_fts_idx"])
+        self.assertEqual(phases[4], {"phase": "fts_query", "fixture": "success",
+                                    "rows": 2, "ids": [1, 3]})
+        for phase in phases:
+            if phase["phase"] == "fault_open":
+                self.assertEqual(phase["before"], {"version": 0, "registry": [],
+                                                  "tables": [], "rows": 0})
+        for index, field, value in ((1, "migration", "probe-baseline-v1"),
+                                     (4, "ids", [1, 2, 3, 4]),
+                                     (4, "rows", 4)):
+            changed = copy.deepcopy(self.record)
+            changed["phases"][index][field] = value
+            self.check_result(self.validate(changed))
+        changed = copy.deepcopy(self.record)
+        changed["phases"][1]["after"]["tables"] = ["probe_state"]
+        self.check_result(self.validate(changed))
+        changed = copy.deepcopy(self.record)
+        changed["phases"][16]["before"] = phases[1]["after"]
+        self.check_result(self.validate(changed))
 
     def test_actual_byte_identity_every_input_not_record_hash_authority(self):
         for name in db.BYTE_FIELDS:
@@ -185,12 +212,14 @@ class PackagedDBTests(unittest.TestCase):
         changed = copy.deepcopy(self.record)
         changed["phases"][4]["ids"] = [1, 2, 3, 4, 5]
         self.check_result(self.validate(changed))
-        for rows in range(1, 5):
+        for rows in range(1, 4):
             changed = copy.deepcopy(self.record)
             changed["corpus"]["payloadByteLengths"] = [1] * rows
-            changed["phases"] = db.required_phases(rows)
-            self.check_result(self.validate(changed), True)
-        for rows in (0, 5, True, 1.0):
+            self.check_result(self.validate(changed))
+        changed = copy.deepcopy(self.record)
+        changed["corpus"] = {"payloadByteLengths": [256] * 4, "queryByteLength": 64}
+        self.check_result(self.validate(changed), True)
+        for rows in (0, 1, 2, 3, 5, True, 4.0):
             with self.assertRaises(db.Invalid):
                 db.required_phases(rows)
 
@@ -245,13 +274,14 @@ class PackagedDBTests(unittest.TestCase):
             changed = copy.deepcopy(self.record)
             changed["phases"] = [{"phase": "unavailable", "reason": reason, "sqliteCode": None}]
             self.check_result(self.validate(changed), True)
-        for code in db.SQLITE_CODES:
+        for code in (19, 1555):
             changed = copy.deepcopy(self.record)
             for phase in changed["phases"]:
                 if phase["phase"] == "injected_failure":
                     phase["sqliteCode"] = code
             self.check_result(self.validate(changed), True)
-        for code in (True, 1.0, -1, 9999, "SQL/private/secret"):
+        for code in (True, 1.0, -1, 9999, "SQL/private/secret",
+                     *(code for code in db.SQLITE_CODES if code not in (19, 1555))):
             changed = copy.deepcopy(self.record)
             changed["phases"][11]["sqliteCode"] = code
             self.check_result(self.validate(changed))

@@ -273,7 +273,7 @@ final class PackagedDBProbe: @unchecked Sendable {
   init(owner input: TopologyDBOwnerContext, fault: PackagedDBFault,
        reopeningClosedFixture: Bool = false) throws {
     guard input.validate(), input.entries() == ["db.sqlite"],
-      reopeningClosedFixture ? fault != .none && input.databaseIdentity.st_size > 0
+      reopeningClosedFixture ? input.databaseIdentity.st_size > 0
         : input.databaseIdentity.st_size == 0
     else { throw PackagedDBFailure(.bindingMismatch) }
     var current = stat()

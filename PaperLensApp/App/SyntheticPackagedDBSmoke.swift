@@ -9,7 +9,17 @@ enum SyntheticPackagedDBSmoke {
   static let directoryName = "Library/Application Support/PaperLensSyntheticPackagedDB"
   enum Launch: Equatable { case absent, invalid, run(String) }
   enum Failure: Error { case ownership, deadline, report }
-  enum Kind: String, Codable, CaseIterable, Sendable { case normal, m1, m2 }
+  enum Kind: String, Codable, CaseIterable, Sendable {
+    case normal, m1, m2
+
+    var fault: PackagedDBFault {
+      switch self {
+      case .normal: return .none
+      case .m1: return .m1
+      case .m2: return .m2
+      }
+    }
+  }
   enum Phase: String, Codable, Sendable {
     case initial, base, migrations, fts, deletion, firstFailure, rollback
     case closeBeforeReopen, reopen, repeatedFailure, finalClose, cleanup
@@ -26,10 +36,11 @@ enum SyntheticPackagedDBSmoke {
   private struct RelaunchResult: Encodable {
     let phase: RelaunchPhase
     let kind: Kind
-    let rollbackVersion: Int
-    let failure: SQLiteFailure
+    var rollbackVersion: Int?
+    var failure: SQLiteFailure?
+    var checks: [Check]?
     let closed = true
-    let cleaned: Bool
+    var cleaned = false
     let provenance: PackagedDBProvenance
   }
   struct CaseResult: Encodable, Sendable {
@@ -88,7 +99,7 @@ enum SyntheticPackagedDBSmoke {
     let deadline = ContinuousClock.now.advanced(by: .seconds(30))
     guard arguments.count == 11, arguments[0] == relaunchFlag,
       let phase = RelaunchPhase(rawValue: arguments[1]),
-      let kind = Kind(rawValue: arguments[2]), kind != .normal,
+      let kind = Kind(rawValue: arguments[2]),
       arguments[3...5].allSatisfy(TopologyFixtures.validRunID),
       let worktree = Int32(arguments[6]), let topology = Int32(arguments[7]),
       let namespace = Int32(arguments[8]), [worktree, topology, namespace].allSatisfy({ $0 >= 3 }),
@@ -112,44 +123,107 @@ enum SyntheticPackagedDBSmoke {
       topology: topology, namespace: namespace, worktreeIdentity: rootInfo,
       topologyIdentity: topologyInfo, namespaceIdentity: namespaceInfo, databaseIdentity: databaseInfo,
       uid: getuid(), ownerID: arguments[3], runID: arguments[4], attemptID: arguments[5])
-    let probe = try PackagedDBProbe(owner: owner, fault: kind == .m1 ? .m1 : .m2,
+    let probe = try PackagedDBProbe(owner: owner, fault: kind.fault,
       reopeningClosedFixture: phase == .reopen)
     defer { if !probe.hasObservedClose { probe.closeAndDrain() } }
     let initial = try probe.snapshot()
-    // A reopening phase must observe rollback before issuing any migration.
-    let initialValid = phase == .first
-      ? initial.version == 0 && initial.registryRows == 0 && initial.probeObjects.isEmpty
-      : matchesRollback(initial, kind: kind)
-    guard initialValid, !probe.isReady else { throw PackagedDBFailure(.unexpectedFailure) }
-    let provenance = try probe.provenance()
+    guard !probe.isReady else { throw PackagedDBFailure(.unexpectedFailure) }
+    var result = RelaunchResult(phase: phase, kind: kind, provenance: try probe.provenance())
+    if kind == .normal {
+      result.checks = try runSuccessfulRelaunchPhase(phase, initial: initial, probe: probe)
+    } else {
+      // Observe the prior rollback independently before attempting another migration.
+      guard matchesSchemaBeforeFTS(initial, baselineCommitted: phase == .reopen && kind == .m2)
+      else { throw PackagedDBFailure(.unexpectedFailure) }
+      let failure = try verifyRelaunchRollback(probe, kind: kind)
+      guard phase == .first || initial == failure.snapshot
+      else { throw PackagedDBFailure(.unexpectedFailure) }
+      result.rollbackVersion = failure.snapshot.version
+      result.failure = failure.code
+    }
+    guard probe.closeAndDrain(), probe.hasObservedClose, owner.validate(),
+      owner.entries() == ["db.sqlite"], ContinuousClock.now < deadline
+    else { throw PackagedDBFailure(.unexpectedFailure) }
+    if phase == .reopen {
+      guard probe.cleanup(), ContinuousClock.now < deadline
+      else { throw PackagedDBFailure(.cleanupFailed) }
+      result.cleaned = true
+    }
+    return try JSONEncoder().encode(result)
+  }
+
+  private static func runSuccessfulRelaunchPhase(
+    _ phase: RelaunchPhase, initial: PackagedDBSnapshot, probe: PackagedDBProbe
+  ) throws -> [Check] {
+    var checks: [Check] = []
+    func check(_ phase: Phase, _ condition: Bool) throws {
+      guard condition else { throw PackagedDBFailure(.unexpectedFailure) }
+      checks.append(Check(phase: phase, passed: true))
+    }
+    if phase == .first {
+      try check(.initial, matchesSchemaBeforeFTS(initial, baselineCommitted: false))
+      _ = try migrateAndDelete(probe, check: check)
+    } else {
+      // Read the on-disk state before the migrator can change it.
+      try check(.initial, matchesEmptyFTS(initial))
+      let reopened = try probe.migrate()
+      try check(.reopen, reopened == initial && probe.isReady && probe.failureHistory.isEmpty)
+    }
+    return checks
+  }
+
+  private static func verifyRelaunchRollback(_ probe: PackagedDBProbe, kind: Kind) throws
+    -> (snapshot: PackagedDBSnapshot, code: SQLiteFailure)
+  {
     var observed: PackagedDBFailure?
     do { _ = try probe.migrate() }
     catch { observed = error as? PackagedDBFailure }
     let rolledBack = try probe.snapshot()
     guard observed?.reason == .migrationFailed, observed?.primaryCode == 19,
       observed?.extendedCode == 1555, !probe.isReady,
-      matchesRollback(rolledBack, kind: kind), phase == .first || initial == rolledBack,
-      probe.closeAndDrain(), probe.hasObservedClose, probe.failureHistory.count == 1,
-      owner.validate(), owner.entries() == ["db.sqlite"], ContinuousClock.now < deadline
+      matchesSchemaBeforeFTS(rolledBack, baselineCommitted: kind == .m2),
+      probe.failureHistory.count == 1
     else { throw PackagedDBFailure(.unexpectedFailure) }
-    let cleaned = phase == .reopen && probe.cleanup()
-    guard (phase == .first || cleaned), ContinuousClock.now < deadline
-    else { throw PackagedDBFailure(.cleanupFailed) }
-    return try JSONEncoder().encode(RelaunchResult(phase: phase, kind: kind,
-      rollbackVersion: rolledBack.version,
-      failure: SQLiteFailure(primary: observed?.primaryCode, extended: observed?.extendedCode),
-      cleaned: cleaned, provenance: provenance))
+    return (rolledBack, SQLiteFailure(primary: observed?.primaryCode, extended: observed?.extendedCode))
   }
 
-  private static func matchesRollback(_ snapshot: PackagedDBSnapshot, kind: Kind) -> Bool {
-    let expectedMigrations = kind == .m1 ? [] : [PackagedDBProbe.migrationNames[0]]
-    return snapshot.version == (kind == .m1 ? 0 : 1)
+  private static func matchesSchemaBeforeFTS(
+    _ snapshot: PackagedDBSnapshot, baselineCommitted: Bool
+  ) -> Bool {
+    let expectedMigrations = baselineCommitted ? [PackagedDBProbe.migrationNames[0]] : []
+    return snapshot.version == (baselineCommitted ? 1 : 0)
       && snapshot.migrations == expectedMigrations && snapshot.identifiers == Set(expectedMigrations)
       && snapshot.registryRows == expectedMigrations.count
-      && snapshot.probeObjects == (kind == .m1 ? [] : ["probe_base"])
+      && snapshot.probeObjects == (baselineCommitted ? ["probe_base"] : [])
       && snapshot.baselineRows == 0 && snapshot.ftsRows == 0 && snapshot.ftsIDs.isEmpty
       && !snapshot.ftsSchemaValid && snapshot.sentences.isEmpty && snapshot.matches.isEmpty
-      && snapshot.baseSchemaValid == (kind == .m2)
+      && snapshot.baseSchemaValid == baselineCommitted
+  }
+
+  private static func matchesEmptyFTS(_ snapshot: PackagedDBSnapshot) -> Bool {
+    snapshot.version == 2 && snapshot.migrations == PackagedDBProbe.migrationNames
+      && snapshot.identifiers == Set(PackagedDBProbe.migrationNames) && snapshot.registryRows == 2
+      && snapshot.baseSchemaValid && snapshot.ftsSchemaValid && snapshot.baselineRows == 0
+      && snapshot.ftsRows == 0 && snapshot.ftsIDs.isEmpty
+      && snapshot.sentences.isEmpty && snapshot.matches.isEmpty
+  }
+
+  private static func migrateAndDelete(
+    _ probe: PackagedDBProbe, check: (Phase, Bool) throws -> Void
+  ) throws -> PackagedDBSnapshot {
+    let base = try probe.migrateBase()
+    try check(.base, base.version == 1 && base.migrations == [PackagedDBProbe.migrationNames[0]]
+      && base.registryRows == 1 && base.baseSchemaValid && base.baselineRows == 0)
+    let full = try probe.migrate()
+    try check(.migrations, full.version == 2 && full.migrations == PackagedDBProbe.migrationNames
+      && full.identifiers == Set(PackagedDBProbe.migrationNames) && full.registryRows == 2
+      && full.baseSchemaValid && full.ftsSchemaValid && probe.isReady)
+    // Compare SQL text/content in RAM only.
+    try check(.fts, full.ftsRows == 4 && full.ftsIDs == [1, 2, 3, 4]
+      && full.sentences == PackagedDBProbe.corpus && full.matches == [1, 3])
+    let deleted = try probe.deleteCorpus()
+    try check(.deletion, matchesEmptyFTS(deleted))
+    return deleted
   }
 
   static func run(parentURL: URL, runID: String) throws -> Report {
@@ -190,8 +264,7 @@ enum SyntheticPackagedDBSmoke {
     }
     do {
       let owner = try files.reserveCase()
-      let fault: PackagedDBFault = kind == .normal ? .none : (kind == .m1 ? .m1 : .m2)
-      let opened = try PackagedDBProbe(owner: owner, fault: fault)
+      let opened = try PackagedDBProbe(owner: owner, fault: kind.fault)
       probe = opened
       let initial = try opened.snapshot()
       try check(.initial, initial.version == 0 && initial.migrations.isEmpty
@@ -199,18 +272,7 @@ enum SyntheticPackagedDBSmoke {
         && initial.probeObjects.isEmpty && initial.ftsRows == 0)
       result.initialProvenance = try opened.provenance()
       if kind == .normal {
-        let base = try opened.migrateBase()
-        try check(.base, base.version == 1 && base.migrations == [PackagedDBProbe.migrationNames[0]]
-          && base.registryRows == 1 && base.baseSchemaValid && base.baselineRows == 0)
-        let full = try opened.migrate()
-        try check(.migrations, full.version == 2 && full.migrations == PackagedDBProbe.migrationNames
-          && full.identifiers == Set(PackagedDBProbe.migrationNames) && full.registryRows == 2
-          && full.baseSchemaValid && full.ftsSchemaValid && opened.isReady)
-        // Compare SQL text/content in RAM only; the report contains closed phase names and booleans.
-        try check(.fts, full.ftsRows == 4 && full.ftsIDs == [1, 2, 3, 4]
-          && full.sentences == PackagedDBProbe.corpus && full.matches == [1, 3])
-        let deleted = try opened.deleteCorpus()
-        try check(.deletion, deleted.ftsRows == 0 && deleted.sentences.isEmpty && deleted.matches.isEmpty)
+        let deleted = try migrateAndDelete(opened, check: check)
         try check(.closeBeforeReopen, opened.closeAndDrain() && opened.hasObservedClose && owner.validate())
         try opened.reopen()
         let reopened = try opened.migrate()
@@ -220,7 +282,7 @@ enum SyntheticPackagedDBSmoke {
       } else {
         try constraint(.firstFailure, opened)
         let rolledBack = try opened.snapshot()
-        try check(.rollback, matchesRollback(rolledBack, kind: kind))
+        try check(.rollback, matchesSchemaBeforeFTS(rolledBack, baselineCommitted: kind == .m2))
         try check(.closeBeforeReopen, opened.closeAndDrain() && opened.hasObservedClose && owner.validate())
         try opened.reopen()
         let reopened = try opened.snapshot()

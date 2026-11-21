@@ -206,11 +206,20 @@ class AgentMatrixTests(unittest.TestCase):
             record["scope"] = scope
             for phase in record["phases"]:
                 if phase["phase"] == "injected_failure":
-                    phase["sqliteCode"] = 5
+                    phase["sqliteCode"] = 1555
             value = replace(value, record=db.json_bytes(record))
             self.assertEqual(db.validate_cell(value.record, value.expected, value.supplied)[0], 2)
             r, e, s = row(value, "failure")
             self.check(agent.validate_row(r, e, s), True, scope == "packaged_db_fts5")
+        value = self.inputs[0]
+        record = db.bounded_json(value.record)
+        for phase in record["phases"]:
+            if phase["phase"] == "injected_failure":
+                phase["sqliteCode"] = 5
+        value = replace(value, record=db.json_bytes(record))
+        self.assertEqual(db.validate_cell(value.record, value.expected, value.supplied)[0], 1)
+        r, e, s = row(value, "failure")
+        self.check(agent.validate_row(r, e, s))
         # A full ordered denominator is not proof of complete positive observations.
         records = list(self.records)
         record = db.bounded_json(records[0])
