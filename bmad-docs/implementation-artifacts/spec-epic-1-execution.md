@@ -10,6 +10,25 @@ approval: explicit-human-story-range-execution
 
 # 전체 실행 계약
 
+## arm64 패키징과 DB 재실행 검증 — 2026-11-22
+
+- Story 1.1의 클린 소스 `a348c80396d5a00e4de703ab81b781278bc562c9`를 Release로 빌드했다.
+  고정된 공급자 런타임을 포함한 전체 앱의 arm64 아키텍처, 실행 코드 19개의 Developer ID 서명과
+  보안 타임스탬프, Hardened Runtime, 샌드박스 권한 및 번들 인벤토리가 검증을 통과했다.
+  패키지 검증 테스트 33개가 통과했다.
+- 패키지 인벤토리 해시는 `2031855a3b6fb56c442141e86ce013509ec450ce2131fe802787a6e41962b48d`다.
+  공증용 ZIP의 SHA-256은 `eb81e42da8c908d94a382a21c91d384c5e55c6e7fd3f71bfe28016185eb7d175`다.
+  `notarytool`은 기본 키체인과 명시한 로그인 키체인에서 `PaperLens` 프로필을 찾지 못했다.
+  공증 요청 ID는 생성되지 않았고, 현재 호스트의 `spctl` 검사에서는 `Unnotarized Developer ID`로 거부됐다.
+- Story 1.5는 같은 패키지의 서명된 실행 파일
+  `e607d79812b3785a96ffe18e8cc85d0a6080839318ca9615357746d682340b71`을
+  macOS 26.7.1(25G241) arm64에서 합성 DB 모드로 여섯 번 실행했다.
+  실제 Apple SQLite에서 FTS5 생성·검색·삭제를 확인했고, 별도 프로세스에서 같은 DB를 다시 열어 삭제가 유지되는지 확인했다.
+  M1·M2의 중복 키 실패 후 각각 스키마 버전 0·1로 롤백됐으며, 재실행으로 같은 DB를 복구하고 정리했다.
+- 로컬 원본은 `.build/topology/notary-a348c80-uqFfd0/`의 `static-verification.json`,
+  `db-relaunch.json`, `submission.log`, `local-gatekeeper.log`에 보존했다.
+  최소 macOS 실행, Agent 정리 매트릭스, 서명 앱의 격리 수용 검증 및 별도 환경의 Gatekeeper GUI 실행은 남아 있다.
+
 ## Integrated native checkpoint — 2026-11-07
 
 **Fixed-design correction:** The unapproved generation pool, alternate package
