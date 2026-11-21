@@ -105,6 +105,15 @@ final class ParsingRecoveryCoordinatorTests: XCTestCase {
     var presentations = database.parsingPresentations(paperID: failed.paperID, includesRetry: true).makeAsyncIterator()
     let initial = try await presentations.next()
     let initialContext = try XCTUnwrap(initial?.retry)
+    let unavailableCoordinator = ParsingRecoveryCoordinator(service: .init(database: database,
+      producer: nil, geometryValidator: RejectingValidator()), currentEpoch: UUID())
+    var feedback: ParsingRetryFailure?
+    do { try await unavailableCoordinator.retry(initialContext); XCTFail("Missing parser admitted a retry") }
+    catch { feedback = ParsingRetryFailure(error: error, context: initialContext) }
+    let previousFailure = try XCTUnwrap(feedback)
+    XCTAssertEqual(previousFailure.matching(initial)?.message, "PDF 파싱 서비스가 연결되지 않았습니다.")
+    XCTAssertNil(previousFailure.matching(nil))
+
     let configuration = try database.compareAndSwapProviderConfiguration(expected: initialContext.currentConfiguration,
       replacementKind: .openAIAPIKey, replacementSlotID: UUID(), replacementModel: "fixture-model")
     let updated = try await presentations.next()
@@ -113,17 +122,22 @@ final class ParsingRecoveryCoordinatorTests: XCTestCase {
     XCTAssertEqual(updated?.status.failure, initial?.status.failure)
     XCTAssertEqual(updatedContext.failedAttempt, failed)
     XCTAssertEqual(updatedContext.currentConfiguration, configuration)
+    XCTAssertNil(previousFailure.matching(updated), "An unchanged attempt ID must not preserve stale feedback")
 
     let producer = HeldFailureProducer()
     let coordinator = ParsingRecoveryCoordinator(service: .init(database: database,
       producer: producer, geometryValidator: RejectingValidator()), currentEpoch: UUID())
     do { try await coordinator.retry(initialContext); XCTFail("Previous configuration must be rejected") }
-    catch { XCTAssertEqual(error as? ParsingRecoveryError, .staleContext) }
+    catch {
+      XCTAssertEqual(error as? ParsingRecoveryError, .staleContext)
+      XCTAssertNil(ParsingRetryFailure(error: error, context: initialContext))
+    }
     let retry = Task { try await coordinator.retry(updatedContext) }
     await producer.waitForStart()
     let running = try await presentations.next()
     XCTAssertEqual(running?.status.state, "running")
     XCTAssertNil(running?.retry)
+    XCTAssertNil(previousFailure.matching(running))
     await producer.release()
     do { _ = try await retry.value; XCTFail("Controlled parser failure should propagate") }
     catch { XCTAssertEqual(error as? ExtractionError, .invalidBatch) }

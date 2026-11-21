@@ -45,6 +45,26 @@ enum ParsingFailureNotice: PreferenceKey {
   }
 }
 
+struct ParsingRetryFailure {
+  private let context: ParsingRecoveryContext
+  let message: String
+
+  init?(error: any Error, context: ParsingRecoveryContext) {
+    guard !(error is ParsingRecoveryError) else { return nil }
+    self.context = context
+    if let failure = error as? ExtractionError {
+      message = ParsingFailureMessage.korean(failure.rawValue)
+    } else {
+      message = "파싱을 다시 시도하지 못했습니다. 현재 상태를 확인하세요."
+    }
+  }
+
+  func matching(_ presentation: ParsingRecoveryCoordinator.Presentation?) -> Self? {
+    guard presentation?.retry == context else { return nil }
+    return self
+  }
+}
+
 /// Reads persisted attempt/visibility state. Dispatching a task is never shown as success.
 public struct ParsingStatusView: View {
   private struct ObservationTaskKey: Hashable {
@@ -61,7 +81,7 @@ public struct ParsingStatusView: View {
   @State private var reconciliation = ParsingMetadataReconciliation()
   @State private var presentation: ParsingRecoveryCoordinator.Presentation?
   @State private var retrying = false
-  @State private var retryFailure: String?
+  @State private var retryFailure: ParsingRetryFailure?
   @State private var unavailable = false
   @State private var restartToken = UUID()
   @State private var trackingKey: ObservationTaskKey?
@@ -97,9 +117,9 @@ public struct ParsingStatusView: View {
       Text(aiPreparationReason).font(.caption)
       Text("Translation·Paper Chat·Brief 생성은 아직 구현되지 않았습니다.")
         .font(.caption).foregroundStyle(.secondary)
-      if let retryFailure {
-        Label(retryFailure, systemImage: "exclamationmark.triangle")
-          .accessibilityLabel(retryFailure)
+      if let message = retryFailure?.message {
+        Label(message, systemImage: "exclamationmark.triangle")
+          .accessibilityLabel(message)
       }
       if canStartParsing {
         Button(initialStartFailed ? "파싱 다시 시도" : "파싱 시작") {
@@ -129,8 +149,7 @@ public struct ParsingStatusView: View {
     .task(id: key) {
       guard isCurrent(key), !Task.isCancelled else { return }
       if presentationPaperID != key.paperID {
-        presentation = nil
-        retryFailure = nil
+        updatePresentation(nil)
         retrying = false
         unavailable = false
         reconciliation = ParsingMetadataReconciliation()
@@ -151,7 +170,7 @@ public struct ParsingStatusView: View {
         guard isCurrent(key), !Task.isCancelled else { return }
         trackingEnded = true
         let request = reconciliation.beginRequest()
-        presentation = nil
+        updatePresentation(nil)
         unavailable = true
         await reconcile(.unavailable, request: request)
       }
@@ -224,24 +243,16 @@ public struct ParsingStatusView: View {
     defer {
       if id == paperID { retrying = false }
     }
-    do { try await coordinator.retry(context) }
-    catch {
-      guard isCurrent(key), !Task.isCancelled else { return }
-      if let failure = error as? ExtractionError {
-        retryFailure = ParsingFailureMessage.korean(failure.rawValue)
-      } else if error is ParsingRecoveryError {
-        // A stale/duplicate action cannot replace the current attempt's notice.
-        retryFailure = nil
-      } else {
-        retryFailure = "파싱을 다시 시도하지 못했습니다. 현재 상태를 확인하세요."
-      }
+    let failure: ParsingRetryFailure?
+    do {
+      try await coordinator.retry(context)
+      failure = nil
+    } catch {
+      failure = ParsingRetryFailure(error: error, context: context)
     }
-    guard isCurrent(key), !Task.isCancelled else { return }
     guard let recoveredKey = await recoverTracking(key: key),
       isCurrent(recoveredKey), !Task.isCancelled else { return }
-    if presentation?.retry?.failedAttempt.attempt != context.failedAttempt.attempt {
-      retryFailure = nil
-    }
+    retryFailure = failure?.matching(presentation)
   }
 
   @MainActor private func recoverTracking(key: ObservationTaskKey) async -> ObservationTaskKey? {
@@ -271,15 +282,20 @@ public struct ParsingStatusView: View {
         latest = .init(status: status, retry: nil)
       }
       guard reconciliation.isCurrent(request), isCurrent(key), !Task.isCancelled else { return }
-      presentation = latest
+      updatePresentation(latest)
       unavailable = false
       await reconcile(.revision(latest.status.usableRevision), request: request)
     } catch {
       guard reconciliation.isCurrent(request), isCurrent(key), !Task.isCancelled else { return }
       unavailable = true
-      presentation = nil
+      updatePresentation(nil)
       await reconcile(.unavailable, request: request)
     }
+  }
+
+  @MainActor private func updatePresentation(_ latest: ParsingRecoveryCoordinator.Presentation?) {
+    presentation = latest
+    retryFailure = retryFailure?.matching(latest)
   }
 
   @MainActor private func reconcile(_ outcome: ParsingMetadataReconciliation.Outcome, request: UUID) async {
