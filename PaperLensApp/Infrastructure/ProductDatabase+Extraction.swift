@@ -120,9 +120,12 @@ extension ProductDatabase {
     }
   }
 
-  func reserveExtraction(_ identity: ExtractionIdentity) throws {
+  func reserveExtraction(_ identity: ExtractionIdentity, firstInvocationOnly: Bool = false) throws {
     try adapterWrite { db in
       try guardExtractionPaper(db, identity)
+      if firstInvocationOnly, try !isFirstExtractionInvocation(db, paperID: identity.paperID) {
+        throw ExtractionError.staleAttempt
+      }
       guard try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM extractionRevision WHERE id = ?",
         arguments: [identity.revision.uuidString]) == 0 else { throw ExtractionError.staleAttempt }
       guard try Int.fetchOne(db, sql: """
@@ -135,17 +138,39 @@ extension ProductDatabase {
           AND (state = 'running' OR attempt = ? OR revision = ?)
         """, arguments: [identity.paperID.uuidString, identity.attempt.uuidString,
           identity.revision.uuidString]) == 0 else { throw ExtractionError.staleAttempt }
-      try db.execute(sql: "INSERT INTO extractionInvocation(attempt, fence, revision, paperID) VALUES (?, ?, ?, ?)",
-        arguments: [identity.attempt.uuidString, identity.fence.uuidString,
-          identity.revision.uuidString, identity.paperID.uuidString])
       try db.execute(sql: "DELETE FROM extractionAttempt WHERE paperID = ?",
         arguments: [identity.paperID.uuidString])
-      try db.execute(sql: """
-        INSERT INTO extractionAttempt(paperID, generation, pdfSHA256, pdfReference, revision,
-          job, attempt, fence, correlation, input, epoch, configSlot, configGeneration, configKind, state)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running')
-        """, arguments: attemptArguments(identity))
+      try insertExtractionInvocation(db, identity)
     }
+  }
+
+  /// Record the failure after the initial reservation rolled back. Nothing was sent to the parser.
+  func recordInitialExtractionFailure(_ identity: ExtractionIdentity) throws {
+    try adapterWrite { db in
+      guard try isFirstExtractionInvocation(db, paperID: identity.paperID) else { return }
+      do { try guardExtractionPaper(db, identity) }
+      catch ExtractionError.staleAttempt { return }
+      try insertExtractionInvocation(db, identity, failure: .reservationFailure)
+    }
+  }
+
+  private func isFirstExtractionInvocation(_ db: Database, paperID: UUID) throws -> Bool {
+    try Int.fetchOne(db, sql: """
+      SELECT EXISTS (SELECT 1 FROM extractionInvocation WHERE paperID = ?)
+        OR EXISTS (SELECT 1 FROM extractionAttempt WHERE paperID = ?)
+      """, arguments: [paperID.uuidString, paperID.uuidString]) == 0
+  }
+
+  private func insertExtractionInvocation(_ db: Database, _ identity: ExtractionIdentity,
+    failure: ExtractionError? = nil) throws {
+    try db.execute(sql: "INSERT INTO extractionInvocation(attempt, fence, revision, paperID) VALUES (?, ?, ?, ?)",
+      arguments: [identity.attempt.uuidString, identity.fence.uuidString,
+        identity.revision.uuidString, identity.paperID.uuidString])
+    try db.execute(sql: """
+      INSERT INTO extractionAttempt(paperID, generation, pdfSHA256, pdfReference, revision,
+        job, attempt, fence, correlation, input, epoch, configSlot, configGeneration, configKind, state, failure)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      """, arguments: attemptArguments(identity) + [failure == nil ? "running" : "failed", failure?.rawValue])
   }
 
   func publishExtraction(_ identity: ExtractionIdentity, sentences: [ValidatedExtractionSentence],

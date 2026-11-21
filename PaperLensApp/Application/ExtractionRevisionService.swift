@@ -1,12 +1,13 @@
 import Foundation
 import Darwin
+import GRDB
 #if SWIFT_PACKAGE
 import ProviderRequest
 #endif
 
 public enum ExtractionError: String, Error, Sendable {
   case producerUnavailable, geometryUnavailable, invalidBatch, staleAttempt, interrupted, storageFailure
-  case resourceExceeded, parsingFailure
+  case resourceExceeded, parsingFailure, reservationFailure
 }
 
 public struct ExtractionIdentity: Equatable, Sendable {
@@ -760,10 +761,20 @@ public struct ExtractionRevisionService: Sendable {
   public let geometryValidator: (any ExtractionGeometryValidating)?
 
   public func parse(_ identity: ExtractionIdentity) async throws {
+    try await parse(identity, firstInvocationOnly: false)
+  }
+
+  func parse(_ identity: ExtractionIdentity, firstInvocationOnly: Bool) async throws {
     guard let producer else { throw ExtractionError.producerUnavailable }
     guard let geometryValidator else { throw ExtractionError.geometryUnavailable }
     try Task.checkCancellation()
-    try await Task.detached { try database.reserveExtraction(identity) }.value
+    try await Task.detached {
+      do { try database.reserveExtraction(identity, firstInvocationOnly: firstInvocationOnly) }
+      catch let error as DatabaseError where firstInvocationOnly {
+        try database.recordInitialExtractionFailure(identity)
+        throw error
+      }
+    }.value
     try await consumeReserved(identity, producer: producer, validator: geometryValidator)
   }
 

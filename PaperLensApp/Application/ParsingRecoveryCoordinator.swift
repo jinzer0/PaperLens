@@ -176,6 +176,7 @@ public enum ParsingFailureMessage {
     case "resourceExceeded": return "파싱이 허용된 자원 한도를 초과했습니다. 다시 시도하세요."
     case "parsingFailure": return "원문 파싱에 실패했습니다. 다시 시도하세요."
     case "staleAttempt": return "논문 또는 설정이 변경되어 파싱을 완료하지 못했습니다."
+    case "reservationFailure": return "파싱 작업을 저장하지 못해 시작하지 못했습니다. 다시 시도하세요."
     case "storageFailure": return "원문 파싱 결과를 저장하지 못했습니다. 다시 시도하세요."
     default: return "원문 파싱에 실패했습니다. 다시 시도하세요."
     }

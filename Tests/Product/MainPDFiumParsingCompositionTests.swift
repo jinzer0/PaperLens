@@ -173,6 +173,69 @@ import XCTest
     XCTAssertEqual(after, context)
   }
 
+  func testFailedInitialReservationIsRestoredAndExplicitRetryUsesSameJob() async throws {
+    let f = try await fixture(reserve: false)
+    defer { try? FileManager.default.removeItem(at: f.temporary) }
+    let graph = try graph(f)
+    // Keep the later Retry at the owned-input boundary so no helper can start.
+    try FileManager.default.removeItem(at: f.database.root.appendingPathComponent(f.snapshot.pdfReference))
+    try f.database.adapterWrite { db in
+      try db.execute(sql: """
+        CREATE TRIGGER rejectInitialReservation BEFORE INSERT ON extractionAttempt
+        WHEN NEW.state = 'running' BEGIN SELECT RAISE(ABORT, 'fixture reservation write failed'); END;
+        """)
+    }
+    do {
+      _ = try await graph.parseImportedPaper(f.identity.paperID)
+      XCTFail("Injected initial reservation error did not propagate")
+    } catch { XCTAssertTrue(error is DatabaseError) }
+    let reopened = try ProductDatabase.open(at: f.database.root)
+    let persisted = try reopened.extractionStatus(paperID: f.identity.paperID)
+    XCTAssertEqual(persisted.state, "failed")
+    XCTAssertEqual(persisted.failure, "reservationFailure")
+    XCTAssertNil(persisted.usableRevision)
+    let failed = try await graph.recoveryCoordinator.presentation(paperID: f.identity.paperID)
+    let context = try XCTUnwrap(failed.retry)
+    XCTAssertEqual(failed.status.failure, persisted.failure)
+    try f.database.adapterWrite { try $0.execute(sql: "DROP TRIGGER rejectInitialReservation") }
+
+    let duplicate = try await graph.parseImportedPaper(f.identity.paperID)
+    XCTAssertNil(duplicate)
+    do {
+      try await graph.recoveryCoordinator.retry(context)
+      XCTFail("Missing owned test input could not have parsed")
+    } catch { }
+    let retried = try await graph.recoveryCoordinator.presentation(paperID: f.identity.paperID)
+    let retryContext = try XCTUnwrap(retried.retry)
+    XCTAssertEqual(retryContext.failedAttempt.job, context.failedAttempt.job)
+    XCTAssertNotEqual(retryContext.failedAttempt.attempt, context.failedAttempt.attempt)
+    XCTAssertNotEqual(retried.status.failure, persisted.failure)
+    XCTAssertEqual(try reopened.adapterRead {
+      try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM extractionInvocation")
+    }, 2)
+  }
+
+  func testLateInitialReservationCannotReplaceAnAlreadyFailedAttempt() async throws {
+    let f = try await fixture(reserve: false)
+    defer { try? FileManager.default.removeItem(at: f.temporary) }
+    let graph = try graph(f)
+    let late = try XCTUnwrap(graph.initialIdentity(paperID: f.identity.paperID))
+    try FileManager.default.removeItem(at: f.database.root.appendingPathComponent(f.snapshot.pdfReference))
+    try f.database.reserveExtraction(f.identity)
+    try f.database.failExtraction(f.identity, failure: .interrupted)
+
+    do {
+      try await graph.service.parse(late, firstInvocationOnly: true)
+      XCTFail("A captured first request cannot replace a persisted attempt")
+    } catch { XCTAssertEqual(error as? ExtractionError, .staleAttempt) }
+    let failed = try await graph.recoveryCoordinator.presentation(paperID: f.identity.paperID)
+    XCTAssertEqual(failed.status.failure, "interrupted")
+    XCTAssertEqual(failed.retry?.failedAttempt.attempt, f.identity.attempt)
+    XCTAssertEqual(try f.database.adapterRead {
+      try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM extractionInvocation")
+    }, 1)
+  }
+
   func testCancelledInitialCommandDoesNotReserveAndStaleConfigurationCannotDispatch() async throws {
     let f = try await fixture(reserve: false)
     defer { try? FileManager.default.removeItem(at: f.temporary) }
@@ -190,7 +253,7 @@ import XCTest
     _ = try f.database.compareAndSwapProviderConfiguration(expected: identity.configuration,
       replacementKind: .openAIAPIKey, replacementSlotID: UUID(),
       replacementModel: "changed-owned-fixture")
-    do { try await graph.service.parse(identity); XCTFail("Stale configuration dispatched") }
+    do { try await graph.service.parse(identity, firstInvocationOnly: true); XCTFail("Stale configuration dispatched") }
     catch { XCTAssertEqual(error as? ExtractionError, .staleAttempt) }
     XCTAssertEqual(try f.database.adapterRead {
       try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM extractionInvocation")
@@ -206,7 +269,7 @@ import XCTest
       try $0.execute(sql: "UPDATE paper SET status = 'deleting', deletionID = ? WHERE id = ?",
         arguments: [UUID().uuidString, f.identity.paperID.uuidString])
     }
-    do { try await graph.service.parse(captured); XCTFail("Deleting capture dispatched") }
+    do { try await graph.service.parse(captured, firstInvocationOnly: true); XCTFail("Deleting capture dispatched") }
     catch { XCTAssertEqual(error as? ExtractionError, .staleAttempt) }
     let freshGraph = try self.graph(f)
     let result = try await freshGraph.parseImportedPaper(f.identity.paperID)

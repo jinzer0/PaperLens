@@ -93,7 +93,7 @@ import ProviderRequest
   public func parseImportedPaper(_ paperID: UUID) async throws -> ExtractionIdentity? {
     try Task.checkCancellation()
     guard let identity = try initialIdentity(paperID: paperID) else { return nil }
-    try await service.parse(identity)
+    try await service.parse(identity, firstInvocationOnly: true)
     return identity
   }
 
