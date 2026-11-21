@@ -1144,6 +1144,87 @@ import ProviderRequest
     try await waitFor { codex.phase == .idle }
   }
 
+  func testUnlaunchedSummaryCleanupDebtBlocksOnlyItsPaperDeletion() async throws {
+    let (root, _, template) = try workerFixture(
+      script: controlWorkerScript(holdResult: false, syntheticLogin: true))
+    defer { try? FileManager.default.removeItem(at: root) }
+    let database = try ProductDatabase.open(at: root.appendingPathComponent("database"))
+    let configuration = try NativeOpenAIConfiguration(model: "fixture-model")
+    let apiKey = NativeAPIKeyConnection(configuration: configuration,
+      slots: try APIKeySlotStore(directory: root.appendingPathComponent("slots")),
+      persistence: DatabaseAPIKeySelector(database: database, configuration: configuration),
+      transport: RejectNetwork(), authority: try ProviderRequest())
+    let loginRoot = root.appendingPathComponent("codex-scopes", isDirectory: true)
+    let retainedBytes = Data("unowned setup fixture".utf8)
+    var loginDirectory: URL?
+    var retainedEntry: URL?
+    let codex = NativeCodexConnection(database: database, root: loginRoot, apiKey: apiKey) { namespace in
+      if namespace.directoryURL.deletingLastPathComponent().path != loginRoot.path {
+        let entry = namespace.directoryURL.appendingPathComponent("unowned-fixture")
+        do { try retainedBytes.write(to: entry, options: .withoutOverwriting) }
+        catch { XCTFail("Could not create the setup cleanup fixture: \(error)") }
+        retainedEntry = entry
+        return nil
+      }
+      guard namespace.prepareBackupExclusionFixture(
+        agentScript: root.appendingPathComponent("resources/agent.py"),
+        interpreter: SyntheticPython.metadataInterpreter) else { return nil }
+      loginDirectory = namespace.directoryURL
+      return .testing(namespace: namespace, interpreter: template.interpreter, script: template.script)
+    }
+    let peer = IsolatedAgentLibraryPurge(unsupportedPaperRoot: root.appendingPathComponent("legacy"),
+      summaryRoot: codex.summaryRoot)
+    peer.bind(codex)
+    let library = try await LocalLibraryLifecycle.open(database: database, agentPurge: peer)
+    let pdf = root.appendingPathComponent("source.pdf")
+    try Data("%PDF-1.7\nsynthetic setup failure\n%%EOF\n".utf8).write(to: pdf)
+    let paper = try await library.importPDF(from: pdf)
+    let other = try await library.importPDF(from: pdf)
+    codex.connect(mode: "browser")
+    let login = try XCTUnwrap(loginDirectory)
+    defer { codex.cancel() }
+    try await waitFor { codex.phase == .signingIn }
+    codex.checkLogin()
+    try await waitFor { codex.eligibleForEntry }
+
+    let (authority, request, _) = try parameters(paperID: paper)
+    let identity = LibrarySummaryIdentity(paperID: paper, generation: UUID(), requestPaperGeneration: 1,
+      pdfSHA256: String(repeating: "a", count: 64), revision: UUID(),
+      configurationGeneration: try database.providerConfiguration().generation, job: UUID(),
+      attempt: UUID(), fence: UUID(), correlation: UUID(), input: UUID(), epoch: UUID())
+    do {
+      _ = try await codex.executeLibrarySummary(request, identity: identity, authority: authority)
+      XCTFail("Summary generation started despite failed setup")
+    } catch { XCTAssertEqual(error as? LibrarySummaryError, .cleanupUnavailable) }
+
+    let retained = try XCTUnwrap(retainedEntry)
+    let unknown = codex.summaryRoot.appendingPathComponent("unowned-sibling")
+    try FileManager.default.createDirectory(at: unknown, withIntermediateDirectories: false)
+    do {
+      _ = try await codex.purgeSummaryPaper(paperID: other, deletionID: UUID())
+      XCTFail("Purge accepted a namespace with an unowned sibling")
+    } catch { XCTAssertEqual(error as? LocalLibraryError, .producerClosureUnknown) }
+    try FileManager.default.removeItem(at: unknown)
+
+    try await library.delete(paperID: other)
+    do {
+      try await library.delete(paperID: paper)
+      XCTFail("Deletion completed for the paper with unresolved setup cleanup")
+    } catch { XCTAssertEqual(error as? LocalLibraryError, .producerClosureUnknown) }
+    let remaining = try await library.list()
+    XCTAssertEqual(remaining.map(\.id), [paper])
+    XCTAssertEqual(remaining.first?.status, .deletionFailed)
+    let storedPDF = database.root.appendingPathComponent("papers/\(paper.uuidString)/document.pdf")
+    XCTAssertTrue(FileManager.default.fileExists(atPath: storedPDF.path))
+    XCTAssertEqual(try Data(contentsOf: retained), retainedBytes)
+    XCTAssertFalse(codex.canStart)
+
+    codex.cancel()
+    try await waitForMarker("retirement-received", directory: login)
+    try Data().write(to: marker("release-retirement", directory: login))
+    try await waitFor { codex.phase == .idle }
+  }
+
   func testCancellationRejectsLateResultAndWaitsForActualRetirement() async throws {
     let (root, namespace, launch) = try workerFixture(script: controlWorkerScript(holdResult: true))
     defer { try? FileManager.default.removeItem(at: root) }

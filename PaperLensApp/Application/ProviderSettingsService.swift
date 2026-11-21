@@ -76,7 +76,8 @@ public final class NativeCodexConnection: ObservableObject {
   private var intendedPhase: Phase = .idle
   private var publishingPhase = false
   private var summaryScopes: [UUID: NativeCodexSummaryScope] = [:]
-  private var summaryNamespaceDebt: [TopologyOwnedFixtures] = []
+  // The single admitted setup may leave a bound namespace before any summary worker starts.
+  private var summaryNamespaceDebt: (paperID: UUID, namespace: TopologyOwnedFixtures)?
   private(set) var preparingForApplicationTermination = false
 
   public var summaryRoot: URL { root.deletingLastPathComponent().appendingPathComponent("codex-summary-scopes") }
@@ -87,7 +88,7 @@ public final class NativeCodexConnection: ObservableObject {
     guard let login = usableActiveLogin, let selected = login.committed,
       selected.generation == identity.configurationGeneration, let model = selected.model,
       request.wire.operation == .librarySummary, summaryScopes.isEmpty,
-      summaryNamespaceDebt.isEmpty else { throw LibrarySummaryError.providerUnavailable }
+      summaryNamespaceDebt == nil else { throw LibrarySummaryError.providerUnavailable }
     let raw = try authority.encodeRequest(request)
     guard raw.count <= 49_152 else { throw LibrarySummaryError.invalidResult }
     try IsolatedAgentLibraryPurge.verifySummaryRoot(summaryRoot)
@@ -97,7 +98,7 @@ public final class NativeCodexConnection: ObservableObject {
     guard let launch = prepareWorker(target), target.prepareRuntimeDirectories(),
       login.namespace.copyLoginAuthentication(to: target) else {
       if !target.cleanupUnlaunchedWorkerNamespace() {
-        summaryNamespaceDebt.append(target)
+        summaryNamespaceDebt = (identity.paperID, target)
         throw LibrarySummaryError.cleanupUnavailable
       }
       throw LibrarySummaryError.providerUnavailable
@@ -130,10 +131,12 @@ public final class NativeCodexConnection: ObservableObject {
       guard scope.clean else { throw LocalLibraryError.producerClosureUnknown }
       removeSummaryScope(id)
     }
-    guard summaryNamespaceDebt.isEmpty else { throw LocalLibraryError.producerClosureUnknown }
-    // Another Paper may own the single admitted summary worker. Account for only
-    // that live namespace by filesystem identity when observing the shared root.
-    if let other = summaryScopes.values.first(where: { $0.paperID != paperID }) {
+    // A different Paper's known namespace may remain. Any unexpected root entry
+    // or replacement still prevents a purge receipt.
+    if let debt = summaryNamespaceDebt {
+      guard debt.paperID != paperID else { throw LocalLibraryError.producerClosureUnknown }
+      try IsolatedAgentLibraryPurge.verifySummaryRoot(summaryRoot, allowing: debt.namespace)
+    } else if let other = summaryScopes.values.first(where: { $0.paperID != paperID }) {
       try other.verifyNamespaceForUnrelatedPurge(at: summaryRoot)
     } else {
       try IsolatedAgentLibraryPurge.verifySummaryRoot(summaryRoot)
@@ -175,12 +178,12 @@ public final class NativeCodexConnection: ObservableObject {
   /// Replacing the coordinator itself must wait for all of its owners to drain.
   public var blocksReplacement: Bool {
     candidate != nil || activeLogin != nil || predecessor != nil
-      || !summaryScopes.isEmpty || !summaryNamespaceDebt.isEmpty
+      || !summaryScopes.isEmpty || summaryNamespaceDebt != nil
   }
 
   public var canStart: Bool {
     guard !loginStorageBlocked, !preparingForApplicationTermination, !publishingPhase, candidate == nil,
-      predecessor == nil, summaryNamespaceDebt.isEmpty,
+      predecessor == nil, summaryNamespaceDebt == nil,
       apiKey.canReplaceOwner else { return false }
     if activeLogin == nil { return phase == .idle && summaryScopes.isEmpty }
     return phase == .connected && eligibleForEntry
@@ -228,7 +231,7 @@ public final class NativeCodexConnection: ObservableObject {
   public var eligibleForEntry: Bool { usableActiveLogin != nil }
 
   var configurationAvailableForAPIKeyPromotion: ProviderConfiguration? {
-    guard candidate == nil, predecessor == nil, summaryNamespaceDebt.isEmpty else { return nil }
+    guard candidate == nil, predecessor == nil, summaryNamespaceDebt == nil else { return nil }
     return usableActiveLogin?.committed
   }
 
