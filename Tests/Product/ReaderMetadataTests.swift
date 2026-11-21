@@ -203,4 +203,44 @@ final class ReaderMetadataTests: XCTestCase {
       location: .init(pageIndex: 7, x: 0, y: 0), sectionID: "/0")))
     XCTAssertTrue(ReaderOutlineAdapter(document: PDFDocument(), identity: current).sections.isEmpty)
   }
+
+  @MainActor
+  func testOutlineFollowsDisplayedVerticalOrderOnRotatedPages() {
+    // Each row lists page-space points from the top of the displayed page to the bottom.
+    let rotations: [(degrees: Int, points: [CGPoint])] = [
+      (0, [CGPoint(x: 100, y: 210), CGPoint(x: 100, y: 180), CGPoint(x: 100, y: 150),
+        CGPoint(x: 100, y: 120), CGPoint(x: 100, y: 90)]),
+      (90, [CGPoint(x: 40, y: 100), CGPoint(x: 70, y: 100), CGPoint(x: 100, y: 100),
+        CGPoint(x: 130, y: 100), CGPoint(x: 160, y: 100)]),
+      (180, [CGPoint(x: 100, y: 60), CGPoint(x: 100, y: 90), CGPoint(x: 100, y: 120),
+        CGPoint(x: 100, y: 150), CGPoint(x: 100, y: 180)]),
+      (270, [CGPoint(x: 210, y: 100), CGPoint(x: 180, y: 100), CGPoint(x: 150, y: 100),
+        CGPoint(x: 120, y: 100), CGPoint(x: 90, y: 100)]),
+    ]
+    for (degrees, points) in rotations {
+      let document = PDFDocument(), page = PDFPage(), nextPage = PDFPage()
+      let crop = CGRect(x: 20, y: 30, width: 200, height: 200)
+      page.setBounds(crop, for: .cropBox)
+      nextPage.setBounds(crop, for: .cropBox)
+      page.rotation = degrees
+      document.insert(page, at: 0)
+      document.insert(nextPage, at: 1)
+      let root = PDFOutline(), first = PDFOutline(), second = PDFOutline()
+      first.label = "Introduction"
+      first.destination = PDFDestination(page: page, at: points[1])
+      second.label = "Methods"
+      second.destination = PDFDestination(page: page, at: points[3])
+      root.insertChild(first, at: 0)
+      root.insertChild(second, at: 1)
+      document.outlineRoot = root
+      let adapter = ReaderOutlineAdapter(document: document, identity: nil)
+      let expected: [String?] = [nil, "/0", "/0", "/1", "/1"]
+      for (index, point) in points.enumerated() {
+        XCTAssertEqual(adapter.activeSection(at: .init(pageIndex: 0, x: point.x, y: point.y)),
+          expected[index], "Rotation \(degrees), position \(index)")
+      }
+      XCTAssertEqual(adapter.activeSection(at: .init(pageIndex: 1, x: 100, y: 100)), "/1",
+        "The visually last section of a rotated page remains current onto the next page")
+    }
+  }
 }

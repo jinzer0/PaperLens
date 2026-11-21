@@ -191,6 +191,7 @@ public final class ReaderOutlineAdapter {
     public let depth: Int
     public let location: ReaderConfirmedLocation?
     fileprivate let destination: PDFDestination?
+    fileprivate let displayedY: CGFloat?
   }
   public let document: PDFDocument
   public let identity: ReaderMetadataIdentity?
@@ -204,8 +205,11 @@ public final class ReaderOutlineAdapter {
     if depth >= 0 {
       let destination = outline.destination ?? (outline.action as? PDFActionGoTo)?.destination
       let location = destination.flatMap { try? validated($0) }
+      let y = location.flatMap { location in
+        destination?.page.flatMap { displayedY(at: location, on: $0) }
+      }
       sections.append(Section(id: path, title: outline.label ?? "미확인", depth: depth,
-        location: location, destination: location == nil ? nil : destination))
+        location: location, destination: location == nil ? nil : destination, displayedY: y))
     }
     for index in 0..<outline.numberOfChildren {
       guard sections.count < 4096 else { break }
@@ -241,16 +245,25 @@ public final class ReaderOutlineAdapter {
   }
   public func activeSection(at location: ReaderConfirmedLocation) -> String? {
     guard let page = document.page(at: location.pageIndex),
-      location.isValid(pageCount: document.pageCount, bounds: page.bounds(for: .cropBox)) else { return nil }
-    return sections.filter { section in
-      guard let start = section.location else { return false }
-      return start.pageIndex < location.pageIndex
-        || (start.pageIndex == location.pageIndex && start.y >= location.y)
+      location.isValid(pageCount: document.pageCount, bounds: page.bounds(for: .cropBox)),
+      let currentY = displayedY(at: location, on: page) else { return nil }
+    return sections.lazy.compactMap { section -> (id: String, pageIndex: Int, y: CGFloat)? in
+      guard let start = section.location, let y = section.displayedY,
+        start.pageIndex < location.pageIndex
+          || (start.pageIndex == location.pageIndex && y >= currentY) else { return nil }
+      return (section.id, start.pageIndex, y)
     }.max { lhs, rhs in
-      guard let l = lhs.location, let r = rhs.location else { return false }
-      return l.pageIndex == r.pageIndex ? l.y > r.y : l.pageIndex < r.pageIndex
+      lhs.pageIndex == rhs.pageIndex ? lhs.y > rhs.y : lhs.pageIndex < rhs.pageIndex
     }?.id
   }
+
+  // Reader scrolls vertically. Compare the rotated crop-box heights, while
+  // keeping destinations and saved positions in their original page space.
+  private func displayedY(at location: ReaderConfirmedLocation, on page: PDFPage) -> CGFloat? {
+    let point = CGPoint(x: location.x, y: location.y).applying(page.transform(for: .cropBox))
+    return point.y.isFinite ? point.y : nil
+  }
+
   /// Restored data is only a candidate until checked against the actual current document.
   public func validatedRestoration(_ context: ReaderMetadataContext) -> ReaderConfirmedLocation? {
     guard let location = context.location,
