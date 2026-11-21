@@ -5,7 +5,7 @@ import ProviderRequest
 
 public enum LibrarySummaryError: Error, Equatable {
   case providerUnavailable, geometryUnavailable, staleIdentity, invalidGrounding, invalidResult
-  case requestInProgress, cleanupUnavailable
+  case requestInProgress, cleanupUnavailable, persistenceFailure
 }
 
 /// Decoder must validate canonical geometry and full quote extent, not merely decode a BLOB.

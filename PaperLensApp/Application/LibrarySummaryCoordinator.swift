@@ -35,6 +35,7 @@ extension LibrarySummaryFailure {
       case .invalidResult: return .invalidResponse
       case .requestInProgress: return .requestInProgress
       case .cleanupUnavailable: return .cleanupUnavailable
+      case .persistenceFailure: return .persistenceFailure
       }
     }
     if let value = error as? APIKeyConnectionError {

@@ -941,6 +941,69 @@ final class LibrarySummaryServiceTests: XCTestCase {
       sql: "SELECT COUNT(*) FROM librarySummaryJob") }, 0)
   }
 
+  @MainActor func testSkippedSummaryWritePreservesPriorResultAndNeverDispatchesWithoutSavedOwners() async throws {
+    let f = try fixture()
+    defer { try? FileManager.default.removeItem(at: f.root) }
+    try prepareCoordinator(f)
+    let provider = SummaryProvider()
+    let epoch = UUID()
+    let authority = try ProviderRequest()
+    func generate() async throws -> LibrarySummaryRecord {
+      let coordinator = LibrarySummaryCoordinator(database: f.db, epoch: epoch, leases: SummaryLeases(),
+        authority: authority, provider: provider)
+      return try await coordinator.generate(paperID: f.identity.paperID,
+        generation: f.identity.generation, outputLanguage: "en")
+    }
+    let previous = try await generate()
+    let skippedWrites: [(trigger: String, dispatches: Bool)] = [
+      ("BEFORE INSERT ON librarySummaryJob", false),
+      ("BEFORE INSERT ON librarySummaryOwner", false),
+      ("BEFORE INSERT ON librarySummaryOwnerAnchor WHEN NEW.sentenceID = 1", false),
+      ("BEFORE INSERT ON librarySummaryResult", true),
+      ("BEFORE UPDATE OF state ON librarySummaryJob WHEN NEW.state = 'succeeded'", true),
+      ("BEFORE UPDATE ON librarySummaryVisible", true)
+    ]
+    let store = LibrarySummaryService(database: f.db)
+    for (trigger, dispatches) in skippedWrites {
+      let calls = provider.calls
+      let jobsBefore = try f.db.adapterRead { try Int.fetchOne($0,
+        sql: "SELECT count(*) FROM librarySummaryJob") }
+      try f.db.adapterWrite { db in
+        try db.execute(sql: "CREATE TRIGGER skipSummaryWrite \(trigger) BEGIN SELECT RAISE(IGNORE); END")
+      }
+      do {
+        _ = try await generate()
+        XCTFail("Skipped write was reported as success: \(trigger)")
+      } catch {
+        XCTAssertEqual(error as? LibrarySummaryError, .persistenceFailure, "\(trigger): \(error)")
+      }
+      XCTAssertEqual(provider.calls, calls + (dispatches ? 1 : 0), trigger)
+      try f.db.adapterRead { db in
+        if dispatches {
+          let attempt = try XCTUnwrap(Row.fetchOne(db, sql: """
+            SELECT state, failure, resultID, permit FROM librarySummaryJob ORDER BY rowid DESC LIMIT 1
+            """))
+          XCTAssertEqual(attempt["state"] as String, "failed", trigger)
+          XCTAssertEqual(attempt["failure"] as String?, LibrarySummaryFailure.persistenceFailure.rawValue, trigger)
+          XCTAssertNil(attempt["resultID"] as String?, trigger)
+          XCTAssertNil(attempt["permit"] as String?, trigger)
+        } else {
+          XCTAssertEqual(try Int.fetchOne(db, sql: "SELECT count(*) FROM librarySummaryJob"),
+            jobsBefore, trigger)
+        }
+        XCTAssertEqual(try String.fetchAll(db, sql: "SELECT id FROM librarySummaryResult"),
+          [previous.id.uuidString], trigger)
+        XCTAssertEqual(try String.fetchOne(db, sql: "SELECT resultID FROM librarySummaryVisible"),
+          previous.id.uuidString, trigger)
+      }
+      XCTAssertEqual(try store.restore(paperID: f.identity.paperID)?.claimAnchors,
+        previous.claimAnchors, trigger)
+      try f.db.adapterWrite { try $0.execute(sql: "DROP TRIGGER skipSummaryWrite") }
+    }
+    let replacement = try await generate()
+    XCTAssertNotEqual(replacement.id, previous.id)
+  }
+
   @MainActor func testExplicitCoordinatorDispatchPublishesGroundedResultAndRestoresWithoutRequest() async throws {
     let f = try fixture(tail: "appendix acknowledgments")
     defer { try? FileManager.default.removeItem(at: f.root) }

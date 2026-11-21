@@ -243,14 +243,17 @@ extension ProductDatabase {
         """, arguments: [i.job.uuidString, i.paperID.uuidString, i.attempt.uuidString,
           i.fence.uuidString, i.correlation.uuidString, i.input.uuidString, i.epoch.uuidString,
           identity, saved])
+      guard db.changesCount == 1 else { throw LibrarySummaryError.persistenceFailure }
       try db.execute(sql: """
         INSERT INTO librarySummaryOwner(job, format, maximumErrorPDFPoints) VALUES (?, 1, ?)
         """, arguments: [i.job.uuidString, owners.maximumErrorPDFPoints])
+      guard db.changesCount == 1 else { throw LibrarySummaryError.persistenceFailure }
       for anchor in owners.anchors {
         try db.execute(sql: """
           INSERT INTO librarySummaryOwnerAnchor(job, page, sentenceID, anchor) VALUES (?, ?, ?, ?)
           """, arguments: [i.job.uuidString, anchor.identity.pageIndex,
             anchor.identity.sentenceID, anchor.bytes])
+        guard db.changesCount == 1 else { throw LibrarySummaryError.persistenceFailure }
       }
     }
   }
@@ -344,13 +347,17 @@ extension ProductDatabase {
         VALUES (?, ?, ?, ?, ?, ?, ?)
         """, arguments: [resultID.uuidString, i.paperID.uuidString, i.revision.uuidString,
           i.job.uuidString, identityData, frozenData, bytes])
+      guard db.changesCount == 1 else { throw LibrarySummaryError.persistenceFailure }
       try db.execute(sql: """
-        UPDATE librarySummaryJob SET state = 'succeeded', resultID = ?, permit = ? WHERE job = ?;
+        UPDATE librarySummaryJob SET state = 'succeeded', resultID = ?, permit = ?
+        WHERE job = ? AND state = 'running'
         """, arguments: [resultID.uuidString, permit, i.job.uuidString])
+      guard db.changesCount == 1 else { throw LibrarySummaryError.persistenceFailure }
       try db.execute(sql: """
         INSERT INTO librarySummaryVisible(paperID, resultID) VALUES (?, ?)
         ON CONFLICT(paperID) DO UPDATE SET resultID = excluded.resultID
         """, arguments: [i.paperID.uuidString, resultID.uuidString])
+      guard db.changesCount == 1 else { throw LibrarySummaryError.persistenceFailure }
       return LibrarySummaryRecord(id: resultID, identity: i, result: validated,
         evidence: bundle, claimAnchors: claim)
     }
