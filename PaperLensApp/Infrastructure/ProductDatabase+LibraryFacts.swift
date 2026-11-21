@@ -2,17 +2,29 @@ import Foundation
 import GRDB
 
 extension ProductDatabase {
+  // The caller aliases paper as p. Bind metadata to the visible revision of the same live PDF.
+  static let currentLibraryMetadataJoins = """
+    LEFT JOIN extractionVisible v ON v.paperID = p.id AND p.status = 'ready' AND p.deletionID IS NULL
+    LEFT JOIN extractionRevision r ON r.id = v.revision AND r.paperID = p.id
+      AND r.generation = p.generation AND r.pdfSHA256 = p.pdfSHA256
+      AND r.pdfReference = p.pdfReference
+    LEFT JOIN readerMetadata m ON m.paperID = p.id AND m.revisionID = r.id
+    """
+
+  static func decodeLibraryMetadata(_ payload: Data?) throws -> ReaderMetadataSnapshot? {
+    guard let payload else { return nil }
+    let snapshot = try JSONDecoder().decode(ReaderMetadataSnapshot.self, from: payload)
+    try snapshot.validate()
+    return snapshot
+  }
+
   /// One read transaction binds read, year, metadata and Summary observations to the ready Paper/revision.
   public func librarySortFacts() throws -> [OrganizationSortFacts] {
     try adapterRead { db in
       try Row.fetchAll(db, sql: """
         SELECT p.id, p.generation, p.pdfSHA256, p.lastReadAt, m.payload
         FROM paper p
-        LEFT JOIN extractionVisible v ON v.paperID = p.id
-        LEFT JOIN extractionRevision r ON r.id = v.revision AND r.paperID = p.id
-          AND r.generation = p.generation AND r.pdfSHA256 = p.pdfSHA256
-          AND r.pdfReference = p.pdfReference
-        LEFT JOIN readerMetadata m ON m.paperID = p.id AND m.revisionID = r.id
+        \(Self.currentLibraryMetadataJoins)
         WHERE p.status = 'ready' AND p.deletionID IS NULL
         """).map { row in
           let id: String = row["id"], generation: String = row["generation"]
@@ -21,12 +33,8 @@ extension ProductDatabase {
           let timestamp: Double? = row["lastReadAt"]
           guard timestamp?.isFinite != false else { throw ProductDatabaseError.invalidRecord }
           var year: Int?
-          var metadata: ReaderMetadataSnapshot?
-          if let payload: Data = row["payload"] {
-            let snapshot = try JSONDecoder().decode(ReaderMetadataSnapshot.self, from: payload)
-            try snapshot.validate()
-            metadata = snapshot
-            let field = snapshot.year
+          let metadata = try Self.decodeLibraryMetadata(row["payload"])
+          if let field = metadata?.year {
             if !field.isConflict, let text = field.candidates.first?.text,
               !text.isEmpty, text.count <= 4, text.allSatisfy({ $0 >= "0" && $0 <= "9" }),
               let value = Int(text), (1...9999).contains(value) {

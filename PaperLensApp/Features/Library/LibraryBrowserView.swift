@@ -381,7 +381,7 @@ public struct LibraryBrowserView: View {
     VStack(alignment: .leading, spacing: 8) {
       Text(paper.title).font(.headline).textSelection(.enabled)
       paperActions(paper).disabled(deletionPending)
-      Text("출처 제목 · \(LibraryMetadataPresentation.preview(fact?.metadata?.title, limit: 160))")
+      Text("출처 제목 · \(LibraryMetadataPresentation.preview(paper.sourceTitle, limit: 160))")
         .font(.caption).textSelection(.enabled)
       Text(deletionPending ? "삭제 중 · 열기 불가" : statusLabel(paper)).font(.caption)
       Text("\(readingLabel(paper.organization.readingStatus)) · \(paper.organization.favorite ? "즐겨찾기" : "즐겨찾기 아님")")
@@ -1252,7 +1252,7 @@ enum LibraryMetadataPresentation {
       if eligible, !closed, isEligible() {
       ScrollView {
         VStack(alignment: .leading, spacing: 16) {
-          field("출처 제목", captured.metadata?.title)
+          field("출처 제목", captured.paper.sourceTitle)
           field("발행연도", captured.metadata?.year)
           LibraryStoredSummary(paper: captured.paper, observation: captured.summary, showEvidence: true)
           storedReadingRecords

@@ -70,9 +70,10 @@ extension ProductDatabase {
             ELSE j.failure END AS failure,
           COALESCE(j.bytesCopied, 0) AS bytesCopied,
           COALESCE(o.readingStatus, 'unread') AS readingStatus,
-          COALESCE(o.favorite, 0) AS favorite
+          COALESCE(o.favorite, 0) AS favorite, m.payload AS metadataPayload
         FROM paper p LEFT JOIN importJob j ON j.paperID = p.id
         LEFT JOIN paperOrganization o ON o.paperID = p.id AND o.generation = p.generation
+        \(Self.currentLibraryMetadataJoins)
         WHERE p.status != 'tombstone' AND (\(folderPredicate)) ORDER BY p.id
         """, arguments: folderArguments)
       let tagRows = try Row.fetchAll(db, sql: """
@@ -85,27 +86,33 @@ extension ProductDatabase {
       for row in tagRows { tags[row["paperID"], default: []].append(row["label"]) }
       let search = LibraryOrganizationService.normalized(filter.search.trimmingCharacters(in: .whitespacesAndNewlines))
       let tag = filter.tag.map(LibraryOrganizationService.normalized)
-      let papers = try rows.map { row -> OrganizedPaper in
+      let papers = try rows.compactMap { row -> OrganizedPaper? in
         let idString: String = row["id"], generationString: String = row["generation"]
         guard let id = UUID(uuidString: idString), let generation = UUID(uuidString: generationString),
           let status = LibraryStatus(rawValue: row["status"]),
           let readingStatus = PaperReadingStatus(rawValue: row["readingStatus"])
         else { throw ProductDatabaseError.invalidRecord }
+        let labels = tags[idString] ?? []
+        let normalizedTags = labels.map(LibraryOrganizationService.normalized)
+        let favorite: Bool = row["favorite"]
+        guard tag.map(normalizedTags.contains) ?? true,
+          filter.readingStatus.map({ $0 == readingStatus }) ?? true,
+          !filter.favoritesOnly || favorite else { return nil }
+        let title: String = row["title"]
+        let sourceTitle = try Self.decodeLibraryMetadata(row["metadataPayload"])?.title
+        let resolvedTitle = sourceTitle.flatMap { $0.isConflict ? nil : $0.candidates.first?.text }
+        guard search.isEmpty || LibraryOrganizationService.normalized(title).contains(search)
+          || resolvedTitle.map({ LibraryOrganizationService.normalized($0).contains(search) }) == true
+          || normalizedTags.contains(where: { $0.contains(search) }) else { return nil }
         let failure = try Self.libraryFailure(row, status: status, in: db)
         let canRetryImport = status == .importFailed && failure != "missingPDF"
           && String.fromDatabaseValue(row["importJobState"]) == "failed"
           && (row["hasImportHistory"] as Bool) && !(row["cleanupDebt"] as Bool)
-        return OrganizedPaper(id: id, generation: generation, title: row["title"], status: status,
+        return OrganizedPaper(id: id, generation: generation, title: title, sourceTitle: sourceTitle, status: status,
           failure: failure, bytesCopied: row["bytesCopied"], createdAt: Date(timeIntervalSince1970: row["createdAt"]),
           readable: (try? validateOrganizationPDF(row, verifyDigest: true)) != nil,
           canRetryImport: canRetryImport,
-          organization: PaperOrganization(readingStatus: readingStatus, favorite: row["favorite"], tags: tags[idString] ?? []))
-      }.filter { paper in
-        let normalizedTags = paper.organization.tags.map(LibraryOrganizationService.normalized)
-        return (search.isEmpty || LibraryOrganizationService.normalized(paper.title).contains(search) || normalizedTags.contains(where: { $0.contains(search) }))
-          && (tag == nil || normalizedTags.contains(tag!))
-          && (filter.readingStatus == nil || paper.organization.readingStatus == filter.readingStatus)
-          && (!filter.favoritesOnly || paper.organization.favorite)
+          organization: PaperOrganization(readingStatus: readingStatus, favorite: favorite, tags: labels))
       }
       return OrganizationSnapshot(preferences: OrganizationPreferences(presentation: presentation, sort: sort), totalCount: totalCount, papers: papers)
     }

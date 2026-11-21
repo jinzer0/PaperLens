@@ -1132,6 +1132,57 @@ private actor WorkspaceDeletionAgent: AgentLibraryPurging {
     XCTAssertEqual(snapshot.papers.first?.organization.readingStatus, .reading)
   }
 
+  func testLibrarySearchUsesCurrentSourceTitleWithOtherFiltersInBothPresentations() async throws {
+    let f = try await fixture()
+    let matching = try await importSelected(f)
+    let other = try await importSelected(f)
+    let folder = try await f.workspace.imports.createFolder(name: "Methods")
+    let selection = try await paper(f, id: matching)
+    let placement = try await f.workspace.imports.capturePaperPlacement(paperID: matching,
+      generation: selection.generation)
+    try await f.workspace.imports.movePaper(placement, to: folder.id)
+    try await f.workspace.organization.save(.init(readingStatus: .reading, favorite: true, tags: ["Methods"]),
+      for: selection)
+
+    let revision = try publishMetadataRevision(f, id: matching)
+    let otherRevision = try publishMetadataRevision(f, id: other)
+    let title = ReaderMetadataValue(text: "Café Vision Models", source: .source, sourceID: "pdf-title")
+    let metadata = ReaderMetadataSnapshot(title: .init([title]))
+    try f.database.saveReaderMetadata(metadata, for: revision)
+    try f.database.saveReaderMetadata(metadata, for: otherRevision)
+    let priorFacts = try await f.workspace.sortFacts()
+
+    var filter = OrganizationFilter()
+    filter.search = "  CAFE vision  "
+    filter.folder = .folder(folder.id)
+    filter.tag = "methods"
+    filter.readingStatus = .reading
+    filter.favoritesOnly = true
+    for presentation in LibraryPresentation.allCases {
+      try await f.workspace.organization.savePreferences(.init(presentation: presentation))
+      let snapshot = try await f.workspace.organization.snapshot(filter: filter, facts: priorFacts)
+      XCTAssertEqual(snapshot.preferences.presentation, presentation)
+      XCTAssertEqual(snapshot.papers.map(\.id), [matching])
+      XCTAssertEqual(snapshot.papers.first?.sourceTitle, metadata.title)
+      XCTAssertEqual(snapshot.totalCount, 2)
+    }
+
+    let conflict = ReaderMetadataValue(text: "Another Title", source: .acceptedExtraction, sourceID: "extraction")
+    try f.database.saveReaderMetadata(.init(title: .init([title, conflict])), for: revision)
+    let ambiguous = try await f.workspace.organization.snapshot(filter: filter, facts: priorFacts)
+    XCTAssertTrue(ambiguous.papers.isEmpty)
+    filter.search = "selected-1999"
+    let filename = try await f.workspace.organization.snapshot(filter: filter, facts: priorFacts)
+    XCTAssertEqual(filename.papers.map(\.id), [matching])
+    XCTAssertEqual(filename.papers.first?.sourceTitle?.isConflict, true)
+
+    try f.database.saveReaderMetadata(metadata, for: revision)
+    _ = try publishMetadataRevision(f, id: matching)
+    filter.search = "Café Vision"
+    let superseded = try await f.workspace.organization.snapshot(filter: filter, facts: priorFacts)
+    XCTAssertTrue(superseded.papers.isEmpty, "Old metadata must lose search visibility when the revision changes")
+  }
+
   func testCancelAndChangedSourceNeverReservePaperOrJob() async throws {
     let f = try await fixture()
     try await f.workspace.prepareImport(source: f.source)

@@ -101,6 +101,7 @@ public struct OrganizedPaper: Identifiable, Equatable, Sendable {
   public let id: UUID
   public let generation: UUID
   public let title: String
+  public let sourceTitle: ReaderMetadataField?
   public let status: LibraryStatus
   public let failure: String?
   public let bytesCopied: Int64
