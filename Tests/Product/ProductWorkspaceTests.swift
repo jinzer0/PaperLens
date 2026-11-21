@@ -68,12 +68,19 @@ private actor WorkspaceDeletionAgent: AgentLibraryPurging {
     return root
   }
 
-  private func fixture(agentPurge: (any AgentLibraryPurging)? = nil) async throws -> Fixture {
+  private func fixture(agentPurge: (any AgentLibraryPurging)? = nil,
+    copyEffects: ActualCopyEffects? = nil) async throws -> Fixture {
     let physical = try privateRoot()
     let source = physical.appendingPathComponent("selected-1999.pdf")
     try Data("%PDF-1.4\nsynthetic workspace fixture\n%%EOF\n".utf8).write(to: source)
     let database = try ProductDatabase.open(at: physical.appendingPathComponent("database"))
-    let lifecycle = try await LocalLibraryLifecycle.open(database: database, agentPurge: agentPurge)
+    let lifecycle: LocalLibraryLifecycle
+    if let copyEffects {
+      lifecycle = try await LocalLibraryLifecycle.openForOwnedCopyFixtures(database: database,
+        effects: copyEffects, agentPurge: agentPurge)
+    } else {
+      lifecycle = try await LocalLibraryLifecycle.open(database: database, agentPurge: agentPurge)
+    }
     let slots = try APIKeySlotStore(directory: physical.appendingPathComponent("api-key-slots"))
     let configuration = try seedProviderSelection(database: database, slots: slots)
     let connection = NativeAPIKeyConnection(configuration: configuration, slots: slots,
@@ -1231,6 +1238,59 @@ private actor WorkspaceDeletionAgent: AgentLibraryPurging {
     XCTAssertEqual(remaining.papers.map(\.id), [otherID])
     XCTAssertTrue(try XCTUnwrap(remaining.papers.first).organization.favorite)
     XCTAssertTrue(FileManager.default.fileExists(atPath: f.source.path))
+  }
+
+  func testConfirmedLocalImportReleasesSheetAndCanBeDeletedDuringRealCopyCleanup() async throws {
+    let releaseCopyClose = DispatchSemaphore(value: 0)
+    defer { releaseCopyClose.signal() }
+    let copyEffects = ActualCopyEffects(beforeOpen: { _, _ in }, checkedClose: { endpoint, handle in
+      if endpoint == .input { _ = releaseCopyClose.wait(timeout: .now() + 10) }
+      try handle.close()
+    }, startScope: { _ in false }, stopScope: { _ in }, completed: { _ in })
+    let unavailableAgentRoot = try privateRoot().appendingPathComponent("unused-agent-papers")
+    let f = try await fixture(agentPurge: NativeOnlyAgentLibraryPurge(unsupportedPaperRoot: unavailableAgentRoot),
+      copyEffects: copyEffects)
+    let original = try Data(contentsOf: f.source)
+    let confirmationID = try await f.workspace.prepareImport(source: f.source)
+    XCTAssertTrue(try f.database.libraryRecords().isEmpty)
+    let imported = try XCTUnwrap(f.workspace.startLocalImport(confirmationID, destinationFolderID: nil))
+    XCTAssertNil(f.workspace.startLocalImport(confirmationID, destinationFolderID: nil))
+    f.workspace.sheet = nil
+    XCTAssertNil(f.workspace.presentationDidDismiss(confirmationID: confirmationID))
+    XCTAssertFalse(f.workspace.sheetCleanupPending)
+    XCTAssertEqual(f.workspace.localImportID, confirmationID)
+
+    let clock = ContinuousClock()
+    let copyDeadline = clock.now + .seconds(3)
+    var rows = try f.database.organizationSnapshot(filter: .init()).papers
+    while (rows.first?.bytesCopied ?? 0) == 0 && clock.now < copyDeadline {
+      try await Task.sleep(for: .milliseconds(10))
+      rows = try f.database.organizationSnapshot(filter: .init()).papers
+    }
+    let importing = try XCTUnwrap(rows.first)
+    XCTAssertEqual(importing.status, .importing)
+    XCTAssertEqual(importing.bytesCopied, Int64(original.count))
+    XCTAssertFalse(importing.readable)
+    let deletion = try XCTUnwrap(f.workspace.requestDeletion(importing, retry: false))
+
+    let deletionDeadline = clock.now + .seconds(3)
+    var pending = try await paper(f, id: importing.id)
+    while pending.status == .importing && clock.now < deletionDeadline {
+      try await Task.sleep(for: .milliseconds(10))
+      pending = try await paper(f, id: importing.id)
+    }
+    XCTAssertEqual(pending.status, .deleting)
+    XCTAssertEqual(f.workspace.localImportID, confirmationID)
+    releaseCopyClose.signal()
+    let result = await imported.value
+    await deletion.value
+
+    XCTAssertEqual(result, importing.id)
+    XCTAssertNil(f.workspace.latestLocalImport)
+    XCTAssertNil(f.workspace.localImportID)
+    XCTAssertNil(f.workspace.failure)
+    XCTAssertTrue(try f.database.libraryRecords().isEmpty)
+    XCTAssertEqual(try Data(contentsOf: f.source), original)
   }
 
   func testGuardedSaveFailureIsVisibleAndDoesNotAcceptLastReadTimestamp() async throws {

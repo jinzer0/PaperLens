@@ -23,6 +23,7 @@ public struct ImportConfirmationView: View {
   private let confirmation: LocalImportConfirmation
   private let service: FolderImportService
   private let imported: (UUID) -> Void
+  private let startInWorkspace: ((UUID?) -> Bool)?
   @Binding private var cancelledConfirmation: UUID?
   @Binding private var continuedConfirmation: UUID?
   private let allowsInteractiveCancel: Bool
@@ -31,12 +32,14 @@ public struct ImportConfirmationView: View {
   @State private var destination: UUID?
   @State private var working = false
   @State private var destinationsLoaded = false
+  @State private var handedToWorkspace = false
   @State private var action = ImportConfirmationActionState()
   @State private var errorMessage: String?
 
   public init(confirmation: LocalImportConfirmation, service: FolderImportService,
     cancelledConfirmation: Binding<UUID?>, continuedConfirmation: Binding<UUID?>,
     allowsInteractiveCancel: Bool,
+    startInWorkspace: ((UUID?) -> Bool)? = nil,
     imported: @escaping (UUID) -> Void) {
     self.confirmation = confirmation
     self.service = service
@@ -44,6 +47,7 @@ public struct ImportConfirmationView: View {
     _cancelledConfirmation = cancelledConfirmation
     _continuedConfirmation = continuedConfirmation
     self.allowsInteractiveCancel = allowsInteractiveCancel
+    self.startInWorkspace = startInWorkspace
     _destination = State(initialValue: confirmation.destinationFolderID)
   }
 
@@ -81,12 +85,23 @@ public struct ImportConfirmationView: View {
           guard action.beginCancel(working: working) else { return }
           cancelledConfirmation = confirmation.id
           working = true
-          Task { await service.cancel(confirmation.id); dismiss() }
+          if startInWorkspace != nil { dismiss() }
+          else { Task { await service.cancel(confirmation.id); dismiss() } }
         }.keyboardShortcut(.cancelAction).disabled(working)
         Spacer()
         Button(confirmation.retryPaperID != nil ? "다시 시도"
           : (confirmation.matchingPaperIDs.isEmpty ? "가져오기" : "계속 가져오기")) {
           guard action.beginContinue(destinationsLoaded: destinationsLoaded, working: working) else { return }
+          if let startInWorkspace {
+            guard startInWorkspace(destination) else {
+              errorMessage = "이 가져오기 확인을 사용하지 못했습니다. PDF를 다시 선택하세요."
+              return
+            }
+            handedToWorkspace = true
+            continuedConfirmation = confirmation.id
+            dismiss()
+            return
+          }
           continuedConfirmation = confirmation.id
           working = true
           Task {
@@ -122,7 +137,7 @@ public struct ImportConfirmationView: View {
     }
     .onDisappear {
       action.invalidate()
-      Task { await service.cancel(confirmation.id) }
+      if !handedToWorkspace { Task { await service.cancel(confirmation.id) } }
     }
   }
 }

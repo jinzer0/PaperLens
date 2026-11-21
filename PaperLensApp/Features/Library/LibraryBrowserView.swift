@@ -17,6 +17,9 @@ public struct LibraryBrowserView: View {
   private let refreshRevision: Int
   private let deletingPaperIDs: Set<UUID>
   private let finishedDeletionIDs: Set<UUID>
+  private let activeImportProgress: [UUID: Int64]
+  private let localPDFAvailable: Bool
+  @State private var observedImportIDs: Set<UUID> = []
   @State private var query = OrganizationQueryState()
   @State private var currentFacts: [UUID: OrganizationSortFacts] = [:]
   @State private var folders: [LibraryFolder] = []
@@ -41,6 +44,7 @@ public struct LibraryBrowserView: View {
   public init(service: LibraryOrganizationService, folderService: FolderImportService,
     filter: Binding<OrganizationFilter>, refreshRevision: Int, deletingPaperIDs: Set<UUID>,
     finishedDeletionIDs: Set<UUID>,
+    activeImportProgress: [UUID: Int64] = [:], localPDFAvailable: Bool = true,
     sortFacts: @escaping @Sendable () async throws -> [OrganizationSortFacts],
     readReadingRecords: @escaping @Sendable (UUID, UUID) async throws -> LibraryReadingRecords,
     openPaper: @escaping @MainActor (OrganizedPaper) async throws -> Void,
@@ -57,6 +61,8 @@ public struct LibraryBrowserView: View {
     self.openPaper = openPaper; self.importPDF = importPDF
     self.deletingPaperIDs = deletingPaperIDs; self.deletePaper = deletePaper
     self.finishedDeletionIDs = finishedDeletionIDs
+    self.activeImportProgress = activeImportProgress
+    self.localPDFAvailable = localPDFAvailable
     self.acknowledgeDeletionRefresh = acknowledgeDeletionRefresh
     self.retryImportPDF = retryImportPDF
     self.retryImportURL = retryImportURL
@@ -91,6 +97,7 @@ public struct LibraryBrowserView: View {
         Spacer()
         Button("PDF 추가", action: requestImport)
           .focused($organizationFocus, equals: .importPDF)
+          .disabled(!localPDFAvailable)
         Button("새로고침", action: requestRefresh).disabled(busy)
           .focused($organizationFocus, equals: .refresh)
       }
@@ -140,6 +147,7 @@ public struct LibraryBrowserView: View {
             description: Text("PDF 추가로 시작하세요."))
           Button("PDF 추가", action: requestImport)
             .focused($organizationFocus, equals: .importEmpty)
+            .disabled(!localPDFAvailable)
         } else if snapshot.papers.isEmpty {
           ContentUnavailableView("일치하는 논문 없음", systemImage: "line.3.horizontal.decrease.circle",
             description: Text("저장된 논문은 있습니다. 검색과 필터를 변경하세요."))
@@ -302,9 +310,10 @@ public struct LibraryBrowserView: View {
       invalidateObservation()
     }
     .onChange(of: refreshRevision) { _, _ in refresh() }
-    .onChange(of: finishedDeletionIDs) { _, _ in refreshAfterDeletion() }
-    .onChange(of: canRefreshAfterDeletion) { _, ready in
-      if ready { refreshAfterDeletion() }
+    .onChange(of: finishedDeletionIDs) { _, _ in refreshAfterBackgroundChange() }
+    .onChange(of: activeImportIDs) { _, _ in refreshAfterBackgroundChange() }
+    .onChange(of: canRefreshAfterBackgroundChange) { _, ready in
+      if ready { refreshAfterBackgroundChange() }
     }
     .onChange(of: summaries.activePaperID) { previous, current in
       if previous != nil, current == nil { refresh() }
@@ -424,7 +433,10 @@ public struct LibraryBrowserView: View {
         .font(.caption).textSelection(.enabled)
       Text("출처 주제 (사용자 태그 아님) · \(LibraryMetadataPresentation.preview(fact?.metadata?.topics, limit: 120))")
         .font(.caption).textSelection(.enabled)
-      if paper.status == .importing { ProgressView(); Text("\(paper.bytesCopied) bytes 복사됨") }
+      if paper.status == .importing, !deletionPending {
+        ProgressView()
+        Text("\((activeImportProgress[paper.id] ?? paper.bytesCopied).formatted()) bytes 복사됨")
+      }
     }
     .accessibilityElement(children: .contain)
   }
@@ -448,7 +460,7 @@ public struct LibraryBrowserView: View {
       Menu("더 보기") {
         if paper.status == .importFailed {
           Button("새 PDF 선택 후 같은 작업 재시도") { requestRetry(paper) }
-            .disabled(busy || loading || loadFailed)
+            .disabled(!localPDFAvailable || busy || loading || loadFailed)
           if let retryImportURL {
             Button("URL 입력 후 같은 작업 재시도") {
               guard !nativeSheetPending, deleting == nil, !operationFailed,
@@ -716,12 +728,15 @@ public struct LibraryBrowserView: View {
     refresh()
   }
 
-  private var canRefreshAfterDeletion: Bool {
+  private var activeImportIDs: Set<UUID> { Set(activeImportProgress.keys) }
+
+  private var canRefreshAfterBackgroundChange: Bool {
     rootMount != nil && !nativeSheetPending && !busy && deleting == nil && !loading && !loadFailed
   }
 
-  private func refreshAfterDeletion() {
-    guard canRefreshAfterDeletion, !finishedDeletionIDs.isEmpty else { return }
+  private func refreshAfterBackgroundChange() {
+    guard canRefreshAfterBackgroundChange,
+      !finishedDeletionIDs.isEmpty || observedImportIDs != activeImportIDs else { return }
     refresh()
   }
 
@@ -748,13 +763,14 @@ public struct LibraryBrowserView: View {
     perform(returningOrganization: receipt) { try await service.save(value, for: paper) }
   }
   private func requestImport() {
-    guard !nativeSheetPending else { return }
+    guard localPDFAvailable, !nativeSheetPending else { return }
     invalidateObservation()
     importPDF()
     refresh()
   }
   private func requestRetry(_ paper: OrganizedPaper) {
-    guard !nativeSheetPending, paper.status == .importFailed, !busy, !loading, !loadFailed else { return }
+    guard localPDFAvailable, !nativeSheetPending, paper.status == .importFailed,
+      !busy, !loading, !loadFailed else { return }
     invalidateObservation()
     retryImportPDF(paper.id, paper.generation)
     refresh()
@@ -815,6 +831,7 @@ public struct LibraryBrowserView: View {
       invalidateObservation(preservingEditor: slotID, completingOrganization: token)
     }
     guard rootMount != nil, !busy else { return }
+    observedImportIDs = activeImportIDs
     if !canPreserveOrganizationReturn(token) { organizationFocusToRestore = nil }
     let request = query.begin(filter: filter)
     if let receipt = organizationFocusToRestore {

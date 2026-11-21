@@ -322,6 +322,41 @@ final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
     XCTAssertEqual(try observeImport(db, current), deleting)
   }
 
+  func testActiveImportProgressObservesCommittedBytesAndRemovesTerminalPapers() async throws {
+    let db = try ProductDatabase.open(at: root)
+    var iterator = db.activeImportProgress().makeAsyncIterator()
+    let initial = try await iterator.next()
+    XCTAssertEqual(initial, [:])
+
+    let first = identity(), second = identity()
+    try reserveLegacyImportFixture(in: db, identity: first, title: "first import")
+    let reserved = try await iterator.next()
+    XCTAssertEqual(reserved, [first.paperID: 0])
+    try db.recordProgress(first, bytes: 12)
+    let copied = try await iterator.next()
+    XCTAssertEqual(copied, [first.paperID: 12])
+
+    try reserveLegacyImportFixture(in: db, identity: second, title: "second import")
+    let simultaneous = try await iterator.next()
+    XCTAssertEqual(simultaneous, [first.paperID: 12, second.paperID: 0])
+    try db.failImport(first, failure: "fixture failure", cleanupDebt: false)
+    let failed = try await iterator.next()
+    XCTAssertEqual(failed, [second.paperID: 0])
+
+    _ = try db.beginDeletion(second.paperID)
+    let deleting = try await iterator.next()
+    XCTAssertEqual(deleting, [:])
+
+    let malformed = identity()
+    try db.adapterWrite { sql in
+      try ProductDatabase.insertImport(malformed, title: "invalid progress", createdAt: 0, in: sql)
+      try sql.execute(sql: "UPDATE importJob SET bytesCopied = -1 WHERE id = ?",
+        arguments: [malformed.jobID.uuidString])
+    }
+    do { _ = try await iterator.next(); XCTFail("Malformed progress must fail observation") }
+    catch { XCTAssertEqual(error as? ProductDatabaseError, .invalidRecord) }
+  }
+
   func testExactDeletingAbortPreservesSagaFailureAndOtherCleanupDebt() throws {
     let db = try ProductDatabase.open(at: root)
     let current = identity()

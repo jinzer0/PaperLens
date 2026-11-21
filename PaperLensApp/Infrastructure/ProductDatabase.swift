@@ -149,6 +149,29 @@ public final class ProductDatabase: @unchecked Sendable {
     }.values(in: queue, bufferingPolicy: .bufferingNewest(1))
   }
 
+  func activeImportProgress() -> AsyncValueObservation<[UUID: Int64]> {
+    ValueObservation.tracking { db in
+      let rows = try Row.fetchAll(db, sql: """
+        SELECT paper.id, paper.generation, importJob.id AS jobID,
+          importJob.state, importJob.bytesCopied
+        FROM paper LEFT JOIN importJob ON importJob.paperID = paper.id
+        WHERE paper.status = 'importing' AND paper.deletionID IS NULL
+        """)
+      var progress: [UUID: Int64] = [:]
+      for row in rows {
+        guard let id = String.fromDatabaseValue(row["id"]).flatMap(UUID.init(uuidString:)),
+          String.fromDatabaseValue(row["generation"]).flatMap(UUID.init(uuidString:)) != nil,
+          String.fromDatabaseValue(row["jobID"]).flatMap(UUID.init(uuidString:)) != nil,
+          String.fromDatabaseValue(row["state"]) == "running",
+          let bytes = Int64.fromDatabaseValue(row["bytesCopied"]), bytes >= 0,
+          progress.updateValue(bytes, forKey: id) == nil else {
+          throw ProductDatabaseError.invalidRecord
+        }
+      }
+      return progress
+    }.values(in: queue, bufferingPolicy: .bufferingNewest(1))
+  }
+
   public func providerConfiguration() throws -> ProviderConfiguration {
     try queue.read { db in
       guard let row = try Row.fetchOne(db, sql: "SELECT kind, slotID, generation, model FROM providerConfig")

@@ -294,9 +294,10 @@ public actor LocalLibraryLifecycle {
       validationEffects: .actual)
   }
 
-  static func openForOwnedCopyFixtures(database: ProductDatabase, effects: ActualCopyEffects)
+  static func openForOwnedCopyFixtures(database: ProductDatabase, effects: ActualCopyEffects,
+    agentPurge: (any AgentLibraryPurging)? = nil)
     async throws -> LocalLibraryLifecycle {
-    try await open(database: database, agentPurge: nil, copyEffects: effects,
+    try await open(database: database, agentPurge: agentPurge, copyEffects: effects,
       validationEffects: .actual)
   }
 

@@ -10,6 +10,7 @@ public struct URLImportView<LibraryContent: View>: View {
   private let folderService: FolderImportService
   private let possibleDuplicate: (String) -> Bool
   private let captureRetry: (@MainActor (OrganizedPaper) async throws -> ImportRecoveryRecord)?
+  private let localPDFAvailable: Bool
   private let openReader: (UUID) -> Void
   private let chooseLocalPDF: (UUID) -> Void
   private let localPDFFocused: FocusState<Bool>.Binding
@@ -78,6 +79,7 @@ public struct URLImportView<LibraryContent: View>: View {
   init(service: URLImportService, folderService: FolderImportService,
     possibleDuplicate: @escaping (String) -> Bool,
     captureRetry: (@MainActor (OrganizedPaper) async throws -> ImportRecoveryRecord)?,
+    localPDFAvailable: Bool = true,
     openReader: @escaping (UUID) -> Void,
     localPDFFocused: FocusState<Bool>.Binding,
     localIntentInvalidation: Binding<UUID?>,
@@ -88,6 +90,7 @@ public struct URLImportView<LibraryContent: View>: View {
     self.folderService = folderService
     self.possibleDuplicate = possibleDuplicate
     self.captureRetry = captureRetry
+    self.localPDFAvailable = localPDFAvailable
     self.openReader = openReader
     self.chooseLocalPDF = chooseLocalPDF
     self.localPDFFocused = localPDFFocused
@@ -125,12 +128,12 @@ public struct URLImportView<LibraryContent: View>: View {
         }.focused($openerFocused, equals: .paste)
           .disabled(!canPresentInput)
         Button("PDF 선택") {
-          guard drag.isCurrent(mount, interaction) else { return }
+          guard drag.isCurrent(mount, interaction), localPDFAvailable else { return }
           drag.interrupt()
           let intent = UUID()
           drag.localIntent = intent
           chooseLocalPDF(intent)
-        }.focused(localPDFFocused)
+        }.focused(localPDFFocused).disabled(!localPDFAvailable)
         Spacer()
       }
       HStack {
@@ -171,6 +174,7 @@ public struct URLImportView<LibraryContent: View>: View {
         .onDrop(of: [UTType.url.identifier, UTType.fileURL.identifier],
           delegate: URLImportDropDelegate(state: drag,
             supportsURL: { service.supports($0) },
+            localPDFAvailable: localPDFAvailable,
             canAccept: { canPresentInput },
             accept: { url in
               if url.isFileURL { confirmLocalPDF(url) } else { prepare(url.absoluteString) }
@@ -526,6 +530,7 @@ private final class URLImportDragState: ObservableObject {
 private struct URLImportDropDelegate: DropDelegate {
   let state: URLImportDragState
   let supportsURL: (String) -> Bool
+  let localPDFAvailable: Bool
   let canAccept: () -> Bool
   let accept: (URL) -> Void
 
@@ -571,7 +576,7 @@ private struct URLImportDropDelegate: DropDelegate {
   }
 
   private func supported(_ url: URL) -> Bool {
-    url.isFileURL ? url.pathExtension.lowercased() == "pdf" : supportsURL(url.absoluteString)
+    url.isFileURL ? localPDFAvailable && url.pathExtension.lowercased() == "pdf" : supportsURL(url.absoluteString)
   }
 
   private func item(_ info: DropInfo) -> NSItemProvider? {
