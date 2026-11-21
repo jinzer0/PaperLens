@@ -98,6 +98,31 @@ final class PDFGeometryTests: XCTestCase {
         assertError(.malformedGeometry) { try mapping.applying(.init(x: 0, y: .infinity)) }
     }
 
+    func testCropBoxMapPreservesInteriorPointsOnReversedFractionalEdges() throws {
+        let interior = Double(1).nextDown
+        let fractionalOrigin = 1.3
+        let fractionalEnd = fractionalOrigin + 1
+        // The far-end subtraction produces a coordinate below the actual edge
+        // even though the original input is within [0, 1].
+        XCTAssertLessThan(fractionalEnd.addingProduct(-interior, 1), fractionalOrigin)
+
+        let absolute = try PDFPageGeometry(pageIndex: 0, cropOrigin: .init(x: 0, y: 0),
+                                           width: 1, height: 1, rotation: 180)
+        let forward = try PDFKitCropBoxTransform(geometry: absolute,
+            displayBounds: CGRect(x: fractionalOrigin, y: 0, width: 1, height: 1), flipped: false)
+        XCTAssertEqual(try forward.applying(.init(x: interior, y: 0.5)),
+                       .init(x: fractionalOrigin.nextUp, y: 0.5))
+        assertError(.outsidePage) { try forward.applying(.init(x: Double(1).nextUp, y: 0.5)) }
+
+        let shifted = try PDFPageGeometry(pageIndex: 0, cropOrigin: .init(x: fractionalOrigin, y: 0),
+                                          width: 1, height: 1, rotation: 180)
+        let inverse = try PDFKitCropBoxTransform(geometry: shifted,
+            displayBounds: CGRect(x: 0, y: 0, width: 1, height: 1), flipped: false)
+        XCTAssertEqual(try inverse.inverse(.init(x: interior, y: 0.5)),
+                       .init(x: fractionalOrigin.nextUp, y: 0.5))
+        assertError(.outsidePage) { try inverse.inverse(.init(x: Double(1).nextUp, y: 0.5)) }
+    }
+
     @MainActor
     func testAdapterStrictInputsAndPublicInversePrecisionAreSeparate() throws {
         let document = try XCTUnwrap(PDFDocument(data: SyntheticPDFGeometryCalibration.fixturePDF()))

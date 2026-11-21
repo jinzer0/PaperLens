@@ -1,10 +1,10 @@
 import Foundation
 import PDFKit
 
-/// A quarter-turn map between two strictly bounded rectangles. Endpoints are
-/// evaluated exactly only when the input equals the actual endpoint. No epsilon,
-/// snapping, clamping, or retained PDFKit state. Internal for arithmetic tests.
+/// A quarter-turn map with strict containment on both rectangles. Evaluates
+/// offsets from the nearer endpoint and retains no PDFKit state.
 struct PDFKitCropBoxTransform {
+    private typealias UnitCoordinate = (distance: Double, fromMaximum: Bool)
     private let geometry: PDFPageGeometry
     private let bounds: CGRect
     private let flipped: Bool
@@ -30,19 +30,23 @@ struct PDFKitCropBoxTransform {
         }
     }
 
-    private func unit(_ value: Double, minimum: Double, maximum: Double, span: Double) -> Double {
-        if value == minimum { return 0 }
-        if value == maximum { return 1 }
-        return (value - minimum) / span
+    private func unit(_ value: Double, minimum: Double, maximum: Double, span: Double) -> UnitCoordinate {
+        let fromMinimum = value - minimum
+        let fromMaximum = maximum - value
+        if fromMinimum <= fromMaximum {
+            return (fromMinimum / span, false)
+        }
+        return (fromMaximum / span, true)
     }
 
-    private func coordinate(_ unit: Double, reversed: Bool,
+    private func coordinate(_ unit: UnitCoordinate, reversed: Bool,
                             minimum: Double, maximum: Double, span: Double) -> Double {
-        if unit == 0 { return reversed ? maximum : minimum }
-        if unit == 1 { return reversed ? minimum : maximum }
-        // Evaluate a reversed axis from its upper endpoint, rather than forming
-        // 1-unit and then subtracting the same large origin in the inverse.
-        return reversed ? maximum.addingProduct(-unit, span) : minimum.addingProduct(unit, span)
+        // Start at the corresponding endpoint. Calculating a short offset from
+        // the far endpoint can cross the rounded rectangle boundary.
+        if unit.fromMaximum != reversed {
+            return maximum.addingProduct(-unit.distance, span)
+        }
+        return minimum.addingProduct(unit.distance, span)
     }
 
     func applying(_ point: PDFPoint) throws -> PDFPoint {
@@ -51,7 +55,7 @@ struct PDFKitCropBoxTransform {
                      maximum: geometry.cropOrigin.x + geometry.width, span: geometry.width)
         let v = unit(point.y, minimum: geometry.cropOrigin.y,
                      maximum: geometry.cropOrigin.y + geometry.height, span: geometry.height)
-        let axes: (x: Double, reverseX: Bool, y: Double, reverseY: Bool)
+        let axes: (x: UnitCoordinate, reverseX: Bool, y: UnitCoordinate, reverseY: Bool)
         switch geometry.rotation {
         case 0: axes = (u, false, v, flipped)
         case 90: axes = (v, false, u, !flipped)
@@ -73,7 +77,7 @@ struct PDFKitCropBoxTransform {
         try validateDisplay(point)
         let x = unit(point.x, minimum: Double(bounds.minX), maximum: Double(bounds.maxX), span: Double(bounds.width))
         let y = unit(point.y, minimum: Double(bounds.minY), maximum: Double(bounds.maxY), span: Double(bounds.height))
-        let axes: (x: Double, reverseX: Bool, y: Double, reverseY: Bool)
+        let axes: (x: UnitCoordinate, reverseX: Bool, y: UnitCoordinate, reverseY: Bool)
         switch geometry.rotation {
         case 0: axes = (x, false, y, flipped)
         case 90: axes = (y, !flipped, x, false)
