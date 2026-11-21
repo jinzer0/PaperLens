@@ -49,6 +49,8 @@ public struct ParsingStatusView: View {
   public let database: ProductDatabase
   public let paperID: UUID
   public let coordinator: ParsingRecoveryCoordinator?
+  private let initialStartFailed: Bool
+  private let startUnreservedParsing: (@MainActor () async -> Void)?
   private let onUsableRevisionChange: @MainActor () async -> Bool
   @State private var reconciliation = ParsingMetadataReconciliation()
   @State private var presentation: ParsingRecoveryCoordinator.Presentation?
@@ -64,10 +66,14 @@ public struct ParsingStatusView: View {
 
   public init(database: ProductDatabase, paperID: UUID,
     coordinator: ParsingRecoveryCoordinator? = nil,
+    initialStartFailed: Bool = false,
+    startUnreservedParsing: (@MainActor () async -> Void)? = nil,
     onUsableRevisionChange: @escaping @MainActor () async -> Bool) {
     self.database = database
     self.paperID = paperID
     self.coordinator = coordinator
+    self.initialStartFailed = initialStartFailed
+    self.startUnreservedParsing = startUnreservedParsing
     self.onUsableRevisionChange = onUsableRevisionChange
   }
 
@@ -89,6 +95,13 @@ public struct ParsingStatusView: View {
         Label(retryFailure, systemImage: "exclamationmark.triangle")
           .accessibilityLabel(retryFailure)
       }
+      if canStartParsing {
+        Button(initialStartFailed ? "파싱 다시 시도" : "파싱 시작") {
+          Task { await startParsing(key: key) }
+        }
+        .disabled(retrying)
+        .accessibilityValue(retrying ? "요청 처리 중" : "")
+      }
       if status?.state == "failed" {
         let displayedRetry = presentation?.retry
         Button(retrying ? "파싱 재시도 요청 중…" : "파싱 다시 시도") {
@@ -107,7 +120,7 @@ public struct ParsingStatusView: View {
     }
     .textSelection(.enabled)
     .overlay(alignment: .bottomTrailing) {
-      if let message = ParsingFailureNotice.message(status: status, unavailable: unavailable) {
+      if let message = failureNotice {
         Label(message, systemImage: "exclamationmark.triangle")
           .font(.callout)
           .padding(12)
@@ -155,6 +168,18 @@ public struct ParsingStatusView: View {
     }
   }
 
+  private var canStartParsing: Bool {
+    !unavailable && status?.state == "notStarted" && status?.usableRevision == nil
+      && startUnreservedParsing != nil
+  }
+
+  private var failureNotice: String? {
+    if canStartParsing && initialStartFailed {
+      return "파싱을 시작하지 못했습니다. 다시 시도하세요."
+    }
+    return ParsingFailureNotice.message(status: status, unavailable: unavailable)
+  }
+
   private var aiPreparationReason: String {
     guard !unavailable, let status else {
       return "파싱 상태를 확인하기 전에는 AI용 원문의 준비 여부를 판단할 수 없습니다."
@@ -173,12 +198,12 @@ public struct ParsingStatusView: View {
     case "failed":
       return ParsingFailureMessage.korean(status?.failure)
     case "unavailable": return "현재 논문의 원문을 사용할 수 없습니다."
-    default: return "검색용 원문이 아직 준비되지 않았습니다."
+    default: return failureNotice ?? "검색용 원문이 아직 준비되지 않았습니다."
     }
   }
 
   private var icon: String {
-    if unavailable { return "exclamationmark.triangle" }
+    if unavailable || (canStartParsing && initialStartFailed) { return "exclamationmark.triangle" }
     switch status?.state {
     case "succeeded": return "checkmark.circle"
     case "running": return "hourglass"
@@ -189,6 +214,15 @@ public struct ParsingStatusView: View {
 
   private func isCurrent(_ key: ObservationTaskKey) -> Bool {
     key.paperID == paperID && key.restart == restartToken
+  }
+
+  @MainActor private func startParsing(key: ObservationTaskKey) async {
+    guard isCurrent(key), !Task.isCancelled, canStartParsing, !retrying,
+      let startUnreservedParsing else { return }
+    retrying = true
+    defer { if key.paperID == paperID { retrying = false } }
+    await startUnreservedParsing()
+    _ = await recoverTracking(key: key)
   }
 
   @MainActor private func retryParsing(_ context: ParsingRecoveryContext, key: ObservationTaskKey) async {

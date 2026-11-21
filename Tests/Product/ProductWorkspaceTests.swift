@@ -170,6 +170,57 @@ private actor WorkspaceDeletionAgent: AgentLibraryPurging {
     }, 1)
   }
 
+  func testReaderCanStartParsingAfterBothInitialWritesFail() async throws {
+    let base = try await fixture()
+    let id = try await importSelected(base)
+    let graph = try MainPDFiumParsingComposition(lifecycle: base.lifecycle,
+      authority: ProviderRequest(), geometryBinding: parsingBinding())
+    let workspace = try ProductWorkspace(database: base.database, lifecycle: base.lifecycle,
+      connection: base.connection, parsing: graph)
+    let f = Fixture(source: base.source, database: base.database, lifecycle: base.lifecycle,
+      connection: base.connection, workspace: workspace)
+    let reader = try await openOwnedReader(f, id: id)
+    defer { workspace.returnToLibrary() }
+    // The mounted Reader retains its read lease. A new extraction acquisition
+    // cannot open this deleted fixture path or start a helper.
+    let reference = try f.database.readerSnapshot(paperID: id).pdfReference
+    try FileManager.default.removeItem(at: f.database.root.appendingPathComponent(reference))
+    try f.database.adapterWrite { db in
+      try db.execute(sql: """
+        CREATE TRIGGER rejectAllInitialWrites BEFORE INSERT ON extractionAttempt
+        BEGIN SELECT RAISE(ABORT, 'fixture storage unavailable'); END;
+        """)
+    }
+
+    let first = try XCTUnwrap(workspace.imported(id))
+    await first.value
+    XCTAssertTrue(workspace.failedInitialParsing.contains(id))
+    await workspace.startUnreservedParsing(for: reader)
+    XCTAssertTrue(workspace.failedInitialParsing.contains(id))
+    XCTAssertEqual(try f.database.extractionStatus(paperID: id).state, "notStarted")
+    XCTAssertEqual(try f.database.adapterRead {
+      try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM extractionInvocation")
+    }, 0)
+
+    try f.database.adapterWrite { try $0.execute(sql: "DROP TRIGGER rejectAllInitialWrites") }
+    let duplicate = try XCTUnwrap(workspace.imported(id))
+    await duplicate.value
+    let stale = try await graph.startUnreservedParsing(paperID: id, generation: UUID())
+    XCTAssertNil(stale)
+    XCTAssertEqual(try f.database.extractionStatus(paperID: id).state, "notStarted")
+
+    await workspace.startUnreservedParsing(for: reader)
+    let persisted = try await graph.recoveryCoordinator.presentation(paperID: id)
+    let context = try XCTUnwrap(persisted.retry)
+    XCTAssertEqual(context.failedAttempt.generation, reader.annotationIdentity.generation)
+    XCTAssertEqual(persisted.status.state, "failed")
+    XCTAssertNotEqual(persisted.status.failure, "reservationFailure")
+    await workspace.startUnreservedParsing(for: reader)
+    XCTAssertEqual(try f.database.adapterRead {
+      try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM extractionInvocation")
+    }, 1)
+  }
+
   private func openOwnedReader(_ f: Fixture, id: UUID,
     discard: @escaping @MainActor () -> Void = {}) async throws -> ProductWorkspace.OpenReader {
     try await f.workspace.open(paper(f, id: id))

@@ -17,6 +17,7 @@ import ProviderRequest
   public let recoveryCoordinator: ParsingRecoveryCoordinator
   private let cancellationRelay: CancellationRelay
   private var initialInvocations: Set<UUID> = []
+  private var initialInFlight: Set<UUID> = []
 
   /// Failure is request failure/debt information, never proof of physical closure.
   public var cancellationRequestFailure: Error? { cancellationRelay.failure }
@@ -91,14 +92,29 @@ import ProviderRequest
   /// invocation (including an interrupted or failed one) requires explicit recovery.
   @discardableResult
   public func parseImportedPaper(_ paperID: UUID) async throws -> ExtractionIdentity? {
+    try await startInitialParsing(paperID: paperID, expectedGeneration: nil)
+  }
+
+  @discardableResult
+  func startUnreservedParsing(paperID: UUID, generation: UUID) async throws -> ExtractionIdentity? {
+    try await startInitialParsing(paperID: paperID, expectedGeneration: generation)
+  }
+
+  private func startInitialParsing(paperID: UUID, expectedGeneration: UUID?) async throws
+    -> ExtractionIdentity? {
     try Task.checkCancellation()
-    guard let identity = try initialIdentity(paperID: paperID) else { return nil }
+    guard !initialInFlight.contains(paperID),
+      let identity = try initialIdentity(paperID: paperID, expectedGeneration: expectedGeneration)
+    else { return nil }
+    initialInFlight.insert(paperID)
+    defer { initialInFlight.remove(paperID) }
     try await service.parse(identity, firstInvocationOnly: true)
     return identity
   }
 
-  internal func initialIdentity(paperID: UUID) throws -> ExtractionIdentity? {
-    guard !initialInvocations.contains(paperID) else { return nil }
+  internal func initialIdentity(paperID: UUID, expectedGeneration: UUID? = nil) throws
+    -> ExtractionIdentity? {
+    guard expectedGeneration != nil || !initialInvocations.contains(paperID) else { return nil }
     let identity: ExtractionIdentity? = try service.database.adapterRead { db in
       guard try Int.fetchOne(db, sql: """
         SELECT COUNT(*) FROM extractionInvocation WHERE paperID = ?
@@ -114,6 +130,7 @@ import ProviderRequest
       guard let generation = UUID(uuidString: row["generation"]),
         let sha: String = row["pdfSHA256"], let reference: String = row["pdfReference"]
       else { throw ProductDatabaseError.invalidRecord }
+      if let expectedGeneration, expectedGeneration != generation { return nil }
       let slot: String? = row["slotID"]
       let rawKind: String? = row["kind"]
       let kind = rawKind.flatMap(ProviderKind.init(rawValue:))

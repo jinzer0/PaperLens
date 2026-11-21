@@ -93,6 +93,7 @@ public final class ProductWorkspace: ObservableObject {
   @Published private(set) var localImportID: UUID?
   @Published private(set) var deletingPaperIDs: Set<UUID> = []
   @Published private(set) var finishedDeletionIDs: Set<UUID> = []
+  @Published private(set) var failedInitialParsing: Set<UUID> = []
   @Published public private(set) var revision = 0
   @Published public private(set) var preparing = false
   @Published public private(set) var opening = false
@@ -152,6 +153,7 @@ public final class ProductWorkspace: ObservableObject {
       deletingPaperIDs.insert(paper.id).inserted
     else { return nil }
     if latestLocalImport == paper.id { latestLocalImport = nil }
+    failedInitialParsing.remove(paper.id)
     urls.dismissReadyStatus(for: paper.id)
     let message = "‘\(paper.title)’ 삭제를 완료하지 못했습니다."
     if failure == message { failure = nil }
@@ -435,10 +437,12 @@ public final class ProductWorkspace: ObservableObject {
       }
       if let parsing {
         return Task {
-          // Parsing reports its own persisted outcome. Reader admission does not
-          // depend on completion, nor does failure become an automatic retry.
           do { _ = try await parsing.parseImportedPaper(paperID) }
-          catch { }
+          catch {
+            guard !Task.isCancelled, !deletingPaperIDs.contains(paperID),
+              !finishedDeletionIDs.contains(paperID) else { return }
+            failedInitialParsing.insert(paperID)
+          }
         }
       }
     } catch { failure = "PDF 가져오기 상태를 확인하지 못했습니다. 라이브러리에서 현재 상태를 다시 확인하세요." }
@@ -447,6 +451,19 @@ public final class ProductWorkspace: ObservableObject {
 
   public func open(_ paper: OrganizedPaper) async throws {
     try await openReader { paper }
+  }
+
+  func startUnreservedParsing(for observed: OpenReader) async {
+    guard let parsing, isCurrentReader(observed), !Task.isCancelled else { return }
+    failedInitialParsing.remove(observed.id)
+    do {
+      try observed.session.withReadAccess { }
+      try await parsing.startUnreservedParsing(paperID: observed.id,
+        generation: observed.annotationIdentity.generation)
+    } catch {
+      guard isCurrentReader(observed), !Task.isCancelled else { return }
+      failedInitialParsing.insert(observed.id)
+    }
   }
 
   private var canOpenReader: Bool {
@@ -742,6 +759,10 @@ public struct ProductWorkspaceView: View {
           parsingStatus: ParsingStatusView(
             database: workspace.database, paperID: reader.id,
             coordinator: workspace.parsingRecoveryCoordinator,
+            initialStartFailed: workspace.failedInitialParsing.contains(reader.id),
+            startUnreservedParsing: workspace.parsing == nil ? nil : {
+              await workspace.startUnreservedParsing(for: reader)
+            },
             onUsableRevisionChange: { await workspace.refreshPublishedMetadata(for: reader) }),
           onReturn: { workspace.returnToLibrary() },
           onSaveFailure: { workspace.reportSaveFailure($0) }
