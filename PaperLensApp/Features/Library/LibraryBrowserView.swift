@@ -7,11 +7,15 @@ public struct LibraryBrowserView: View {
   private let sortFacts: @Sendable () async throws -> [OrganizationSortFacts]
   private let readReadingRecords: @Sendable (UUID, UUID) async throws -> LibraryReadingRecords
   private let openPaper: @MainActor (OrganizedPaper) async throws -> Void
+  private let deletePaper: @MainActor (OrganizedPaper, Bool) -> Void
+  private let acknowledgeDeletionRefresh: @MainActor (Set<UUID>) -> Void
   private let importPDF: @MainActor () -> Void
   private let retryImportPDF: @MainActor (UUID, UUID) -> Void
   private let manageFolders: @MainActor () -> Void
   @ObservedObject private var summaries: LibrarySummaryCoordinator
   private let refreshRevision: Int
+  private let deletingPaperIDs: Set<UUID>
+  private let finishedDeletionIDs: Set<UUID>
   @State private var query = OrganizationQueryState()
   @State private var currentFacts: [UUID: OrganizationSortFacts] = [:]
   @State private var folders: [LibraryFolder] = []
@@ -34,10 +38,13 @@ public struct LibraryBrowserView: View {
   private var loadFailed: Bool { query.failed }
 
   public init(service: LibraryOrganizationService, folderService: FolderImportService,
-    filter: Binding<OrganizationFilter>, refreshRevision: Int,
+    filter: Binding<OrganizationFilter>, refreshRevision: Int, deletingPaperIDs: Set<UUID>,
+    finishedDeletionIDs: Set<UUID>,
     sortFacts: @escaping @Sendable () async throws -> [OrganizationSortFacts],
     readReadingRecords: @escaping @Sendable (UUID, UUID) async throws -> LibraryReadingRecords,
     openPaper: @escaping @MainActor (OrganizedPaper) async throws -> Void,
+    deletePaper: @escaping @MainActor (OrganizedPaper, Bool) -> Void,
+    acknowledgeDeletionRefresh: @escaping @MainActor (Set<UUID>) -> Void,
     importPDF: @escaping @MainActor () -> Void,
     retryImportPDF: @escaping @MainActor (UUID, UUID) -> Void,
     manageFolders: @escaping @MainActor () -> Void,
@@ -46,6 +53,9 @@ public struct LibraryBrowserView: View {
     self.readReadingRecords = readReadingRecords
     _filter = filter; self.refreshRevision = refreshRevision
     self.openPaper = openPaper; self.importPDF = importPDF
+    self.deletingPaperIDs = deletingPaperIDs; self.deletePaper = deletePaper
+    self.finishedDeletionIDs = finishedDeletionIDs
+    self.acknowledgeDeletionRefresh = acknowledgeDeletionRefresh
     self.retryImportPDF = retryImportPDF
     self.manageFolders = manageFolders
     self.summaries = summaries
@@ -289,6 +299,10 @@ public struct LibraryBrowserView: View {
       invalidateObservation()
     }
     .onChange(of: refreshRevision) { _, _ in refresh() }
+    .onChange(of: finishedDeletionIDs) { _, _ in refreshAfterDeletion() }
+    .onChange(of: canRefreshAfterDeletion) { _, ready in
+      if ready { refreshAfterDeletion() }
+    }
     .onChange(of: summaries.activePaperID) { previous, current in
       if previous != nil, current == nil { refresh() }
     }
@@ -320,10 +334,10 @@ public struct LibraryBrowserView: View {
     }
     .alert("논문을 영구 삭제하시겠습니까?",
       isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }), presenting: deleting) { paper in
-        Button("삭제", role: .destructive) { deleting = nil; perform { try await service.delete(paper, retry: false) } }
+        Button("삭제", role: .destructive) { deleting = nil; deletePaper(paper, false) }
         Button("취소", role: .cancel) { deleting = nil; focusedPaper = paper.id }
       } message: { paper in
-        Text("‘\(paper.title)’의 앱 소유 PDF와 읽기 위치·주석·조직 기록을 삭제합니다. 원본 파일은 유지되며 이 작업은 되돌릴 수 없습니다.")
+        Text("‘\(paper.title)’의 앱 내 PDF, 추출 텍스트와 검색 색인, 주석, 읽기 위치, 태그·상태·즐겨찾기, 요약과 관련 임시 데이터를 삭제합니다. 가져오기 전 원본 파일은 유지됩니다. 이 작업은 되돌릴 수 없습니다.")
       }
     .alert("저장 또는 작업 실패", isPresented: Binding(
       get: { operationFailed || summaries.requestFailure != nil },
@@ -342,12 +356,13 @@ public struct LibraryBrowserView: View {
 
   @ViewBuilder private func paperContent(_ paper: OrganizedPaper) -> some View {
     let fact = currentFacts[paper.id].flatMap { $0.generation == paper.generation ? $0 : nil }
+    let deletionPending = deletingPaperIDs.contains(paper.id) || finishedDeletionIDs.contains(paper.id)
     VStack(alignment: .leading, spacing: 8) {
       Text(paper.title).font(.headline).textSelection(.enabled)
-      paperActions(paper)
+      paperActions(paper).disabled(deletionPending)
       Text("출처 제목 · \(LibraryMetadataPresentation.preview(fact?.metadata?.title, limit: 160))")
         .font(.caption).textSelection(.enabled)
-      Text(statusLabel(paper)).font(.caption)
+      Text(deletionPending ? "삭제 중 · 열기 불가" : statusLabel(paper)).font(.caption)
       Text("\(readingLabel(paper.organization.readingStatus)) · \(paper.organization.favorite ? "즐겨찾기" : "즐겨찾기 아님")")
       HStack {
         Toggle("즐겨찾기", isOn: Binding(get: { paper.organization.favorite }, set: { selected in
@@ -375,7 +390,7 @@ public struct LibraryBrowserView: View {
         .focused($organizationFocus, equals: .reading(paper.id))
         .accessibilityLabel("\(paper.title) 읽기 상태 변경")
         .accessibilityValue(readingLabel(paper.organization.readingStatus))
-      }.disabled(!paper.readable || busy || loading || loadFailed)
+      }.disabled(deletionPending || !paper.readable || busy || loading || loadFailed)
       if !paper.organization.tags.isEmpty { Text(paper.organization.tags.joined(separator: " · ")).font(.caption) }
       if fact?.metadata?.year.isConflict == true {
         Text("발행연도 출처 간 충돌 · 상세에서 후보 확인").font(.caption)
@@ -393,13 +408,13 @@ public struct LibraryBrowserView: View {
         HStack {
           ProgressView("요약 생성 중")
           Button("요약 취소") { summaries.cancel() }
-        }
+        }.disabled(deletionPending)
       } else {
         Menu(fact?.summary?.record == nil ? "요약 생성" : "요약 다시 생성") {
           Button("한국어") { beginSummary(paper, language: "ko") }
           Button("English") { beginSummary(paper, language: "en") }
         }
-        .disabled(!paper.readable || busy || loading || loadFailed || summaries.activePaperID != nil)
+        .disabled(deletionPending || !paper.readable || busy || loading || loadFailed || summaries.activePaperID != nil)
         .accessibilityLabel("\(paper.title) 근거 문장으로 요약 생성")
       }
       Text("초록 · \(LibraryMetadataPresentation.preview(fact?.metadata?.abstract, limit: 220))")
@@ -436,7 +451,7 @@ public struct LibraryBrowserView: View {
           beginTagEdit(paper)
         }.disabled(!paper.readable)
         if paper.status == .deletionFailed {
-          Button("삭제 다시 시도") { perform { try await service.delete(paper, retry: true) } }
+          Button("삭제 다시 시도") { deletePaper(paper, true) }
         } else {
           Button("삭제", role: .destructive) {
             guard !nativeSheetPending, !busy else { return }
@@ -688,6 +703,15 @@ public struct LibraryBrowserView: View {
     refresh()
   }
 
+  private var canRefreshAfterDeletion: Bool {
+    rootMount != nil && !nativeSheetPending && !busy && deleting == nil && !loading && !loadFailed
+  }
+
+  private func refreshAfterDeletion() {
+    guard canRefreshAfterDeletion, !finishedDeletionIDs.isEmpty else { return }
+    refresh()
+  }
+
   private func savePreferences(_ preference: OrganizationPreferences) {
     perform { try await service.savePreferences(preference) }
   }
@@ -787,7 +811,8 @@ public struct LibraryBrowserView: View {
         awaitingRequest: request)
     }
     if let slot, sheetPresentation?.slot.id == slot.id { sheetPresentation?.awaitingRequest = request }
-    Task { await load(request) }
+    let deletions = finishedDeletionIDs
+    Task { await load(request, refreshingDeletions: deletions) }
   }
   private func invalidateObservation(preservingEditor slotID: UUID? = nil,
     completingOrganization token: UUID? = nil) {
@@ -807,7 +832,7 @@ public struct LibraryBrowserView: View {
     tagLoadFailed = false
     query.invalidate()
   }
-  private func load(_ request: OrganizationQueryState.Request) async {
+  private func load(_ request: OrganizationQueryState.Request, refreshingDeletions: Set<UUID>) async {
     let observedFolders: [LibraryFolder]
     let foldersFailed: Bool
     do {
@@ -830,6 +855,7 @@ public struct LibraryBrowserView: View {
       let facts = try await sortFacts()
       let value = try await service.snapshot(filter: request.filter, facts: facts)
       guard query.accept(value, request: request, currentFilter: filter) else { return }
+      if !refreshingDeletions.isEmpty { acknowledgeDeletionRefresh(refreshingDeletions) }
       folders = observedFolders
       folderLoadFailed = foldersFailed
       tags = observedTags

@@ -17,6 +17,16 @@ import ProviderRequest
   }
 }
 
+private actor WorkspaceDeletionAgent: AgentLibraryPurging {
+  private(set) var deletionIDs: [UUID] = []
+
+  func purgeLibraryPaper(paperID: UUID, deletionID: UUID) async throws -> AgentLibraryPurgeReceipt {
+    deletionIDs.append(deletionID)
+    if deletionIDs.count == 1 { throw LocalLibraryError.cleanupFailed }
+    return AgentLibraryPurgeReceipt(paperID: paperID, deletionID: deletionID)
+  }
+}
+
 @MainActor final class ProductWorkspaceTests: XCTestCase {
   private struct Fixture {
     let source: URL
@@ -58,12 +68,12 @@ import ProviderRequest
     return root
   }
 
-  private func fixture() async throws -> Fixture {
+  private func fixture(agentPurge: (any AgentLibraryPurging)? = nil) async throws -> Fixture {
     let physical = try privateRoot()
     let source = physical.appendingPathComponent("selected-1999.pdf")
     try Data("%PDF-1.4\nsynthetic workspace fixture\n%%EOF\n".utf8).write(to: source)
     let database = try ProductDatabase.open(at: physical.appendingPathComponent("database"))
-    let lifecycle = try await LocalLibraryLifecycle.open(database: database)
+    let lifecycle = try await LocalLibraryLifecycle.open(database: database, agentPurge: agentPurge)
     let slots = try APIKeySlotStore(directory: physical.appendingPathComponent("api-key-slots"))
     let configuration = try seedProviderSelection(database: database, slots: slots)
     let connection = NativeAPIKeyConnection(configuration: configuration, slots: slots,
@@ -1161,6 +1171,66 @@ import ProviderRequest
     XCTAssertThrowsError(try session.withReadAccess { XCTFail("Revoked content must not be used") })
     XCTAssertEqual(try f.database.libraryRecords().first?.status, .deletionFailed)
     f.workspace.returnToLibrary()
+  }
+
+  func testWorkspaceDeletionLeavesOtherPapersUsableAndRetriesSameSaga() async throws {
+    let agent = WorkspaceDeletionAgent()
+    let f = try await fixture(agentPurge: agent)
+    let removalID = try await importSelected(f)
+    let removal = try await paper(f, id: removalID)
+    let otherSource = f.source.deletingLastPathComponent().appendingPathComponent("other.pdf")
+    try Data("%PDF-1.4\nsecond workspace fixture\n%%EOF\n".utf8).write(to: otherSource)
+    let otherID = try await f.lifecycle.importPDF(from: otherSource)
+    let other = try await paper(f, id: otherID)
+
+    let source = try f.database.readerSnapshot(paperID: removalID)
+    let lease = try LibraryReadLeaseProvider(lifecycle: f.lifecycle).acquireReadLease(for: source) {}
+    defer { lease.close() }
+    let deletion = try XCTUnwrap(f.workspace.requestDeletion(removal, retry: false))
+    XCTAssertEqual(f.workspace.deletingPaperIDs, [removalID])
+    XCTAssertNil(f.workspace.requestDeletion(removal, retry: false))
+    do {
+      try await f.workspace.open(removal)
+      XCTFail("A captured ready row must be unavailable immediately after deletion is requested")
+    } catch { XCTAssertEqual(error as? OrganizationError, .stalePaper) }
+
+    let clock = ContinuousClock()
+    let deadline = clock.now + .seconds(3)
+    var deleting = try await paper(f, id: removalID)
+    while deleting.status == .ready && clock.now < deadline {
+      try await Task.sleep(for: .milliseconds(10))
+      deleting = try await paper(f, id: removalID)
+    }
+    XCTAssertEqual(deleting.status, .deleting)
+    XCTAssertFalse(deleting.readable)
+    let callsBeforeDrain = await agent.deletionIDs
+    XCTAssertTrue(callsBeforeDrain.isEmpty)
+    try await f.workspace.organization.save(.init(readingStatus: .reading, favorite: true), for: other)
+    try await f.workspace.open(other)
+    XCTAssertEqual(f.workspace.reader?.id, otherID)
+
+    lease.close()
+    await deletion.value
+    XCTAssertEqual(f.workspace.reader?.id, otherID)
+    XCTAssertTrue(f.workspace.deletingPaperIDs.isEmpty)
+    XCTAssertEqual(f.workspace.finishedDeletionIDs, [removalID])
+    let failed = try await paper(f, id: removalID)
+    XCTAssertEqual(failed.status, .deletionFailed)
+    XCTAssertFalse(failed.readable)
+    f.workspace.returnToLibrary()
+    XCTAssertNil(f.workspace.requestDeletion(failed, retry: true))
+
+    f.workspace.acknowledgeDeletionRefresh([removalID])
+    let retry = try XCTUnwrap(f.workspace.requestDeletion(failed, retry: true))
+    await retry.value
+    let calls = await agent.deletionIDs
+    XCTAssertEqual(calls.count, 2)
+    XCTAssertEqual(calls.first, calls.last)
+    XCTAssertNil(f.workspace.failure)
+    let remaining = try await f.workspace.organization.snapshot(filter: .init(), facts: [])
+    XCTAssertEqual(remaining.papers.map(\.id), [otherID])
+    XCTAssertTrue(try XCTUnwrap(remaining.papers.first).organization.favorite)
+    XCTAssertTrue(FileManager.default.fileExists(atPath: f.source.path))
   }
 
   func testGuardedSaveFailureIsVisibleAndDoesNotAcceptLastReadTimestamp() async throws {

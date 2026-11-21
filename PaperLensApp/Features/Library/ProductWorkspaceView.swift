@@ -89,6 +89,8 @@ public final class ProductWorkspace: ObservableObject {
   @Published public var libraryFilter = OrganizationFilter()
   @Published public private(set) var reader: OpenReader?
   @Published private(set) var latestLocalImport: UUID?
+  @Published private(set) var deletingPaperIDs: Set<UUID> = []
+  @Published private(set) var finishedDeletionIDs: Set<UUID> = []
   @Published public private(set) var revision = 0
   @Published public private(set) var preparing = false
   @Published public private(set) var opening = false
@@ -140,6 +142,28 @@ public final class ProductWorkspace: ObservableObject {
   public func sortFacts() async throws -> [OrganizationSortFacts] {
     let database = database
     return try await Task.detached { try database.librarySortFacts() }.value
+  }
+
+  @discardableResult func requestDeletion(_ paper: OrganizedPaper, retry: Bool) -> Task<Void, Never>? {
+    guard canOpenReader, paper.status != .deleting, paper.status != .tombstone,
+      retry == (paper.status == .deletionFailed), !finishedDeletionIDs.contains(paper.id),
+      deletingPaperIDs.insert(paper.id).inserted
+    else { return nil }
+    let message = "‘\(paper.title)’ 삭제를 완료하지 못했습니다."
+    if failure == message { failure = nil }
+    return Task {
+      defer {
+        // Keep the old row unavailable until Library reloads its durable status.
+        finishedDeletionIDs.insert(paper.id)
+        deletingPaperIDs.remove(paper.id)
+      }
+      do { try await organization.delete(paper, retry: retry) }
+      catch { failure = message }
+    }
+  }
+
+  func acknowledgeDeletionRefresh(_ paperIDs: Set<UUID>) {
+    finishedDeletionIDs.subtract(paperIDs)
   }
 
   @discardableResult public func prepareImport(source: URL) async throws -> UUID {
@@ -385,6 +409,8 @@ public final class ProductWorkspace: ObservableObject {
     opening = true
     defer { opening = false }
     let paper = try await resolvePaper()
+    guard !deletingPaperIDs.contains(paper.id), !finishedDeletionIDs.contains(paper.id)
+    else { throw OrganizationError.stalePaper }
     try await organization.admitOpen(paper)
     // Bind the selected generation at lease acquisition too, not just at the list's check.
     let provider = SelectedPaperReadLeases(base: readLeases, paper: paper)
@@ -701,6 +727,7 @@ public struct ProductWorkspaceView: View {
           LibraryBrowserView(
             service: workspace.organization, folderService: workspace.imports,
             filter: $workspace.libraryFilter, refreshRevision: workspace.revision,
+            deletingPaperIDs: workspace.deletingPaperIDs, finishedDeletionIDs: workspace.finishedDeletionIDs,
             sortFacts: { try await workspace.sortFacts() },
             readReadingRecords: { [annotations = workspace.annotations] paperID, generation in
               try await Task.detached {
@@ -711,6 +738,8 @@ public struct ProductWorkspaceView: View {
               invalidateDirectIntent()
               try await workspace.open($0)
             },
+            deletePaper: { workspace.requestDeletion($0, retry: $1) },
+            acknowledgeDeletionRefresh: { workspace.acknowledgeDeletionRefresh($0) },
             importPDF: {
               invalidateDirectIntent()
               _ = workspace.pickPDF()
