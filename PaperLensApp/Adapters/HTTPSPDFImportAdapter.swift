@@ -79,19 +79,27 @@ private final class HTTPSPDFProducerRoots: @unchecked Sendable {
   var ids: Set<UUID> { lock.withLock { Set(producers.keys) } }
 }
 
+enum URLImportInputKind: Equatable, Sendable {
+  case arxivAbstract, arxivPDF, httpsPDF
+}
+
 public final class HTTPSPDFImportAdapter: Sendable {
   static var rootedProducerIDs: Set<UUID> { HTTPSPDFProducerRoots.shared.ids }
   private let authority: ProviderRequest
   public init(authority: ProviderRequest) { self.authority = authority }
 
   public func route(_ text: String) throws -> ValidatedRequestURL {
-    if let abstract = try? authority.resolveArxivAbstractURL(text) { return abstract }
-    if let pdf = try? authority.validateImportURL(text, sourceKind: "arxivPDF") { return pdf }
+    try recognize(text).request
+  }
+
+  func recognize(_ text: String) throws -> (kind: URLImportInputKind, request: ValidatedRequestURL) {
+    if let resolved = try? authority.resolveArxivAbstractURL(text) { return (.arxivAbstract, resolved) }
+    if let pdf = try? authority.validateImportURL(text, sourceKind: "arxivPDF") { return (.arxivPDF, pdf) }
     if let host = URLComponents(string: text)?.host?.lowercased(),
       authority.contract["policies"]["arxivHosts"].array.contains(.string(host)) {
       throw URLImportError.rejected
     }
-    return try authority.validateImportURL(text, sourceKind: "httpsPDF")
+    return (.httpsPDF, try authority.validateImportURL(text, sourceKind: "httpsPDF"))
   }
 
   public func download(

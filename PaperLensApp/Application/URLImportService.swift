@@ -77,7 +77,8 @@ public struct URLImportConfirmation: Identifiable, Sendable {
   public let destination: String
   public let destinationFolderID: UUID?
   public let possibleDuplicate: Bool
-  public let sourceKind: String
+  public var sourceKind: String { route.sourceKind }
+  let inputKind: URLImportInputKind
   let purpose: Purpose
   fileprivate let route: ValidatedRequestURL
   fileprivate let admission = URLImportAdmission()
@@ -192,8 +193,8 @@ public final class URLImportService: ObservableObject {
     destinationFolderID: UUID?, purpose: URLImportConfirmation.Purpose,
     restoringFailure: URLImportError? = nil) throws {
     guard !starting, operation == nil else { throw URLImportError.rejected }
-    let route: ValidatedRequestURL
-    do { route = try adapter.route(input) } catch { throw URLImportError.rejected }
+    let recognized: (kind: URLImportInputKind, request: ValidatedRequestURL)
+    do { recognized = try adapter.recognize(input) } catch { throw URLImportError.rejected }
     lastInput = input
     lastDestination = destination
     lastDestinationFolderID = destinationFolderID
@@ -206,7 +207,7 @@ public final class URLImportService: ObservableObject {
     }
     confirmation = URLImportConfirmation(id: UUID(), destination: destination,
       destinationFolderID: destinationFolderID, possibleDuplicate: possibleDuplicate,
-      sourceKind: route.sourceKind, purpose: purpose, route: route)
+      inputKind: recognized.kind, purpose: purpose, route: recognized.request)
     state = .confirming
   }
 

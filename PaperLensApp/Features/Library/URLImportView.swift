@@ -235,7 +235,14 @@ public struct URLImportView<LibraryContent: View>: View {
           Text("Library에 논문 추가").font(.headline)
         }
         Label(intent.destination, systemImage: "folder")
-        Text("입력 경로: \(intent.sourceKind)")
+        switch intent.inputKind {
+        case .arxivAbstract:
+          Text("arXiv 초록 링크에서 PDF 가져오기")
+        case .arxivPDF:
+          Text("arXiv PDF 링크에서 가져오기")
+        case .httpsPDF:
+          Text("HTTPS PDF 링크에서 가져오기")
+        }
         if intent.possibleDuplicate {
           if case .retry = intent.purpose {
             Label("중복 가능성이 있습니다. 계속하면 선택한 논문의 실패한 작업만 다시 시도하며, 같은 내용의 기존 논문은 교체하지 않습니다.", systemImage: "exclamationmark.triangle")
@@ -423,7 +430,7 @@ public struct URLImportView<LibraryContent: View>: View {
         service.state != .confirming, service.state != .downloading else { throw URLImportError.rejected }
       let folder = folders.first { $0.id == destinationFolderID }
       guard destinationFolderID == nil || folder != nil else { throw URLImportError.rejected }
-      try service.prepare(text, destination: folder?.name ?? "Unfiled",
+      try service.prepare(text, destination: folder?.name ?? "미분류",
         possibleDuplicate: possibleDuplicate(text), destinationFolderID: destinationFolderID)
       if let opener, let confirmation = service.confirmation {
         confirmationPresentation = ConfirmationPresentation(id: confirmation.id,

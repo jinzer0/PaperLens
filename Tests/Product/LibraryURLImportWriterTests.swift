@@ -38,6 +38,56 @@ final class LibraryURLImportWriterTests: XCTestCase, @unchecked Sendable {
   }
 
   @MainActor
+  func testThreeURLInputsKeepTheirConfirmationKindAndPublishToConfirmedFolder() async throws {
+    let db = try database()
+    let folder = try db.createFolder(name: "Confirmed destination")
+    let lifecycle = try await LocalLibraryLifecycle.open(database: db)
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [URLRouteFixture.self]
+    let service = URLImportService(authority: try ProviderRequest(), sessionConfiguration: configuration,
+      grantWriter: { try await lifecycle.grantURLImportWriter(for: $0) })
+    let inputs: [(url: String, kind: URLImportInputKind, request: String, sourceKind: String)] = [
+      ("https://arxiv.org/abs/2401.12345v2", .arxivAbstract, "https://arxiv.org/pdf/2401.12345v2", "arxivPDF"),
+      ("https://arxiv.org/pdf/2401.12345v2.pdf", .arxivPDF, "https://arxiv.org/pdf/2401.12345v2.pdf", "arxivPDF"),
+      ("https://writer.invalid/download", .httpsPDF, "https://writer.invalid/download", "httpsPDF")
+    ]
+
+    for (index, input) in inputs.enumerated() {
+      try service.prepare(input.url, destination: folder.name, possibleDuplicate: true,
+        destinationFolderID: folder.id)
+      let confirmation = try XCTUnwrap(service.confirmation)
+      XCTAssertEqual(confirmation.inputKind, input.kind)
+      XCTAssertEqual(confirmation.sourceKind, input.sourceKind)
+      XCTAssertEqual(confirmation.destination, folder.name)
+      XCTAssertEqual(confirmation.destinationFolderID, folder.id)
+      XCTAssertTrue(confirmation.possibleDuplicate)
+      XCTAssertEqual(try db.libraryRecords().count, index)
+      service.cancelConfirmation()
+      service.continueImport(confirmationID: confirmation.id)
+      XCTAssertEqual(service.state, .idle)
+      XCTAssertEqual(try db.libraryRecords().count, index)
+
+      try service.prepare(input.url, destination: folder.name, possibleDuplicate: true,
+        destinationFolderID: folder.id)
+      let confirmed = try XCTUnwrap(service.confirmation)
+      XCTAssertNotEqual(confirmed.id, confirmation.id)
+      service.continueImport(confirmationID: confirmed.id)
+      let deadline = ContinuousClock.now + .seconds(5)
+      while service.state == .downloading && ContinuousClock.now < deadline {
+        try await Task.sleep(for: .milliseconds(10))
+      }
+      guard case .ready(let paperID) = service.state else {
+        return XCTFail("The \(input.kind) input did not publish its PDF")
+      }
+      XCTAssertEqual(try db.folderID(for: paperID), folder.id)
+      XCTAssertEqual(try db.libraryRecords().count, index + 1)
+      let published = try db.readerSnapshot(paperID: paperID)
+      XCTAssertEqual(try Data(contentsOf: db.root.appendingPathComponent(published.pdfReference)),
+        try XCTUnwrap(URLRouteFixture.documents[input.request]))
+    }
+  }
+
+  @MainActor
   func testActualAbortedURLRetryRetainsJobAndRequiresFreshConfirmationWithoutNetwork() async throws {
     let db = try database()
     let lifecycle = try await LocalLibraryLifecycle.open(database: db)
@@ -864,6 +914,32 @@ private actor URLWriterAgent: AgentLibraryPurging {
     guard !FileManager.default.fileExists(atPath: owned.path) else { throw URLImportError.cleanupFailed }
     return AgentLibraryPurgeReceipt(paperID: paperID, deletionID: deletionID)
   }
+}
+
+private final class URLRouteFixture: URLProtocol, @unchecked Sendable {
+  static let documents = [
+    "https://arxiv.org/pdf/2401.12345v2": Data("%PDF-1.7\nresolved abstract".utf8),
+    "https://arxiv.org/pdf/2401.12345v2.pdf": Data("%PDF-1.7\ndirect arXiv".utf8),
+    "https://writer.invalid/download": Data("%PDF-1.7\ndirect HTTPS".utf8)
+  ]
+
+  // Intercept unexpected requests too so these tests never leave the local fixture.
+  override class func canInit(with request: URLRequest) -> Bool { true }
+  override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+  override func startLoading() {
+    guard let url = request.url, let bytes = Self.documents[url.absoluteString],
+      let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1",
+        headerFields: ["Content-Type": "application/pdf"]) else {
+      client?.urlProtocol(self, didFailWithError: URLError(.badURL))
+      return
+    }
+    client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+    client?.urlProtocol(self, didLoad: bytes)
+    client?.urlProtocolDidFinishLoading(self)
+  }
+
+  override func stopLoading() {}
 }
 
 private final class URLWriterFixture: URLProtocol, @unchecked Sendable {
