@@ -298,18 +298,24 @@ import SwiftUI
 
   @objc private func positionChanged(_ notification: Notification) {
     guard opened, !restoring else { return }
+    var observed: ReaderPosition?
+    var saveFailure: String?
     do {
       let position = try readCurrentPosition()
+      observed = position
       try session.save(position)
+    } catch {
+      saveFailure = "Reading position was not saved: \(error)"
+    }
+    guard opened else { return }
+    // Page controls follow the PDF, even when the stored position is unchanged.
+    if let position = observed {
       pageIndex = position.pageIndex
       guard opened else { return }
       zoom = position.zoom
       guard opened else { return }
-      failure = nil
-    } catch {
-      guard opened else { return }
-      failure = "Reading position was not saved: \(error)"
     }
+    failure = saveFailure
     observeMetadataPosition()
   }
 

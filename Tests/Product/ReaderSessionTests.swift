@@ -188,6 +188,53 @@ import GRDB
     session.close()
   }
 
+  func testRewrittenPositionSaveRollsBackAndKeepsReaderAvailable() throws {
+    let (db, root) = try fixture()
+    let id = try insert(db)
+    let provider = TestLeaseProvider()
+    let session = ReaderSession(database: db, leaseProvider: provider)
+    _ = try session.open(paperID: id, validateDocument: { _ in 4 }, discard: {})
+    defer { session.close() }
+    let previous = ReaderPosition(pageIndex: 1, zoom: 1.5)
+    let next = ReaderPosition(pageIndex: 2, zoom: 2)
+    try session.save(previous)
+    let saved = try XCTUnwrap(db.adapterRead {
+      try Row.fetchOne($0, sql: """
+        SELECT lastReadPage, lastReadZoom, lastReadAt, readerSequence, readerSession
+        FROM paper WHERE id = ?
+        """, arguments: [id.uuidString])
+    })
+
+    for mutation in [
+      "lastReadPage = 0", "lastReadZoom = 3", "lastReadAt = 0",
+      "readerSequence = NEW.readerSequence + 1", "readerSession = NULL"
+    ] {
+      try db.adapterWrite {
+        try $0.execute(sql: """
+          CREATE TRIGGER rewriteSavedPosition AFTER UPDATE OF lastReadPage ON paper
+          WHEN NEW.lastReadPage = 2
+          BEGIN UPDATE paper SET \(mutation) WHERE id = NEW.id; END;
+          """)
+      }
+      XCTAssertThrowsError(try session.save(next), mutation)
+      XCTAssertEqual(session.restoredPosition, previous, mutation)
+      XCTAssertTrue(provider.lastLease?.closed == false, mutation)
+      let actual = try db.adapterRead {
+        try Row.fetchOne($0, sql: """
+          SELECT lastReadPage, lastReadZoom, lastReadAt, readerSequence, readerSession
+          FROM paper WHERE id = ?
+          """, arguments: [id.uuidString])
+      }
+      XCTAssertEqual(actual, saved, mutation)
+      try db.adapterWrite { try $0.execute(sql: "DROP TRIGGER rewriteSavedPosition") }
+    }
+
+    try session.leave(at: next)
+    let reopened = ReaderSession(database: try ProductDatabase.open(at: root), leaseProvider: provider)
+    XCTAssertEqual(try reopened.open(paperID: id, validateDocument: { _ in 4 }, discard: {}), next)
+    reopened.close()
+  }
+
   func testInvalidDocumentClosesLeaseWithoutClaimingPaper() throws {
     let (db, _) = try fixture()
     let id = try insert(db)

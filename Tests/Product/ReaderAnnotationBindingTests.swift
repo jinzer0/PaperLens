@@ -336,6 +336,46 @@ private final class AnnotationPageDelegate: NSObject, PDFDocumentDelegate {
     XCTAssertEqual(reader.currentMatchNumber, 0)
   }
 
+  func testReaderNavigationAndZoomStayCurrentWhenPositionSaveFails() async throws {
+    let (_, db, lifecycle, id, _) = try await fixture()
+    let reader = try presentation(database: db, lifecycle: lifecycle, paperID: id)
+    defer { reader.session.close() }
+    let previous = ReaderPosition(pageIndex: 0, zoom: 1)
+    try reader.session.save(previous)
+    try db.adapterWrite {
+      try $0.execute(sql: """
+        CREATE TRIGGER rejectReaderPosition BEFORE UPDATE OF lastReadPage ON paper
+        BEGIN SELECT RAISE(ABORT, 'fixture position storage failure'); END;
+        """)
+    }
+
+    reader.navigate(delta: 1)
+    let document = try XCTUnwrap(reader.pdfView.document)
+    XCTAssertEqual(document.index(for: try XCTUnwrap(reader.pdfView.currentPage)), 1)
+    XCTAssertEqual(reader.pageIndex, 1)
+    reader.navigate(delta: -1)
+    XCTAssertEqual(document.index(for: try XCTUnwrap(reader.pdfView.currentPage)), 0)
+    XCTAssertEqual(reader.pageIndex, 0)
+    reader.changeZoom(factor: 2)
+    XCTAssertEqual(reader.pdfView.scaleFactor, 2, accuracy: 0.001)
+    XCTAssertEqual(reader.zoom, 2, accuracy: 0.001)
+    XCTAssertNotNil(reader.failure)
+    XCTAssertEqual(reader.session.restoredPosition, previous)
+    reader.leave { XCTFail("A failed save must not close the Reader") }
+    XCTAssertTrue(reader.opened)
+
+    try db.adapterWrite { try $0.execute(sql: "DROP TRIGGER rejectReaderPosition") }
+    reader.navigate(delta: 1)
+    XCTAssertEqual(reader.pageIndex, 1)
+    XCTAssertNil(reader.failure)
+    var returned = false
+    reader.leave { returned = true }
+    XCTAssertTrue(returned)
+    let generation = try db.readerSnapshot(paperID: id).generation
+    XCTAssertEqual(try db.libraryReadingRecords(paperID: id, generation: generation).position,
+      .init(pageIndex: 1, zoom: 2))
+  }
+
   func testReaderExitPersistsNativeSearchPageAndZoomBeforeNotificationsArrive() async throws {
     let (_, db, lifecycle, id, _) = try await fixture()
 

@@ -71,14 +71,22 @@ extension ProductDatabase {
       sequence > 0 else { throw ReaderError.invalidPosition }
     try adapterWrite { db in
       try Self.checkReaderSnapshot(db, snapshot: snapshot)
+      let readAt = Date().timeIntervalSince1970
       try db.execute(sql: """
         UPDATE paper SET lastReadPage = ?, lastReadZoom = ?, readerSequence = ?, lastReadAt = ?
         WHERE id = ? AND generation = ? AND pdfReference = ? AND status = 'ready'
           AND deletionID IS NULL AND readerSession = ? AND readerSequence < ?
-        """, arguments: [position.pageIndex, position.zoom, sequence, Date().timeIntervalSince1970,
-          snapshot.paperID.uuidString,
+        """, arguments: [position.pageIndex, position.zoom, sequence, readAt, snapshot.paperID.uuidString,
           snapshot.generation.uuidString, snapshot.pdfReference, sessionID.uuidString, sequence])
       guard db.changesCount == 1 else { throw ReaderError.replacedSession }
+      // Check the final row before committing or reporting a new saved position.
+      guard try Int.fetchOne(db, sql: """
+        SELECT 1 FROM paper WHERE id = ? AND generation = ? AND pdfReference = ?
+          AND status = 'ready' AND deletionID IS NULL AND readerSession = ? AND readerSequence = ?
+          AND lastReadPage = ? AND lastReadZoom = ? AND lastReadAt = ?
+        """, arguments: [snapshot.paperID.uuidString, snapshot.generation.uuidString,
+          snapshot.pdfReference, sessionID.uuidString, sequence, position.pageIndex, position.zoom, readAt])
+        == 1 else { throw ProductDatabaseError.invalidRecord }
     }
   }
 
