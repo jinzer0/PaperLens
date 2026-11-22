@@ -4,9 +4,11 @@ public struct ReaderMetadataPresentation {
   public let identity: ReaderMetadataIdentity?
   public let metadata: ReaderMetadataSnapshot
   public let storedMetadataInvalid: Bool
+  public let sourceSaveFailed: Bool
   public init(identity: ReaderMetadataIdentity?, metadata: ReaderMetadataSnapshot,
-    storedMetadataInvalid: Bool = false) {
+    storedMetadataInvalid: Bool = false, sourceSaveFailed: Bool = false) {
     self.identity = identity; self.metadata = metadata; self.storedMetadataInvalid = storedMetadataInvalid
+    self.sourceSaveFailed = sourceSaveFailed
   }
 }
 
@@ -25,6 +27,9 @@ public struct MetadataOutlineView: View {
         if let state = binding.state {
           if state.presentation.storedMetadataInvalid {
             Label("저장된 출처 정보를 확인할 수 없습니다.", systemImage: "exclamationmark.triangle")
+              .font(.caption)
+          } else if state.presentation.sourceSaveFailed {
+            Label(ReaderMetadataError.sourceSaveFailed.message, systemImage: "exclamationmark.triangle")
               .font(.caption)
           } else if state.presentation.identity == nil {
             Text("원본 PDF의 정보를 표시합니다. 추출 정보는 아직 사용할 수 없습니다.")

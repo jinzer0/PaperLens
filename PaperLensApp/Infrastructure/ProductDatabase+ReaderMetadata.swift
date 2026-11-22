@@ -83,13 +83,9 @@ extension ProductDatabase {
 
   public func saveReaderMetadata(_ snapshot: ReaderMetadataSnapshot, for identity: ReaderMetadataIdentity) throws {
     try snapshot.validate()
-    let data = try JSONEncoder().encode(snapshot)
     try adapterWrite { db in
       try Self.guardReaderMetadata(identity, in: db)
-      try db.execute(sql: """
-        INSERT INTO readerMetadata(paperID, revisionID, payload) VALUES (?, ?, ?)
-        ON CONFLICT(paperID) DO UPDATE SET revisionID = excluded.revisionID, payload = excluded.payload
-        """, arguments: [identity.paperID.uuidString, identity.revisionID.uuidString, data])
+      try Self.writeReaderMetadata(snapshot, for: identity, in: db)
     }
   }
 
@@ -108,12 +104,21 @@ extension ProductDatabase {
     let existing = try decodeReaderMetadata(data) ?? ReaderMetadataSnapshot()
     let merged = existing.mergingPDFSource(source)
     guard merged != existing else { return existing }
+    try writeReaderMetadata(merged, for: identity, in: db)
+    return merged
+  }
+
+  private static func writeReaderMetadata(_ snapshot: ReaderMetadataSnapshot, for identity: ReaderMetadataIdentity,
+    in db: Database) throws {
+    let payload = try JSONEncoder().encode(snapshot)
     try db.execute(sql: """
       INSERT INTO readerMetadata(paperID, revisionID, payload) VALUES (?, ?, ?)
       ON CONFLICT(paperID) DO UPDATE SET revisionID = excluded.revisionID, payload = excluded.payload
-      """, arguments: [identity.paperID.uuidString, identity.revisionID.uuidString,
-        try JSONEncoder().encode(merged)])
-    return merged
+      """, arguments: [identity.paperID.uuidString, identity.revisionID.uuidString, payload])
+    try guardReaderMetadata(identity, in: db)
+    guard try Data.fetchOne(db, sql: "SELECT payload FROM readerMetadata WHERE paperID = ? AND revisionID = ?",
+      arguments: [identity.paperID.uuidString, identity.revisionID.uuidString]) == payload
+    else { throw ReaderMetadataError.sourceSaveFailed }
   }
 
   /// Atomically fences previous Reader sessions while retaining only current-revision candidates.

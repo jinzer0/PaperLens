@@ -268,6 +268,7 @@ public struct ReaderMetadataBindingState {
     observed: ReaderConfirmedLocation?) throws -> ReaderMetadataBindingState {
     var displayedMetadata = metadata ?? ReaderMetadataSnapshot()
     var storedMetadataInvalid = metadata == nil
+    var sourceSaveFailed = false
     let pdfSource = PDFSourceMetadata.read(from: document, sha256: documentIdentity.pdfSHA256)
     _ = try validate()
     if !pdfSource.isEmpty {
@@ -279,10 +280,11 @@ public struct ReaderMetadataBindingState {
           displayedMetadata = pdfSource
           storedMetadataInvalid = true
         }
+        catch ReaderMetadataError.sourceSaveFailed { sourceSaveFailed = true }
       }
     }
     return ReaderMetadataBindingState(presentation: .init(identity: identity, metadata: displayedMetadata,
-      storedMetadataInvalid: storedMetadataInvalid),
+      storedMetadataInvalid: storedMetadataInvalid, sourceSaveFailed: sourceSaveFailed),
       sections: adapter.sections.map {
         ReaderMetadataOutlineRow(id: $0.id, title: $0.title, depth: $0.depth, location: $0.location)
       }, restorationCandidate: context.flatMap { adapter.validatedRestoration($0) }, observedLocation: observed,

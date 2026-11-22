@@ -26,7 +26,7 @@ public struct ReaderMetadataIdentity: Equatable, Sendable {
 }
 
 public enum ReaderMetadataError: Error, Equatable {
-  case staleIdentity, invalidMetadata, invalidDestination, unavailableContents, staleConfirmation
+  case staleIdentity, invalidMetadata, invalidDestination, unavailableContents, staleConfirmation, sourceSaveFailed
   public var message: String {
     switch self {
     case .staleIdentity: return "현재 논문 정보가 변경되었습니다."
@@ -34,6 +34,7 @@ public enum ReaderMetadataError: Error, Equatable {
     case .invalidDestination: return "이 목차 위치로 이동할 수 없습니다. PDF는 계속 읽을 수 있습니다."
     case .unavailableContents: return "목차 미확인. PDF는 계속 읽을 수 있습니다."
     case .staleConfirmation: return "새로운 읽기 위치가 있어 이전 위치를 저장하지 않았습니다."
+    case .sourceSaveFailed: return "PDF에서 읽은 출처 정보를 저장하지 못했습니다."
     }
   }
 }
@@ -303,7 +304,11 @@ public struct ReaderMetadataService: Sendable {
   /// Called while the binding borrows the actual admitted PDF under its read lease.
   func recordPDFSource(_ source: ReaderMetadataSnapshot,
     for identity: ReaderMetadataIdentity) throws -> ReaderMetadataSnapshot {
-    try database.adapterWrite { try ProductDatabase.mergeReaderPDFSource(source, for: identity, in: $0) }
+    do {
+      return try database.adapterWrite { try ProductDatabase.mergeReaderPDFSource(source, for: identity, in: $0) }
+    } catch is DatabaseError {
+      throw ReaderMetadataError.sourceSaveFailed
+    }
   }
   public func beginSession(for identity: ReaderMetadataIdentity) throws -> ReaderMetadataContext {
     try database.beginReaderMetadataSession(for: identity)

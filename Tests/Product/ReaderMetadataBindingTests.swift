@@ -600,6 +600,47 @@ private final class MetadataObservedPDFDocument: PDFDocument {
     XCTAssertEqual(refreshed.sections.map(\.title), state.sections.map(\.title))
   }
 
+  func testRejectedSourceSaveKeepsPaperInformationAndContentsUsable() async throws {
+    for rejection in ["IGNORE", "ABORT, 'fixture storage failure'"] {
+      let (db, _, identity, owner) = try await fixture(embeddedTitle: "Original PDF title")
+      defer { owner.session.close() }
+      try outline(owner)
+      let service = ReaderMetadataService(database: db)
+      let accepted = ReaderMetadataSnapshot(year: .init([
+        .init(text: "2024", source: .acceptedExtraction, sourceID: identity.revisionID.uuidString)
+      ]))
+      try service.accept(accepted, for: identity)
+      try db.adapterWrite { sql in
+        try sql.execute(sql: """
+          CREATE TRIGGER rejectSourceMetadata BEFORE UPDATE ON readerMetadata
+          BEGIN SELECT RAISE(\(rejection)); END;
+          """)
+      }
+
+      let binding = try mount(db, identity, owner)
+      let state = try XCTUnwrap(binding.state)
+      XCTAssertTrue(state.presentation.sourceSaveFailed)
+      XCTAssertFalse(state.presentation.storedMetadataInvalid)
+      XCTAssertEqual(state.presentation.metadata.title.candidates.map(\.text), ["Original PDF title"])
+      XCTAssertEqual(state.presentation.metadata.year, accepted.year)
+      XCTAssertEqual(try service.metadata(for: identity), accepted)
+      try binding.navigate(sectionID: "/1")
+      XCTAssertEqual(owner.view.requestedLocation, state.sections[1].location)
+      XCTAssertNil(binding.state?.activeSectionID)
+      let page = try XCTUnwrap(owner.view.document?.page(at: 0))
+      owner.view.observedDestination = PDFDestination(page: page, at: CGPoint(x: 20, y: 200))
+      try binding.observePosition()
+      XCTAssertEqual(binding.state?.activeSectionID, "/1")
+
+      try db.adapterWrite { try $0.execute(sql: "DROP TRIGGER rejectSourceMetadata") }
+      try binding.refresh()
+      let refreshed = try XCTUnwrap(binding.state)
+      XCTAssertFalse(refreshed.presentation.sourceSaveFailed)
+      XCTAssertEqual(refreshed.activeSectionID, "/1")
+      XCTAssertEqual(try service.metadata(for: identity), state.presentation.metadata)
+    }
+  }
+
   func testDamagedSavedPositionKeepsContentsAndAllowsANewConfirmedPosition() async throws {
     for decodable in [false, true] {
       let (db, _, identity, owner) = try await fixture(embeddedTitle: "Original title")
