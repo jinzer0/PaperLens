@@ -28,7 +28,7 @@ public struct APIKeyConnectionView: View {
         .disabled(provider.candidatesBlocked)
       HStack {
         Button(buttonTitle) { submit() }
-          .disabled(key.isEmpty || connection.phase == .probing || provider.candidatesBlocked)
+          .disabled(key.isEmpty || provider.isTesting || provider.candidatesBlocked)
           .keyboardShortcut(.defaultAction)
         if connection.phase == .probing {
           ProgressView().controlSize(.small)
@@ -72,8 +72,7 @@ public struct APIKeyConnectionView: View {
     return connection.activeSelection == nil ? "연결 확인 및 저장" : "새 키 확인 및 교체"
   }
   private func submit() {
-    guard !key.isEmpty, connection.phase != .probing, !provider.candidatesBlocked else { return }
-    provider.reconnect(key: key)
+    submitProviderAPIKey($key, service: provider)
   }
   @ViewBuilder private var status: some View {
     switch connection.phase {

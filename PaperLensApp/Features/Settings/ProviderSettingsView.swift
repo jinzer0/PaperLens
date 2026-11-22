@@ -18,6 +18,19 @@ func providerSettingsKeyBinding(
 }
 
 @MainActor
+func submitProviderAPIKey(
+  _ entry: Binding<String>, service: ProviderSettingsService,
+  isCurrent: @escaping @MainActor () -> Bool = { true }
+) {
+  let submittedKey = entry.wrappedValue
+  guard isCurrent(), !submittedKey.isEmpty, !service.isTesting, !service.candidatesBlocked else { return }
+  service.reconnect(key: submittedKey) {
+    guard isCurrent(), entry.wrappedValue == submittedKey else { return }
+    entry.wrappedValue = ""
+  }
+}
+
+@MainActor
 public struct ProviderSettingsView: View {
   @ObservedObject private var service: ProviderSettingsService
   private let isCurrent: @MainActor () -> Bool
@@ -93,8 +106,7 @@ public struct ProviderSettingsView: View {
   }
 
   private func submit() {
-    guard isCurrent(), !key.isEmpty, !service.isTesting, !service.candidatesBlocked else { return }
-    service.reconnect(key: key)
+    submitProviderAPIKey($key, service: service, isCurrent: isCurrent)
   }
 
   @ViewBuilder private var candidateStatus: some View {

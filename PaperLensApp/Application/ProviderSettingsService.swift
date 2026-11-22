@@ -851,11 +851,20 @@ public final class ProviderSettingsService: ObservableObject {
     connection.restore(preservingRetryableFailure: true)
   }
   public func reconnect(key: String) {
+    reconnect(key: key, onPromotion: nil)
+  }
+  func reconnect(key: String, onPromotion: (() -> Void)?) {
     guard !keyStorageBlocked, codex?.preparingForApplicationTermination != true else { return }
-    guard let codex, codex.blocksReplacement else { return connection.connect(key: key) }
-    guard let expected = codex.configurationAvailableForAPIKeyPromotion else { return }
+    let expected: ProviderConfiguration?
+    if let codex, codex.blocksReplacement {
+      guard let available = codex.configurationAvailableForAPIKeyPromotion else { return }
+      expected = available
+    } else {
+      expected = nil
+    }
     connection.connect(key: key, replacing: expected) { [weak codex] winner in
-      codex?.retireAfterAPIKeyPromotion(replacing: expected, winner: winner)
+      if let expected { codex?.retireAfterAPIKeyPromotion(replacing: expected, winner: winner) }
+      onPromotion?()
     }
   }
   public func cancel() { connection.cancel() }

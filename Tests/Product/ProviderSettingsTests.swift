@@ -344,13 +344,14 @@ final class ProviderSettingsTests: XCTestCase {
     let lease = try f.service.acquireLease()
     var entry = "fixture-binding-candidate"
     var phasesAtWrite: [APIKeyConnectionPhase] = []
-    let binding = providerSettingsKeyBinding(Binding(get: { entry }, set: { next in
+    let draft = Binding(get: { entry }, set: { next in
       phasesAtWrite.append(f.service.phase)
       XCTAssertEqual(f.service.activeSelection, old)
       XCTAssertEqual(f.selector.commits, 0)
       entry = next
-    }), service: f.service)
-    f.service.reconnect(key: entry)
+    })
+    let binding = providerSettingsKeyBinding(draft, service: f.service)
+    submitProviderAPIKey(draft, service: f.service)
     await waitUntil { f.transport.count == 1 }
     binding.wrappedValue = entry // An unchanged native assignment is not an edit.
     XCTAssertEqual(phasesAtWrite, [.probing])
@@ -369,6 +370,7 @@ final class ProviderSettingsTests: XCTestCase {
     XCTAssertEqual(f.service.activeSelection, old)
     XCTAssertEqual(f.selector.selection, old)
     XCTAssertEqual(f.selector.commits, 0)
+    XCTAssertEqual(entry, "fixture-binding-edited")
     XCTAssertEqual(f.transport.count, 1) // Entry edits never send an automatic probe.
     XCTAssertTrue(f.service.eligibleForEntry)
     XCTAssertTrue(try f.service.mayPublish(lease))
@@ -405,7 +407,9 @@ final class ProviderSettingsTests: XCTestCase {
     let f = try fixture()
     let old = try XCTUnwrap(f.service.activeSelection)
     let lease = try f.service.acquireLease()
-    f.service.reconnect(key: "fixture-rejected")
+    var entry = "fixture-retry-key"
+    let draft = Binding(get: { entry }, set: { entry = $0 })
+    submitProviderAPIKey(draft, service: f.service)
     await waitUntil { f.transport.count == 1 }
     XCTAssertTrue(f.service.isTesting)
     XCTAssertTrue(f.service.eligibleForEntry)
@@ -422,8 +426,9 @@ final class ProviderSettingsTests: XCTestCase {
     XCTAssertEqual(f.selector.commits, 0)
     XCTAssertTrue(try f.service.mayPublish(lease))
     XCTAssertFalse(f.service.availabilityMessage.contains("fixture-last-good"))
+    XCTAssertEqual(entry, "fixture-retry-key")
 
-    f.service.reconnect(key: "fixture-retry")
+    submitProviderAPIKey(draft, service: f.service)
     await waitUntil { f.transport.count == 2 }
     try f.transport.complete(1)
     await waitUntil { !f.service.isTesting }
@@ -433,6 +438,11 @@ final class ProviderSettingsTests: XCTestCase {
     XCTAssertEqual(f.service.phase, .connected(new))
     XCTAssertEqual(f.selector.selection, new)
     XCTAssertEqual(f.selector.commits, 1)
+    XCTAssertTrue(entry.isEmpty)
+    XCTAssertEqual(try f.slots.read(new.slotID), "fixture-retry-key")
+    submitProviderAPIKey(draft, service: f.service) // A second Return has no credential to send.
+    XCTAssertFalse(f.service.isTesting)
+    XCTAssertEqual(f.transport.count, 2)
     XCTAssertFalse(try f.service.mayPublish(lease))
     XCTAssertEqual(try f.slots.read(old.slotID), "fixture-last-good")
     let currentLease = try f.service.acquireLease()
