@@ -373,8 +373,9 @@ private actor WorkspaceDeletionAgent: AgentLibraryPurging {
     return try XCTUnwrap(f.database.publishedMetadataPaperIdentity(paperID: id))
   }
 
-  private func failedImportForRetry(_ f: Fixture) async throws -> ImportRecoveryRecord {
-    let id = try await f.lifecycle.importPDF(from: f.source, expectedSHA256: String(repeating: "0", count: 64))
+  private func failedImportForRetry(_ f: Fixture, destinationFolderID: UUID? = nil) async throws -> ImportRecoveryRecord {
+    let id = try await f.lifecycle.importPDF(from: f.source, expectedSHA256: String(repeating: "0", count: 64),
+      destinationFolderID: destinationFolderID)
     let observed = try await paper(f, id: id)
     XCTAssertEqual(observed.status, .importFailed)
     return try f.database.captureRetryableImport(paperID: id, generation: observed.generation)
@@ -623,15 +624,16 @@ private actor WorkspaceDeletionAgent: AgentLibraryPurging {
 
   func testWorkspaceFreshRetryConfirmationPublishesSameJobAndCannotReplay() async throws {
     let f = try await fixture()
-    let old = try await failedImportForRetry(f)
-    let identity = try old.journal.currentCapture().identity
     let folder = try f.database.createFolder(name: "Retry folder")
+    let old = try await failedImportForRetry(f, destinationFolderID: folder.id)
+    let identity = try old.journal.currentCapture().identity
     try await f.workspace.prepareRetry(source: f.source, paperID: identity.paperID, generation: identity.generation)
     let confirmed = try confirmation(f.workspace)
     XCTAssertEqual(confirmed.retryPaperID, identity.paperID)
+    XCTAssertEqual(confirmed.destinationFolderID, folder.id)
     XCTAssertEqual(try f.database.captureRetryableImport(paperID: identity.paperID,
       generation: identity.generation).encoded, old.encoded, "Preparing a sheet reserves no execution")
-    let id = try await f.workspace.imports.continueImport(confirmed.id, destinationFolderID: folder.id)
+    let id = try await f.workspace.imports.continueImport(confirmed.id, destinationFolderID: confirmed.destinationFolderID)
     XCTAssertEqual(id, identity.paperID)
     let journal = try f.database.adapterRead { sql in
       try ImportRecoveryJournal.decode(XCTUnwrap(Data.fetchOne(sql,
@@ -648,6 +650,31 @@ private actor WorkspaceDeletionAgent: AgentLibraryPurging {
     XCTAssertEqual(try f.database.adapterRead { try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM importJob") }, 1)
     f.workspace.sheet = nil
     f.workspace.dismissSheet()
+  }
+
+  func testWorkspaceCanChooseAnotherRetryFolderAfterOriginalFolderWasDeleted() async throws {
+    let f = try await fixture()
+    let original = try f.database.createFolder(name: "Removed folder")
+    let replacement = try f.database.createFolder(name: "New destination")
+    let old = try await failedImportForRetry(f, destinationFolderID: original.id)
+    let identity = try old.journal.currentCapture().identity
+    try f.database.deleteFolder(id: original.id)
+
+    try await f.workspace.prepareRetry(source: f.source, paperID: identity.paperID, generation: identity.generation)
+    let confirmed = try confirmation(f.workspace)
+    XCTAssertEqual(confirmed.destinationFolderID, original.id, "The sheet can identify the missing choice")
+    XCTAssertEqual(try f.database.captureRetryableImport(paperID: identity.paperID,
+      generation: identity.generation).encoded, old.encoded)
+    XCTAssertEqual(try f.database.folders(), [replacement])
+    let retry = try XCTUnwrap(f.workspace.startLocalImport(confirmed.id, destinationFolderID: replacement.id))
+    f.workspace.sheet = nil
+    f.workspace.presentationDidDismiss(confirmationID: confirmed.id)
+    let published = await retry.value
+    XCTAssertEqual(published, identity.paperID)
+    let reopened = try ProductDatabase.open(at: f.database.root)
+    XCTAssertEqual(try reopened.folderID(for: identity.paperID), replacement.id)
+    XCTAssertEqual(try reopened.adapterRead { try String.fetchAll($0, sql: "SELECT id FROM importJob") },
+      [identity.jobID.uuidString])
   }
 
   func testWorkspaceCancelRetryLeavesExactFailedHistoryAndRequiresFreshConfirmation() async throws {
@@ -1546,9 +1573,10 @@ private actor WorkspaceDeletionAgent: AgentLibraryPurging {
     let removalID = try XCTUnwrap(importedID)
     XCTAssertEqual(f.workspace.latestLocalImport, removalID)
     let removal = try await paper(f, id: removalID)
-    let otherSource = f.source.deletingLastPathComponent().appendingPathComponent("other.pdf")
-    try Data("%PDF-1.4\nsecond workspace fixture\n%%EOF\n".utf8).write(to: otherSource)
-    let otherID = try await f.lifecycle.importPDF(from: otherSource)
+    let survivorFolder = try f.database.createFolder(name: "Surviving copy")
+    let otherConfirmation = try await f.workspace.imports.prepare(source: f.source, destinationFolderID: survivorFolder.id)
+    XCTAssertEqual(otherConfirmation.matchingPaperIDs, [removalID])
+    let otherID = try await f.workspace.imports.continueImport(otherConfirmation.id, destinationFolderID: survivorFolder.id)
     let other = try await paper(f, id: otherID)
 
     let source = try f.database.readerSnapshot(paperID: removalID)
@@ -1580,12 +1608,14 @@ private actor WorkspaceDeletionAgent: AgentLibraryPurging {
     let callsBeforeDrain = await agent.deletionIDs
     XCTAssertTrue(callsBeforeDrain.isEmpty)
     try await f.workspace.organization.save(.init(readingStatus: .reading, favorite: true), for: other)
-    try await f.workspace.open(other)
-    XCTAssertEqual(f.workspace.reader?.id, otherID)
+    let survivor = try await openOwnedReader(f, id: otherID)
+    let survivorPosition = ReaderPosition(pageIndex: 2, zoom: 1.5)
+    try survivor.session.save(survivorPosition)
 
     lease.close()
     await deletion.value
-    XCTAssertEqual(f.workspace.reader?.id, otherID)
+    XCTAssertTrue(f.workspace.reader?.session === survivor.session)
+    try survivor.session.withReadAccess { }
     XCTAssertTrue(f.workspace.deletingPaperIDs.isEmpty)
     XCTAssertEqual(f.workspace.finishedDeletionIDs, [removalID])
     let failed = try await paper(f, id: removalID)
@@ -1606,6 +1636,16 @@ private actor WorkspaceDeletionAgent: AgentLibraryPurging {
     XCTAssertTrue(try XCTUnwrap(remaining.papers.first).organization.favorite)
     XCTAssertNil(f.workspace.latestLocalImport)
     XCTAssertTrue(FileManager.default.fileExists(atPath: f.source.path))
+    let reopened = try ProductDatabase.open(at: f.database.root)
+    let reopenedLifecycle = try await LocalLibraryLifecycle.open(database: reopened, agentPurge: agent)
+    let reopenedSession = ReaderSession(database: reopened,
+      leaseProvider: LibraryReadLeaseProvider(lifecycle: reopenedLifecycle))
+    defer { reopenedSession.close() }
+    XCTAssertEqual(try reopened.folderID(for: otherID), survivorFolder.id)
+    XCTAssertEqual(try reopenedSession.open(paperID: otherID, validateDocument: { url in
+      XCTAssertEqual(try Data(contentsOf: url), try Data(contentsOf: f.source))
+      return 4
+    }, discard: {}), survivorPosition)
   }
 
   func testConfirmedLocalImportReleasesSheetAndCanBeDeletedDuringRealCopyCleanup() async throws {

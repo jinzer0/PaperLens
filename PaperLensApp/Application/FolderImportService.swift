@@ -183,24 +183,37 @@ public actor FolderImportService {
       purpose: .newPaper, retryPaperID: nil)
   }
 
+  public func prepareRetry(source: URL, paperID: UUID, generation: UUID) async throws -> LocalImportConfirmation {
+    let captured = try await captureRetry(paperID: paperID, generation: generation)
+    let previousDestination = try captured.journal.currentCapture().confirmedInput.destinationFolderID
+    // The previous folder is a suggestion. The sheet can require a new selection if it is gone.
+    return try await prepareConfirmation(source: source, destinationFolderID: previousDestination,
+      purpose: .retry(captured), retryPaperID: paperID, validateDestination: false)
+  }
+
   public func prepareRetry(source: URL, paperID: UUID, generation: UUID,
-    destinationFolderID: UUID? = nil) async throws -> LocalImportConfirmation {
+    destinationFolderID: UUID?) async throws -> LocalImportConfirmation {
+    let captured = try await captureRetry(paperID: paperID, generation: generation)
+    return try await prepareConfirmation(source: source, destinationFolderID: destinationFolderID,
+      purpose: .retry(captured), retryPaperID: paperID)
+  }
+
+  private func captureRetry(paperID: UUID, generation: UUID) async throws -> ImportRecoveryRecord {
     let database = database
     let captured = try await Task.detached {
       try database.captureRetryableImport(paperID: paperID, generation: generation)
     }.value
     try Task.checkCancellation()
-    return try await prepareConfirmation(source: source, destinationFolderID: destinationFolderID,
-      purpose: .retry(captured), retryPaperID: paperID)
+    return captured
   }
 
   private func prepareConfirmation(source: URL, destinationFolderID: UUID?,
-    purpose: Purpose, retryPaperID: UUID?) async throws -> LocalImportConfirmation {
+    purpose: Purpose, retryPaperID: UUID?, validateDestination: Bool = true) async throws -> LocalImportConfirmation {
     let database = database
     let closeSelectedSource = closeSelectedSource
     let beforeOpen = beforeOpen
     let facts = try await Self.readSelectedSource {
-      try database.validateFolderDestination(destinationFolderID)
+      if validateDestination { try database.validateFolderDestination(destinationFolderID) }
       let digest = try Self.hashLocalPDF(source, close: closeSelectedSource, beforeOpen: beforeOpen)
       try Task.checkCancellation()
       return (digest, try database.contentHashMatches(digest))

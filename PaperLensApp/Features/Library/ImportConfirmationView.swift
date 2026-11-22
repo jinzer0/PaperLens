@@ -49,6 +49,13 @@ public struct ImportConfirmationView: View {
   @State private var action = ImportConfirmationActionState()
   @State private var errorMessage: String?
 
+  private var missingDestination: UUID? {
+    guard destinationsLoaded, let destination, !folders.contains(where: { $0.id == destination }) else { return nil }
+    return destination
+  }
+
+  private var destinationIsAvailable: Bool { destinationsLoaded && missingDestination == nil }
+
   public init(confirmation: LocalImportConfirmation, service: FolderImportService,
     cancelledConfirmation: Binding<UUID?>, continuedConfirmation: Binding<UUID?>,
     allowsInteractiveCancel: Bool,
@@ -76,8 +83,13 @@ public struct ImportConfirmationView: View {
       Text("논문 제목·저자·식별자: 아직 추출하지 않음").foregroundStyle(.secondary)
       if destinationsLoaded {
         Picker("저장 폴더", selection: $destination) {
+          if let missingDestination { Text("삭제된 저장 폴더").tag(Optional(missingDestination)) }
           Text("미분류 (기본값)").tag(nil as UUID?)
           ForEach(folders) { folder in Text(folder.name).tag(Optional(folder.id)) }
+        }
+        if missingDestination != nil {
+          Label("선택한 저장 폴더가 더 이상 없습니다. 다른 폴더나 ‘미분류’를 선택하세요.",
+            systemImage: "exclamationmark.triangle")
         }
       } else if errorMessage == nil {
         ProgressView("저장 폴더를 불러오는 중…")
@@ -104,7 +116,7 @@ public struct ImportConfirmationView: View {
         Spacer()
         Button(confirmation.retryPaperID != nil ? "다시 시도"
           : (confirmation.matchingPaperIDs.isEmpty ? "가져오기" : "계속 가져오기")) {
-          guard action.beginContinue(destinationsLoaded: destinationsLoaded, working: working) else { return }
+          guard action.beginContinue(destinationsLoaded: destinationIsAvailable, working: working) else { return }
           if let startInWorkspace {
             guard startInWorkspace(destination) else {
               errorMessage = "이 가져오기 확인을 사용하지 못했습니다. PDF를 다시 선택하세요."
@@ -130,7 +142,7 @@ public struct ImportConfirmationView: View {
             working = false
           }
         }.keyboardShortcut(.defaultAction)
-          .disabled(!destinationsLoaded || working || action.consumed)
+          .disabled(!destinationIsAvailable || working || action.consumed)
       }
     }
     .padding(24)
@@ -140,12 +152,7 @@ public struct ImportConfirmationView: View {
     .task {
       do {
         folders = try await service.folders()
-        if let destination, !folders.contains(where: { $0.id == destination }) {
-          errorMessage = "선택한 저장 폴더가 더 이상 없습니다. PDF를 새로 선택하고 저장 폴더를 다시 확인하세요."
-          action.invalidate()
-        } else {
-          destinationsLoaded = true
-        }
+        destinationsLoaded = true
       }
       catch { errorMessage = "저장 폴더를 불러오지 못했습니다."; action.invalidate() }
     }
