@@ -376,7 +376,9 @@ public actor LocalLibraryLifecycle {
     do {
       try await reserveURLImport(identity, confirmation: confirmation, cancellation: cancellation)
       reserved = true
-      try confirmation.bindFailedQuery { try await self.captureFailedURLImport(identity) }
+      try confirmation.bindFailedQuery(paperID: identity.paperID) {
+        try await self.captureFailedURLImport(identity)
+      }
       LibraryURLImportWriter.retain(writer)
       try await writerOpened(identity)
       try await Task.detached {

@@ -24,13 +24,14 @@ private final class URLImportAdmission: @unchecked Sendable {
   private enum Phase { case confirming, continued, granted, cancelled }
   private var phase = Phase.confirming
   private var failedQuery: (@Sendable () async throws -> ImportRecoveryRecord)?
-  private var queryBound = false
+  private var acknowledgedPaperID: UUID?
   var granted: Bool { lock.withLock { phase == .granted } }
-  var reservationAcknowledged: Bool { lock.withLock { queryBound } }
-  func bindFailedQuery(_ query: @escaping @Sendable () async throws -> ImportRecoveryRecord) throws {
+  var reservedPaperID: UUID? { lock.withLock { acknowledgedPaperID } }
+  func bindFailedQuery(paperID: UUID,
+    _ query: @escaping @Sendable () async throws -> ImportRecoveryRecord) throws {
     try lock.withLock {
-      guard phase == .granted, !queryBound else { throw URLImportError.writerUnavailable }
-      queryBound = true
+      guard phase == .granted, acknowledgedPaperID == nil else { throw URLImportError.writerUnavailable }
+      acknowledgedPaperID = paperID
       failedQuery = query
     }
   }
@@ -83,8 +84,9 @@ public struct URLImportConfirmation: Identifiable, Sendable {
   fileprivate let route: ValidatedRequestURL
   fileprivate let admission = URLImportAdmission()
   func consumeWriterGrant() -> Bool { admission.grantOnce() }
-  func bindFailedQuery(_ query: @escaping @Sendable () async throws -> ImportRecoveryRecord) throws {
-    try admission.bindFailedQuery(query)
+  func bindFailedQuery(paperID: UUID,
+    _ query: @escaping @Sendable () async throws -> ImportRecoveryRecord) throws {
+    try admission.bindFailedQuery(paperID: paperID, query)
   }
   func authorizesURLRetry(_ expected: ImportRecoveryRecord) -> Bool {
     guard admission.granted, case .retry(let record) = purpose,
@@ -150,7 +152,9 @@ public final class URLImportService: ObservableObject {
       // Publication or failure capture can return after Library starts deleting the row.
       dismissedPaperIDs.insert(paperID)
     case .failed, .confirming:
-      guard (confirmation?.purpose.retryPaperID ?? retryRecord?.paperID) == paperID else { return }
+      let owner = confirmation?.purpose.retryPaperID ?? failedIntent?.admission.reservedPaperID
+        ?? failedIntent?.purpose.retryPaperID
+      guard owner == paperID else { return }
       confirmation?.admission.cancel()
       confirmation = nil
       discardFailure()
@@ -289,20 +293,19 @@ public final class URLImportService: ObservableObject {
           ownedWriter.revoke()
           do { try await ownedWriter.abort(reason: safe) } catch { safe = .cleanupFailed }
         }
-        // Consuming a grant can fail before Main reserves any durable work.
-        admittedFailure = ownedWriter != nil || intent.admission.reservationAcknowledged
+        // A durable reservation still owns the banner if cleanup or Retry capture fails.
+        let reservedPaperID = intent.admission.reservedPaperID
+        admittedFailure = ownedWriter != nil || reservedPaperID != nil
         // Main's query is bound to the acknowledged execution, never to an error
         // label. It runs only after the real writer's abort/drain has returned.
         retryRecord = try? await intent.admission.captureFailed()
-        if retryRecord == nil, ownedWriter == nil, !intent.admission.reservationAcknowledged,
+        if retryRecord == nil, !admittedFailure,
           case .retry(let expected) = intent.purpose {
           // No replacement execution was acknowledged. The next Continue still
           // revalidates the genuine original history with the exact durable CAS.
           retryRecord = expected
         }
-        if !dismissedPaperIDs.isEmpty,
-          let paperID = (ownedWriter as? LibraryURLImportWriter)?.identity.paperID
-            ?? retryRecord?.paperID ?? intent.purpose.retryPaperID,
+        if let paperID = reservedPaperID ?? intent.purpose.retryPaperID,
           dismissedPaperIDs.contains(paperID) {
           discardFailure()
         } else {

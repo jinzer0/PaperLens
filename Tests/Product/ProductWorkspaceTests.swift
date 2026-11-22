@@ -298,6 +298,45 @@ private actor WorkspaceDeletionAgent: AgentLibraryPurging {
     }
   }
 
+  func testDeletingFailedURLImportDismissesFailureEvenWithoutRetryCapture() async throws {
+    let agentRoot = try privateRoot().appendingPathComponent("unused-agent-papers")
+    let f = try await fixture(agentPurge: NativeOnlyAgentLibraryPurge(unsupportedPaperRoot: agentRoot))
+    let unrelatedID = try await importSelected(f)
+    let session = URLSessionConfiguration.ephemeral
+    session.protocolClasses = [ImportFixtureProtocol.self]
+    let workspace = try ProductWorkspace(database: f.database, lifecycle: f.lifecycle,
+      connection: f.connection, diagnosticSource: nil, urlSessionConfiguration: session)
+    let urls = workspace.urls
+    try f.database.adapterWrite {
+      try $0.execute(sql: """
+        CREATE TRIGGER rejectURLDebtClear BEFORE UPDATE OF cleanupDebt ON paper
+        WHEN OLD.status = 'importFailed' AND OLD.cleanupDebt = 1 AND NEW.cleanupDebt = 0
+        BEGIN SELECT RAISE(ABORT, 'fixture cleanup write failure'); END;
+        """)
+    }
+    try urls.prepare("https://fixture.invalid/mime", destination: "미분류", possibleDuplicate: false)
+    urls.continueImport(confirmationID: try XCTUnwrap(urls.confirmation).id)
+    let deadline = ContinuousClock.now + .seconds(5)
+    while urls.state == .downloading && ContinuousClock.now < deadline {
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    XCTAssertEqual(urls.state, .failed(.cleanupFailed))
+    XCTAssertFalse(urls.canRetry)
+    let failed = try XCTUnwrap(f.database.organizationSnapshot(filter: .init()).papers
+      .first(where: { $0.status == .importFailed }))
+    XCTAssertThrowsError(try f.database.captureRetryableImport(
+      paperID: failed.id, generation: failed.generation))
+
+    urls.dismissStatus(for: unrelatedID)
+    XCTAssertEqual(urls.state, .failed(.cleanupFailed))
+    try f.database.adapterWrite { try $0.execute(sql: "DROP TRIGGER rejectURLDebtClear") }
+    let deletion = try XCTUnwrap(workspace.requestDeletion(failed, retry: false))
+    await deletion.value
+    XCTAssertEqual(urls.state, .idle)
+    XCTAssertNil(workspace.failure)
+    XCTAssertEqual(try f.database.libraryRecords().map(\.id), [unrelatedID])
+  }
+
   func testReaderCanStartParsingAfterBothInitialWritesFail() async throws {
     let base = try await fixture()
     let id = try await importSelected(base)
