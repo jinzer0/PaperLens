@@ -178,26 +178,32 @@ public struct OrganizationQueryState {
   public struct Request: Equatable, Sendable {
     fileprivate let revision: Int
     public let filter: OrganizationFilter
+    let deletionRevision: Int
   }
   public private(set) var snapshot: OrganizationSnapshot?
   public private(set) var loading = true
   public private(set) var failed = false
   private var revision = 0
+  private var snapshotDeletionRevision: Int?
   public init() {}
+  func isLoading(at deletionRevision: Int) -> Bool {
+    loading || (!failed && snapshot != nil && snapshotDeletionRevision != deletionRevision)
+  }
   public mutating func invalidate() {
     revision += 1
     loading = true
     failed = false
   }
-  public mutating func begin(filter: OrganizationFilter) -> Request {
+  public mutating func begin(filter: OrganizationFilter, deletionRevision: Int = 0) -> Request {
     invalidate()
-    return Request(revision: revision, filter: filter)
+    return Request(revision: revision, filter: filter, deletionRevision: deletionRevision)
   }
   @discardableResult
   public mutating func accept(_ value: OrganizationSnapshot, request: Request,
     currentFilter: OrganizationFilter) -> Bool {
     guard request.revision == revision, request.filter == currentFilter else { return false }
     snapshot = value; loading = false; failed = false
+    snapshotDeletionRevision = request.deletionRevision
     return true
   }
   public mutating func reject(request: Request, currentFilter: OrganizationFilter) {

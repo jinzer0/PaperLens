@@ -1968,6 +1968,16 @@ private actor WorkspaceDeletionAgent: AgentLibraryPurging {
     let libraryWindow = f.workspace.attachPresentation()
     let readerWindow = f.workspace.attachPresentation()
     let beforeDeletion = f.workspace.deletionRevision
+    var search = OrganizationFilter()
+    search.search = removal.title
+    let beforeRows = try await f.workspace.organization.snapshot(filter: search).snapshot
+    XCTAssertEqual(Set(beforeRows.papers.map(\.id)), [removalID, otherID])
+    var otherWindowQuery = OrganizationQueryState()
+    let beforeRequest = otherWindowQuery.begin(filter: search, deletionRevision: beforeDeletion)
+    XCTAssertTrue(otherWindowQuery.accept(beforeRows, request: beforeRequest, currentFilter: search))
+    XCTAssertFalse(otherWindowQuery.isLoading(at: beforeDeletion))
+    let delayedRequest = otherWindowQuery.begin(filter: search, deletionRevision: beforeDeletion)
+    XCTAssertTrue(f.workspace.allowsLibraryCapture(paperID: removalID, deletionRevision: beforeDeletion))
 
     let source = try f.database.readerSnapshot(paperID: removalID)
     let lease = try LibraryReadLeaseProvider(lifecycle: f.lifecycle).acquireReadLease(for: source) {
@@ -1977,6 +1987,8 @@ private actor WorkspaceDeletionAgent: AgentLibraryPurging {
     defer { lease.close() }
     let deletion = try XCTUnwrap(f.workspace.requestDeletion(removal, retry: false, presentationMount: libraryWindow))
     XCTAssertEqual(f.workspace.deletingPaperIDs, [removalID])
+    XCTAssertFalse(f.workspace.allowsLibraryCapture(paperID: removalID, deletionRevision: beforeDeletion))
+    XCTAssertTrue(f.workspace.allowsLibraryCapture(paperID: otherID, deletionRevision: beforeDeletion))
     XCTAssertNil(f.workspace.latestLocalImport)
     XCTAssertNil(f.workspace.imported(removalID, localConfirmationID: selected.id))
     XCTAssertNil(f.workspace.failure, "A stale completion must not surface a new import result")
@@ -2015,6 +2027,16 @@ private actor WorkspaceDeletionAgent: AgentLibraryPurging {
     XCTAssertNil(f.workspace.requestDeletion(failed, retry: true, presentationMount: libraryWindow))
     let failedRevision = f.workspace.deletionRevision
     f.workspace.acknowledgeDeletionRefresh([removalID], revision: failedRevision)
+    XCTAssertTrue(f.workspace.finishedDeletionIDs.isEmpty)
+    XCTAssertFalse(f.workspace.allowsLibraryCapture(paperID: removalID, deletionRevision: beforeDeletion),
+      "A first window acknowledging the result must not reactivate a second window's old detail")
+    XCTAssertTrue(otherWindowQuery.accept(beforeRows, request: delayedRequest, currentFilter: search))
+    XCTAssertTrue(otherWindowQuery.isLoading(at: failedRevision), "A delayed ready row must stay hidden")
+    let retryRows = try await f.workspace.organization.snapshot(filter: search).snapshot
+    let retryRequest = otherWindowQuery.begin(filter: search, deletionRevision: failedRevision)
+    XCTAssertTrue(otherWindowQuery.accept(retryRows, request: retryRequest, currentFilter: search))
+    XCTAssertFalse(otherWindowQuery.isLoading(at: failedRevision))
+    XCTAssertEqual(retryRows.papers.first { $0.id == removalID }?.status, .deletionFailed)
     XCTAssertNil(f.workspace.requestDeletion(failed, retry: true, presentationMount: readerWindow))
     let retry = try XCTUnwrap(f.workspace.requestDeletion(failed, retry: true, presentationMount: libraryWindow))
     await retry.value
@@ -2029,6 +2051,13 @@ private actor WorkspaceDeletionAgent: AgentLibraryPurging {
     let remaining = try await f.workspace.organization.snapshot(filter: .init(), facts: [])
     XCTAssertEqual(remaining.papers.map(\.id), [otherID])
     XCTAssertTrue(try XCTUnwrap(remaining.papers.first).organization.favorite)
+    let completedRevision = f.workspace.deletionRevision
+    XCTAssertTrue(otherWindowQuery.isLoading(at: completedRevision))
+    let remainingSearch = try await f.workspace.organization.snapshot(filter: search).snapshot
+    let completedRequest = otherWindowQuery.begin(filter: search, deletionRevision: completedRevision)
+    XCTAssertTrue(otherWindowQuery.accept(remainingSearch, request: completedRequest, currentFilter: search))
+    XCTAssertFalse(otherWindowQuery.isLoading(at: completedRevision))
+    XCTAssertEqual(remainingSearch.papers.map(\.id), [otherID])
     XCTAssertNil(f.workspace.latestLocalImport)
     XCTAssertTrue(FileManager.default.fileExists(atPath: f.source.path))
     let reopened = try ProductDatabase.open(at: f.database.root)

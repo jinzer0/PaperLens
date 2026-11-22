@@ -261,6 +261,11 @@ public final class ProductWorkspace: ObservableObject {
     finishedDeletionIDs.subtract(paperIDs)
   }
 
+  func allowsLibraryCapture(paperID: UUID, deletionRevision expected: Int) -> Bool {
+    deletionRevision == expected && !deletingPaperIDs.contains(paperID)
+      && !finishedDeletionIDs.contains(paperID)
+  }
+
   func captureURLImportRetry(_ paper: OrganizedPaper) async throws -> ImportRecoveryRecord {
     guard diagnosticSource == nil, canOpenReader, paper.status == .importFailed,
       !deletingPaperIDs.contains(paper.id), !finishedDeletionIDs.contains(paper.id)
@@ -998,6 +1003,7 @@ public struct ProductWorkspaceView: View {
             filter: $workspace.libraryFilter, refreshRevision: workspace.revision,
             deletingPaperIDs: workspace.deletingPaperIDs, finishedDeletionIDs: workspace.finishedDeletionIDs,
             deletionRevision: workspace.deletionRevision,
+            allowsLibraryCapture: workspace.allowsLibraryCapture,
             contentRevision: workspace.libraryContentRevision,
             activeImportProgress: activeImportProgress, localPDFAvailable: workspace.canPrepareLocalImport,
             libraryPresentationAvailable: workspace.canOpenReader,

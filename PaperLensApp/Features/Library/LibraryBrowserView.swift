@@ -8,6 +8,7 @@ public struct LibraryBrowserView: View {
   private let openPaper: @MainActor (OrganizedPaper) async throws -> Void
   private let deletePaper: @MainActor (OrganizedPaper, Bool) -> Void
   private let acknowledgeDeletionRefresh: @MainActor (Set<UUID>, Int) -> Void
+  private let allowsLibraryCapture: @MainActor (UUID, Int) -> Bool
   private let importPDF: @MainActor () -> Void
   private let retryImportPDF: @MainActor (UUID, UUID) -> Void
   private let retryImportURL: URLImportRetryAction?
@@ -45,12 +46,13 @@ public struct LibraryBrowserView: View {
   @FocusState private var focusedIdentification: UUID?
   @FocusState private var focusedMovement: UUID?
   private var snapshot: OrganizationSnapshot? { query.snapshot }
-  private var loading: Bool { query.loading }
+  private var loading: Bool { query.isLoading(at: deletionRevision) }
   private var loadFailed: Bool { query.failed }
 
   public init(service: LibraryOrganizationService, folderService: FolderImportService,
     filter: Binding<OrganizationFilter>, refreshRevision: Int, deletingPaperIDs: Set<UUID>,
-    finishedDeletionIDs: Set<UUID>, deletionRevision: Int, contentRevision: UUID? = nil,
+    finishedDeletionIDs: Set<UUID>, deletionRevision: Int,
+    allowsLibraryCapture: @escaping @MainActor (UUID, Int) -> Bool, contentRevision: UUID? = nil,
     activeImportProgress: [UUID: Int64] = [:], localPDFAvailable: Bool = true,
     libraryPresentationAvailable: Bool = true,
     readReadingRecords: @escaping @Sendable (UUID, UUID) async throws -> LibraryReadingRecords,
@@ -70,6 +72,7 @@ public struct LibraryBrowserView: View {
     self.deletingPaperIDs = deletingPaperIDs; self.deletePaper = deletePaper
     self.finishedDeletionIDs = finishedDeletionIDs
     self.deletionRevision = deletionRevision
+    self.allowsLibraryCapture = allowsLibraryCapture
     self.activeImportProgress = activeImportProgress
     self.localPDFAvailable = localPDFAvailable
     self.libraryPresentationAvailable = libraryPresentationAvailable
@@ -347,6 +350,9 @@ public struct LibraryBrowserView: View {
     .onChange(of: contentRevision) { _, _ in refreshAfterBackgroundChange() }
     .onChange(of: deletionRevision) { _, _ in refreshAfterBackgroundChange() }
     .onChange(of: finishedDeletionIDs) { _, _ in refreshAfterBackgroundChange() }
+    .onChange(of: invalidatedIdentificationID) { _, id in
+      if let id, invalidatedIdentificationID == id { interruptSheetReturn(newerWork: true) }
+    }
     .onChange(of: activeImportIDs) { _, _ in refreshAfterBackgroundChange() }
     .onChange(of: canRefreshAfterBackgroundChange) { _, ready in
       if ready { refreshAfterBackgroundChange() }
@@ -534,7 +540,8 @@ public struct LibraryBrowserView: View {
   }
 
   private func renderedPaperControls(for paper: OrganizedPaper) -> Bool {
-    guard !busy, !loading, !loadFailed, !selectedFolderUnavailable, let snapshot else { return false }
+    guard !busy, !loading, !loadFailed, !selectedFolderUnavailable, let snapshot,
+      allowsLibraryCapture(paper.id, deletionRevision) else { return false }
     return snapshot.totalCount > 0
       && snapshot.papers.contains(where: { $0.id == paper.id && $0.generation == paper.generation })
   }
@@ -561,7 +568,8 @@ public struct LibraryBrowserView: View {
     interruptSheetReturn(newerWork: true)
     guard sheetPresentation == nil else { return }
     let fact = currentFacts[accepted.id].flatMap { $0.generation == accepted.generation ? $0 : nil }
-    let captured = LibraryIdentification(paper: accepted, metadata: fact?.metadata, summary: fact?.summary)
+    let captured = LibraryIdentification(paper: accepted, metadata: fact?.metadata, summary: fact?.summary,
+      deletionRevision: deletionRevision)
     let slot = LibrarySheetSlot(mountID: mountID, content: .identification(captured),
       filter: filter, refreshRevision: refreshRevision)
     organizationFocusToRestore = nil
@@ -601,8 +609,15 @@ public struct LibraryBrowserView: View {
     refresh(completedMovement: slot)
   }
 
+  private var invalidatedIdentificationID: UUID? {
+    guard let slot = sheetPresentation?.slot, case .identification(let captured) = slot.content,
+      !allowsLibraryCapture(captured.paper.id, captured.deletionRevision) else { return nil }
+    return slot.id
+  }
+
   private func detailPayloadIsEligible(_ slot: LibrarySheetSlot) -> Bool {
-    guard case .identification = slot.content, let presentation = sheetPresentation else { return false }
+    guard case .identification(let captured) = slot.content, let presentation = sheetPresentation,
+      allowsLibraryCapture(captured.paper.id, captured.deletionRevision) else { return false }
     return presentation.slot.id == slot.id && presentation.slot.mountID == slot.mountID
       && rootMount == slot.mountID && presentation.requestedVisibility && !presentation.closing
       && !presentation.nativeDismissConsumed && !presentation.newerWork
@@ -771,7 +786,7 @@ public struct LibraryBrowserView: View {
   private var activeImportIDs: Set<UUID> { Set(activeImportProgress.keys) }
 
   private var canRefreshAfterBackgroundChange: Bool {
-    rootMount != nil && !nativeSheetPending && !busy && deleting == nil && !loading && !loadFailed
+    rootMount != nil && !nativeSheetPending && !busy && deleting == nil && !query.loading && !loadFailed
   }
 
   private func refreshAfterBackgroundChange() {
@@ -949,7 +964,7 @@ public struct LibraryBrowserView: View {
     observedContentRevision = contentRevision
     observedSummaryRevision = summaries.completionRevision
     if !canPreserveOrganizationReturn(token) { organizationFocusToRestore = nil }
-    let request = query.begin(filter: filter)
+    let request = query.begin(filter: filter, deletionRevision: deletionRevision)
     if let receipt = organizationFocusToRestore {
       organizationFocusToRestore = OrganizationActionReturn(token: receipt.token,
         mountID: receipt.mountID, paperID: receipt.paperID, generation: receipt.generation,
@@ -985,7 +1000,7 @@ public struct LibraryBrowserView: View {
       let observation = try await service.observation(filter: request.filter)
       let value = observation.snapshot
       guard !Task.isCancelled, query.accept(value, request: request, currentFilter: filter) else { return }
-      if !refreshingDeletions.isEmpty { acknowledgeDeletionRefresh(refreshingDeletions, deletionRevision) }
+      if !refreshingDeletions.isEmpty { acknowledgeDeletionRefresh(refreshingDeletions, request.deletionRevision) }
       folders = observation.folders ?? []
       folderLoadFailed = observation.folders == nil
       tags = observation.tags ?? []
@@ -1235,6 +1250,7 @@ private struct LibraryIdentification {
   let paper: OrganizedPaper
   let metadata: ReaderMetadataSnapshot?
   let summary: LibrarySummaryObservation?
+  let deletionRevision: Int
 }
 
 @MainActor private struct LibraryStoredSummary: View {
