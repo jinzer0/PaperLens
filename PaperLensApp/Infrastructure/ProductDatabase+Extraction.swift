@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import GRDB
 #if SWIFT_PACKAGE
@@ -235,6 +236,8 @@ extension ProductDatabase {
           identity.generation.uuidString, identity.pdfSHA256, identity.pdfReference])
       guard db.changesCount == 1 else { throw ExtractionError.storageFailure }
       var ownerPrecision: PDFGeometryPrecision?
+      var originalDigests: [SHA256.Digest] = []
+      originalDigests.reserveCapacity(ownedCount)
       for sentence in sentences {
         try checkBudget()
         try db.execute(sql: """
@@ -251,6 +254,7 @@ extension ProductDatabase {
           guard archive.anchors.count == 1, let original = archive.anchors.first else {
             throw ExtractionError.invalidBatch
           }
+          originalDigests.append(SHA256.hash(data: original.bytes))
           try checkBudget()
           try db.execute(sql: """
             INSERT INTO extractionGeometryOwner(revision, sentenceID, page, maximumErrorPDFPoints, originalAnchor)
@@ -283,16 +287,38 @@ extension ProductDatabase {
           """, arguments: [identity.paperID.uuidString, identity.revision.uuidString,
             identity.generation.uuidString, identity.pdfSHA256, identity.pdfReference]) == 1
       else { throw ExtractionError.storageFailure }
-      // Check the final rows, including changes made by publication triggers.
-      let indexedCount = try Int.fetchOne(db, sql: """
-        SELECT COUNT(*) FROM extractionSentence s
-        JOIN extractionFTS f ON f.rowid = s.id AND f.text = s.text
+      // Read the final rows after all publication writes. Row counts alone cannot
+      // detect a rewritten page, quote or anchor. The cursor keeps one row at a time.
+      let stored = try Row.fetchCursor(db, sql: """
+        SELECT s.page, s.sentenceID, CAST(s.text AS BLOB) AS textBytes, s.geometry, o.originalAnchor,
+          o.page AS ownerPage, o.maximumErrorPDFPoints,
+          CAST(f.text AS BLOB) = CAST(s.text AS BLOB) AS indexedTextMatches
+        FROM extractionSentence s
+        LEFT JOIN extractionFTS f ON f.rowid = s.id
         LEFT JOIN extractionGeometryOwner o ON o.revision = s.revision
-          AND o.sentenceID = s.sentenceID AND o.page = s.page
-        WHERE s.revision = ?
-        HAVING COUNT(o.sentenceID) = ?
-        """, arguments: [identity.revision.uuidString, ownedCount])
-      guard indexedCount == sentences.count else { throw ExtractionError.storageFailure }
+          AND o.sentenceID = s.sentenceID
+        WHERE s.revision = ? ORDER BY s.sentenceID
+        """, arguments: [identity.revision.uuidString])
+      for (index, expected) in sentences.enumerated() {
+        try checkBudget()
+        guard let row = try stored.next(),
+          (row["indexedTextMatches"] as Bool?) == true,
+          (row["page"] as DatabaseValue).storage == expected.page.databaseValue.storage,
+          (row["sentenceID"] as DatabaseValue).storage == expected.sentenceID.databaseValue.storage,
+          try row.withUnsafeData(named: "textBytes", { $0?.elementsEqual(expected.text.utf8) == true }),
+          try row.withUnsafeData(named: "geometry", { $0 == expected.geometry })
+        else { throw ExtractionError.storageFailure }
+        if let ownerPrecision {
+          guard (row["maximumErrorPDFPoints"] as DatabaseValue) == ownerPrecision.maximumErrorPDFPoints.databaseValue,
+            (row["ownerPage"] as DatabaseValue).storage == expected.page.databaseValue.storage,
+            try row.withUnsafeData(named: "originalAnchor", {
+              $0.map { SHA256.hash(data: $0) } == originalDigests[index]
+            }) else { throw ExtractionError.storageFailure }
+        } else if !(row["ownerPage"] as DatabaseValue).isNull {
+          throw ExtractionError.storageFailure
+        }
+      }
+      guard try stored.next() == nil else { throw ExtractionError.storageFailure }
       try checkBudget()
     }
   }

@@ -262,7 +262,7 @@ final class ExtractionRevisionTests: XCTestCase {
     XCTAssertEqual(hits.first?.canonicalGeometry, Data([1, 2, 3]))
   }
 
-  func testPublicationRollsBackWhenAnyCommittedComponentIsMissing() throws {
+  func testPublicationRollsBackWhenCommittedComponentsAreMissingOrRewritten() throws {
     let (db, paper, generation, root) = try fixture()
     defer { try? FileManager.default.removeItem(at: root) }
     let original = try identity(db, paper, generation)
@@ -287,8 +287,60 @@ final class ExtractionRevisionTests: XCTestCase {
       END;
       """,
       """
+      CREATE TRIGGER incompletePublication AFTER UPDATE OF state ON extractionAttempt
+      WHEN NEW.state = 'succeeded' BEGIN
+        INSERT INTO extractionSentence(revision, page, sentenceID, text, geometry)
+          VALUES (NEW.revision, 0, 1, 'unexpected', X'010203');
+        DELETE FROM extractionFTS WHERE rowid IN (
+          SELECT id FROM extractionSentence WHERE revision = NEW.revision AND sentenceID = 1
+        );
+      END;
+      """,
+      """
       CREATE TRIGGER incompletePublication BEFORE INSERT ON extractionGeometryOwner
       BEGIN SELECT RAISE(IGNORE); END;
+      """,
+      """
+      CREATE TRIGGER incompletePublication AFTER UPDATE OF state ON extractionAttempt
+      WHEN NEW.state = 'succeeded' BEGIN
+        UPDATE extractionSentence SET text = text || char(0) || 'altered' WHERE revision = NEW.revision;
+        DELETE FROM extractionFTS WHERE rowid IN (
+          SELECT id FROM extractionSentence WHERE revision = NEW.revision
+        );
+        INSERT INTO extractionFTS(rowid, text)
+          SELECT id, text FROM extractionSentence WHERE revision = NEW.revision;
+      END;
+      """,
+      """
+      CREATE TRIGGER incompletePublication AFTER UPDATE OF state ON extractionAttempt
+      WHEN NEW.state = 'succeeded' BEGIN
+        UPDATE extractionSentence SET page = page + 1 WHERE revision = NEW.revision;
+        UPDATE extractionGeometryOwner SET page = page + 1 WHERE revision = NEW.revision;
+      END;
+      """,
+      """
+      CREATE TRIGGER incompletePublication AFTER UPDATE OF state ON extractionAttempt
+      WHEN NEW.state = 'succeeded' BEGIN
+        UPDATE extractionSentence SET page = page + 0.5 WHERE revision = NEW.revision;
+      END;
+      """,
+      """
+      CREATE TRIGGER incompletePublication AFTER UPDATE OF state ON extractionAttempt
+      WHEN NEW.state = 'succeeded' BEGIN
+        UPDATE extractionSentence SET geometry = X'010203' WHERE revision = NEW.revision;
+      END;
+      """,
+      """
+      CREATE TRIGGER incompletePublication AFTER UPDATE OF state ON extractionAttempt
+      WHEN NEW.state = 'succeeded' BEGIN
+        UPDATE extractionGeometryOwner SET originalAnchor = X'010203' WHERE revision = NEW.revision;
+      END;
+      """,
+      """
+      CREATE TRIGGER incompletePublication AFTER UPDATE OF state ON extractionAttempt
+      WHEN NEW.state = 'succeeded' BEGIN
+        UPDATE extractionGeometryOwner SET maximumErrorPDFPoints = 1 WHERE revision = NEW.revision;
+      END;
       """,
     ]
     for trigger in incompleteWrites {
@@ -409,7 +461,7 @@ final class ExtractionRevisionTests: XCTestCase {
     try publishFixtureExtraction(db, original, sentences: rows("retained"))
     let pending = try identity(db, paper, generation)
     try db.reserveExtraction(pending)
-    for permittedChecks in 0..<4 {
+    for permittedChecks in 0..<5 {
       let budget = ExtractionFixtureBudget(maximumChecks: permittedChecks)
       XCTAssertThrowsError(try db.publishExtraction(pending, sentences: rows("forbidden"),
         checkBudget: { try budget.check() })) {
