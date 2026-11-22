@@ -31,7 +31,7 @@ public enum APIKeyConnectionError: Error, Equatable, Sendable {
     }
   }
 
-  fileprivate var isRetryableProbeFailure: Bool {
+  var isRetryableProbeFailure: Bool {
     switch self {
     case .invalidKey, .authentication, .rateLimited, .providerUnavailable, .transport,
       .deadline, .invalidResponse, .cancelled, .staleCandidate, .selectorConflict:
@@ -191,6 +191,8 @@ public final class NativeAPIKeyConnection: ObservableObject {
   private var unresolvedSlots = false
   private var ownerRetired = false
 
+  var replacementStorageBlocked: Bool { storageBlocked || unresolvedSlots }
+
   var hasUncommittedProbe: Bool { running != nil && !publishingSelection }
   var cancellableProbeID: UUID? {
     // A synchronous phase observer can run before the published value is assigned.
@@ -218,7 +220,7 @@ public final class NativeAPIKeyConnection: ObservableObject {
 
   /// Cancellation acceptance does not release transport or consumer references.
   public var canReplaceOwner: Bool {
-    !ownerRetired && !storageBlocked && !unresolvedSlots
+    !ownerRetired && !replacementStorageBlocked
       && running == nil && probes.isEmpty && leases.isEmpty && retired.isEmpty
   }
 

@@ -36,7 +36,9 @@ public struct APIKeyConnectionView: View {
         }
       }
       status
-      if provider.candidatesBlocked {
+      if provider.keyReplacementBlocked {
+        Text("앱을 다시 열어 키 저장소 상태를 확인하세요.").foregroundStyle(.secondary)
+      } else if provider.candidatesBlocked {
         Text("진행 중인 ChatGPT 로그인이나 전용 저장소 정리가 끝나면 새 키를 확인할 수 있습니다.")
           .foregroundStyle(.secondary)
       }
@@ -68,7 +70,7 @@ public struct APIKeyConnectionView: View {
   }
 
   private var buttonTitle: String {
-    if case .failed = connection.phase { return "다시 시도" }
+    if provider.offersAPIKeyRetry { return "다시 시도" }
     return connection.activeSelection == nil ? "연결 확인 및 저장" : "새 키 확인 및 교체"
   }
   private func submit() {

@@ -710,6 +710,32 @@ final class ProviderSettingsTests: XCTestCase {
     XCTAssertEqual(f.transport.count, 1)
   }
 
+  func testUnownedKeySlotDisablesSettingsRetryWhileLastGoodStaysUsable() throws {
+    let f = try fixture()
+    defer { try? removeFixture(f.root) }
+    let old = try XCTUnwrap(f.service.activeSelection)
+    let unknownID = try f.slots.create(key: "fixture-unknown")
+
+    f.service.restore()
+    XCTAssertEqual(f.service.phase, .failed(.cleanupBlocked))
+    XCTAssertTrue(f.service.candidatesBlocked)
+    XCTAssertFalse(f.service.offersAPIKeyRetry)
+    XCTAssertTrue(f.service.eligibleForEntry)
+    XCTAssertEqual(f.service.activeSelection, old)
+    let lease = try f.service.acquireLease()
+    XCTAssertTrue(try f.service.mayPublish(lease))
+    try f.service.releaseAfterTermination(lease)
+
+    submitProviderAPIKey(.constant("fixture-replacement"), service: f.service)
+    f.service.reconnect(key: "fixture-replacement")
+    XCTAssertEqual(f.service.phase, .failed(.cleanupBlocked))
+    XCTAssertNil(f.service.apiKeyProbeID)
+    XCTAssertEqual(f.transport.count, 0)
+    XCTAssertEqual(f.selector.selection, old)
+    XCTAssertEqual(f.selector.commits, 0)
+    XCTAssertEqual(try f.slots.validatedSlotIDs(), Set([old.slotID, unknownID]))
+  }
+
   func testCleanupDebtPropagatesAndRemainsVisibleDuringEntryEdits() async throws {
     let f = try fixture()
     let old = try XCTUnwrap(f.service.activeSelection)

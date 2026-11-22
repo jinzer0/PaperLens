@@ -82,7 +82,9 @@ public struct ProviderSettingsView: View {
           }
         }
         candidateStatus
-        if service.candidatesBlocked && !service.keyStorageBlocked {
+        if service.keyReplacementBlocked {
+          Text("앱을 다시 열어 키 저장소 상태를 확인하세요.").foregroundStyle(.secondary)
+        } else if service.candidatesBlocked {
           Text("진행 중인 ChatGPT 로그인이나 전용 저장소 정리가 끝나면 새 키를 확인할 수 있습니다.")
             .foregroundStyle(.secondary)
         }
@@ -100,7 +102,7 @@ public struct ProviderSettingsView: View {
   }
 
   private var actionTitle: String {
-    if case .failed = service.phase { return "다시 시도" }
+    if service.offersAPIKeyRetry { return "다시 시도" }
     return service.eligibleForEntry ? "새 키 확인 및 교체" : "연결 확인 및 저장"
   }
 
@@ -121,9 +123,7 @@ public struct ProviderSettingsView: View {
     case .failed(let error):
       Label(error.koreanMessage, systemImage: "exclamationmark.triangle")
         .foregroundStyle(.red)
-      if error == .persistenceFailure && service.keyStorageBlocked {
-        Text("앱을 다시 열어 저장된 연결을 확인하세요.")
-      } else if service.eligibleForEntry && !service.keyStorageBlocked {
+      if service.eligibleForEntry {
         Text("새 연결은 적용하지 않았으며 기존 연결을 유지합니다.")
       }
     }

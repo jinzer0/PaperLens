@@ -850,9 +850,9 @@ public final class ProviderSettingsService: ObservableObject {
     case nil: return "없음"
     }
   }
-  var keyStorageBlocked: Bool { connection.storageBlocked }
+  var keyReplacementBlocked: Bool { connection.replacementStorageBlocked }
   public var candidatesBlocked: Bool {
-    if keyStorageBlocked { return true }
+    if keyReplacementBlocked { return true }
     guard let codex else { return false }
     return codex.preparingForApplicationTermination
       || (codex.blocksReplacement && codex.configurationAvailableForAPIKeyPromotion == nil)
@@ -860,6 +860,10 @@ public final class ProviderSettingsService: ObservableObject {
   public var model: String { connection.configuration.model }
   public var isTesting: Bool { connection.hasUncommittedProbe }
   var apiKeyProbeID: UUID? { connection.cancellableProbeID }
+  var offersAPIKeyRetry: Bool {
+    guard !candidatesBlocked, case .failed(let error) = phase else { return false }
+    return error.isRetryableProbeFailure
+  }
   public var availabilityMessage: String {
     guard let selected = savedConfiguration else { return "저장된 Provider 상태를 확인할 수 없습니다." }
     if isAvailable(selected) { return "현재 \(providerLabel(selected.kind)) 연결을 사용할 수 있습니다." }
@@ -873,7 +877,7 @@ public final class ProviderSettingsService: ObservableObject {
     reconnect(key: key, onPromotion: nil)
   }
   func reconnect(key: String, onPromotion: (() -> Void)?) {
-    guard !keyStorageBlocked, codex?.preparingForApplicationTermination != true else { return }
+    guard !keyReplacementBlocked, codex?.preparingForApplicationTermination != true else { return }
     let expected: ProviderConfiguration?
     if let codex, codex.blocksReplacement {
       guard let available = codex.configurationAvailableForAPIKeyPromotion else { return }
