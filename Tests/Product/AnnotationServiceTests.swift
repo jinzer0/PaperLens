@@ -144,4 +144,68 @@ final class AnnotationServiceTests: XCTestCase {
         arguments: [paper.id.uuidString])
     }, 0)
   }
+
+  @MainActor func testCreationRollsBackAnIgnoredHighlightOrRewrittenNote() throws {
+    let db = try database()
+    let paper = try admit(db)
+    let service = AnnotationService(database: db)
+    let selected = try selection(paper)
+    try db.adapterWrite { sql in
+      try sql.execute(sql: """
+        CREATE TRIGGER ignoreHighlight BEFORE INSERT ON personalAnnotation
+        WHEN NEW.kind = 'highlight' BEGIN SELECT RAISE(IGNORE); END;
+        CREATE TRIGGER rewriteInsertedNote AFTER INSERT ON personalAnnotation
+        WHEN NEW.kind = 'note' BEGIN
+          UPDATE personalAnnotation SET note = 'unexpected note' WHERE id = NEW.id;
+        END;
+        """)
+    }
+    XCTAssertThrowsError(try service.createHighlight(selected)) {
+      XCTAssertEqual($0 as? AnnotationError, .corruptRecord)
+    }
+    XCTAssertThrowsError(try service.createNote(selected, text: "requested note")) {
+      XCTAssertEqual($0 as? AnnotationError, .corruptRecord)
+    }
+    XCTAssertEqual(try service.records(for: paper), [])
+  }
+
+  @MainActor func testNoteEditRollsBackIfStoredTextDiffers() throws {
+    let db = try database()
+    let paper = try admit(db)
+    let service = AnnotationService(database: db)
+    let note = try service.createNote(selection(paper), text: "original note")
+    try db.adapterWrite { sql in
+      try sql.execute(sql: """
+        CREATE TRIGGER rewriteEditedNote AFTER UPDATE OF note ON personalAnnotation
+        BEGIN
+          UPDATE personalAnnotation SET note = 'unexpected note' WHERE id = NEW.id;
+        END;
+        """)
+    }
+    XCTAssertThrowsError(try service.updateNote(note, text: "requested note")) {
+      XCTAssertEqual($0 as? AnnotationError, .corruptRecord)
+    }
+    XCTAssertEqual(try service.records(for: paper), [note])
+  }
+
+  @MainActor func testDeletionRollsBackIfAnnotationSurvives() throws {
+    let db = try database()
+    let paper = try admit(db)
+    let service = AnnotationService(database: db)
+    let highlight = try service.createHighlight(selection(paper))
+    try db.adapterWrite { sql in
+      try sql.execute(sql: """
+        CREATE TRIGGER retainDeletedAnnotation AFTER DELETE ON personalAnnotation
+        BEGIN
+          INSERT INTO personalAnnotation(id, paperID, generation, kind, selection, note, revision, createdAt)
+          VALUES (OLD.id, OLD.paperID, OLD.generation, OLD.kind, OLD.selection, OLD.note,
+            OLD.revision + 1, OLD.createdAt);
+        END;
+        """)
+    }
+    XCTAssertThrowsError(try service.delete(highlight)) {
+      XCTAssertEqual($0 as? AnnotationError, .corruptRecord)
+    }
+    XCTAssertEqual(try service.records(for: paper), [highlight])
+  }
 }
