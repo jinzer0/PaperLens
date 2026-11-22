@@ -1,5 +1,21 @@
 # Story 1.17 Build Spec — Folder arrangement and duplicate local import
 
+## 키보드 초점과 중복 PDF 재실행 검증 — 2026-11-22
+
+macOS 26.7.1 arm64의 Developer ID 서명 앱과 전용 합성 PDF로 확인했다. 시스템 키보드
+탐색을 끈 상태에서 툴바의 폴더 관리 창을 닫기 또는 Esc로 닫으면 같은 버튼에 초점이 돌아왔고,
+스페이스 키로 다시 열렸다. PDF 가져오기 확인에서 취소 또는 Esc를 사용하면 PDF 선택 버튼으로
+돌아왔고 스페이스 키로 macOS 파일 선택 창을 다시 열 수 있었다. 취소 중에는 가져오기 Job이
+늘지 않았다. Settings 닫기와 재열기도 다시 확인했다.
+
+같은 PDF를 가져오면 내용 해시가 일치한다는 안내가 표시됐다. 취소 후 기존 논문과 Job이
+유지됐다. 계속 가져오기를 선택하면 기존과 다른 논문 ID와 독립 PDF 파일이 생성됐고, 두
+파일의 내용과 해시가 같았다. 한 편을 Library에서 합성 폴더로 옮긴 뒤 미분류 복사본만
+삭제했다. 앱을 종료하고 새 프로세스에서 같은 저장소를 열어 폴더 및 삭제 상태가 유지되고
+남은 논문이 Reader에서 8쪽 PDF로 열리는 것을 확인했다. 관련 XCTest 113개가 통과했다.
+로컬 기록은 `.build/epic1-import-native-focus/` 아래의 `edit-focus-native.log`,
+`duplicate-relaunch-ui.log`, `existing-copies-relaunch.log`, `edit-focus-tests.json`에 있다.
+
 ## 서명 앱의 폴더 배치 검증 — 2026-11-22
 
 macOS 26.7.1 arm64에서 소스 `abe2a1f62273f06fcae94a3b373520d3946e475f`의

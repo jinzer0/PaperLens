@@ -958,15 +958,8 @@ public struct ProductWorkspaceView: View {
       } else {
         HStack {
           Group {
-            Button("폴더 관리") { openToolbar(.folders) }.focused($folderOpenerFocused)
-            Button("Settings") { openToolbar(.settings) }
-              .focusable(workspace.canOpenReader)
-              .focused($settingsOpenerFocused)
-              .onKeyPress(.space, phases: .down) { press in
-                guard press.modifiers.isEmpty else { return .ignored }
-                openToolbar(.settings)
-                return .handled
-              }
+            toolbarButton("폴더 관리", kind: .folders, focus: $folderOpenerFocused)
+            toolbarButton("Settings", kind: .settings, focus: $settingsOpenerFocused)
             if let mount, let paperID = workspace.latestLocalImport {
               Button("가져온 PDF 열기") {
                 Task { await workspace.openImportedPDF(paperID, presentationMount: mount) }
@@ -1147,6 +1140,19 @@ public struct ProductWorkspaceView: View {
   }
 
   private func invalidateDirectIntent() { directIntent?.invalidated = true }
+
+  private func toolbarButton(_ title: LocalizedStringKey, kind: ToolbarPresentation.Kind,
+    focus: FocusState<Bool>.Binding
+  ) -> some View {
+    Button(title) { openToolbar(kind) }
+      .focusable(workspace.canOpenReader, interactions: .edit)
+      .focused(focus)
+      .onKeyPress(.space, phases: .down) { press in
+        guard press.modifiers.isEmpty else { return .ignored }
+        openToolbar(kind)
+        return .handled
+      }
+  }
 
   private func openToolbar(_ kind: ToolbarPresentation.Kind) {
     guard workspace.canOpenReader, let mount, nativeSlot == nil, toolbarPresentation == nil, workspace.sheet == nil,

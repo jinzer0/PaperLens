@@ -1,5 +1,13 @@
 # Story 1.18 Build Spec — URL Import and shared Library entry
 
+## URL 추가 키보드 초점 검증 — 2026-11-22
+
+macOS 26.7.1 arm64의 Developer ID 서명 앱에서 시스템 키보드 탐색을 끈 상태로 확인했다.
+URL 입력을 취소 버튼이나 Esc로 닫으면 URL 추가 버튼으로 초점이 돌아왔고 스페이스 키로
+입력 창을 다시 열 수 있었다. 취소 후 합성 Workspace DB에 논문과 가져오기 Job은 0개였다.
+관련 XCTest 113개가 통과했다. 로컬 기록은 `.build/epic1-import-native-focus/` 아래의
+`edit-focus-native.log`와 `edit-focus-tests.json`에 있다.
+
 ## 서명 앱의 URL 확인과 취소 검증 — 2026-11-22
 
 macOS 26.7.1 arm64에서 소스 `abe2a1f62273f06fcae94a3b373520d3946e475f`의

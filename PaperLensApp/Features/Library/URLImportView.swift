@@ -129,12 +129,14 @@ public struct URLImportView<LibraryContent: View>: View {
     let folderObservation = FolderObservationID(mount: mount, refresh: folderRefreshID)
     VStack {
       HStack {
-        Button("URL 추가") {
-          guard drag.isCurrent(mount, interaction), canPresentInput else { return }
-          drag.interrupt()
-          inputPresentation = InputPresentation(mount: drag.mount, retry: nil, interaction: drag.interaction)
-          inputSheet = true
-        }.focused($openerFocused, equals: .add)
+        Button("URL 추가") { openURLInput(mount: mount, interaction: interaction) }
+          .focusable(canPresentInput, interactions: .edit)
+          .focused($openerFocused, equals: .add)
+          .onKeyPress(.space, phases: .down) { press in
+            guard press.modifiers.isEmpty else { return .ignored }
+            openURLInput(mount: mount, interaction: interaction)
+            return .handled
+          }
           .disabled(!canPresentInput)
         Button("URL 붙여넣기") {
           guard drag.isCurrent(mount, interaction), canPresentInput else { return }
@@ -143,13 +145,15 @@ public struct URLImportView<LibraryContent: View>: View {
           else { invalidInput = true }
         }.focused($openerFocused, equals: .paste)
           .disabled(!canPresentInput)
-        Button("PDF 선택") {
-          guard drag.isCurrent(mount, interaction), localPDFAvailable else { return }
-          drag.interrupt()
-          let intent = UUID()
-          drag.localIntent = intent
-          chooseLocalPDF(intent)
-        }.focused(localPDFFocused).disabled(!localPDFAvailable)
+        Button("PDF 선택") { openPDFPicker(mount: mount, interaction: interaction) }
+          .focusable(localPDFAvailable, interactions: .edit)
+          .focused(localPDFFocused)
+          .onKeyPress(.space, phases: .down) { press in
+            guard press.modifiers.isEmpty else { return .ignored }
+            openPDFPicker(mount: mount, interaction: interaction)
+            return .handled
+          }
+          .disabled(!localPDFAvailable)
         Spacer()
       }
       HStack {
@@ -304,6 +308,21 @@ public struct URLImportView<LibraryContent: View>: View {
     }
     .onChange(of: service.confirmation?.id) { _ in serviceInterrupted() }
     .onChange(of: service.state) { _ in serviceInterrupted() }
+  }
+
+  private func openURLInput(mount: UUID?, interaction: UUID) {
+    guard drag.isCurrent(mount, interaction), canPresentInput else { return }
+    drag.interrupt()
+    inputPresentation = InputPresentation(mount: drag.mount, retry: nil, interaction: drag.interaction)
+    inputSheet = true
+  }
+
+  private func openPDFPicker(mount: UUID?, interaction: UUID) {
+    guard drag.isCurrent(mount, interaction), localPDFAvailable else { return }
+    drag.interrupt()
+    let intent = UUID()
+    drag.localIntent = intent
+    chooseLocalPDF(intent)
   }
 
   private func beginRetry(_ paper: OrganizedPaper, restoreFocus: @escaping @MainActor () -> Void) {
