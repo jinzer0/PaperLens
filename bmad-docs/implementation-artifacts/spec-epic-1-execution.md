@@ -29,6 +29,18 @@ approval: explicit-human-story-range-execution
   `db-relaunch.json`, `submission.log`, `local-gatekeeper.log`에 보존했다.
   최소 macOS 실행, Agent 정리 매트릭스, 서명 앱의 격리 수용 검증 및 별도 환경의 Gatekeeper GUI 실행은 남아 있다.
 
+### Story 1.5 최신 서명 패키지 재검증
+
+- 소스 `7f2d9cdf4264b813552ed52132adec6d3fb93f34`의 전체 arm64 패키지에서 실행 코드 19개의 서명을 확인했다.
+  패키지 인벤토리 해시는 `2d94d1fd629840abc023e52b9fa1a8ca5485be2fa57554d0d26938799d61ad60`이다.
+  매니페스트와 재실행 보고서의 실행 파일 SHA-256이 실제 서명된 바이너리와 일치했다.
+- macOS 26.7.1(25G241)의 Apple SQLite 3.51.0으로 정상·M1 실패·M2 실패의 총 여섯 프로세스를 실행했다.
+  정상 DB는 FTS5 검색·삭제 및 재실행 뒤 삭제 유지를 통과했다. M1·M2 실패 DB는 같은 파일에서 각각 버전 0·1을 복원했다.
+  합성 DB와 실행 디렉터리를 정리했다. 관련 오프라인 테스트 30개가 통과했다.
+- 로컬 보고서는 `.build/topology/db-current-7f2d9cd-0djP5X/db-relaunch.json`에 있다.
+  보고서 SHA-256은 `5bc9c32cffd50dd14ab699bdcd93f8fd1a93ed3391190650dcecdaf32729e77f`다.
+  공증 프로필, 최소 macOS 실행 및 Agent 정리 수용 증거가 남아 있어 Story 1.5와 P-2 매트릭스의 완료 상태는 진행 중이다.
+
 ## Integrated native checkpoint — 2026-11-07
 
 **Fixed-design correction:** The unapproved generation pool, alternate package
