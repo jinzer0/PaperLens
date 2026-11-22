@@ -182,6 +182,53 @@ private final class AnnotationPageDelegate: NSObject, PDFDocumentDelegate {
     return reader
   }
 
+  func testReaderHighlightMarksSavedPagesWithoutChangingReadPosition() async throws {
+    let (_, db, lifecycle, id, _) = try await fixture()
+    let reader = try presentation(database: db, lifecycle: lifecycle, paperID: id)
+    defer { reader.session.close() }
+    let document = try XCTUnwrap(reader.pdfView.document)
+    let currentPage = try XCTUnwrap(document.page(at: 1))
+    reader.pdfView.go(to: currentPage)
+    reader.pdfView.scaleFactor = 1.4
+    let scale = reader.pdfView.scaleFactor
+    let selection = PDFSelection(document: document)
+    selection.add(document.findString("alpha", withOptions: []))
+    reader.pdfView.setCurrentSelection(selection, animate: false)
+    XCTAssertTrue(reader.pdfView.currentPage === currentPage)
+
+    reader.highlightSelection()
+    let context = try XCTUnwrap(reader.annotationContext)
+    let saved = try XCTUnwrap(context.records().first)
+    XCTAssertEqual(saved.kind, .highlight)
+    XCTAssertEqual(saved.selection.locations.map(\.pageIndex), [0, 1])
+    reader.pdfView.clearSelection()
+    let overlay = try XCTUnwrap(reader.pdfView.highlightedSelections?.first)
+    XCTAssertEqual(overlay.pages.map { document.index(for: $0) }.sorted(), [0, 1])
+    XCTAssertTrue(reader.pdfView.currentPage === currentPage)
+    XCTAssertEqual(reader.pdfView.scaleFactor, scale)
+    XCTAssertEqual(reader.annotationFeedback, "하이라이트가 저장되었습니다.")
+    try context.reveal(saved)
+    XCTAssertEqual(reader.pdfView.currentPage.map { document.index(for: $0) }, 0)
+  }
+
+  func testHighlightDisplayFailureReportsThatRecordWasSaved() async throws {
+    let (_, db, _, id, binding) = try await fixture()
+    defer { binding.session.close() }
+    let context = try binding.open(database: db, paperID: id)
+    let page = try XCTUnwrap(binding.view.document?.page(at: 1) as? AnnotationControlledPDFPage)
+    page.rejectRectangleSelection = true
+    let saved = try context.highlightSelection()
+    XCTAssertGreaterThan(page.rectangleSelectionCalls, 0)
+    XCTAssertNil(binding.view.highlightedSelections)
+    XCTAssertEqual(context.editor.records, [saved])
+    XCTAssertEqual(context.editor.feedback, "하이라이트를 저장했지만 PDF에 표시하지 못했습니다.")
+    XCTAssertEqual(try AnnotationService(database: ProductDatabase.open(at: db.root))
+      .records(for: context.identity), [saved])
+    page.rejectRectangleSelection = false
+    try context.reveal(saved)
+    XCTAssertNotNil(binding.view.highlightedSelections?.first)
+  }
+
   func testPublishedMetadataChangePreservesAndLetsReaderSavePendingNote() async throws {
     let (_, db, lifecycle, id, _) = try await fixture()
     let reader = try presentation(database: db, lifecycle: lifecycle, paperID: id)

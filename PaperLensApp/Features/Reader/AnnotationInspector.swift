@@ -174,10 +174,17 @@ import SwiftUI
 
   @discardableResult func highlightSelection() throws -> AnnotationRecord {
     let saved = try createHighlight()
+    let feedback: String
+    do {
+      try showAnnotation(saved, navigate: false)
+      feedback = "하이라이트가 저장되었습니다."
+    } catch AnnotationError.invalidSelection {
+      feedback = "하이라이트를 저장했지만 PDF에 표시하지 못했습니다."
+    }
     let records = try records()
     guard records.contains(saved) else { throw AnnotationError.staleRecord }
     try publishEditor { editor.records = records }
-    try publishEditor { editor.feedback = "하이라이트가 저장되었습니다." }
+    try publishEditor { editor.feedback = feedback }
     return saved
   }
 
@@ -187,6 +194,10 @@ import SwiftUI
   }
 
   public func reveal(_ record: AnnotationRecord) throws {
+    try showAnnotation(record, navigate: true)
+  }
+
+  private func showAnnotation(_ record: AnnotationRecord, navigate: Bool) throws {
     var installedOverlay: PDFSelection?
     do {
       try access(requiring: record) { view, document in
@@ -215,7 +226,9 @@ import SwiftUI
         revealedRecordID = record.id
         view.highlightedSelections = [overlay]
         try validate(requiring: record)
-        view.go(to: PDFDestination(page: page, at: CGPoint(x: rect.x, y: rect.y + rect.height)))
+        if navigate {
+          view.go(to: PDFDestination(page: page, at: CGPoint(x: rect.x, y: rect.y + rect.height)))
+        }
       }
     } catch {
       if let installedOverlay, revealedOverlay === installedOverlay { clearRevealedOverlay() }
@@ -281,10 +294,7 @@ import SwiftUI
       }
       HStack {
         Button("하이라이트") {
-          perform {
-            let saved = try context.highlightSelection()
-            try context.reveal(saved)
-          }
+          perform { _ = try context.highlightSelection() }
         }
         .accessibilityLabel("선택한 원본 PDF 텍스트에 하이라이트 추가")
         Button("노트 추가") {
