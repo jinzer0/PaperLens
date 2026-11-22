@@ -492,20 +492,34 @@ public struct LibraryBrowserView: View {
   }
 
   private func paperActions(_ paper: OrganizedPaper) -> some View {
-    HStack {
+    let canShowDetails = !busy && !loading && !loadFailed
+    let canMovePaper = paper.readable && canShowDetails
+    return HStack {
       Button("열기") { perform { try await service.admitOpen(paper); try await openPaper(paper) } }
         .disabled(!libraryPresentationAvailable || !paper.readable || busy)
         .focused($organizationFocus, equals: .open(paper.id))
         .accessibilityLabel("\(paper.title) 열기")
       Button("논문 상세") {
         beginIdentification(paper)
-      }.disabled(busy || loading || loadFailed)
+      }.focusable(canShowDetails, interactions: .edit)
         .focused($focusedIdentification, equals: paper.id)
+        .onKeyPress(.space, phases: .down) { press in
+          guard press.modifiers.isEmpty else { return .ignored }
+          beginIdentification(paper)
+          return .handled
+        }
+        .disabled(!canShowDetails)
         .accessibilityLabel("\(paper.title) 출처 제목·발행연도·요약·초록·출처 주제·저장된 읽기 기록 상세")
       Button("폴더 이동") {
         beginMovement(paper)
-      }.disabled(!paper.readable || busy || loading || loadFailed)
+      }.focusable(canMovePaper, interactions: .edit)
         .focused($focusedMovement, equals: paper.id)
+        .onKeyPress(.space, phases: .down) { press in
+          guard press.modifiers.isEmpty else { return .ignored }
+          beginMovement(paper)
+          return .handled
+        }
+        .disabled(!canMovePaper)
         .accessibilityLabel("\(paper.title) 폴더 이동")
       Menu("더 보기") {
         if paper.canRetryImport {
@@ -535,7 +549,9 @@ public struct LibraryBrowserView: View {
             deleting = paper
           }.disabled(paper.status == .deleting)
         }
-      }.disabled(busy).focused($focusedPaper, equals: paper.id)
+      }.focusable(!busy, interactions: [.activate, .edit])
+        .focused($focusedPaper, equals: paper.id)
+        .disabled(busy)
         .accessibilityLabel("\(paper.title) 더 보기")
     }
   }
@@ -558,7 +574,7 @@ public struct LibraryBrowserView: View {
     guard sheetPresentation == nil else { return }
     let slot = LibrarySheetSlot(mountID: mountID, content: .tagEditor(paper),
       filter: filter, refreshRevision: refreshRevision)
-    organizationFocusToRestore = nil
+    preparePaperSheetFocus()
     sheetPresentation = LibrarySheetPresentation(slot: slot)
     invalidateObservation(preservingEditor: slot.id)
   }
@@ -576,7 +592,7 @@ public struct LibraryBrowserView: View {
       deletionRevision: deletionRevision)
     let slot = LibrarySheetSlot(mountID: mountID, content: .identification(captured),
       filter: filter, refreshRevision: refreshRevision)
-    organizationFocusToRestore = nil
+    preparePaperSheetFocus()
     sheetPresentation = LibrarySheetPresentation(slot: slot)
   }
 
@@ -590,9 +606,18 @@ public struct LibraryBrowserView: View {
     guard sheetPresentation == nil else { return }
     let slot = LibrarySheetSlot(mountID: mountID, content: .movement(accepted),
       filter: filter, refreshRevision: refreshRevision)
-    organizationFocusToRestore = nil
+    preparePaperSheetFocus()
     clearObservation()
     sheetPresentation = LibrarySheetPresentation(slot: slot)
+  }
+
+  private func preparePaperSheetFocus() {
+    // Opening a row action can leave the previously used search or filter control focused.
+    organizationFocusToRestore = nil
+    organizationFocus = nil
+    focusedPaper = nil
+    focusedIdentification = nil
+    focusedMovement = nil
   }
 
   private func movementPayloadIsEligible(_ slot: LibrarySheetSlot) -> Bool {

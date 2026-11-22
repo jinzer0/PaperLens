@@ -1,5 +1,14 @@
 # Story 1.25 Build Spec — Library organization, search and filters
 
+## 필터를 적용한 상태에서 태그 편집과 초점 복원 — 2026-11-22
+
+macOS 26.7.1 arm64의 Developer ID 서명 앱에서 즐겨찾기 필터로 합성 논문 한 편을
+선택했다. 태그 편집을 Esc로 닫거나 새 태그를 저장하면 같은 논문의 더 보기 메뉴에
+초점이 돌아왔다. 새 앱 프로세스에서도 저장한 즐겨찾기와 새 태그로 논문을 필터링할 수
+있었다. 더 보기 메뉴를 키보드로 다시 여는 동작과 VoiceOver는 후속 검증이 필요하다.
+로컬 기록은 `.build/epic1-library-row-focus/` 아래의 `tag-save-restart.log`,
+`card-focus-ui.log`, `preferences-restart.log`에 있다.
+
 ## 서명 앱에서 사용자 태그 관리 검증 — 2026-11-22
 
 macOS 26.7.1 arm64에서 소스 `f279dc8447f67705bea6125d7afef77f1e7d5a72`의

@@ -1,5 +1,13 @@
 # Story 1.17 Build Spec — Folder arrangement and duplicate local import
 
+## Library 폴더 이동의 초점 복원 — 2026-11-22
+
+Developer ID 서명 앱의 목록과 카드에서 폴더 이동을 취소하면 같은 논문의 폴더 이동
+버튼으로 돌아왔다. 스페이스 키로 다시 열고 Esc로 닫아도 초점이 돌아왔다. 선택 중인
+폴더에서 논문을 미분류로 옮겨 행이 사라진 경우에는 Library 검색창에 초점이 갔다.
+관련 XCTest 122개가 통과했다. 로컬 기록은 `.build/epic1-library-row-focus/` 아래의
+`row-combo-ui.log`, `card-focus-ui.log`, `movement-fallback.log`에 있다.
+
 ## 키보드 초점과 중복 PDF 재실행 검증 — 2026-11-22
 
 macOS 26.7.1 arm64의 Developer ID 서명 앱과 전용 합성 PDF로 확인했다. 시스템 키보드

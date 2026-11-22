@@ -1,5 +1,13 @@
 # Story 1.24 Build Spec — Library presentation and record revisits
 
+## 논문 상세 초점과 보기 설정 복원 — 2026-11-22
+
+macOS 26.7.1 arm64의 Developer ID 서명 앱에서 목록과 카드의 논문 상세를 닫으면
+같은 논문의 상세 버튼으로 돌아왔다. 스페이스 키로 다시 열고 Esc로 닫을 수 있었다.
+카드 보기와 이름 정렬을 선택한 뒤 새 앱 프로세스에서 두 설정이 활성 상태로 복원됐다.
+관련 XCTest 122개가 통과했다. 로컬 기록은 `.build/epic1-library-row-focus/` 아래의
+`row-combo-ui.log`, `card-focus-ui.log`, `preferences-restart.log`, `product-tests.json`에 있다.
+
 ## 서명 앱의 읽기 기록과 삭제 재시도 검증 — 2026-11-22
 
 macOS 26.7.1 arm64에서 소스 `66bf739d305e6d9208c11d593065372f8c28460f`의
