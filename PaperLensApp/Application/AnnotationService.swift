@@ -118,6 +118,9 @@ public struct AnnotationService: Sendable {
   public func libraryReadingRecords(paperID: UUID, generation: UUID) throws -> LibraryReadingRecords {
     try database.libraryReadingRecords(paperID: paperID, generation: generation)
   }
+  func validatePaper(_ paper: AnnotationPaperIdentity) throws {
+    guard try database.annotationIdentity(paperID: paper.id) == paper else { throw AnnotationError.stalePaper }
+  }
   public func records(for paper: AnnotationPaperIdentity) throws -> [AnnotationRecord] {
     try database.annotationRecords(for: paper)
   }

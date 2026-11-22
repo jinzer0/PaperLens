@@ -171,6 +171,7 @@ import SwiftUI
     case .invalidSelection: return "먼저 주석을 지원하는 원본 PDF 텍스트를 선택하세요."
     case .stalePaper: return "이 논문에는 더 이상 주석을 남길 수 없습니다."
     case .staleRecord: return "이 기록이 변경되었거나 삭제되었습니다. 새로고침 후 편집하세요."
+    case .corruptRecord: return "주석 기록을 확인하지 못했습니다. PDF는 계속 읽을 수 있습니다."
     default: return "주석 작업을 완료하지 못했습니다. 새로고침으로 저장된 기록을 확인한 후 다시 시도하세요."
     }
   }

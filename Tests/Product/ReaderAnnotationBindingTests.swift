@@ -183,6 +183,60 @@ private final class AnnotationPageDelegate: NSObject, PDFDocumentDelegate {
     return reader
   }
 
+  func testCorruptAnnotationDoesNotPreventReadingOrSavingPosition() async throws {
+    let (_, db, lifecycle, id, binding) = try await fixture()
+    let context = try binding.open(database: db, paperID: id)
+    let highlight = try context.createHighlight()
+    binding.session.close()
+
+    let damagedSelection = Data("unreadable selection".utf8)
+    try db.adapterWrite { sql in
+      try sql.execute(sql: "UPDATE personalAnnotation SET selection = ? WHERE id = ?",
+        arguments: [damagedSelection, highlight.id.uuidString])
+    }
+    XCTAssertThrowsError(try AnnotationService(database: db).records(for: highlight.selection.paper)) {
+      XCTAssertEqual($0 as? AnnotationError, .corruptRecord)
+    }
+
+    let reader = try presentation(database: db, lifecycle: lifecycle, paperID: id)
+    defer { reader.session.close() }
+    let document = try XCTUnwrap(reader.pdfView.document)
+    reader.toggleAnnotations()
+    XCTAssertNil(reader.annotationContext)
+    XCTAssertEqual(reader.annotationFeedback, "주석 기록을 확인하지 못했습니다. PDF는 계속 읽을 수 있습니다.")
+    reader.pdfView.go(to: try XCTUnwrap(document.page(at: 1)))
+    reader.pdfView.scaleFactor = 1.4
+    let position = ReaderPosition(pageIndex: 1, zoom: Double(reader.pdfView.scaleFactor))
+    var returned = false
+    reader.leave { returned = true }
+    XCTAssertTrue(returned)
+    let stored = try db.adapterRead { sql in
+      try Data.fetchOne(sql, sql: "SELECT selection FROM personalAnnotation WHERE id = ?",
+        arguments: [highlight.id.uuidString])
+    }
+    XCTAssertEqual(stored, damagedSelection)
+
+    let reopened = try presentation(database: db, lifecycle: lifecycle, paperID: id)
+    defer { reopened.session.close() }
+    XCTAssertEqual(reopened.session.restoredPosition, position)
+  }
+
+  func testReaderStillRejectsAStalePDFIdentityBeforeOpening() async throws {
+    let (_, db, lifecycle, id, _) = try await fixture()
+    let identity = try db.annotationIdentity(paperID: id)
+    let reader = ReaderPresentation(session: ReaderSession(database: db,
+      leaseProvider: LibraryReadLeaseProvider(lifecycle: lifecycle)),
+      annotationIdentity: AnnotationPaperIdentity(id: id, generation: identity.generation,
+        pdfSHA256: String(repeating: "0", count: 64)),
+      annotationService: AnnotationService(database: db),
+      metadataService: ReaderMetadataService(database: db), metadataIdentity: nil)
+    defer { reader.session.close() }
+    reader.open(paperID: id)
+    XCTAssertFalse(reader.opened)
+    XCTAssertEqual(reader.session.admissionState, .closed)
+    XCTAssertNil(reader.pdfView.document)
+  }
+
   func testReaderHighlightMarksSavedPagesWithoutChangingReadPosition() async throws {
     let (_, db, lifecycle, id, _) = try await fixture()
     let reader = try presentation(database: db, lifecycle: lifecycle, paperID: id)

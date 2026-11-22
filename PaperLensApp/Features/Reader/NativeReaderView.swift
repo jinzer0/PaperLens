@@ -110,7 +110,7 @@ import SwiftUI
         guard session.currentPaper?.paperID == annotationIdentity.id,
           session.currentPaper?.generation == annotationIdentity.generation,
           paperID == annotationIdentity.id else { throw AnnotationError.stalePaper }
-        _ = try annotationService.records(for: annotationIdentity)
+        try annotationService.validatePaper(annotationIdentity)
       }
       try step { _ in pdfView.scaleFactor = CGFloat(position.zoom) }
       try step { document in
