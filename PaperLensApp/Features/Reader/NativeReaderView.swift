@@ -481,8 +481,9 @@ import SwiftUI
   }
 
   private func saveCurrentPosition() throws {
-    try saveLastMetadataPosition()
+    // The PDF's page and zoom remain useful when its Contents position cannot be saved.
     try session.save(readCurrentPosition())
+    try saveLastMetadataPosition()
   }
 
   private func saveLastMetadataPosition() throws {

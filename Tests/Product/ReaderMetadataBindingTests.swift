@@ -1638,6 +1638,8 @@ private final class MetadataObservedPDFDocument: PDFDocument {
     XCTAssertThrowsError(try session.savePositionBeforeApplicationTermination()) {
       XCTAssertTrue($0 is DatabaseError)
     }
+    XCTAssertEqual(session.restoredPosition, .init(pageIndex: 1, zoom: 2))
+    XCTAssertNil(presentation.metadataBinding?.state?.observedLocation)
     XCTAssertTrue(presentation.opened)
     XCTAssertTrue(view.document === document)
     try db.adapterWrite { try $0.execute(sql: "DROP TRIGGER rejectQuitPosition") }
@@ -1656,7 +1658,7 @@ private final class MetadataObservedPDFDocument: PDFDocument {
     XCTAssertEqual(try ReaderMetadataService(database: reopened).beginSession(for: identity).location, location)
   }
 
-  func testReaderExitReportsWithinPageSaveFailureAndAllowsRetry() async throws {
+  func testReaderExitPreservesPageAndZoomWhenWithinPageSaveFails() async throws {
     for returningToLibrary in [true, false] {
       let (db, lifecycle, identity, owner) = try await fixture()
       owner.session.close()
@@ -1670,8 +1672,16 @@ private final class MetadataObservedPDFDocument: PDFDocument {
         annotationService: AnnotationService(database: db),
         metadataService: service, metadataIdentity: identity, pdfView: view)
       presentation.open(paperID: identity.paperID)
-      let page = try XCTUnwrap(view.document?.page(at: 0))
-      let location = ReaderConfirmedLocation(pageIndex: 0, x: 20, y: 220)
+      let page = try XCTUnwrap(view.document?.page(at: 1))
+      // Close immediately, without an earlier notification committing the new PDF position.
+      for name in [Notification.Name.PDFViewPageChanged, .PDFViewScaleChanged, .PDFViewVisiblePagesChanged] {
+        NotificationCenter.default.removeObserver(presentation, name: name, object: view)
+      }
+      presentation.changeZoom(factor: 2)
+      presentation.navigate(toPage: 2)
+      XCTAssertTrue(view.currentPage === page)
+      XCTAssertEqual(session.restoredPosition, .init(pageIndex: 0, zoom: 1))
+      let location = ReaderConfirmedLocation(pageIndex: 1, x: 20, y: 220)
       view.observedDestination = PDFDestination(page: page, at: CGPoint(x: location.x, y: location.y))
       try db.adapterWrite { db in
         try db.execute(sql: """
@@ -1687,6 +1697,7 @@ private final class MetadataObservedPDFDocument: PDFDocument {
         XCTAssertTrue(presentation.opened)
         XCTAssertNotNil(session.currentPaper)
         XCTAssertNotNil(presentation.failure)
+        XCTAssertEqual(session.restoredPosition, .init(pageIndex: 1, zoom: 2))
         XCTAssertEqual(try db.adapterRead { db in
           try Int.fetchOne(db, sql: "SELECT sequence FROM readerMetadataContext WHERE paperID = ?",
             arguments: [identity.paperID.uuidString])
@@ -1704,6 +1715,9 @@ private final class MetadataObservedPDFDocument: PDFDocument {
       }
       XCTAssertNil(session.currentPaper)
       XCTAssertNil(view.document)
+      let reopened = try ProductDatabase.open(at: db.root)
+      let reading = try reopened.libraryReadingRecords(paperID: identity.paperID, generation: identity.generation)
+      XCTAssertEqual(reading.position, .init(pageIndex: 1, zoom: 2))
     }
   }
 
