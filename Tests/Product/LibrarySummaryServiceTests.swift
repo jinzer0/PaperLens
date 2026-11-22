@@ -673,6 +673,32 @@ final class LibrarySummaryServiceTests: XCTestCase {
       sql: "SELECT state FROM librarySummaryJob") }, "running")
   }
 
+  func testLibraryRejectsVisibleSummaryBoundToAnotherPaperAfterReopen() throws {
+    let f = try fixture()
+    defer { try? FileManager.default.removeItem(at: f.root) }
+    let other = try fixture(database: f.db)
+    try reserve(f)
+    let saved = try publish(f)
+    try f.db.adapterWrite { db in
+      try db.execute(sql: "INSERT INTO librarySummaryVisible(paperID, resultID) VALUES (?, ?)",
+        arguments: [other.identity.paperID.uuidString, saved.id.uuidString])
+    }
+
+    let reopened = try ProductDatabase.open(at: f.root)
+    XCTAssertThrowsError(try LibrarySummaryService(database: reopened)
+      .restore(paperID: other.identity.paperID)) { error in
+        XCTAssertEqual(error as? LibrarySummaryError, .invalidResult)
+      }
+    let facts = try reopened.librarySortFacts()
+    let otherSummary = try XCTUnwrap(facts.first { $0.paperID == other.identity.paperID }?.summary)
+    XCTAssertEqual(otherSummary.availability, .verificationFailed)
+    XCTAssertNil(otherSummary.record)
+    let original = try XCTUnwrap(facts.first { $0.paperID == f.identity.paperID }?.summary)
+    XCTAssertEqual(original.availability, .available)
+    XCTAssertEqual(original.record?.id, saved.id)
+    XCTAssertEqual(original.record?.claimAnchors, saved.claimAnchors)
+  }
+
   func testDuplicateIntentCannotSendAgainAndInterruptionCannotPublish() throws {
     let f = try fixture()
     defer { try? FileManager.default.removeItem(at: f.root) }
@@ -924,6 +950,9 @@ final class LibrarySummaryServiceTests: XCTestCase {
       observation: nil, providerAvailable: true), .unconfirmed)
     XCTAssertEqual(try blocker(), .geometryUnavailable)
     try prepareCoordinator(f)
+    let ready = try XCTUnwrap(f.db.organizationObservation(filter: .init()).facts.first?.summary)
+    XCTAssertEqual(ready.availability, .notSaved)
+    XCTAssertNil(ready.record)
     XCTAssertNil(try blocker())
     XCTAssertEqual(try blocker(providerAvailable: false), .providerUnavailable)
     try f.db.adapterWrite { db in
@@ -955,25 +984,33 @@ final class LibrarySummaryServiceTests: XCTestCase {
         generation: f.identity.generation, outputLanguage: "en")
     }
     let previous = try await generate()
-    let skippedWrites: [(trigger: String, dispatches: Bool)] = [
-      ("BEFORE INSERT ON librarySummaryJob", false),
-      ("BEFORE INSERT ON librarySummaryOwner", false),
-      ("BEFORE INSERT ON librarySummaryOwnerAnchor WHEN NEW.sentenceID = 1", false),
-      ("BEFORE INSERT ON librarySummaryResult", true),
-      ("BEFORE UPDATE OF state ON librarySummaryJob WHEN NEW.state = 'succeeded'", true),
-      ("BEFORE UPDATE ON librarySummaryVisible", true)
+    let failedWrites: [(trigger: String, dispatches: Bool)] = [
+      ("BEFORE INSERT ON librarySummaryJob BEGIN SELECT RAISE(IGNORE); END", false),
+      ("BEFORE INSERT ON librarySummaryOwner BEGIN SELECT RAISE(IGNORE); END", false),
+      ("BEFORE INSERT ON librarySummaryOwnerAnchor WHEN NEW.sentenceID = 1 BEGIN SELECT RAISE(IGNORE); END", false),
+      ("BEFORE INSERT ON librarySummaryResult BEGIN SELECT RAISE(IGNORE); END", true),
+      ("BEFORE UPDATE OF state ON librarySummaryJob WHEN NEW.state = 'succeeded' BEGIN SELECT RAISE(IGNORE); END", true),
+      ("BEFORE UPDATE ON librarySummaryVisible BEGIN SELECT RAISE(IGNORE); END", true),
+      ("""
+        AFTER UPDATE ON librarySummaryVisible
+        BEGIN UPDATE librarySummaryVisible SET resultID = OLD.resultID WHERE paperID = NEW.paperID; END
+        """, true),
+      ("""
+        AFTER INSERT ON librarySummaryResult
+        BEGIN UPDATE librarySummaryResult SET result = X'00' WHERE id = NEW.id; END
+        """, true)
     ]
     let store = LibrarySummaryService(database: f.db)
-    for (trigger, dispatches) in skippedWrites {
+    for (trigger, dispatches) in failedWrites {
       let calls = provider.calls
       let jobsBefore = try f.db.adapterRead { try Int.fetchOne($0,
         sql: "SELECT count(*) FROM librarySummaryJob") }
       try f.db.adapterWrite { db in
-        try db.execute(sql: "CREATE TRIGGER skipSummaryWrite \(trigger) BEGIN SELECT RAISE(IGNORE); END")
+        try db.execute(sql: "CREATE TRIGGER failSummaryWrite \(trigger)")
       }
       do {
         _ = try await generate()
-        XCTFail("Skipped write was reported as success: \(trigger)")
+        XCTFail("Unconfirmed write was reported as success: \(trigger)")
       } catch {
         XCTAssertEqual(error as? LibrarySummaryError, .persistenceFailure, "\(trigger): \(error)")
       }
@@ -998,7 +1035,7 @@ final class LibrarySummaryServiceTests: XCTestCase {
       }
       XCTAssertEqual(try store.restore(paperID: f.identity.paperID)?.claimAnchors,
         previous.claimAnchors, trigger)
-      try f.db.adapterWrite { try $0.execute(sql: "DROP TRIGGER skipSummaryWrite") }
+      try f.db.adapterWrite { try $0.execute(sql: "DROP TRIGGER failSummaryWrite") }
     }
     let replacement = try await generate()
     XCTAssertNotEqual(replacement.id, previous.id)

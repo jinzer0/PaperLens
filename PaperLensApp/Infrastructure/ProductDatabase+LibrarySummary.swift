@@ -358,6 +358,21 @@ extension ProductDatabase {
         ON CONFLICT(paperID) DO UPDATE SET resultID = excluded.resultID
         """, arguments: [i.paperID.uuidString, resultID.uuidString])
       guard db.changesCount == 1 else { throw LibrarySummaryError.persistenceFailure }
+      try guardSummaryPaper(i, db: db, currentInput: true)
+      // Verify the stored values before commit so a mismatch rolls back all three writes.
+      guard try Int.fetchOne(db, sql: """
+        SELECT 1 FROM librarySummaryVisible v
+        JOIN librarySummaryResult r ON r.id = v.resultID AND r.paperID = v.paperID
+        JOIN librarySummaryJob j ON j.job = r.job AND j.paperID = r.paperID
+        WHERE v.paperID = ? AND v.resultID = ? AND r.revision = ? AND r.identity = ?
+          AND r.frozen = ? AND r.result = ? AND j.job = ? AND j.attempt = ? AND j.fence = ?
+          AND j.correlation = ? AND j.input = ? AND j.epoch = ? AND j.state = 'succeeded'
+          AND j.resultID = r.id AND j.permit = ? AND j.failure IS NULL
+          AND j.identity = r.identity AND j.frozen = r.frozen
+        """, arguments: [i.paperID.uuidString, resultID.uuidString, i.revision.uuidString, identityData,
+          frozenData, bytes, i.job.uuidString, i.attempt.uuidString, i.fence.uuidString,
+          i.correlation.uuidString, i.input.uuidString, i.epoch.uuidString, permit]) == 1
+      else { throw LibrarySummaryError.persistenceFailure }
       return LibrarySummaryRecord(id: resultID, identity: i, result: validated,
         evidence: bundle, claimAnchors: claim)
     }
@@ -386,21 +401,27 @@ extension ProductDatabase {
     in db: Database) throws -> LibrarySummaryRecord? {
       guard let row = try Row.fetchOne(db, sql: """
         SELECT r.*, j.identity AS jobIdentity, j.frozen AS jobFrozen, j.permit AS publicationPermit
-        FROM librarySummaryVisible v JOIN librarySummaryResult r ON r.id = v.resultID
-        JOIN librarySummaryJob j ON j.job = r.job AND j.state = 'succeeded' AND j.resultID = r.id
-        WHERE v.paperID = ? AND r.paperID = v.paperID AND j.paperID = r.paperID
+        FROM librarySummaryVisible v
+        LEFT JOIN librarySummaryResult r ON r.id = v.resultID AND r.paperID = v.paperID
+        LEFT JOIN librarySummaryJob j ON j.job = r.job AND j.paperID = r.paperID
+          AND j.state = 'succeeded' AND j.resultID = r.id
+        WHERE v.paperID = ?
         """, arguments: [paperID.uuidString]) else { return nil }
+      // A visible pointer that cannot be resolved is a verification failure, not an unsaved summary.
+      guard let id = try row.decode(String?.self, forColumn: "id"),
+        let jobIdentity = try row.decode(Data?.self, forColumn: "jobIdentity"),
+        let jobFrozen = try row.decode(Data?.self, forColumn: "jobFrozen")
+      else { throw LibrarySummaryError.invalidResult }
       let identity = try JSONDecoder().decode(LibrarySummaryIdentity.self, from: row["identity"])
       let frozen = try JSONDecoder().decode(LibrarySummaryFrozen.self, from: row["frozen"])
-      let id: String = row["id"]
       let revision: String = row["revision"]
       let job: String = row["job"]
       let permit: String? = row["publicationPermit"]
       guard identity.paperID == paperID, revision == identity.revision.uuidString,
         job == identity.job.uuidString, let resultID = UUID(uuidString: id),
         let permit, !permit.isEmpty,
-        try JSONDecoder().decode(LibrarySummaryIdentity.self, from: row["jobIdentity"]) == identity,
-        try JSONDecoder().decode(LibrarySummaryFrozen.self, from: row["jobFrozen"]) == frozen
+        try JSONDecoder().decode(LibrarySummaryIdentity.self, from: jobIdentity) == identity,
+        try JSONDecoder().decode(LibrarySummaryFrozen.self, from: jobFrozen) == frozen
       else { throw LibrarySummaryError.staleIdentity }
       // Prior config/revision may differ from current input, but never relabel the saved identity.
       try guardSummaryPaper(identity, db: db, currentInput: false)

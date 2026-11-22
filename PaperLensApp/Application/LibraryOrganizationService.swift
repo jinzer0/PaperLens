@@ -34,7 +34,7 @@ public struct OrganizationFilter: Equatable, Sendable {
   public init() {}
 }
 public enum LibrarySummaryAvailability: Sendable {
-  case available, unavailable, verificationFailed
+  case notSaved, available, unavailable, verificationFailed
 }
 public enum LibrarySummaryAttemptActivity: Sendable {
   case running, failed, succeeded

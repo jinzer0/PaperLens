@@ -1244,7 +1244,6 @@ private struct LibraryIdentification {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
-      Text(showEvidence ? "저장된 요약" : "저장된 요약 · 한 줄 미리보기").font(.headline)
       if let observation {
         if let attempt = observation.recentAttempt,
           attempt.identity.paperID == paper.id, attempt.identity.generation == paper.generation {
@@ -1257,6 +1256,7 @@ private struct LibraryIdentification {
           }
         }
         switch observation.availability {
+        case .notSaved: Text("저장된 요약 없음").font(.caption)
         case .available: EmptyView()
         case .unavailable:
           Text("요약 사용 불가 · 검증된 저장 요약 또는 원문 근거 검증 소유자를 사용할 수 없습니다.")
@@ -1266,6 +1266,7 @@ private struct LibraryIdentification {
         if let record = observation.record,
           record.identity.paperID == paper.id, record.identity.generation == paper.generation,
           case .librarySummary(let summary, let insufficiency) = record.result.result {
+          Text("저장된 요약").font(.headline)
           if showEvidence {
             Text(summary.text).textSelection(.enabled)
           } else {

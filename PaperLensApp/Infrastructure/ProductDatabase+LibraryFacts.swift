@@ -71,7 +71,7 @@ extension ProductDatabase {
       }
       let pdfSHA256: String = try row.decode(String.self, forColumn: "pdfSHA256")
       var record: LibrarySummaryRecord?
-      var availability: LibrarySummaryAvailability = .unavailable
+      var availability: LibrarySummaryAvailability = .notSaved
       do {
         if let restored = try restoreLibrarySummary(paperID: paperID, geometry: nil, in: db) {
           guard restored.identity.paperID == paperID, restored.identity.generation == generationID,
