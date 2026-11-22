@@ -789,18 +789,18 @@ public final class OwnedChildRetirement: @unchecked Sendable {
         source.activate()
       }
     }
-    private var admitsBrokerOffer: Bool {
+    private var admitsWorkerStartupIdentity: Bool {
       lock.withLock { terminal == nil && DispatchTime.now().uptimeNanoseconds < startupDeadline }
     }
     private func receiveBrokerOffer(from fd: Int32) throws -> Bool {
       // An already-spawned worker can deliver its broker for cleanup after
       // revocation, within the original identity observation window.
-      guard admitsBrokerOffer, let workerAtSpawn, let child,
+      guard admitsWorkerStartupIdentity, let workerAtSpawn, let child,
         case .worker(let launch) = command
       else { throw Failure.control }
       let storage = try NativeBrokerABI.ReceiveStorage()
       offerStorage = storage
-      let admit = { self.admitsBrokerOffer }
+      let admit = { self.admitsWorkerStartupIdentity }
       let offer = try NativeBrokerABI.receiveOffer(
         socket: fd, storage: storage, admit: admit,
         capture: { self.captureOwned($0, role: .brokerControl) })
@@ -1031,7 +1031,14 @@ public final class OwnedChildRetirement: @unchecked Sendable {
         if let brokerFD, brokerIdentity != nil {
           try queueControl(brokerFD, "revoke", ["retirementID": retirementID])
         }
-        if let workerFD { try queueControl(workerFD, "revoke", ["retirementID": retirementID]) }
+        if let workerFD {
+          // The worker may have spawned before revocation stopped normal startup.
+          // Keep setup handles rooted until the authenticated process retirement.
+          if brokerFD == nil, workerAtSpawn != nil, admitsWorkerStartupIdentity {
+            armControl(workerFD)
+          }
+          try queueControl(workerFD, "revoke", ["retirementID": retirementID])
+        }
       } catch { if controlPermitted { failed(.control) } }
     }
     private func retireUnlaunchedWorker(_ namespace: TopologyOwnedFixtures) {
@@ -1309,9 +1316,9 @@ public final class OwnedChildRetirement: @unchecked Sendable {
               do {
                 workerAtSpawn = try NativeBrokerABI.observeProcess(
                   pid: spawned,
-                  storage: identityStorage, admit: { self.allowsIO })
+                  storage: identityStorage, admit: { self.admitsWorkerStartupIdentity })
               } catch {
-                if allowsIO { failed(.identity) }
+                if admitsWorkerStartupIdentity { failed(.identity) }
                 return
               }
             }

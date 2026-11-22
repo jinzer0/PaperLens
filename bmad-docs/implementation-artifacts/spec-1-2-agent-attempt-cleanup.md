@@ -15,6 +15,7 @@ approval_record: 'https://github.com/jinzer0/PaperLens/issues/3#issuecomment-604
 
 - Worker가 연결된 Broker의 제어 소켓을 인계하기 전에 취소해도 원래 시작 기한 안에서 Broker 신원을 확인하고 같은 취소 요청을 전달한다. 제품 요청 시작은 즉시 차단된다.
 - 실제 로컬 합성 Worker와 Broker로 두 프로세스의 회수, 제어 소켓 닫힘, 전용 디렉터리 삭제를 확인했다. Worker가 인계 없이 종료되면 `.unknown(.control)`을 보고하고, 정리하지 못한 리소스의 보유 기록을 유지한다.
+- Worker 시작 직후 제어 소켓 감시를 붙이기 전에 취소하는 경우도 검증했다. 원래 시작 기한 내에 신원이 확인된 Worker의 제어 소켓을 종료 흐름에서 감시한다. 프로세스 회수와 남아 있던 초기화 디스크립터 10개의 닫힘을 확인한 뒤 정리 완료를 보고한다.
 
 ## Intent / permission
 

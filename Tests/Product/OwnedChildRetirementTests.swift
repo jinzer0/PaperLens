@@ -684,12 +684,19 @@ final class OwnedChildRetirementTests: XCTestCase {
     try await revokeDuringAuthenticatedStartup(before: "hello", wrongOrder: true)
   }
 
-  func testWorkerRevocationWhileBrokerOfferIsPendingRetiresWithoutDispatch() async throws {
+  private func revokeWhileBrokerOfferIsPending(pauseAfterSpawn: Bool) async throws {
     let (root, namespace, launch) = try workerFixture(
       script: controlWorkerScript(wrongOrder: false, retirement: true, holdBrokerOffer: true))
     defer { try? FileManager.default.removeItem(at: root) }
+    let resumeSetup = DispatchSemaphore(value: 0)
+    defer { resumeSetup.signal() }
+    var hooks = OwnedChildRetirement.Hooks()
+    if pauseAfterSpawn {
+      hooks.afterSpawn = { _ in resumeSetup.wait() }
+      hooks.workerLaunched = { XCTFail("Revoked Worker finished startup") }
+    }
     let deadline = DispatchTime.now().uptimeNanoseconds + 5_000_000_000
-    let child = OwnedChildRetirement(worker: launch, deadlineUptimeNanoseconds: deadline)
+    let child = OwnedChildRetirement(worker: launch, deadlineUptimeNanoseconds: deadline, hooks: hooks)
     let started = expectation(description: "cancelled startup returns once")
     let retired = terminalExpectation(child)
     child.startProduct(startDeadlineUptimeNanoseconds: deadline) { result in
@@ -701,13 +708,18 @@ final class OwnedChildRetirementTests: XCTestCase {
     }
     let directory = namespace.directoryURL
     try await waitForControlMarker("broker-connected", in: directory)
-    let listening = await withCheckedContinuation { continuation in
-      child.core.operation.async {
-        continuation.resume(returning: !child.core.controlSources.isEmpty)
+    if pauseAfterSpawn {
+      XCTAssertEqual(child.testingDescriptorCount, 10)
+    } else {
+      let listening = await withCheckedContinuation { continuation in
+        child.core.operation.async {
+          continuation.resume(returning: !child.core.controlSources.isEmpty)
+        }
       }
+      XCTAssertTrue(listening)
     }
-    XCTAssertTrue(listening)
     child.revoke()
+    resumeSetup.signal()
     await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
       child.core.operation.async { continuation.resume() }
     }
@@ -724,6 +736,14 @@ final class OwnedChildRetirementTests: XCTestCase {
     XCTAssertThrowsError(try child.core.reservedEndpoints())
     XCTAssertFalse(FileManager.default.fileExists(atPath: directory.path))
     XCTAssertFalse(child.testingRetained)
+  }
+
+  func testWorkerRevocationWhileBrokerOfferIsPendingRetiresWithoutDispatch() async throws {
+    try await revokeWhileBrokerOfferIsPending(pauseAfterSpawn: false)
+  }
+
+  func testWorkerRevocationBeforeControlSourcesArmRetiresWithoutDispatch() async throws {
+    try await revokeWhileBrokerOfferIsPending(pauseAfterSpawn: true)
   }
 
   private func revokeDuringProductHandoff(beforeCapture: Bool) async throws {
