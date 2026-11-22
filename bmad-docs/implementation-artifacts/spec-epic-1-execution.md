@@ -20,6 +20,8 @@ approval: explicit-human-story-range-execution
   공증용 ZIP의 SHA-256은 `eb81e42da8c908d94a382a21c91d384c5e55c6e7fd3f71bfe28016185eb7d175`다.
   `notarytool`은 기본 키체인과 명시한 로그인 키체인에서 `PaperLens` 프로필을 찾지 못했다.
   공증 요청 ID는 생성되지 않았고, 현재 호스트의 `spctl` 검사에서는 `Unnotarized Developer ID`로 거부됐다.
+- 이후 `notarytool history --keychain-profile PaperLens`로 조회했을 때 Apple은 개발자 팀에 필요한
+  계약이 체결되지 않았거나 만료됐다는 HTTP 403을 반환했다. 공증 요청은 제출하지 않았다.
 - Story 1.5는 같은 패키지의 서명된 실행 파일
   `e607d79812b3785a96ffe18e8cc85d0a6080839318ca9615357746d682340b71`을
   macOS 26.7.1(25G241) arm64에서 합성 DB 모드로 여섯 번 실행했다.
