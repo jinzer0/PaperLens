@@ -1,5 +1,23 @@
 # Story 1.18 Build Spec — URL Import and shared Library entry
 
+## 서명 앱의 공개 HTTPS 다운로드 검증 — 2026-11-22
+
+macOS 26.7.1 arm64에서 소스 `e4113cf`의 Developer ID 서명 Release 진단 빌드를
+별도 Workspace로 실행했다. 앱의 URLSession으로 [arXiv 초록](https://arxiv.org/abs/1706.03762),
+[arXiv PDF](https://arxiv.org/pdf/1706.03762), [W3C 테스트 PDF](https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf)를 다운로드했다.
+확정 전에 논문이나 가져오기 Job이 생성되지 않았다. 확정 후 선택한 폴더에 세 논문과
+독립 파일이 저장됐고 각 파일의 SHA-256은 서버 응답 및 DB 기록과 일치했다.
+Reader에서 두 arXiv 복사본의 1·2쪽과 W3C PDF의 1쪽을 열었다. 재실행 뒤 세 항목과
+폴더 배치가 유지됐고 W3C PDF가 다시 열렸다.
+
+W3C PDF는 검색용 원문도 생성했다. 같은 arXiv PDF의 두 복사본은 `invalidBatch`로
+파싱에 실패했다. 별도 진단 빌드에서 Reader의 재시도로 실패를 재현했다. PDFium
+워커가 화면에 그려지는 글자의 변환 행렬을 검사하는 지점에서 `unsupportedGeometry`를
+반환했다. 재시도 뒤에도 저장된 PDF와 읽던 페이지를 이용할 수 있었다.
+
+로컬 결과는 `.build/epic1-public-url-import/`의 `public-routes.log`, `parsing-results.txt`,
+`diagnostic-retry.log`에 있다. 고정 프로필의 P-6 타이밍 검증은 남아 있다.
+
 ## 서명 앱의 세 URL 경로 저장과 재실행 — 2026-11-22
 
 macOS 26.7.1 arm64에서 소스 `e782c53`의 Developer ID 서명 Release 진단 빌드를
