@@ -32,6 +32,10 @@ extension OwnedChildRetirement {
             }, failure: { core.revoke() })
           guard core.allowsIO else { return }
           try lifecycle.start()
+        } catch OwnedPipeAgentRPCChannel.Failure.closed {
+          core.revoke()
+        } catch AgentRPCConnection.Failure.notReady where !core.allowsIO {
+          core.revoke()
         } catch { core.failed(.setup) }
       }, failure: { ready(.failure($0)) })
   }
@@ -185,25 +189,30 @@ public final class OwnedPipeAgentRPCChannel: AgentRPCChannel, OwnedChildTranspor
     let w = write.fileDescriptor
     var rs = stat()
     var ws = stat()
-    guard r > STDERR_FILENO, w > STDERR_FILENO, r != w,
-      permit(), fstat(r, &rs) == 0, permit(), fstat(w, &ws) == 0,
-      (rs.st_mode & S_IFMT) == S_IFIFO, (ws.st_mode & S_IFMT) == S_IFIFO,
+    guard r > STDERR_FILENO, w > STDERR_FILENO, r != w else { throw Failure.invalidEndpoint }
+    guard permit() else { throw Failure.closed }
+    guard fstat(r, &rs) == 0, (rs.st_mode & S_IFMT) == S_IFIFO
+    else { throw Failure.invalidEndpoint }
+    guard permit() else { throw Failure.closed }
+    guard fstat(w, &ws) == 0,
+      (ws.st_mode & S_IFMT) == S_IFIFO,
       rs.st_dev != ws.st_dev || rs.st_ino != ws.st_ino
     else { throw Failure.invalidEndpoint }
     guard permit() else { throw Failure.closed }
     let rf = fcntl(r, F_GETFL)
+    guard rf >= 0, rf & O_ACCMODE == O_RDONLY else { throw Failure.invalidEndpoint }
     guard permit() else { throw Failure.closed }
     let wf = fcntl(w, F_GETFL)
-    guard rf >= 0, wf >= 0, rf & O_ACCMODE == O_RDONLY,
-      wf & O_ACCMODE == O_WRONLY
-    else { throw Failure.invalidEndpoint }
+    guard wf >= 0, wf & O_ACCMODE == O_WRONLY else { throw Failure.invalidEndpoint }
     var readInfo = pipe_fdinfo()
     var writeInfo = pipe_fdinfo()
     let infoSize = Int32(MemoryLayout<pipe_fdinfo>.size)
-    guard permit(),
-      proc_pidfdinfo(getpid(), r, PROC_PIDFDPIPEINFO, &readInfo, infoSize) == infoSize,
-      permit(), proc_pidfdinfo(getpid(), w, PROC_PIDFDPIPEINFO, &writeInfo, infoSize) == infoSize,
-      readInfo.pipeinfo.pipe_handle != 0, readInfo.pipeinfo.pipe_peerhandle != 0,
+    guard permit() else { throw Failure.closed }
+    guard proc_pidfdinfo(getpid(), r, PROC_PIDFDPIPEINFO, &readInfo, infoSize) == infoSize,
+      readInfo.pipeinfo.pipe_handle != 0, readInfo.pipeinfo.pipe_peerhandle != 0
+    else { throw Failure.invalidEndpoint }
+    guard permit() else { throw Failure.closed }
+    guard proc_pidfdinfo(getpid(), w, PROC_PIDFDPIPEINFO, &writeInfo, infoSize) == infoSize,
       writeInfo.pipeinfo.pipe_handle != 0, writeInfo.pipeinfo.pipe_peerhandle != 0,
       readInfo.pipeinfo.pipe_handle != writeInfo.pipeinfo.pipe_handle,
       readInfo.pipeinfo.pipe_handle != writeInfo.pipeinfo.pipe_peerhandle,
@@ -270,8 +279,9 @@ public final class OwnedPipeAgentRPCChannel: AgentRPCChannel, OwnedChildTranspor
           guard ioPermitted else { throw Failure.closed }
           let fd = handle.fileDescriptor
           let flags = fcntl(fd, F_GETFL)
+          guard flags >= 0 else { throw Failure.setup(errno) }
           guard ioPermitted else { throw Failure.closed }
-          guard flags >= 0, fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0 else {
+          guard fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0 else {
             throw Failure.setup(errno)
           }
           guard ioPermitted else { throw Failure.closed }
@@ -282,9 +292,11 @@ public final class OwnedPipeAgentRPCChannel: AgentRPCChannel, OwnedChildTranspor
         let setNoSIGPIPE: Int32 = 73
         let getNoSIGPIPE: Int32 = 74
         guard ioPermitted else { throw Failure.closed }
-        guard fcntl(writeHandle.fileDescriptor, setNoSIGPIPE, 1) == 0,
-          ioPermitted, fcntl(writeHandle.fileDescriptor, getNoSIGPIPE) == 1
-        else {
+        guard fcntl(writeHandle.fileDescriptor, setNoSIGPIPE, 1) == 0 else {
+          throw Failure.setup(errno)
+        }
+        guard ioPermitted else { throw Failure.closed }
+        guard fcntl(writeHandle.fileDescriptor, getNoSIGPIPE) == 1 else {
           throw Failure.setup(errno)
         }
       } catch {

@@ -680,6 +680,61 @@ final class OwnedChildRetirementTests: XCTestCase {
     try await revokeDuringAuthenticatedStartup(before: "hello", wrongOrder: true)
   }
 
+  private func revokeDuringProductHandoff(beforeCapture: Bool) async throws {
+    let (root, namespace, launch) = try workerFixture(
+      script: controlWorkerScript(wrongOrder: false, retirement: true))
+    defer { try? FileManager.default.removeItem(at: root) }
+    let counts = Counts()
+    let reached = expectation(description: "reached the product handoff")
+    let revoke: @Sendable () -> Void = {
+      counts.revokeCapturedChild()
+      reached.fulfill()
+    }
+    var hooks = OwnedChildRetirement.Hooks()
+    if beforeCapture { hooks.beforeProductHandoff = revoke }
+    else { hooks.beforeChannelSetup = revoke }
+    let deadline = DispatchTime.now().uptimeNanoseconds + 3_000_000_000
+    let child = OwnedChildRetirement(worker: launch, deadlineUptimeNanoseconds: deadline, hooks: hooks)
+    counts.lock.withLock { counts.capturedChild = child }
+    defer { counts.lock.withLock { counts.capturedChild = nil } }
+    let completed = terminalExpectation(child)
+    let ready = expectation(description: "product startup resolved once")
+    ready.assertForOverFulfill = true
+    child.startProduct(startDeadlineUptimeNanoseconds: deadline) { result in
+      if case .failure(.revoked) = result {} else { XCTFail("Revoked handoff reached product startup: \(result)") }
+      ready.fulfill()
+    }
+    let directory = namespace.directoryURL
+    try await waitForControlMarker("right-offered", in: directory)
+    for gate in ["hello", "running", "dispatching", "offered"] {
+      try controlGate(gate, in: directory)
+    }
+    await fulfillment(of: [reached, ready, completed], timeout: 3)
+    guard case .clean(let proof) = child.terminal else {
+      try? controlGate("stop", in: directory)
+      if !child.core.lock.withLock({ child.core.workerProcessesRetired }) {
+        try? await waitForControlMarker("broker-reaped-physically", in: directory)
+      }
+      await physicalTeardown(child)
+      return XCTFail("Expected observed retirement at product handoff, got \(String(describing: child.terminal))")
+    }
+    XCTAssertTrue(proof.childReaped)
+    XCTAssertEqual(child.testingDescriptorCount, 0)
+    XCTAssertThrowsError(try child.core.reservedEndpoints())
+    if beforeCapture { XCTAssertNil(child.testingChannel) }
+    else { XCTAssertEqual(child.testingChannel?.checkedEndpointsClosed, true) }
+    XCTAssertFalse(FileManager.default.fileExists(atPath: directory.path))
+    XCTAssertFalse(child.testingRetained)
+  }
+
+  func testWorkerRevocationReleasesUnclaimedProductHandoff() async throws {
+    try await revokeDuringProductHandoff(beforeCapture: true)
+  }
+
+  func testWorkerRevocationAfterProductCaptureRetiresWithoutSetupDebt() async throws {
+    try await revokeDuringProductHandoff(beforeCapture: false)
+  }
+
   func testWorkerObservedProcessRetirementPurgesOnlyItsOwnedNamespace() async throws {
     let (root, namespace, launch) = try workerFixture(
       script: controlWorkerScript(wrongOrder: false, retirement: true))

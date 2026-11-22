@@ -103,6 +103,7 @@ public final class OwnedChildRetirement: @unchecked Sendable {
     // Private EBADF injection leaves the real descriptor owned, never certifies closure.
     var closeFault: @Sendable () -> Bool = { false }
     var afterPipeFault: @Sendable () -> Bool = { false }
+    var beforeProductHandoff: @Sendable () -> Void = {}
     var beforeChannelSetup: @Sendable () -> Void = {}
     var afterClose: @Sendable () -> Void = {}
     var afterSocketFault: @Sendable () -> Bool = { false }
@@ -244,9 +245,10 @@ public final class OwnedChildRetirement: @unchecked Sendable {
       return true
     }
     var allowsIO: Bool {
-      lock.withLock {
-        terminal == nil && !revoked && DispatchTime.now().uptimeNanoseconds < deadline
-      }
+      lock.withLock { allowsIOWhileLocked }
+    }
+    private var allowsIOWhileLocked: Bool {
+      terminal == nil && !revoked && DispatchTime.now().uptimeNanoseconds < deadline
     }
     @MainActor
     func begin(
@@ -972,9 +974,10 @@ public final class OwnedChildRetirement: @unchecked Sendable {
         failed(.setup)
         return
       }
+      hooks.beforeProductHandoff()
       Task { @MainActor [self] in
-        guard allowsIO else { return }
         let consume = lock.withLock { () -> (@MainActor @Sendable (Core) -> Void)? in
+          guard allowsIOWhileLocked else { return nil }
           let result = consumeTransport
           consumeTransport = nil
           return result
@@ -986,6 +989,15 @@ public final class OwnedChildRetirement: @unchecked Sendable {
       guard controlPermitted, workerRetirementPhase == nil,
         let retirementID = lock.withLock({ self.retirementID }) else { return }
       workerRetirementPhase = .revoking
+      // The pending callback is still unclaimed. Its descriptors have never
+      // left Core, so retirement can proceed without waiting for MainActor.
+      lock.withLock {
+        if consumeTransport != nil {
+          consumeTransport = nil
+          endpoints = nil
+          handoff = false
+        }
+      }
       do {
         if let brokerFD, brokerIdentity != nil {
           try queueControl(brokerFD, "revoke", ["retirementID": retirementID])
