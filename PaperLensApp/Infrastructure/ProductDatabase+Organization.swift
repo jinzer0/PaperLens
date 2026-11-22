@@ -91,6 +91,15 @@ extension ProductDatabase {
       folderPredicate = "EXISTS (SELECT 1 FROM paperFolder pf WHERE pf.paperID = p.id AND pf.folderID = ?)"
       folderArguments = [id.uuidString]
     }
+    let result = try organizationPapers(filter: filter, matching: folderPredicate,
+      arguments: folderArguments, in: db)
+    return OrganizationSnapshot(preferences: preferences, totalCount: totalCount,
+      folderCount: result.unfilteredCount, papers: result.papers)
+  }
+
+  private func organizationPapers(filter: OrganizationFilter, matching predicate: String,
+    arguments: StatementArguments, in db: Database, requireReadable: Bool = false)
+    throws -> (papers: [OrganizedPaper], unfilteredCount: Int) {
     let rows = try Row.fetchAll(db, sql: """
       SELECT p.*, j.id AS importJobID, j.state AS importJobState,
         j.recoveryJournal IS NOT NULL AS hasImportHistory,
@@ -102,14 +111,14 @@ extension ProductDatabase {
       FROM paper p LEFT JOIN importJob j ON j.paperID = p.id
       LEFT JOIN paperOrganization o ON o.paperID = p.id AND o.generation = p.generation
       \(Self.currentLibraryMetadataJoins)
-      WHERE p.status != 'tombstone' AND (\(folderPredicate)) ORDER BY p.id
-      """, arguments: folderArguments)
+      WHERE p.status != 'tombstone' AND (\(predicate)) ORDER BY p.id
+      """, arguments: arguments)
     let tagRows = try Row.fetchAll(db, sql: """
       SELECT t.paperID, t.label FROM paperUserTag t
       JOIN paperOrganization o ON o.paperID = t.paperID
       JOIN paper p ON p.id = o.paperID AND p.generation = o.generation
-      WHERE p.status != 'tombstone' ORDER BY t.normalized, t.label
-      """)
+      WHERE p.status != 'tombstone' AND (\(predicate)) ORDER BY t.normalized, t.label
+      """, arguments: arguments)
     var tags: [String: [String]] = [:]
     for row in tagRows { tags[row["paperID"], default: []].append(row["label"]) }
     let search = LibraryOrganizationService.normalized(filter.search.trimmingCharacters(in: .whitespacesAndNewlines))
@@ -138,7 +147,14 @@ extension ProductDatabase {
       let canRetryImport = status == .importFailed && failure != "missingPDF"
         && String.fromDatabaseValue(row["importJobState"]) == "failed"
         && (row["hasImportHistory"] as Bool) && !(row["cleanupDebt"] as Bool)
-      let readable = (try? validateOrganizationPDF(row, verifyDigest: true)) != nil
+      let readable: Bool
+      do {
+        try validateOrganizationPDF(row, verifyDigest: true)
+        readable = true
+      } catch {
+        if requireReadable { throw error }
+        readable = false
+      }
       try Task.checkCancellation()
       return OrganizedPaper(id: id, generation: generation, title: title, sourceTitle: sourceTitle,
         sourceMetadataInvalid: metadata.invalid, status: status,
@@ -147,8 +163,18 @@ extension ProductDatabase {
         readable: readable, canRetryImport: canRetryImport,
         organization: PaperOrganization(readingStatus: readingStatus, favorite: favorite, tags: labels))
     }
-    return OrganizationSnapshot(preferences: preferences, totalCount: totalCount,
-      folderCount: rows.count, papers: papers)
+    return (papers, rows.count)
+  }
+
+  func readOrganizationEditorPaper(paperID: UUID, generation: UUID) async throws -> OrganizedPaper {
+    try await adapterReadAsync { db in
+      let result = try self.organizationPapers(filter: .init(), matching: "p.id = ? AND p.generation = ?",
+        arguments: [paperID.uuidString, generation.uuidString], in: db, requireReadable: true)
+      guard let paper = result.papers.first else {
+        throw OrganizationError.stalePaper
+      }
+      return paper
+    }
   }
 
   public func organizationTags() throws -> [String] {

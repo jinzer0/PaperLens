@@ -137,6 +137,44 @@ final class LibraryOrganizationTests: XCTestCase {
     XCTAssertEqual(try database.organizationSnapshot(filter: .init()).papers.first?.organization, freshDraft)
   }
 
+  func testEditorRevalidatesOnlySelectedPaperAndStillVerifiesOwnedPDF() async throws {
+    let database = try ProductDatabase.open(at: root())
+    let selected = try seed(database, title: "Selected paper")
+    let unrelated = try seed(database, title: "Unrelated paper")
+    let lifecycle = try await LocalLibraryLifecycle.open(database: database)
+    let service = LibraryOrganizationService(database: database, lifecycle: lifecycle)
+    let observed = try XCTUnwrap(database.organizationSnapshot(filter: .init()).papers.first { $0.id == selected.0 })
+    let committed = PaperOrganization(readingStatus: .reading, favorite: true, tags: ["Latest tag"])
+    try await service.save(committed, for: observed)
+    do {
+      try await service.save(.init(tags: ["Stale draft"]), for: observed)
+      XCTFail("Expected stale editor rejection")
+    } catch { XCTAssertEqual(error as? OrganizationError, .staleOrganization) }
+
+    try database.adapterWrite { db in
+      try db.execute(sql: "UPDATE paper SET generation = ? WHERE id = ?",
+        arguments: ["malformed synthetic generation", unrelated.0.uuidString])
+    }
+    let current = try await service.revalidate(observed)
+    XCTAssertEqual(current.id, selected.0)
+    XCTAssertEqual(current.generation, selected.1)
+    XCTAssertEqual(current.organization, committed)
+    XCTAssertTrue(current.readable)
+    let edited = PaperOrganization(readingStatus: .read, favorite: false, tags: ["Reopened editor"])
+    try await service.save(edited, for: current)
+    let saved = try await service.revalidate(current)
+    XCTAssertEqual(saved.organization, edited)
+
+    let pdf = database.root.appendingPathComponent("papers/\(selected.0.uuidString)/document.pdf")
+    try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: pdf.path)
+    try Data("%PDF-1.7\nmodified synthetic content\n%%EOF\n".utf8).write(to: pdf)
+    try FileManager.default.setAttributes([.posixPermissions: 0o400], ofItemAtPath: pdf.path)
+    do {
+      _ = try await service.revalidate(current)
+      XCTFail("Expected the selected paper's changed PDF to be rejected")
+    } catch { XCTAssertEqual(error as? OrganizationError, .unavailablePDF) }
+  }
+
   func testEditorFailedRevalidationAndDisappearanceCannotReopenClosedInteraction() async throws {
     let database = try ProductDatabase.open(at: root())
     let id = try seed(database, title: "Stale editor")

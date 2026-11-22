@@ -290,14 +290,7 @@ public actor LibraryOrganizationService {
   }
   /// Retry does not silently rebase the failed whole-record draft onto newer values.
   public func revalidate(_ paper: OrganizedPaper) async throws -> OrganizedPaper {
-    let database = database
-    return try await Task.detached {
-      let snapshot = try database.organizationSnapshot(filter: .init())
-      guard let current = snapshot.papers.first(where: { $0.id == paper.id && $0.generation == paper.generation })
-      else { throw OrganizationError.stalePaper }
-      try database.admitOrganizationOpen(paperID: current.id, generation: current.generation)
-      return current
-    }.value
+    try await database.readOrganizationEditorPaper(paperID: paper.id, generation: paper.generation)
   }
   public func admitOpen(_ paper: OrganizedPaper) async throws {
     let database = database
