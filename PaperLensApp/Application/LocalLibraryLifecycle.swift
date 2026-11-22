@@ -494,7 +494,8 @@ public actor LocalLibraryLifecycle {
     }.value
     writer.retainValidation(validation)
     let closed = ClosedImportStage(file: stage.file, sha256: stage.sha256, bytes: Int64(stage.byteCount))
-    try await publishClosed(identity, stage: closed, cancellation: writer.cancellation)
+    try await publishClosed(identity, stage: closed, cancellation: writer.cancellation,
+      checkBeforeMove: validation.checkElapsed)
     writer.acknowledgePhysicalCompletion()
     LibraryURLImportWriter.release(writer)
     finishProducer(identity.paperID)
@@ -502,7 +503,7 @@ public actor LocalLibraryLifecycle {
   }
 
   private func publishClosed(_ identity: ImportIdentity, stage: ClosedImportStage,
-    cancellation: ImportCancellation) async throws {
+    cancellation: ImportCancellation, checkBeforeMove: (@Sendable () throws -> Void)? = nil) async throws {
     await enterTransition(identity.paperID)
     defer { leaveTransition(identity.paperID) }
     var record = try currentRecord(identity.paperID)
@@ -524,7 +525,8 @@ public actor LocalLibraryLifecycle {
       try cancellation.check()
       let admitted = record
       let committed = try await Task.detached {
-        try database.publishJournaledImport(expected: admitted, closedStage: stage, receipt: receipt)
+        try database.publishJournaledImport(expected: admitted, closedStage: stage, receipt: receipt,
+          checkBeforeMove: checkBeforeMove)
       }.value
       records[identity.paperID] = committed
     } catch {

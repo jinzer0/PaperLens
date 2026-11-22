@@ -25,6 +25,7 @@ private final class ActualURLStageValidationOwner: @unchecked Sendable {
 
 struct ActualURLValidationReceipt: Sendable {
   let acknowledge: @Sendable () -> Void
+  let checkElapsed: @Sendable () throws -> Void
 }
 
 private final class ActualURLStageValidationRoots: @unchecked Sendable {
@@ -205,6 +206,10 @@ final class LibraryURLImportWriter: URLImportWriter, @unchecked Sendable {
       throw URLImportError.rejected
     }
     let budget = try RequestResourceBudget(authority: authority, kind: "import")
+    let checkElapsed: @Sendable () throws -> Void = {
+      try budget.observe("elapsedMs", value: stage.elapsedMilliseconds)
+    }
+    try checkElapsed()
     let pool = try RequestResourcePool(authority: authority, kind: "import")
     guard let lease = pool.acquire() else { throw URLImportError.capacity }
     let owner = ActualURLStageValidationOwner(stage: stage, lease: lease)
@@ -224,6 +229,7 @@ final class LibraryURLImportWriter: URLImportWriter, @unchecked Sendable {
     var workError: (any Error)?
     do {
       try cancellation.check()
+      try checkElapsed()
       var info = stat()
       guard fstat(fd, &info) == 0, info.st_mode & S_IFMT == S_IFREG,
         info.st_mode & 0o7777 == 0o400, info.st_nlink == 1,
@@ -232,18 +238,12 @@ final class LibraryURLImportWriter: URLImportWriter, @unchecked Sendable {
       var hash = SHA256()
       var count = 0
       var first = true
-      let clock = ContinuousClock()
-      let started = clock.now
       while true {
         try cancellation.check()
-        let elapsed = started.duration(to: clock.now).components
-        try budget.observe("elapsedMs", value: Int(elapsed.seconds) * 1000
-          + Int(elapsed.attoseconds / 1_000_000_000_000_000))
+        try checkElapsed()
         let next = try input.read(upToCount: authority.limit("readBufferBytes"))
         try cancellation.check()
-        let afterRead = started.duration(to: clock.now).components
-        try budget.observe("elapsedMs", value: Int(afterRead.seconds) * 1000
-          + Int(afterRead.attoseconds / 1_000_000_000_000_000))
+        try checkElapsed()
         guard let chunk = next, !chunk.isEmpty else { break }
         try budget.observe("readBufferBytes", value: chunk.count)
         try budget.add("bodyBytes", delta: chunk.count)
@@ -287,11 +287,12 @@ final class LibraryURLImportWriter: URLImportWriter, @unchecked Sendable {
     lease.close()
     let receipt = ActualURLValidationReceipt(acknowledge: {
       ActualURLStageValidationRoots.shared.releaseKnown(owner)
-    })
+    }, checkElapsed: checkElapsed)
     if let writer = retained(directory: directory) { writer.retainValidation(receipt) }
     else { receipt.acknowledge() }
     if let workError { throw workError }
     try cancellation.check()
+    try checkElapsed()
     return receipt
   }
 }

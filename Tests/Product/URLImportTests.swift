@@ -508,12 +508,23 @@ final class URLImportTests: XCTestCase {
   }
 }
 
-private final class HTTPSImportTestClock: @unchecked Sendable {
+final class HTTPSImportTestClock: @unchecked Sendable {
   private let lock = NSLock()
   private var instant = ContinuousClock().now
-  var now: ContinuousClock.Instant { lock.withLock { instant } }
+  private var pendingAdvance: Duration = .zero
+  var now: ContinuousClock.Instant {
+    lock.withLock {
+      let observed = instant
+      instant = instant.advanced(by: pendingAdvance)
+      pendingAdvance = .zero
+      return observed
+    }
+  }
   func advance(by duration: Duration) {
     lock.withLock { instant = instant.advanced(by: duration) }
+  }
+  func advanceAfterNextRead(by duration: Duration) {
+    lock.withLock { pendingAdvance = duration }
   }
 }
 

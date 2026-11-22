@@ -303,7 +303,8 @@ extension ProductDatabase {
   /// No receipt reconciliation here: SQL rollback cannot undo the physical rename.
   /// On a post-move failure preserve the final bytes and throw to the future owner bridge.
   func publishJournaledImport(expected: ImportRecoveryRecord,
-    closedStage: ClosedImportStage, receipt: ImportPublicationReceipt) throws -> ImportRecoveryRecord {
+    closedStage: ClosedImportStage, receipt: ImportPublicationReceipt,
+    checkBeforeMove: (@Sendable () throws -> Void)? = nil) throws -> ImportRecoveryRecord {
     try adapterWrite { db in
       let maximum = ProductJobRecovery.maximumImportRecoveryJournalBytes
       try Self.validateExpectedRecovery(expected)
@@ -338,6 +339,7 @@ extension ProductDatabase {
       let completed = try published.recording(.release(lineage, permit: identity.publication.uuidString))
       let finalBytes = try Self.recoveryEncode(completed, maximumBytes: maximum)
       let final = try Self.closedStageDestination(closedStage, identity: identity, root: root)
+      try checkBeforeMove?()
       try FileManager.default.moveItem(at: closedStage.file, to: final)
       receipt.didMove()
       let stored = try Self.compareAndSwapImportRecovery(expected: expected.encoded,

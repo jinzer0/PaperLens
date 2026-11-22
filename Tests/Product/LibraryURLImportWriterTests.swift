@@ -456,6 +456,52 @@ final class LibraryURLImportWriterTests: XCTestCase, @unchecked Sendable {
       URLWriterFixture.bytes)
   }
 
+  func testURLImportSharesElapsedLimitUntilPublicationMove() async throws {
+    let authority = try ProviderRequest()
+    let pool = try RequestResourcePool(authority: authority, kind: "import")
+    let limit = Duration.milliseconds(authority.limit("importElapsedMs"))
+    let downloadTime = Duration.seconds(7)
+    for (overrunAtClose, overrunBeforeMove) in [(false, false), (true, false), (false, true)] {
+      let db = try database()
+      let clock = HTTPSImportTestClock()
+      let roots = LibraryURLImportWriter.rootedValidationIDs
+      let before = pool.active
+      let observation = URLValidationObservation(pool: pool)
+      let lifecycle = try await LocalLibraryLifecycle.openForOwnedURLValidationFixtures(
+        database: db, effects: observation.effects(onClose: {
+          clock.advance(by: limit - downloadTime + (overrunAtClose ? .microseconds(1) : .zero))
+          // Return the exact boundary to the validator's final check, then exceed it before the move.
+          if overrunBeforeMove { clock.advanceAfterNextRead(by: .microseconds(1)) }
+        }))
+      let writer = try await lifecycle.grantURLImportWriter(for: continued())
+      let downloadEffects = HTTPSPDFFileEffects(acquired: { _ in }, checkedClose: { try $0.close() },
+        sessionStarted: { _ in }, finalNetworkDrain: { clock.advance(by: downloadTime) }, now: { clock.now })
+      let closed = try await stage(writer, effects: downloadEffects)
+      if overrunAtClose || overrunBeforeMove {
+        do {
+          _ = try await writer.publish(closed)
+          XCTFail("An expired URL import published")
+        } catch {
+          XCTAssertEqual((error as? RequestContractError)?.code, "importRejected")
+        }
+        try await writer.abort(reason: .rejected)
+        let failed = try XCTUnwrap(db.libraryRecords().first)
+        XCTAssertEqual(failed.status, .importFailed)
+        XCTAssertFalse(failed.cleanupDebt)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: writer.stagingDirectory.path))
+      } else {
+        _ = try await writer.publish(closed)
+        XCTAssertEqual(try db.libraryRecords().map(\.status), [.ready])
+        XCTAssertEqual(try Data(contentsOf: writer.stagingDirectory.appendingPathComponent("document.pdf")),
+          URLWriterFixture.bytes)
+      }
+      XCTAssertEqual(observation.snapshot.acquisitions, 1)
+      XCTAssertEqual(observation.snapshot.closeAttempts, 1)
+      XCTAssertEqual(pool.active, before)
+      XCTAssertEqual(LibraryURLImportWriter.rootedValidationIDs, roots)
+    }
+  }
+
   func testActualValidationKnownClosePreservesTamperAndSignatureErrors() async throws {
     let db = try database()
     let lifecycle = try await LocalLibraryLifecycle.open(database: db)
@@ -973,7 +1019,8 @@ private final class URLValidationObservation: @unchecked Sendable {
       try handle.close()
     }, sessionStarted: { _ in }, finalNetworkDrain: {})
   }
-  func effects(failClose: Bool = false, cancelOnOpen: ImportCancellation? = nil)
+  func effects(failClose: Bool = false, cancelOnOpen: ImportCancellation? = nil,
+    onClose: @escaping @Sendable () -> Void = {})
     -> ActualURLStageValidationEffects {
     ActualURLStageValidationEffects(acquired: { fd in
       let active = self.pool.active
@@ -1001,6 +1048,7 @@ private final class URLValidationObservation: @unchecked Sendable {
       }
       if failClose { throw URLImportError.cleanupFailed }
       try handle.close()
+      onClose()
     })
   }
 }

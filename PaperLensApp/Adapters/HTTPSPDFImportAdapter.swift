@@ -15,10 +15,18 @@ public struct ClosedHTTPSPDFStage: Sendable {
   public let file: URL
   public let sha256: String
   public let byteCount: Int
-  fileprivate init(file: URL, sha256: String, byteCount: Int) {
+  private let started: ContinuousClock.Instant
+  private let now: @Sendable () -> ContinuousClock.Instant
+
+  var elapsedMilliseconds: Int { started.duration(to: now()).importBudgetMilliseconds }
+
+  fileprivate init(file: URL, sha256: String, byteCount: Int, started: ContinuousClock.Instant,
+    now: @escaping @Sendable () -> ContinuousClock.Instant) {
     self.file = file
     self.sha256 = sha256
     self.byteCount = byteCount
+    self.started = started
+    self.now = now
   }
 }
 
@@ -451,7 +459,8 @@ private final class HTTPSPDFProducer: NSObject, URLSessionDataDelegate, @uncheck
     let result: ClosedHTTPSPDFStage?
     if failure == nil && bodyComplete && fileClosed && networkDrained {
       result = ClosedHTTPSPDFStage(file: stage,
-        sha256: digest.finalize().map { String(format: "%02x", $0) }.joined(), byteCount: bytes)
+        sha256: digest.finalize().map { String(format: "%02x", $0) }.joined(),
+        byteCount: bytes, started: started, now: effects.now)
     } else { result = nil }
     if fileClosed && networkDrained { lease.close() }
     completion.finished(fileClosed: fileClosed, networkDrained: networkDrained, stage: result)
