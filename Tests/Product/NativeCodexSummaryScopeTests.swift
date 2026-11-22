@@ -1087,6 +1087,82 @@ import ProviderRequest
     XCTAssertFalse(codex.canStart)
   }
 
+  func testApplicationTerminationRetriesKnownUnlaunchedSummaryDirectory() async throws {
+    let (root, _, template) = try workerFixture(
+      script: controlWorkerScript(holdResult: false, syntheticLogin: true))
+    defer { try? FileManager.default.removeItem(at: root) }
+    let database = try ProductDatabase.open(at: root.appendingPathComponent("database"))
+    let configuration = try NativeOpenAIConfiguration(model: "fixture-model")
+    let apiKey = NativeAPIKeyConnection(configuration: configuration,
+      slots: try APIKeySlotStore(directory: root.appendingPathComponent("slots")),
+      persistence: DatabaseAPIKeySelector(database: database, configuration: configuration),
+      transport: RejectNetwork(), authority: try ProviderRequest())
+    let loginRoot = root.appendingPathComponent("codex-scopes", isDirectory: true)
+    let bytes = Data("unowned summary fixture".utf8)
+    var loginDirectory: URL?
+    var obstruction: URL?
+    let codex = NativeCodexConnection(database: database, root: loginRoot, apiKey: apiKey) { namespace in
+      guard namespace.prepareBackupExclusionFixture(
+        agentScript: root.appendingPathComponent("resources/agent.py"),
+        interpreter: SyntheticPython.metadataInterpreter) else { return nil }
+      if namespace.directoryURL.deletingLastPathComponent() == loginRoot {
+        loginDirectory = namespace.directoryURL
+        return .testing(namespace: namespace, interpreter: template.interpreter, script: template.script)
+      }
+      XCTAssertTrue(namespace.prepareRuntimeDirectories())
+      let entry = namespace.directoryURL.appendingPathComponent("unowned-fixture")
+      do { try bytes.write(to: entry, options: .withoutOverwriting) }
+      catch { XCTFail("Could not create the summary cleanup fixture: \(error)") }
+      obstruction = entry
+      return nil
+    }
+    codex.connect(mode: "browser")
+    let login = try XCTUnwrap(loginDirectory)
+    try await waitFor { codex.phase == .signingIn }
+    codex.checkLogin()
+    try await waitFor { codex.eligibleForEntry }
+    let selected = try database.providerConfiguration()
+    let paperID = UUID()
+    let (authority, request, _) = try parameters(paperID: paperID)
+    let identity = LibrarySummaryIdentity(paperID: paperID, generation: UUID(), requestPaperGeneration: 1,
+      pdfSHA256: String(repeating: "a", count: 64), revision: UUID(),
+      configurationGeneration: selected.generation, job: UUID(), attempt: UUID(), fence: UUID(),
+      correlation: UUID(), input: UUID(), epoch: UUID())
+    do {
+      _ = try await codex.executeLibrarySummary(request, identity: identity, authority: authority)
+      XCTFail("Summary execution must fail when worker setup fails")
+    } catch { XCTAssertEqual(error as? LibrarySummaryError, .unlaunchedCleanupPending) }
+    let retained = try XCTUnwrap(obstruction)
+    let ownedDirectory = retained.deletingLastPathComponent()
+
+    let shutdown = Task { await codex.retireForApplicationTermination() }
+    try await waitForMarker("retirement-received", directory: login)
+    try Data().write(to: marker("release-retirement", directory: login))
+    let initialCleanup = await shutdown.value
+    XCTAssertFalse(initialCleanup)
+    XCTAssertEqual(try Data(contentsOf: retained), bytes)
+    XCTAssertTrue(codex.blocksReplacement)
+    codex.cancelApplicationTermination()
+
+    try FileManager.default.removeItem(at: retained)
+    let foreign = codex.summaryRoot.appendingPathComponent("unowned-sibling")
+    try bytes.write(to: foreign, options: .withoutOverwriting)
+    let unverified = await codex.retireForApplicationTermination()
+    XCTAssertFalse(unverified)
+    XCTAssertEqual(try Data(contentsOf: foreign), bytes)
+    XCTAssertTrue(FileManager.default.fileExists(atPath: ownedDirectory.path))
+    codex.cancelApplicationTermination()
+
+    try FileManager.default.removeItem(at: foreign)
+    let cleaned = await codex.retireForApplicationTermination()
+    XCTAssertTrue(cleaned)
+    XCTAssertFalse(codex.blocksReplacement)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: ownedDirectory.path))
+    XCTAssertEqual(try database.providerConfiguration(), selected)
+    codex.cancelApplicationTermination()
+    XCTAssertTrue(codex.canStart)
+  }
+
   func testOtherPaperPurgeKeepsBoundSummaryAndRejectsUnownedEntry() async throws {
     let (root, _, template) = try workerFixture(
       script: controlWorkerScript(holdResult: true, syntheticLogin: true))

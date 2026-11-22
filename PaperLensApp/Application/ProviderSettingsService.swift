@@ -412,6 +412,14 @@ public final class NativeCodexConnection: ObservableObject {
       await scope.retireAndWait()
       if scope.clean { removeSummaryScope(id) }
     }
+    if let debt = summaryNamespaceDebt, debt.namespace.hasPendingUnlaunchedRemoval {
+      // Setup already retired every tracked child and never started a worker.
+      // Retry only on the verified directory; the owner removes it only if empty.
+      guard (try? IsolatedAgentLibraryPurge.verifySummaryRoot(summaryRoot, allowing: debt.namespace)) != nil,
+        debt.namespace.cleanupUnlaunchedWorkerNamespace() else { return false }
+      summaryNamespaceDebt = nil
+      objectWillChange.send()
+    }
     return !blocksReplacement
   }
 
