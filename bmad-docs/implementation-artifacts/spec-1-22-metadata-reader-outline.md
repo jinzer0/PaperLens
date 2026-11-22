@@ -433,3 +433,17 @@ PDFKit이 페이지 왼쪽 여백을 현재 위치로 반환하면, Reader는 �
 거친 Reader 재진입에도 유지됐다. 종료 후 같은 논문의 저장 위치, 제목, 발행연도,
 초록, 주제를 확인했다. 관련 XCTest 151개가 통과했다. 같은 저장소로 앱을 재시작하는
 검증과 macOS 15 실행은 남아 있다.
+
+## 서명 앱 재실행에서 목차 복원과 삭제 확인 — 2026-11-22
+
+macOS 26.7.1 arm64의 소스 `1dafd77` Developer ID 서명 Release 진단 빌드로
+목차와 XMP 데이터가 있는 합성 PDF를 가져왔다. 목차에서 5쪽으로 이동한 뒤 닫았다.
+새 프로세스가 같은 저장소를 열었고, Reader 진입 즉시 5쪽과 현재 섹션을 복원했다.
+같은 논문과 추출 revision에서 제목, 발행연도, 초록, 주제가 유지됐고, 페이지 밖을
+가리키는 목차 항목은 위치 미확인 상태로 비활성화됐다.
+
+Library에서 이 논문을 영구 삭제하자 소유 PDF, 메타데이터, 목차 위치 및 활성 추출
+revision이 제거됐다. 다시 앱을 실행해도 삭제한 논문을 열 수 없었고, 합성 원본은
+같은 해시로 남았다. Reader와 Workspace 관련 XCTest 145개가 통과했다. 로컬 기록은
+`.build/epic1-outline-restart/`의 `outline-restart.log`, `reopened-outline.txt`,
+`xctest-result.json`에 있다. 실제 VoiceOver 사용과 macOS 15 실행은 남아 있다.
