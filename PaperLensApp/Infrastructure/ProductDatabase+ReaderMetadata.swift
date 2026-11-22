@@ -149,6 +149,7 @@ extension ProductDatabase {
           sessionID = excluded.sessionID, sequence = excluded.sequence, payload = excluded.payload
         """, arguments: [identity.paperID.uuidString, identity.revisionID.uuidString,
           context.sessionID.uuidString, context.sequence, data])
+      try Self.verifyWrittenReaderMetadataContext(context, payload: data, for: identity, in: db)
       return context
     }
   }
@@ -172,7 +173,20 @@ extension ProductDatabase {
         """, arguments: [next.sequence, data, identity.paperID.uuidString, identity.revisionID.uuidString,
           expected.sessionID.uuidString, expected.sequence])
       guard db.changesCount == 1 else { throw ReaderMetadataError.staleConfirmation }
+      try Self.verifyWrittenReaderMetadataContext(next, payload: data, for: identity, in: db)
       return next
+    }
+  }
+
+  private static func verifyWrittenReaderMetadataContext(_ context: ReaderMetadataContext,
+    payload: Data, for identity: ReaderMetadataIdentity, in db: Database) throws {
+    try guardReaderMetadata(identity, in: db)
+    guard try Data.fetchOne(db, sql: """
+      SELECT payload FROM readerMetadataContext
+      WHERE paperID = ? AND revisionID = ? AND sessionID = ? AND sequence = ?
+      """, arguments: [identity.paperID.uuidString, identity.revisionID.uuidString,
+        context.sessionID.uuidString, context.sequence]) == payload else {
+      throw ProductDatabaseError.invalidRecord
     }
   }
 }

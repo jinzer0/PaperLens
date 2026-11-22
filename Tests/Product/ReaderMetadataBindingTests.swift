@@ -1199,6 +1199,41 @@ private final class MetadataObservedPDFDocument: PDFDocument {
       replacement.sequence)
   }
 
+  func testRewrittenPositionNeverPublishesAndCanBeRetried() async throws {
+    let (db, _, identity, owner) = try await fixture()
+    defer { owner.session.close() }
+    try outline(owner)
+    let binding = try mount(db, identity, owner)
+    let page = try XCTUnwrap(owner.view.document?.page(at: 0))
+    owner.view.observedDestination = PDFDestination(page: page, at: CGPoint(x: 20, y: 150))
+    try binding.observePosition()
+    XCTAssertNotNil(binding.state?.observedLocation)
+    XCTAssertNotNil(binding.state?.activeSectionID)
+
+    try db.adapterWrite { sql in
+      try sql.execute(sql: """
+        CREATE TRIGGER rewriteReaderMetadataPosition AFTER UPDATE OF sequence ON readerMetadataContext
+        BEGIN UPDATE readerMetadataContext SET payload = OLD.payload WHERE paperID = NEW.paperID; END;
+        """)
+    }
+    let location = ReaderConfirmedLocation(pageIndex: 0, x: 20, y: 120)
+    owner.view.observedDestination = PDFDestination(page: page, at: CGPoint(x: location.x, y: location.y))
+    XCTAssertThrowsError(try binding.observePosition()) { error in
+      XCTAssertEqual(error as? ProductDatabaseError, .invalidRecord)
+    }
+    XCTAssertNil(binding.state?.observedLocation)
+    XCTAssertNil(binding.state?.activeSectionID)
+    XCTAssertEqual(binding.state?.sections.map(\.title), ["Introduction", "Methods", "Foreign"])
+
+    try db.adapterWrite { try $0.execute(sql: "DROP TRIGGER rewriteReaderMetadataPosition") }
+    try binding.observePosition()
+    XCTAssertEqual(binding.state?.observedLocation, location)
+    let reopened = try ProductDatabase.open(at: db.root)
+    let restored = try ReaderMetadataService(database: reopened).beginSession(for: identity)
+    XCTAssertEqual(restored.sequence, 2)
+    XCTAssertEqual(restored.location, location)
+  }
+
   func testInvalidAndReentrantObservationsCannotSaveForeignPositions() async throws {
     let (db, _, identity, owner) = try await fixture()
     defer { owner.session.close() }

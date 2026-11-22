@@ -75,6 +75,33 @@ final class ReaderMetadataTests: XCTestCase {
     }
   }
 
+  func testRewrittenSessionClaimRollsBackAndPreservesPreviousOwner() throws {
+    try withDatabase { database, _ in
+      let current = identity()
+      try seed(current, in: database)
+      let service = ReaderMetadataService(database: database)
+      let session = try service.beginSession(for: current)
+      let location = ReaderConfirmedLocation(pageIndex: 0, x: 20, y: 100)
+      let saved = try service.saveConfirmed(location, sectionID: "/0", expected: session, for: current)
+      try database.adapterWrite { db in
+        try db.execute(sql: """
+          CREATE TRIGGER rewriteReaderMetadataSession AFTER UPDATE OF sessionID ON readerMetadataContext
+          BEGIN UPDATE readerMetadataContext SET payload = OLD.payload WHERE paperID = NEW.paperID; END;
+          """)
+      }
+
+      XCTAssertThrowsError(try service.beginSession(for: current)) { error in
+        XCTAssertEqual(error as? ProductDatabaseError, .invalidRecord)
+      }
+      try service.validateContext(saved, for: current)
+      try database.adapterWrite { try $0.execute(sql: "DROP TRIGGER rewriteReaderMetadataSession") }
+      let nextSession = try service.beginSession(for: current)
+      XCTAssertEqual(nextSession.location, location)
+      XCTAssertEqual(nextSession.sectionID, "/0")
+      XCTAssertNotEqual(nextSession.sessionID, saved.sessionID)
+    }
+  }
+
   func testRevisionSwitchDeleteAndLateCallbacksDoNotResurrect() throws {
     try withDatabase { database, _ in
       let current = identity(), other = identity()
