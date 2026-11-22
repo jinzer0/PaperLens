@@ -255,6 +255,7 @@ public final class PDFiumExtractionKey: NSObject, NSSecureCoding, @unchecked Sen
 public enum PDFiumFailureCode: Int, Sendable {
   case invalidRequest, identityMismatch, busy, invalidPDF, unsupportedGeometry, unmappableText
   case resourceExceeded, cancelled, protocolViolation, cleanupIncomplete
+  case noExtractableText
 }
 @objc(PaperLensPDFiumFailure)
 public final class PDFiumFailure: NSObject, NSSecureCoding, Error, @unchecked Sendable {

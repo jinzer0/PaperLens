@@ -7,7 +7,7 @@ import ProviderRequest
 
 public enum ExtractionError: String, Error, Sendable {
   case producerUnavailable, geometryUnavailable, invalidBatch, staleAttempt, interrupted, storageFailure
-  case resourceExceeded, parsingFailure, reservationFailure
+  case resourceExceeded, parsingFailure, reservationFailure, noExtractableText
 }
 
 public struct ExtractionIdentity: Equatable, Sendable {
@@ -852,6 +852,7 @@ public struct ExtractionRevisionService: Sendable {
       switch failure.code {
       case .cancelled: return .interrupted
       case .resourceExceeded: return .resourceExceeded
+      case .noExtractableText: return .noExtractableText
       case .protocolViolation, .invalidRequest, .identityMismatch, .invalidPDF,
         .unsupportedGeometry, .unmappableText: return .invalidBatch
       case .busy, .cleanupIncomplete: return .parsingFailure

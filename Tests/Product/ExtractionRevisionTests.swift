@@ -12,6 +12,12 @@ final class ExtractionRevisionTests: XCTestCase {
       throw ExtractionError.invalidBatch
     }
   }
+  private struct TextFreePDFProducer: ExtractionBatchProducing {
+    func withBatches(_ identity: ExtractionIdentity,
+      consume: @escaping @Sendable ([ExtractionBatch], ExtractionConsumptionScope) async throws -> Void) async throws {
+      throw PDFiumFailure(code: .noExtractableText)
+    }
+  }
   private struct UnboundGeometry: ExtractionGeometryInput {}
   private struct RejectingGeometryValidator: ExtractionGeometryValidating {
     func validateAndEncode(_ input: any ExtractionGeometryInput,
@@ -504,6 +510,24 @@ final class ExtractionRevisionTests: XCTestCase {
     }
     XCTAssertNil(try db.extractionStatus(paperID: paper).failure)
     XCTAssertNil(try db.extractionStatus(paperID: paper).usableRevision)
+  }
+
+  func testTextFreePDFFailurePersistsSpecificUserReasonWithoutPublishing() async throws {
+    let (db, paper, generation, root) = try fixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let id = try identity(db, paper, generation)
+    let service = ExtractionRevisionService(database: db, producer: TextFreePDFProducer(),
+      geometryValidator: RejectingGeometryValidator())
+    do { try await service.parse(id); XCTFail("A PDF without extractable text must fail parsing") }
+    catch { XCTAssertEqual((error as? PDFiumFailure)?.code, .noExtractableText) }
+
+    let reopened = try ProductDatabase.open(at: root)
+    let status = try reopened.extractionStatus(paperID: paper)
+    XCTAssertEqual(status.state, "failed")
+    XCTAssertEqual(status.failure, "noExtractableText")
+    XCTAssertNil(status.usableRevision)
+    XCTAssertEqual(ParsingFailureMessage.korean(status.failure),
+      "PDF에서 추출할 수 있는 텍스트를 찾지 못했습니다.")
   }
 
   func testAbsentProducerRejectsBeforeReservationWithoutUsableRevision() async throws {

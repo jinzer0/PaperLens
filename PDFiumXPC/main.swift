@@ -358,7 +358,10 @@ private final class NativeExtraction: @unchecked Sendable {
       sentences.append(sentence); batchBytes += extra.partialValue
       try check()
     }
-    guard !sentences.isEmpty else { throw PDFiumFailure(code: .unmappableText) }
+    guard !sentences.isEmpty else {
+      if complete && sentenceCount == 0 { throw PDFiumFailure(code: .noExtractableText) }
+      throw PDFiumFailure(code: .unmappableText)
+    }
     let batch = try PDFiumBatch(key: request.key, sequence: sequence, pages: pages,
       sentences: sentences, complete: complete, totalSentences: complete ? sentenceCount : nil)
     sequence += 1
