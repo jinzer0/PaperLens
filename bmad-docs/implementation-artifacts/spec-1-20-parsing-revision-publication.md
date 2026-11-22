@@ -229,10 +229,10 @@ signed connection PID, wire keys, actual hash/size/page observations, batch orde
 consecutive sentence IDs and final totals. Confirmed helper drain precedes checked sender
 close and actual child-pin release; the resource owner remains captured through consumer,
 sole-DB publication and disposal. Concurrent drain callers await the same actual release
-tasks. Timeout fails only the waiter: the captured session/debt remains. A late same-session
-cancel response can record verified drain proof, but cannot publish, release ownership on
-its own or modify a newer operation. Retrying drain after the scope has disposed its data
-can release the original retained resource owner. Ordinary failures before publication keep
+tasks. Timeout fails only the waiter and retains the captured session. When verified
+same-session drain proof and returned consumer scope are both present, Main completes
+checked local teardown. Either event can arrive first. Teardown closes the retained sender,
+releases its read pin and returns its resources. Ordinary failures before publication keep
 the old usable revision via the existing sole reserve/publish/fail DB contract. An actual
 post-commit resource-release error remains cleanup debt and propagates without falsely
 marking an already committed publication as a failed Job.

@@ -338,8 +338,7 @@ public actor PDFiumExtractionProducer: ExtractionBatchProducing {
     running = true
     defer { running = false }
     try Task.checkCancellation()
-    // A late verified End only records proof. The next admission can complete
-    // checked local teardown once the original consumer has returned.
+    // A new admission can join checked teardown that is still in progress.
     if let (operationID, session) = sessions.first, session.scopeReturned, session.end != nil {
       try await finishSession(session, operationID: operationID)
     }
@@ -384,7 +383,12 @@ public actor PDFiumExtractionProducer: ExtractionBatchProducing {
     let input = session.input
     let key = session.key
     let connection = session.connection
-    defer { session.scopeReturned = true }
+    defer {
+      session.scopeReturned = true
+      if sessions[operationID] === session, session.end != nil {
+        Task { await self.finishReturnedSessionIfDrained(session) }
+      }
+    }
     var batches: [ExtractionBatch] = []
     do {
       guard input.operationID == operationID, input.identity == identity,
@@ -484,6 +488,7 @@ public actor PDFiumExtractionProducer: ExtractionBatchProducing {
   }
 
   private func finishSession(_ session: Session, operationID: UUID) async throws {
+    if let end = session.end { try validateEnd(end, session: session) }
     try await releasePin(session)
     try await finishResources(session)
     guard sessions[operationID] === session else { return }
@@ -525,12 +530,19 @@ public actor PDFiumExtractionProducer: ExtractionBatchProducing {
       throw PDFiumFailure(code: .protocolViolation)
     }
   }
-  private func observeDrain(_ end: PDFiumEnd?, failure: PDFiumFailure?, session: Session) {
+  private func observeDrain(_ end: PDFiumEnd?, failure: PDFiumFailure?, session: Session) async {
     guard sessions[session.key.operationID] === session, let end,
       failure == nil || end.disposition == .failed else { return }
     do { try validateEnd(end, session: session); session.end = end }
+    catch { session.cancellationFailure = error; return }
+    await finishReturnedSessionIfDrained(session)
+  }
+
+  private func finishReturnedSessionIfDrained(_ session: Session) async {
+    let operationID = session.key.operationID
+    guard sessions[operationID] === session, session.scopeReturned, session.end != nil else { return }
+    do { try await finishSession(session, operationID: operationID) }
     catch { session.cancellationFailure = error }
-    // Recording same-operation proof is not publication or resource release.
   }
   private func start(_ session: Session, request: PDFiumExtractionRequest) async throws
     -> (PDFiumStartAck?, PDFiumFailure?) {
