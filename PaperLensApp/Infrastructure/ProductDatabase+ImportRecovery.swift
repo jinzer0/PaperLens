@@ -846,14 +846,18 @@ extension ProductDatabase {
       UPDATE importJob SET state = 'failed', failure = 'missingPDF'
       WHERE paperID = ? AND recoveryJournal IS NULL
       """, arguments: [paperID.uuidString])
+    // Revoking the PDF also clears its Reader position and session in the same transaction.
+    let clearedColumns = ["pdfReference", "lastReadPage", "lastReadZoom", "lastReadAt", "readerSession"]
+    let changedColumns = Set(clearedColumns + ["status", "cleanupDebt", "readerSequence"])
     guard db.changesCount == histories.filter({ $0 == nil }).count,
       let after = try Row.fetchOne(db, sql: "SELECT * FROM paper WHERE id = ?",
         arguments: [paperID.uuidString]),
-      sameRow(before, after, except: ["status", "pdfReference", "cleanupDebt"]),
+      sameRow(before, after, except: changedColumns),
       recoveryString(after, "id") == paperID.uuidString,
       recoveryString(after, "generation") == generation.uuidString,
       recoveryString(after, "pdfSHA256") == sha256,
-      recoveryString(after, "status") == "importFailed", nullColumns(after, ["pdfReference"]),
+      recoveryString(after, "status") == "importFailed", nullColumns(after, clearedColumns),
+      after["readerSequence"] == Int64(0).databaseValue,
       Int64.fromDatabaseValue(after["cleanupDebt"]) == 1,
       try importFolder(paperID, in: db) == folder else {
       throw ProductJobRecoveryError.readbackMismatch

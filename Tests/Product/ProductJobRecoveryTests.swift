@@ -471,6 +471,54 @@ final class ProductJobRecoveryTests: XCTestCase, @unchecked Sendable {
     XCTAssertEqual((attributes[.size] as? NSNumber)?.uint64Value, size)
   }
 
+  func testRestartReconcilesMissingPDFWithSavedReaderPosition() async throws {
+    let missing = try await ownedStartupImport("missing after reading")
+    let intact = try await ownedStartupImport("still available after reading")
+    let missingPDF = try database.readerSnapshot(paperID: missing)
+    let intactPDF = try database.readerSnapshot(paperID: intact)
+    let missingOwner = UUID()
+    let intactOwner = UUID()
+    let position = ReaderPosition(pageIndex: 1, zoom: 1.5)
+    XCTAssertNil(try database.claimReader(missingPDF, sessionID: missingOwner))
+    try database.saveReaderPosition(position, snapshot: missingPDF, sessionID: missingOwner, sequence: 1)
+    XCTAssertNil(try database.claimReader(intactPDF, sessionID: intactOwner))
+    try database.saveReaderPosition(position, snapshot: intactPDF, sessionID: intactOwner, sequence: 1)
+    try database.releaseReader(intactPDF, sessionID: intactOwner)
+
+    let missingBefore = try row("paper", paper: missing)
+    let intactBefore = try row("paper", paper: intact)
+    let missingJob = try row("importJob", paper: missing)
+    let intactJob = try row("importJob", paper: intact)
+    let missingURL = root.appendingPathComponent(missingPDF.pdfReference)
+    try FileManager.default.removeItem(at: missingURL)
+
+    database = nil
+    database = try ProductDatabase.open(at: root)
+    let restarted = try await LocalLibraryLifecycle.open(database: database)
+    let snapshot = try await LibraryOrganizationService(database: database, lifecycle: restarted)
+      .snapshot(filter: .init(), facts: [])
+    XCTAssertEqual(snapshot.papers.filter(\.readable).map(\.id), [intact])
+    let recovered = try XCTUnwrap(snapshot.papers.first { $0.id == missing })
+    XCTAssertEqual(recovered.status, .importFailed)
+    XCTAssertEqual(recovered.failure, "missingPDF")
+    XCTAssertFalse(recovered.canRetryImport)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: missingURL.path))
+
+    let missingAfter = try row("paper", paper: missing)
+    let cleared = ["pdfReference", "lastReadPage", "lastReadZoom", "lastReadAt", "readerSession"]
+    assertUnchanged(missingBefore, missingAfter, except: Set(cleared + ["status", "cleanupDebt", "readerSequence"]))
+    for column in cleared {
+      XCTAssertTrue((missingAfter[column] as DatabaseValue).isNull, column)
+    }
+    XCTAssertEqual(missingAfter["readerSequence"] as Int, 0)
+    XCTAssertEqual(missingAfter["cleanupDebt"] as Int, 1)
+    assertUnchanged(missingJob, try row("importJob", paper: missing))
+    assertUnchanged(intactBefore, try row("paper", paper: intact))
+    assertUnchanged(intactJob, try row("importJob", paper: intact))
+    XCTAssertEqual(try database.libraryReadingRecords(paperID: intact,
+      generation: intactPDF.generation).position, position)
+  }
+
   func testUnavailableImportCASRejectsStaleCapturedGenerationSHAAndReference() async throws {
     let paper = try await ownedStartupImport("old capture")
     let newerPaper = try await ownedStartupImport("newer metadata")
