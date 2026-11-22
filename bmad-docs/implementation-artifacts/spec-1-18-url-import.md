@@ -1,5 +1,23 @@
 # Story 1.18 Build Spec — URL Import and shared Library entry
 
+## 서명 앱의 세 URL 경로 저장과 재실행 — 2026-11-22
+
+macOS 26.7.1 arm64에서 소스 `e782c53`의 Developer ID 서명 Release 진단 빌드를
+실행했다. 합성 Workspace의 전용 URLProtocol이 arXiv 초록에서 변환된 PDF 주소,
+arXiv PDF 주소, 일반 HTTPS PDF 주소의 세 요청에만 동일한 8쪽 합성 PDF를 반환했다.
+
+세 확인 화면에서 경로 종류, 선택한 폴더, 중복 시 독립 복사본 안내가 표시됐다.
+계속을 누르기 전에는 새 논문이나 가져오기 Job이 없었다. 저장 후 Library에서
+각 복사본을 Reader로 열어 페이지 수와 검색용 원문 준비 상태를 확인했다. 논문,
+generation, Job, 소유 PDF 경로, 파싱 revision이 각각 3개였고, 저장 파일의 해시는
+입력 PDF와 일치했다. 새 앱 프로세스에서도 같은 DB의 기록이 유지됐고 선택한 폴더에서
+일반 HTTPS 복사본을 다시 열었다.
+
+URL 가져오기, Library writer, Workspace 관련 격리 XCTest 112개가 통과했다.
+로컬 기록은 `.build/epic1-three-url-paths/`의 `three-routes.log`와
+`xctest-result.json`에 있다. 실행 중 PDFKit에서 `PDFDocument`가 없는 페이지를
+그리려 했다는 진단이 한 차례 기록됐다. 실제 외부 다운로드와 P-6 측정은 남아 있다.
+
 ## URL 추가 키보드 초점 검증 — 2026-11-22
 
 macOS 26.7.1 arm64의 Developer ID 서명 앱에서 시스템 키보드 탐색을 끈 상태로 확인했다.
