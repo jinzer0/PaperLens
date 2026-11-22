@@ -232,9 +232,23 @@ public struct ProductJobRecovery: Sendable {
       throw LocalLibraryError.producerClosureUnknown
     }
     try database.adapterWrite { db in
+      let interrupted = try Row.fetchAll(db, sql: "SELECT * FROM paper WHERE status = 'deleting' ORDER BY id")
       try db.execute(sql: """
         UPDATE paper SET status = 'deletionFailed', cleanupDebt = 1 WHERE status = 'deleting'
         """)
+      guard db.changesCount == interrupted.count else { throw ProductJobRecoveryError.recoveryConflict }
+      for before in interrupted {
+        try Task.checkCancellation()
+        let paperID = try Self.uuid(before, "id")
+        guard let after = try Row.fetchOne(db, sql: "SELECT * FROM paper WHERE id = ?",
+          arguments: [paperID.uuidString]),
+          String.fromDatabaseValue(after["status"]) == "deletionFailed",
+          Int64.fromDatabaseValue(after["cleanupDebt"]) == 1,
+          Self.matches(before, after, except: ["status", "cleanupDebt"]) else {
+          throw ProductJobRecoveryError.readbackMismatch
+        }
+      }
+      try Task.checkCancellation()
     }
     let references: [(id: UUID, generation: UUID, sha256: String, reference: String)] = try database.adapterRead { db in
       try Row.fetchAll(db, sql: """

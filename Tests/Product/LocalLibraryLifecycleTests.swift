@@ -1325,6 +1325,62 @@ final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
     XCTAssertTrue(after.isEmpty)
   }
 
+  func testStartupRejectsUnacknowledgedInterruptedDeletionAndRetryKeepsOriginalSaga() async throws {
+    let db = try ProductDatabase.open(at: root)
+    let agent = makeAgent()
+    let original = try await LocalLibraryLifecycle.open(database: db, agentPurge: agent)
+    let first = try await original.importPDF(from: source("first-deletion.pdf"))
+    let second = try await original.importPDF(from: source("second-deletion.pdf"))
+    let firstSaga = try XCTUnwrap(db.beginDeletion(first)).saga
+    let secondSaga = try XCTUnwrap(db.beginDeletion(second)).saga
+    let firstBefore = try deletionRows(db, first)
+    let secondBefore = try deletionRows(db, second)
+    let firstPDF = namespace(first).appendingPathComponent("document.pdf")
+    let secondPDF = namespace(second).appendingPathComponent("document.pdf")
+    let replacementSaga = UUID()
+    let faults: [(timing: String, body: String, error: ProductJobRecoveryError)] = [
+      ("BEFORE", "SELECT RAISE(IGNORE);", .recoveryConflict),
+      ("AFTER", "UPDATE paper SET status = 'deleting' WHERE id = NEW.id;", .readbackMismatch),
+      ("AFTER", "UPDATE paper SET deletionID = '\(replacementSaga.uuidString)' WHERE id = NEW.id;", .readbackMismatch)
+    ]
+    for fault in faults {
+      try db.adapterWrite { db in
+        try db.execute(sql: """
+          CREATE TRIGGER interruptRecovery \(fault.timing) UPDATE OF status ON paper
+          WHEN NEW.status = 'deletionFailed' AND NEW.id = '\(first.uuidString)'
+          BEGIN \(fault.body) END;
+          """)
+      }
+      do {
+        _ = try await LocalLibraryLifecycle.open(database: ProductDatabase.open(at: root), agentPurge: agent)
+        XCTFail("Startup accepted an unconfirmed deletion recovery write")
+      } catch { XCTAssertEqual(error as? ProductJobRecoveryError, fault.error) }
+      assertDeletionRowsEqual(firstBefore, try deletionRows(db, first))
+      assertDeletionRowsEqual(secondBefore, try deletionRows(db, second))
+      XCTAssertTrue(FileManager.default.fileExists(atPath: firstPDF.path))
+      XCTAssertTrue(FileManager.default.fileExists(atPath: secondPDF.path))
+      try db.adapterWrite { try $0.execute(sql: "DROP TRIGGER interruptRecovery") }
+    }
+
+    let reopened = try ProductDatabase.open(at: root)
+    let restarted = try await LocalLibraryLifecycle.open(database: reopened, agentPurge: agent)
+    let recovered = try await restarted.list()
+    XCTAssertEqual(Set(recovered.map(\.id)), [first, second])
+    XCTAssertTrue(recovered.allSatisfy { $0.status == .deletionFailed && $0.cleanupDebt })
+    assertDeletionRowsEqual(firstBefore, try deletionRows(reopened, first), paperExcept: ["status", "cleanupDebt"])
+    assertDeletionRowsEqual(secondBefore, try deletionRows(reopened, second), paperExcept: ["status", "cleanupDebt"])
+    let beforeRetry = await agent.sagaIDs()
+    XCTAssertTrue(beforeRetry.isEmpty)
+    try await restarted.retryDeletion(paperID: first)
+    try await restarted.retryDeletion(paperID: second)
+    let purged = await agent.sagaIDs()
+    XCTAssertEqual(purged, [firstSaga, secondSaga])
+    let remaining = try await restarted.list()
+    XCTAssertTrue(remaining.isEmpty)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: firstPDF.path))
+    XCTAssertFalse(FileManager.default.fileExists(atPath: secondPDF.path))
+  }
+
   func testMismatchedPeerReceiptCannotFinalize() async throws {
     let db = try ProductDatabase.open(at: root)
     let agent = makeAgent()
