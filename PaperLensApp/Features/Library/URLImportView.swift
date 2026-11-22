@@ -27,6 +27,7 @@ public struct URLImportView<LibraryContent: View>: View {
   @State private var folders: [LibraryFolder] = []
   @State private var destinationFolderID: UUID?
   @State private var folderLoadFailed = false
+  @State private var folderRefreshID = UUID()
   @FocusState private var inputFocused: Bool
   @FocusState private var openerFocused: Opener?
   @State private var inputPresentation: InputPresentation?
@@ -36,6 +37,11 @@ public struct URLImportView<LibraryContent: View>: View {
   private enum FocusReturn {
     case toolbar(Opener)
     case paper(@MainActor () -> Void)
+  }
+
+  private struct FolderObservationID: Equatable {
+    let mount: UUID?
+    let refresh: UUID
   }
 
   private struct RetryEntry {
@@ -120,6 +126,7 @@ public struct URLImportView<LibraryContent: View>: View {
     let confirmationID = mountedConfirmationID
     let inputPresentationID = inputPresentation?.id
     let confirmationPresentationID = confirmationPresentation?.id
+    let folderObservation = FolderObservationID(mount: mount, refresh: folderRefreshID)
     VStack {
       HStack {
         Button("URL 추가") {
@@ -159,9 +166,7 @@ public struct URLImportView<LibraryContent: View>: View {
         Button("폴더 새로고침") {
           guard drag.isCurrent(mount, interaction) else { return }
           drag.interrupt()
-          let loadMount = drag.mount
-          let loadInteraction = drag.interaction
-          Task { await reloadFolders(mount: loadMount, interaction: loadInteraction) }
+          folderRefreshID = UUID()
         }
         if folderLoadFailed {
           Label("폴더를 불러오지 못했습니다.", systemImage: "exclamationmark.triangle")
@@ -287,10 +292,8 @@ public struct URLImportView<LibraryContent: View>: View {
     .onAppear {
       drag.localIntentInvalidation = $localIntentInvalidation
       drag.appear()
-      let loadMount = drag.mount
-      let loadInteraction = drag.interaction
-      Task { await reloadFolders(mount: loadMount, interaction: loadInteraction) }
     }
+    .task(id: folderObservation) { await observeFolders(folderObservation) }
     .onDisappear {
       let ownedConfirmationID = mountedConfirmationID
       inputPresentation = nil
@@ -458,8 +461,9 @@ public struct URLImportView<LibraryContent: View>: View {
     guard canPresentInput, let captureRetry else { return }
     guard service.supports(text) else { invalidInput = true; return }
     let folderID = destinationFolderID
-    let folder = folders.first { $0.id == folderID }
-    guard folderID == nil || folder != nil else { retryUnavailable = true; return }
+    guard folderID == nil || folders.contains(where: { $0.id == folderID }) else {
+      retryUnavailable = true; return
+    }
     let id = UUID()
     let mount = drag.mount, interaction = drag.interaction
     retryPreparation = id
@@ -468,7 +472,10 @@ public struct URLImportView<LibraryContent: View>: View {
       do {
         let expected = try await captureRetry(entry.paper)
         guard retryPreparation == id, drag.isCurrent(mount, interaction),
-          service.confirmation == nil, destinationFolderID == folderID else { return }
+          service.confirmation == nil else { return }
+        guard destinationFolderID == folderID else { retryUnavailable = true; return }
+        let folder = folders.first { $0.id == folderID }
+        guard folderID == nil || folder != nil else { retryUnavailable = true; return }
         try service.prepareRetry(text, destination: folder?.name ?? "미분류",
           possibleDuplicate: possibleDuplicate(text), destinationFolderID: folderID, expected: expected)
         if let confirmation = service.confirmation {
@@ -481,18 +488,23 @@ public struct URLImportView<LibraryContent: View>: View {
     }
   }
 
-  private func reloadFolders(mount: UUID?, interaction: UUID) async {
-    guard drag.isCurrent(mount, interaction) else { return }
+  private func observeFolders(_ observation: FolderObservationID) async {
+    func isCurrent() -> Bool {
+      observation.mount != nil && observation.mount == drag.mount
+        && observation.refresh == folderRefreshID && !Task.isCancelled
+    }
+    guard isCurrent() else { return }
     do {
-      let loaded = try await folderService.folders()
-      guard drag.isCurrent(mount, interaction) else { return }
-      folders = loaded
-      if let id = destinationFolderID, !folders.contains(where: { $0.id == id }) {
-        destinationFolderID = nil
+      for try await loaded in folderService.folderSnapshots() {
+        guard isCurrent() else { return }
+        folders = loaded
+        if let id = destinationFolderID, !loaded.contains(where: { $0.id == id }) {
+          destinationFolderID = nil
+        }
+        folderLoadFailed = false
       }
-      folderLoadFailed = false
     } catch {
-      guard drag.isCurrent(mount, interaction) else { return }
+      guard isCurrent() else { return }
       folderLoadFailed = true
     }
   }

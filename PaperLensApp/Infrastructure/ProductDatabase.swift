@@ -187,6 +187,12 @@ public final class ProductDatabase: @unchecked Sendable {
       .eraseToAnyPublisher()
   }
 
+  func folderSnapshots() -> AsyncValueObservation<[LibraryFolder]> {
+    ValueObservation.tracking { db in
+      try self.folders(in: db)
+    }.values(in: queue, bufferingPolicy: .bufferingNewest(1))
+  }
+
   func activeImportProgress() -> AsyncValueObservation<[UUID: Int64]> {
     ValueObservation.tracking { db in
       let rows = try Row.fetchAll(db, sql: """

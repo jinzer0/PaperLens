@@ -346,6 +346,48 @@ final class URLImportTests: XCTestCase {
   }
 
   @MainActor
+  func testFolderPickersReceiveCommittedChangesWithoutChangingPendingURLConfirmation() async throws {
+    let root = try directory()
+    let database = try ProductDatabase.open(at: root.appendingPathComponent("database"))
+    let lifecycle = try await LocalLibraryLifecycle.open(database: database)
+    let folderService = FolderImportService(database: database, lifecycle: lifecycle)
+    let urls = URLImportService(authority: try ProviderRequest())
+    var firstWindow = folderService.folderSnapshots().makeAsyncIterator()
+    var secondWindow = folderService.folderSnapshots().makeAsyncIterator()
+    let initialFirst = try await firstWindow.next()
+    let initialSecond = try await secondWindow.next()
+    XCTAssertEqual(initialFirst, [])
+    XCTAssertEqual(initialSecond, [])
+
+    let folder = try await folderService.createFolder(name: "Reading list")
+    let firstCreated = try await firstWindow.next()
+    let secondCreated = try await secondWindow.next()
+    XCTAssertEqual(firstCreated, [folder])
+    XCTAssertEqual(secondCreated, [folder])
+    try urls.prepare("https://fixture.invalid/paper.pdf", destination: folder.name,
+      possibleDuplicate: true, destinationFolderID: folder.id)
+    let original = try XCTUnwrap(urls.confirmation)
+
+    try await folderService.renameFolder(id: folder.id, name: "Read next")
+    let firstRenamed = try await firstWindow.next()
+    let secondRenamed = try await secondWindow.next()
+    let renamed = try XCTUnwrap(secondRenamed?.first)
+    XCTAssertEqual(renamed.id, folder.id)
+    XCTAssertEqual(renamed.name, "Read next")
+    XCTAssertEqual(firstRenamed, secondRenamed)
+    XCTAssertEqual(urls.confirmation?.id, original.id)
+    XCTAssertEqual(urls.confirmation?.destination, original.destination)
+    XCTAssertEqual(urls.confirmation?.destinationFolderID, original.destinationFolderID)
+
+    try await folderService.deleteFolder(id: folder.id)
+    let firstDeleted = try await firstWindow.next()
+    let secondDeleted = try await secondWindow.next()
+    XCTAssertEqual(firstDeleted, [])
+    XCTAssertEqual(secondDeleted, [])
+    XCTAssertEqual(urls.confirmation?.destinationFolderID, folder.id)
+  }
+
+  @MainActor
   func testCancelBeforeContinueAndMissingCapabilityHaveZeroGrantEffects() throws {
     let recorder = GrantRecorder()
     let service = URLImportService(authority: try ProviderRequest(), grantWriter: { _ in

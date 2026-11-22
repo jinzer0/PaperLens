@@ -1,6 +1,7 @@
 import CryptoKit
 import Darwin
 import Foundation
+import GRDB
 import UniformTypeIdentifiers
 #if SWIFT_PACKAGE
 import ProviderRequest
@@ -147,6 +148,10 @@ public actor FolderImportService {
   public func folders() async throws -> [LibraryFolder] {
     let database = database
     return try await Task.detached { try database.folders() }.value
+  }
+
+  nonisolated func folderSnapshots() -> AsyncValueObservation<[LibraryFolder]> {
+    database.folderSnapshots()
   }
 
   public func createFolder(name: String) async throws -> LibraryFolder {
