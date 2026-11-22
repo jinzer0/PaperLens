@@ -58,37 +58,71 @@ public final class ProductWorkspace: ObservableObject {
   private var pendingConfirmation: UUID?
   private var continuedLocalConfirmation: UUID?
   private var confirmationCancellation: (id: UUID, task: Task<UUID, Never>)?
-  private var importPreparation: (id: UUID, task: Task<LocalImportConfirmation, any Error>)?
+  private var importPreparation: (id: UUID, mount: UUID?, task: Task<LocalImportConfirmation, any Error>)?
   internal var beforeImportConfirmationInstallForOwnedFixtures:
     (@MainActor (LocalImportConfirmation) -> Void)?
   private var metadataReadRequest: UUID?
   private var installingSheet = false
   private var clearingSheet = false
   private var cleaningSheet = false
+  private var presentationMounts: Set<UUID> = []
+  private var activeSheetMount: UUID?
   @Published private var activeSheet: Sheet?
   @Published public private(set) var sheetCleanupPending = false
   public var sheet: Sheet? {
     get { activeSheet }
     set {
       if let newValue {
-        guard activeSheet == nil, !sheetCleanupPending, !installingSheet, !cleaningSheet else {
-          return
-        }
-        switch newValue {
-        case .confirmation(let confirmation):
-          guard preparing, pendingConfirmation == confirmation.id else { return }
-        case .folders, .settings:
-          guard !preparing, !opening, reader == nil else { return }
-        }
-        installingSheet = true
-        defer { installingSheet = false }
-        confirmationCancellation = nil
-        sheetCleanupPending = true
-        activeSheet = newValue
+        installSheet(newValue, for: nil)
       } else {
         clearActiveSheet()
       }
     }
+  }
+
+  func attachPresentation() -> UUID {
+    let mount = UUID()
+    presentationMounts.insert(mount)
+    return mount
+  }
+
+  func detachPresentation(_ mount: UUID) {
+    guard presentationMounts.remove(mount) != nil else { return }
+    if !installingSheet, !clearingSheet,
+      importPreparation?.mount == mount || activeSheetMount == mount
+    {
+      dismissSheet()
+    }
+  }
+
+  func sheet(for mount: UUID?) -> Sheet? {
+    guard let mount, activeSheetMount == mount, presentationMounts.contains(mount) else { return nil }
+    return activeSheet
+  }
+
+  func closeSheet(id: String, for mount: UUID) {
+    guard sheet(for: mount)?.id == id else { return }
+    clearActiveSheet()
+  }
+
+  func installSheet(_ sheet: Sheet, for mount: UUID?) {
+    guard activeSheet == nil, !sheetCleanupPending, !installingSheet, !cleaningSheet,
+      mount.map(presentationMounts.contains) ?? true else { return }
+    switch sheet {
+    case .confirmation(let confirmation):
+      guard preparing, pendingConfirmation == confirmation.id, importPreparation?.mount == mount else { return }
+    case .folders, .settings:
+      guard !preparing, !opening, reader == nil else { return }
+    }
+    installingSheet = true
+    defer {
+      installingSheet = false
+      if let mount, !presentationMounts.contains(mount) { dismissSheet() }
+    }
+    confirmationCancellation = nil
+    activeSheetMount = mount
+    sheetCleanupPending = true
+    activeSheet = sheet
   }
 
   fileprivate var settingsActionsAllowed: Bool {
@@ -98,8 +132,12 @@ public final class ProductWorkspace: ObservableObject {
 
   private func clearActiveSheet() {
     guard !clearingSheet, let activeSheet else { return }
+    let mount = activeSheetMount
     clearingSheet = true
-    defer { clearingSheet = false }
+    defer {
+      clearingSheet = false
+      if !cleaningSheet, let mount, !presentationMounts.contains(mount) { dismissSheet() }
+    }
     if case .settings = activeSheet { settings.cancelUncommittedConnections() }
     self.activeSheet = nil
   }
@@ -220,27 +258,29 @@ public final class ProductWorkspace: ObservableObject {
     return captured
   }
 
-  @discardableResult public func prepareImport(source: URL) async throws -> UUID {
+  @discardableResult public func prepareImport(source: URL, presentationMount: UUID? = nil) async throws -> UUID {
     let destinationFolderID: UUID?
     switch libraryFilter.folder {
     case .folder(let id): destinationFolderID = id
     case .all, .unfiled: destinationFolderID = nil
     }
-    return try await prepareLocalImport(source: source, destinationFolderID: destinationFolderID)
+    return try await prepareLocalImport(source: source, destinationFolderID: destinationFolderID,
+      presentationMount: presentationMount)
   }
 
-  public func prepareRetry(source: URL, paperID: UUID, generation: UUID) async throws {
-    _ = try await prepareLocalImport(source: source, retry: (paperID, generation))
+  public func prepareRetry(source: URL, paperID: UUID, generation: UUID, presentationMount: UUID? = nil) async throws {
+    _ = try await prepareLocalImport(source: source, retry: (paperID, generation), presentationMount: presentationMount)
   }
 
   private func prepareLocalImport(
     source: URL, destinationFolderID: UUID? = nil,
-    retry: (paperID: UUID, generation: UUID)? = nil
+    retry: (paperID: UUID, generation: UUID)? = nil, presentationMount: UUID?
   ) async throws -> UUID {
     try admitDiagnosticSource(source)
     guard canPrepareLocalImport else {
       throw ProductWorkspaceError.busy
     }
+    guard presentationMount.map(presentationMounts.contains) ?? true else { throw CancellationError() }
     try Task.checkCancellation()
     confirmationCancellation = nil
     let scoped = source.startAccessingSecurityScopedResource()
@@ -252,7 +292,7 @@ public final class ProductWorkspace: ObservableObject {
       }
       return try await imports.prepare(source: source, destinationFolderID: destinationFolderID)
     }
-    importPreparation = (request, task)
+    importPreparation = (request, presentationMount, task)
     preparing = true
     // A synchronous observer may have dismissed the request during publication.
     if importPreparation == nil { preparing = false }
@@ -263,6 +303,7 @@ public final class ProductWorkspace: ObservableObject {
       }
     }
     var returnedConfirmation: UUID?
+    var handedOffConfirmation = false
     do {
       let confirmation = try await withTaskCancellationHandler {
         try await task.value
@@ -273,21 +314,25 @@ public final class ProductWorkspace: ObservableObject {
       beforeImportConfirmationInstallForOwnedFixtures?(confirmation)
       try Task.checkCancellation()
       guard importPreparation?.id == request, !opening, !sheetCleanupPending, sheet == nil,
-        reader == nil
+        reader == nil, presentationMount.map(presentationMounts.contains) ?? true
       else { throw CancellationError() }
       if scoped { scopedSource = source }
       pendingConfirmation = confirmation.id
-      sheet = .confirmation(confirmation)
+      installSheet(.confirmation(confirmation), for: presentationMount)
+      handedOffConfirmation = true
+      guard pendingConfirmation == confirmation.id else { throw CancellationError() }
       failure = nil
       return confirmation.id
     } catch {
-      if scoped { source.stopAccessingSecurityScopedResource() }
-      if let returnedConfirmation { await imports.cancel(returnedConfirmation) }
+      if !handedOffConfirmation {
+        if scoped { source.stopAccessingSecurityScopedResource() }
+        if let returnedConfirmation { await imports.cancel(returnedConfirmation) }
+      }
       throw error
     }
   }
 
-  @discardableResult public func pickPDF() -> Task<UUID?, Never>? {
+  @discardableResult public func pickPDF(presentationMount: UUID? = nil) -> Task<UUID?, Never>? {
     guard canPrepareLocalImport else {
       return nil
     }
@@ -299,7 +344,7 @@ public final class ProductWorkspace: ObservableObject {
     if let diagnosticSource { picker.directoryURL = diagnosticSource.deletingLastPathComponent() }
     guard picker.runModal() == .OK, let source = picker.url else { return nil }
     return Task {
-      do { return try await prepareImport(source: source) }
+      do { return try await prepareImport(source: source, presentationMount: presentationMount) }
       catch is CancellationError { return nil }
       catch {
         failure = (error as? FolderImportError)?.reselectionMessage
@@ -309,7 +354,7 @@ public final class ProductWorkspace: ObservableObject {
     }
   }
 
-  public func pickRetryPDF(paperID: UUID, generation: UUID) {
+  public func pickRetryPDF(paperID: UUID, generation: UUID, presentationMount: UUID? = nil) {
     guard canPrepareLocalImport else { return }
     confirmationCancellation = nil
     let picker = NSOpenPanel()
@@ -319,7 +364,8 @@ public final class ProductWorkspace: ObservableObject {
     if let diagnosticSource { picker.directoryURL = diagnosticSource.deletingLastPathComponent() }
     guard picker.runModal() == .OK, let source = picker.url else { return }
     Task {
-      do { try await prepareRetry(source: source, paperID: paperID, generation: generation) }
+      do { try await prepareRetry(source: source, paperID: paperID, generation: generation,
+        presentationMount: presentationMount) }
       catch is CancellationError { return }
       catch {
         failure = (error as? FolderImportError)?.reselectionMessage
@@ -328,10 +374,12 @@ public final class ProductWorkspace: ObservableObject {
     }
   }
 
-  @discardableResult func startLocalImport(_ id: UUID, destinationFolderID: UUID?) -> Task<UUID?, Never>? {
+  @discardableResult func startLocalImport(_ id: UUID, destinationFolderID: UUID?,
+    presentationMount: UUID? = nil) -> Task<UUID?, Never>? {
     guard case .confirmation(let confirmation) = activeSheet, confirmation.id == id,
       pendingConfirmation == id, continuedLocalConfirmation == nil, localImportID == nil,
-      !installingSheet, !cleaningSheet else { return nil }
+      activeSheetMount == presentationMount, !installingSheet, !clearingSheet, !cleaningSheet,
+      presentationMount.map(presentationMounts.contains) ?? true else { return nil }
     // Continue transfers the picker scope to the import before the sheet can dismiss.
     // The producer still owns its own scope and writer until physical cleanup.
     continuedLocalConfirmation = id
@@ -356,8 +404,13 @@ public final class ProductWorkspace: ObservableObject {
     }
   }
 
-  fileprivate func cancelLocalImportPreparation() {
-    guard importPreparation != nil, activeSheet == nil, !installingSheet else { return }
+  func isPreparingImport(for mount: UUID?) -> Bool {
+    guard let mount, presentationMounts.contains(mount) else { return false }
+    return preparing && importPreparation?.mount == mount
+  }
+
+  func cancelLocalImportPreparation(for mount: UUID) {
+    guard isPreparingImport(for: mount), activeSheet == nil, !installingSheet else { return }
     dismissSheet()
   }
 
@@ -371,6 +424,7 @@ public final class ProductWorkspace: ObservableObject {
     cleaningSheet = true
     sheetCleanupPending = true
     clearActiveSheet()
+    activeSheetMount = nil
     importPreparation?.task.cancel()
     importPreparation = nil
     preparing = false
@@ -401,10 +455,12 @@ public final class ProductWorkspace: ObservableObject {
     return nil
   }
 
-  @discardableResult public func presentationDidDismiss(confirmationID: UUID? = nil) -> Task<
+  @discardableResult public func presentationDidDismiss(confirmationID: UUID? = nil,
+    presentationMount: UUID? = nil) -> Task<
     UUID, Never
   >? {
-    guard activeSheet == nil, !installingSheet, !preparing, importPreparation == nil else {
+    guard activeSheetMount == presentationMount, activeSheet == nil,
+      !installingSheet, !preparing, importPreparation == nil else {
       return nil
     }
     if let confirmationID {
@@ -420,9 +476,9 @@ public final class ProductWorkspace: ObservableObject {
     return dismissSheet()
   }
 
-  public func acceptDroppedPDF(_ source: URL) {
+  public func acceptDroppedPDF(_ source: URL, presentationMount: UUID? = nil) {
     Task {
-      do { _ = try await prepareImport(source: source) }
+      do { _ = try await prepareImport(source: source, presentationMount: presentationMount) }
       catch is CancellationError { return }
       catch {
         failure = (error as? FolderImportError)?.reselectionMessage
@@ -713,6 +769,7 @@ public enum ProductWorkspaceError: Error { case busy, diagnosticSourceRequired }
 public struct ProductWorkspaceView: View {
   @ObservedObject private var workspace: ProductWorkspace
   @ObservedObject private var urls: URLImportService
+  private let diagnosticPresentationChange: ((UUID?) -> Void)?
   @FocusState private var folderOpenerFocused: Bool
   @FocusState private var settingsOpenerFocused: Bool
   @FocusState private var localPDFFocused: Bool
@@ -775,8 +832,13 @@ public struct ProductWorkspaceView: View {
   }
 
   public init(workspace: ProductWorkspace) {
+    self.init(workspace: workspace, diagnosticPresentationChange: nil)
+  }
+
+  init(workspace: ProductWorkspace, diagnosticPresentationChange: ((UUID?) -> Void)?) {
     self.workspace = workspace
     urls = workspace.urls
+    self.diagnosticPresentationChange = diagnosticPresentationChange
   }
   public var body: some View {
     let slot = nativeSlot
@@ -807,9 +869,9 @@ public struct ProductWorkspaceView: View {
               Button("가져온 PDF 열기") { Task { await workspace.openImportedPDF(paperID) } }
             }
           }.disabled(workspace.preparing || workspace.opening || workspace.sheetCleanupPending)
-          if workspace.preparing {
+          if let mount, workspace.isPreparingImport(for: mount) {
             ProgressView("PDF 확인 중")
-            Button("취소") { workspace.cancelLocalImportPreparation() }
+            Button("취소") { workspace.cancelLocalImportPreparation(for: mount) }
               .accessibilityLabel("PDF 확인 취소")
           }
           Spacer()
@@ -831,8 +893,9 @@ public struct ProductWorkspaceView: View {
             }),
           chooseLocalPDF: { chooseLocalPDF($0) },
           confirmLocalPDF: {
+            guard let mount else { return }
             invalidateDirectIntent()
-            workspace.acceptDroppedPDF($0)
+            workspace.acceptDroppedPDF($0, presentationMount: mount)
           }
         ) { retryImportURL in
           LibraryBrowserView(
@@ -853,17 +916,20 @@ public struct ProductWorkspaceView: View {
             deletePaper: { workspace.requestDeletion($0, retry: $1) },
             acknowledgeDeletionRefresh: { workspace.acknowledgeDeletionRefresh($0) },
             importPDF: {
+              guard let mount else { return }
               invalidateDirectIntent()
-              _ = workspace.pickPDF()
+              _ = workspace.pickPDF(presentationMount: mount)
             },
             retryImportPDF: {
+              guard let mount else { return }
               invalidateDirectIntent()
-              workspace.pickRetryPDF(paperID: $0, generation: $1)
+              workspace.pickRetryPDF(paperID: $0, generation: $1, presentationMount: mount)
             },
             retryImportURL: retryImportURL,
             manageFolders: {
+              guard let mount else { return }
               invalidateDirectIntent()
-              workspace.sheet = .folders
+              workspace.installSheet(.folders, for: mount)
             },
             summaries: workspace.summaries, providerSettings: workspace.settings)
         }
@@ -881,14 +947,19 @@ public struct ProductWorkspaceView: View {
       }
     }
     .onAppear {
-      mount = UUID()
+      guard mount == nil else { return }
+      mount = workspace.attachPresentation()
+      diagnosticPresentationChange?(mount)
       latchNativeSlot()
     }
     .onDisappear {
       invalidateDirectIntent()
-      workspace.cancelLocalImportPreparation()
+      let oldMount = mount
       mount = nil
       toolbarPresentation = nil
+      nativeSlot = nil
+      if let oldMount { workspace.detachPresentation(oldMount) }
+      diagnosticPresentationChange?(nil)
     }
     .onChange(of: workspace.reader?.mountIdentity) { _, reader in
       if reader != nil {
@@ -896,7 +967,7 @@ public struct ProductWorkspaceView: View {
         toolbarPresentation = nil
       }
     }
-    .onChange(of: workspace.sheet?.id) { _, _ in latchNativeSlot() }
+    .onChange(of: workspace.sheet(for: mount)?.id) { _, _ in latchNativeSlot() }
     .task {
       do {
         for try await progress in workspace.database.activeImportProgress() {
@@ -911,16 +982,16 @@ public struct ProductWorkspaceView: View {
       isPresented: Binding(
         get: {
           guard let slot else { return false }
-          return nativeSlot?.id == slot.id && workspace.sheet?.id == slot.sheet.id
+          return nativeSlot?.id == slot.id && workspace.sheet(for: slot.mount)?.id == slot.sheet.id
         },
         set: { visible in
           guard !visible, let slot, nativeSlot?.id == slot.id,
-            workspace.sheet?.id == slot.sheet.id
+            workspace.sheet(for: slot.mount)?.id == slot.sheet.id
           else { return }
           if interactiveCancelAllowed(slot) {
             recordAction(slot, confirmationID: slot.confirmationID, continued: false)
           }
-          workspace.sheet = nil
+          workspace.closeSheet(id: slot.sheet.id, for: slot.mount)
         }),
       onDismiss: {
         if let slot { nativeDidDismiss(slot) }
@@ -941,7 +1012,8 @@ public struct ProductWorkspaceView: View {
         cancelledConfirmation: actionBinding(slot, continued: false),
         continuedConfirmation: actionBinding(slot, continued: true),
         allowsInteractiveCancel: interactiveCancelAllowed(slot),
-        startInWorkspace: { workspace.startLocalImport(confirmation.id, destinationFolderID: $0) != nil },
+        startInWorkspace: { workspace.startLocalImport(confirmation.id, destinationFolderID: $0,
+          presentationMount: slot.mount) != nil },
         imported: { _ in })
     case .folders:
       VStack {
@@ -952,6 +1024,7 @@ public struct ProductWorkspaceView: View {
       VStack {
         ProviderSettingsView(service: workspace.settings, isCurrent: {
           nativeSlot?.id == slot.id && mount == slot.mount && workspace.settingsActionsAllowed
+            && workspace.sheet(for: slot.mount)?.id == slot.sheet.id
         })
         .onDisappear { closeNativeSlot(slot) }
         Button("닫기") { closeNativeSlot(slot) }
@@ -969,8 +1042,8 @@ public struct ProductWorkspaceView: View {
     let presentation = ToolbarPresentation(mount: mount, kind: kind)
     toolbarPresentation = presentation
     invalidateDirectIntent()
-    workspace.sheet = kind.sheet
-    if workspace.sheet.map({ kind.matches($0) }) != true,
+    workspace.installSheet(kind.sheet, for: mount)
+    if workspace.sheet(for: mount).map({ kind.matches($0) }) != true,
       toolbarPresentation?.id == presentation.id
     {
       toolbarPresentation = nil
@@ -978,8 +1051,8 @@ public struct ProductWorkspaceView: View {
   }
 
   private func closeNativeSlot(_ slot: NativeSlot) {
-    guard nativeSlot?.id == slot.id, workspace.sheet?.id == slot.sheet.id else { return }
-    workspace.sheet = nil
+    guard nativeSlot?.id == slot.id else { return }
+    workspace.closeSheet(id: slot.sheet.id, for: slot.mount)
   }
 
   private func chooseLocalPDF(_ id: UUID) {
@@ -988,7 +1061,7 @@ public struct ProductWorkspaceView: View {
       !workspace.sheetCleanupPending, workspace.localImportID == nil
     else { return }
     directIntent = DirectIntent(id: id, mount: mount)
-    guard let preparation = workspace.pickPDF() else {
+    guard let preparation = workspace.pickPDF(presentationMount: mount) else {
       if directIntent?.id == id { directIntent = nil }
       return
     }
@@ -1005,12 +1078,12 @@ public struct ProductWorkspaceView: View {
 
   private func latchNativeSlot() {
     if let presentation = toolbarPresentation,
-      let sheet = workspace.sheet,
+      let sheet = workspace.sheet(for: mount),
       presentation.mount != mount || !presentation.kind.matches(sheet)
     {
       if toolbarPresentation?.id == presentation.id { toolbarPresentation = nil }
     }
-    guard nativeSlot == nil, let mount, let sheet = workspace.sheet else { return }
+    guard nativeSlot == nil, let mount, let sheet = workspace.sheet(for: mount) else { return }
     let confirmationID: UUID?
     if case .confirmation(let confirmation) = sheet {
       confirmationID = confirmation.id
@@ -1038,7 +1111,7 @@ public struct ProductWorkspaceView: View {
 
   private func nativeDidAppear(_ slot: NativeSlot) {
     guard nativeSlot?.id == slot.id, mount == slot.mount,
-      workspace.sheet?.id == slot.sheet.id
+      workspace.sheet(for: slot.mount)?.id == slot.sheet.id
     else { return }
     nativeSlot?.appeared = true
     if let id = slot.toolbarPresentationID, toolbarPresentation?.id == id,
@@ -1059,7 +1132,7 @@ public struct ProductWorkspaceView: View {
       nativeSlot?.continued == nil, let id = slot.directIntentID,
       directIntent?.id == id, directIntent?.slotID == slot.id,
       directIntent?.invalidated == false, directIntent?.continued == nil,
-      mount == slot.mount, workspace.sheet?.id == slot.sheet.id
+      mount == slot.mount, workspace.sheet(for: slot.mount)?.id == slot.sheet.id
     else { return false }
     return true
   }
@@ -1075,7 +1148,7 @@ public struct ProductWorkspaceView: View {
   private func recordAction(_ slot: NativeSlot, confirmationID: UUID?, continued: Bool) {
     guard nativeSlot?.id == slot.id, let confirmationID,
       slot.confirmationID == confirmationID, mount == slot.mount,
-      workspace.sheet?.id == slot.sheet.id
+      workspace.sheet(for: slot.mount)?.id == slot.sheet.id
     else { return }
     if continued {
       nativeSlot?.continued = confirmationID
@@ -1096,7 +1169,8 @@ public struct ProductWorkspaceView: View {
     // Slot identity gates duplicate callbacks; owner cleanup precedes every focus guard.
     guard nativeSlot?.id == slot.id else { return }
     if case .settings = slot.sheet { closeNativeSlot(slot) }
-    let cleanup = workspace.presentationDidDismiss(confirmationID: slot.confirmationID)
+    let cleanup = workspace.presentationDidDismiss(confirmationID: slot.confirmationID,
+      presentationMount: slot.mount)
     let appeared = nativeSlot?.appeared == true
     nativeSlot = nil
     if let id = slot.directIntentID, directIntent?.id == id,

@@ -572,6 +572,109 @@ private actor WorkspaceDeletionAgent: AgentLibraryPurging {
     _ = await f.workspace.presentationDidDismiss(confirmationID: fresh.id)?.value
   }
 
+  func testLocalPDFConfirmationOnlyBelongsToItsAttachedLibraryWindow() async throws {
+    let f = try await fixture()
+    let owner = f.workspace.attachPresentation()
+    let otherWindow = f.workspace.attachPresentation()
+    f.workspace.beforeImportConfirmationInstallForOwnedFixtures = { _ in
+      XCTAssertTrue(f.workspace.isPreparingImport(for: owner))
+      XCTAssertFalse(f.workspace.isPreparingImport(for: otherWindow))
+      f.workspace.cancelLocalImportPreparation(for: otherWindow)
+      f.workspace.detachPresentation(otherWindow)
+    }
+    defer { f.workspace.beforeImportConfirmationInstallForOwnedFixtures = nil }
+    let id = try await f.workspace.prepareImport(source: f.source, presentationMount: owner)
+    let pending = try confirmation(f.workspace)
+    XCTAssertEqual(pending.id, id)
+    XCTAssertEqual(f.workspace.sheet(for: owner)?.id, id.uuidString)
+    XCTAssertNil(f.workspace.sheet(for: otherWindow))
+    let secondWindow = f.workspace.attachPresentation()
+    XCTAssertNil(f.workspace.sheet(for: secondWindow))
+    f.workspace.closeSheet(id: id.uuidString, for: secondWindow)
+    XCTAssertNil(f.workspace.startLocalImport(id, destinationFolderID: nil, presentationMount: secondWindow))
+    XCTAssertEqual(f.workspace.sheet(for: owner)?.id, id.uuidString)
+
+    f.workspace.detachPresentation(owner)
+    XCTAssertNil(f.workspace.sheet)
+    let cleanup = try XCTUnwrap(f.workspace.dismissSheet())
+    let cancelledID = await cleanup.value
+    XCTAssertEqual(cancelledID, id)
+    let pendingCount = await f.workspace.imports.pendingConfirmationCount
+    XCTAssertEqual(pendingCount, 0)
+    XCTAssertFalse(f.workspace.sheetCleanupPending)
+    XCTAssertTrue(try f.database.libraryRecords().isEmpty)
+    XCTAssertEqual(try f.database.adapterRead { try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM importJob") }, 0)
+
+    f.workspace.beforeImportConfirmationInstallForOwnedFixtures = nil
+    let fresh = try await f.workspace.prepareImport(source: f.source, presentationMount: secondWindow)
+    XCTAssertNil(f.workspace.presentationDidDismiss(confirmationID: id, presentationMount: owner))
+    let importing = try XCTUnwrap(f.workspace.startLocalImport(fresh, destinationFolderID: nil,
+      presentationMount: secondWindow))
+    f.workspace.detachPresentation(secondWindow)
+    let imported = await importing.value
+    let paperID = try XCTUnwrap(imported)
+    XCTAssertEqual(try f.database.libraryRecords().first(where: { $0.id == paperID })?.status, .ready)
+    XCTAssertNil(f.workspace.sheet)
+  }
+
+  func testClosingLibraryWindowBeforeLocalConfirmationCannotLeaveAnUnownedIntent() async throws {
+    let f = try await fixture()
+    let closed = f.workspace.attachPresentation()
+    f.workspace.beforeImportConfirmationInstallForOwnedFixtures = { _ in f.workspace.detachPresentation(closed) }
+    defer { f.workspace.beforeImportConfirmationInstallForOwnedFixtures = nil }
+    do {
+      _ = try await f.workspace.prepareImport(source: f.source, presentationMount: closed)
+      XCTFail("Expected detached presentation to cancel preparation")
+    } catch is CancellationError { }
+    XCTAssertNil(f.workspace.sheet)
+    XCTAssertFalse(f.workspace.preparing)
+    let pendingCount = await f.workspace.imports.pendingConfirmationCount
+    XCTAssertEqual(pendingCount, 0)
+
+    let current = f.workspace.attachPresentation()
+    f.workspace.installSheet(.settings, for: current)
+    XCTAssertNil(f.workspace.sheet(for: closed))
+    XCTAssertEqual(f.workspace.sheet(for: current)?.id, "settings")
+    f.workspace.closeSheet(id: "settings", for: closed)
+    XCTAssertEqual(f.workspace.sheet(for: current)?.id, "settings")
+    f.workspace.closeSheet(id: "settings", for: current)
+    XCTAssertTrue(f.workspace.sheetCleanupPending)
+    XCTAssertNil(f.workspace.presentationDidDismiss(presentationMount: closed))
+    XCTAssertTrue(f.workspace.sheetCleanupPending)
+    f.workspace.presentationDidDismiss(presentationMount: current)
+    XCTAssertFalse(f.workspace.sheetCleanupPending)
+  }
+
+  func testWindowDetachDuringSheetPublicationCompletesCleanup() async throws {
+    let f = try await fixture()
+    let settingsMount = f.workspace.attachPresentation()
+    f.workspace.installSheet(.settings, for: settingsMount)
+    let closeObservation = f.workspace.objectWillChange.sink {
+      f.workspace.detachPresentation(settingsMount)
+    }
+    f.workspace.closeSheet(id: "settings", for: settingsMount)
+    closeObservation.cancel()
+    XCTAssertFalse(f.workspace.sheetCleanupPending)
+
+    let importMount = f.workspace.attachPresentation()
+    let openObservation = f.workspace.objectWillChange.sink {
+      if f.workspace.preparing, f.workspace.sheetCleanupPending, f.workspace.sheet == nil {
+        f.workspace.detachPresentation(importMount)
+      }
+    }
+    defer { openObservation.cancel() }
+    do {
+      _ = try await f.workspace.prepareImport(source: f.source, presentationMount: importMount)
+      XCTFail("Expected detached presentation to cancel confirmation")
+    } catch is CancellationError { }
+    if let cleanup = f.workspace.dismissSheet() { _ = await cleanup.value }
+    XCTAssertNil(f.workspace.sheet)
+    XCTAssertFalse(f.workspace.sheetCleanupPending)
+    XCTAssertFalse(f.workspace.preparing)
+    let pendingCount = await f.workspace.imports.pendingConfirmationCount
+    XCTAssertEqual(pendingCount, 0)
+  }
+
   func testWorkspaceObsoleteDismissCallbackDuringOwnedImportPreparationDoesNotInvalidateInput() async throws {
     let f = try await fixture()
     let folder = try await f.workspace.imports.createFolder(name: "Fresh input destination")

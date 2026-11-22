@@ -84,6 +84,7 @@ final class SyntheticWorkspaceFiles {
   @Published var workspace: ProductWorkspace?
   @Published var failed = false
   @Published var preparing = false
+  @Published var presentationMount: UUID?
   private var started = false
   private var source: URL?
   private var retainedFiles: SyntheticWorkspaceFiles?
@@ -117,10 +118,11 @@ final class SyntheticWorkspaceFiles {
   }
 
   func prepareSyntheticImport() async {
-    guard let workspace, let source, !preparing else { return }
+    guard let workspace, let source, let presentationMount, !preparing else { return }
     preparing = true
     defer { preparing = false }
-    do { _ = try await workspace.prepareImport(source: source) }
+    do { _ = try await workspace.prepareImport(source: source, presentationMount: presentationMount) }
+    catch is CancellationError { return }
     catch { failed = true }
   }
 }
@@ -134,10 +136,10 @@ final class SyntheticWorkspaceFiles {
         Text("전용 합성 PDF의 가져오기 확인과 Reader만 검사합니다. 제품의 Provider 진입 검증이 아닙니다.")
           .font(.caption)
         Button("합성 PDF 가져오기") { Task { await model.prepareSyntheticImport() } }
-          .disabled(model.workspace == nil || model.preparing)
+          .disabled(model.presentationMount == nil || model.preparing)
       }.padding().frame(maxWidth: .infinity, alignment: .leading).background(.yellow.opacity(0.15))
       if let workspace = model.workspace {
-        ProductWorkspaceView(workspace: workspace)
+        ProductWorkspaceView(workspace: workspace) { model.presentationMount = $0 }
       } else if model.failed {
         Text("합성 진단 저장소를 만들지 못했습니다. 새 run ID와 전용 앱 실행을 확인하세요.").padding()
       } else { ProgressView("합성 진단 준비 중").padding() }
