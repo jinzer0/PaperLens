@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import GRDB
 import XCTest
@@ -25,8 +26,8 @@ final class ExtractionRevisionTests: XCTestCase {
       throw ExtractionError.geometryUnavailable
     }
   }
-  private func fixture() throws -> (ProductDatabase, UUID, UUID, URL) {
-    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+  private func fixture(at root: URL = FileManager.default.temporaryDirectory
+    .appendingPathComponent(UUID().uuidString)) throws -> (ProductDatabase, UUID, UUID, URL) {
     let db = try ProductDatabase.open(at: root)
     let paper = UUID(), generation = UUID()
     try db.adapterWrite { sql in
@@ -201,6 +202,131 @@ final class ExtractionRevisionTests: XCTestCase {
     XCTAssertEqual(try reopened.extractionStatus(paperID: paper).usableRevision, second.revision)
     XCTAssertEqual(try reopened.searchExtraction(paperID: paper, matching: "beta").first?.canonicalGeometry,
       Data([1, 2, 3]))
+  }
+
+  private enum PublicationExitPoint: String, CaseIterable {
+    case beforeCommit, afterCommit
+
+    var exitStatus: Int32 { self == .beforeCommit ? 71 : 72 }
+  }
+
+  func testPublicationSurvivesAbruptExitAtCommitBoundary() async throws {
+    let argument = "PAPERLENS_TEST_EXTRACTION_PUBLICATION_EXIT"
+    let temporaryDirectory = FileManager.default.temporaryDirectory
+    if let request = ProcessInfo.processInfo.environment[argument] {
+      let parts = request.split(separator: ":")
+      guard parts.count == 2, let id = UUID(uuidString: String(parts[0])),
+        let point = PublicationExitPoint(rawValue: String(parts[1])) else {
+        return XCTFail("Invalid child fixture request")
+      }
+      let root = temporaryDirectory.appendingPathComponent("paperlens-publication-\(id.uuidString)")
+      guard FileManager.default.fileExists(atPath: root.appendingPathComponent("xctest.log").path) else {
+        return XCTFail("Parent fixture was not prepared")
+      }
+      try exitWhilePublishing(at: root, point: point)
+    }
+
+    for point in PublicationExitPoint.allCases {
+      let id = UUID()
+      let root = temporaryDirectory.appendingPathComponent("paperlens-publication-\(id.uuidString)")
+      try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false,
+        attributes: [.posixPermissions: 0o700])
+      defer { try? FileManager.default.removeItem(at: root) }
+      let log = root.appendingPathComponent("xctest.log")
+      try Data().write(to: log, options: .withoutOverwriting)
+      let output = try FileHandle(forWritingTo: log)
+      defer { try? output.close() }
+      let process = Process()
+      process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
+      process.arguments = ["xctest", "-XCTest",
+        "ProductTests.ExtractionRevisionTests/testPublicationSurvivesAbruptExitAtCommitBoundary",
+        Bundle(for: Self.self).bundlePath]
+      var environment = ProcessInfo.processInfo.environment
+      environment[argument] = "\(id.uuidString):\(point.rawValue)"
+      process.environment = environment
+      process.standardOutput = output
+      process.standardError = output
+      let exited = expectation(description: "Publisher exits \(point.rawValue)")
+      process.terminationHandler = { _ in exited.fulfill() }
+      try process.run()
+      await fulfillment(of: [exited], timeout: 12)
+      if process.isRunning {
+        kill(process.processIdentifier, SIGKILL)
+        process.waitUntilExit()
+      }
+      guard process.terminationReason == .exit, process.terminationStatus == point.exitStatus else {
+        return XCTFail("Publisher missed \(point) exit: \(try String(contentsOf: log, encoding: .utf8))")
+      }
+
+      let database = try ProductDatabase.open(at: root)
+      let paper = try XCTUnwrap(database.adapterRead { db in
+        try String.fetchOne(db, sql: "SELECT id FROM paper").flatMap(UUID.init(uuidString:))
+      })
+      let originalRevision = try XCTUnwrap(database.adapterRead { db in
+        try String.fetchOne(db, sql: """
+          SELECT i.revision FROM extractionInvocation i JOIN extractionAttemptHistory h USING (attempt)
+          """).flatMap(UUID.init(uuidString:))
+      })
+      let receipt = try ProductJobRecovery(database: database).recoverStartup(currentEpoch: UUID())
+      let status = try database.extractionStatus(paperID: paper)
+      let hits = try database.searchExtraction(paperID: paper, matching: "R")
+      XCTAssertEqual(try database.searchExtraction(paperID: paper, matching: "retained",
+        revision: originalRevision).map(\.text), ["retained"])
+      if point == .beforeCommit {
+        XCTAssertEqual(receipt.interruptedJobs.map(\.kind), [.extraction])
+        XCTAssertEqual(status.state, "failed")
+        XCTAssertEqual(status.failure, "interrupted")
+        XCTAssertEqual(status.usableRevision, originalRevision)
+        XCTAssertEqual(try database.searchExtraction(paperID: paper, matching: "retained").count, 1)
+        XCTAssertTrue(hits.isEmpty)
+        let counts = try database.adapterRead { db in
+          try ["extractionRevision", "extractionSentence", "extractionFTS", "extractionGeometryOwner"].map {
+            try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM \($0)")
+          }
+        }
+        XCTAssertEqual(counts, [1, 1, 1, 0])
+      } else {
+        XCTAssertTrue(receipt.interruptedJobs.isEmpty)
+        XCTAssertEqual(status.state, "succeeded")
+        XCTAssertNil(status.failure)
+        let hit = try XCTUnwrap(hits.first)
+        XCTAssertEqual(hits.count, 1)
+        XCTAssertEqual(status.usableRevision, hit.revision)
+        XCTAssertNotEqual(hit.revision, originalRevision)
+        let owner = try database.annotationIdentity(paperID: paper)
+        let sentence = try PDFSentenceIdentity(paperID: paper, pdfSHA256: owner.pdfSHA256,
+          extractionRevision: hit.revision.uuidString.lowercased(), pageIndex: hit.page, sentenceID: hit.sentenceID)
+        let geometry = try XCTUnwrap(database.originalExtractionGeometryOwners(paperID: paper,
+          generation: owner.generation, pdfSHA256: owner.pdfSHA256, revision: hit.revision, sentences: [sentence]))
+        XCTAssertEqual(try geometry.resolve(hit, identity: sentence).fullSourceQuote, "R")
+      }
+    }
+  }
+
+  private func exitWhilePublishing(at root: URL, point: PublicationExitPoint) throws -> Never {
+    let (db, paper, generation, _) = try fixture(at: root)
+    let original = try identity(db, paper, generation)
+    try db.reserveExtraction(original)
+    try publishFixtureExtraction(db, original, sentences: rows("retained"))
+    let next = try identity(db, paper, generation)
+    try db.reserveExtraction(next)
+    if point == .beforeCommit {
+      try db.adapterWrite { sql in
+        sql.add(function: DatabaseFunction("exitBeforePublicationCommit", argumentCount: 0) { _ in
+          Darwin._exit(point.exitStatus)
+        })
+        try sql.execute(sql: """
+          CREATE TEMP TRIGGER exitBeforePublicationCommit AFTER UPDATE OF state ON extractionAttempt
+          WHEN NEW.state = 'succeeded' BEGIN
+            SELECT exitBeforePublicationCommit();
+          END;
+          """)
+      }
+    }
+    let replacement = try replacementWithOriginalGeometry(next)
+    try publishFixtureExtraction(db, next, sentences: [replacement])
+    // The storage adapter's return means its transaction has committed.
+    Darwin._exit(PublicationExitPoint.afterCommit.exitStatus)
   }
 
   func testFTSFailureRollsBackEveryRowAndKeepsPreviousUsableRevision() throws {

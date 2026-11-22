@@ -1,5 +1,10 @@
 # Story 1.20 Build Spec — Parsing revision publication
 
+## 저장 프로세스 강제 종료와 재실행 검증
+
+- 실제 ProductDatabase 저장 프로세스를 새 revision의 검색 색인과 공개 포인터를 쓴 뒤 커밋하기 직전에 즉시 종료했다. 재실행 시 기존 revision만 검색됐고, 새 문장·geometry·FTS 행은 남지 않았다. 중단된 시도는 시작 복구에서 `interrupted`로 바뀌었다.
+- 별도 프로세스를 커밋 직후 즉시 종료한 경우에는 새 revision의 검색 결과와 원본 위치를 확인했다. 이전 revision도 지정해서 검색할 수 있었고, 시작 복구에서 완료된 시도는 유지됐다. 이 검증은 합성 문장을 사용한 저장 동작을 다룬다.
+
 ## Authority and admission
 
 Issue#22 / issue/22-story-1-20; basef14f15f3f1c1fed02657ebf0c7ecdcb23721bfa8. PRODUCT5eac3bb9424ad893eca7d63bc319b71f580838ed; ARCHITECTURE1195c92227cc628e325f5ff24d70cc93639bf7a9; Whole-Epic https://github.com/jinzer0/PaperLens/issues/3#issuecomment-6049004229. Own Spec before source, no repeated unchanged-scope SHA approval; no live/paid/credential/remote/distribution/gate inference.
