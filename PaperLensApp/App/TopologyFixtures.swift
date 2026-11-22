@@ -1833,7 +1833,7 @@ final class TopologyOwnedFixtures: @unchecked Sendable {
 
   func beginMetadataMutation(owner: UUID) -> Bool {
     backupAdmission.withLock {
-      guard metadataLease == nil, !cleaned else { return false }
+      guard metadataLease == nil, namespaceIsActive else { return false }
       metadataLease = owner
       return true
     }
@@ -1849,7 +1849,11 @@ final class TopologyOwnedFixtures: @unchecked Sendable {
   var links: [[String: String]] {
     ownedLinks.map { ["alias": $0.alias, "name": $0.alias + ".link"] }
   }
-  private var cleaned = false
+  private enum CleanupState {
+    case active, removed, unverified, unlaunchedRemovalPending
+  }
+  private var cleanupState: CleanupState = .active
+  private var namespaceIsActive: Bool { cleanupState == .active }
   private var runtimeCleanupDescriptors: Set<Int32> = []
   private let runtimeAdmission = NSRecursiveLock()
 
@@ -1927,7 +1931,7 @@ final class TopologyOwnedFixtures: @unchecked Sendable {
     let second = first === self ? destination : self
     first.runtimeAdmission.lock(); second.runtimeAdmission.lock()
     defer { second.runtimeAdmission.unlock(); first.runtimeAdmission.unlock() }
-    guard self !== destination, !cleaned, !destination.cleaned,
+    guard self !== destination, namespaceIsActive, destination.namespaceIsActive,
       destination.permitsNamespaceMutation,
       matchesOwnedNamespace(), destination.matchesOwnedNamespace(),
       let source = ownedDirectories.first(where: { $0.name == "codex" }),
@@ -1987,11 +1991,25 @@ final class TopologyOwnedFixtures: @unchecked Sendable {
     return true
   }
 
-  /// Used only before a worker launch has been constructed/admitted.
+  var hasPendingUnlaunchedRemoval: Bool {
+    runtimeAdmission.withLock { cleanupState == .unlaunchedRemovalPending }
+  }
+
+  /// Used only when no product worker has started.
   func cleanupUnlaunchedWorkerNamespace() -> Bool {
+    runtimeAdmission.lock()
+    defer { runtimeAdmission.unlock() }
+    if cleanupState == .unlaunchedRemovalPending {
+      // All tracked entries were retired earlier. Retry only removal of the
+      // same empty directory, without touching whatever prevented that unlink.
+      guard permitsNamespaceMutation, matchesNamespaceIdentity(),
+        unlinkat(parent, runID, AT_REMOVEDIR) == 0 else { return false }
+      cleanupState = .removed
+      return true
+    }
     let owner = UUID()
     guard beginMetadataMutation(owner: owner) else { return false }
-    return cleanupWorkerNamespace(owner: owner)
+    return cleanupWorkerNamespace(owner: owner, unlaunched: true)
   }
 
   func prepareWorkerDirectories(owner: UUID, permit: () -> Bool) -> Bool {
@@ -2173,9 +2191,13 @@ final class TopologyOwnedFixtures: @unchecked Sendable {
   }
 
   private func matchesOwnedNamespace(permit: () -> Bool = { true }) -> Bool {
+    namespaceIsActive && matchesNamespaceIdentity(permit: permit)
+  }
+
+  private func matchesNamespaceIdentity(permit: () -> Bool = { true }) -> Bool {
     var info = stat()
     var named = stat()
-    return !cleaned && privateOwnedDirectory(descriptor, info: &info, permit: permit)
+    return privateOwnedDirectory(descriptor, info: &info, permit: permit)
       && info.st_ino == directoryInode && info.st_dev == directoryDevice
       && permit()
       && TopologyFixtures.matches(directory: parent, name: runID, info: info)
@@ -2230,7 +2252,7 @@ final class TopologyOwnedFixtures: @unchecked Sendable {
   }
 
   func prepareLinks(_ aliases: [String]) -> Bool {
-    guard permitsNamespaceMutation, !cleaned, ownedLinks.isEmpty, !aliases.isEmpty,
+    guard permitsNamespaceMutation, namespaceIsActive, ownedLinks.isEmpty, !aliases.isEmpty,
       Set(aliases).count == aliases.count,
       aliases.allSatisfy({ TopologyFixtures.aliases.contains($0) })
     else { return false }
@@ -2249,7 +2271,7 @@ final class TopologyOwnedFixtures: @unchecked Sendable {
 
   func checkLinks() -> Bool {
     var info = stat()
-    guard !cleaned, !ownedLinks.isEmpty,
+    guard namespaceIsActive, !ownedLinks.isEmpty,
       TopologyFixtures.privateDirectory(descriptor, info: &info),
       info.st_ino == directoryInode, info.st_dev == directoryDevice
     else { return false }
@@ -2269,7 +2291,7 @@ final class TopologyOwnedFixtures: @unchecked Sendable {
 
   func create(_ alias: String) -> Bool {
     let names = ["M": "db.canary", "PDF": "input.pdf", "G": "group.canary"]
-    guard permitsNamespaceMutation, !cleaned, let name = names[alias] else { return false }
+    guard permitsNamespaceMutation, namespaceIsActive, let name = names[alias] else { return false }
     let bytes = TopologyFixtures.marker(alias, runID: runID)
     let fd = openat(descriptor, name, O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
     guard fd >= 0 else { return false }
@@ -2299,7 +2321,7 @@ final class TopologyOwnedFixtures: @unchecked Sendable {
   }
 
   func check() -> Bool {
-    guard permitsNamespaceMutation, !cleaned, !files.isEmpty else { return false }
+    guard permitsNamespaceMutation, namespaceIsActive, !files.isEmpty else { return false }
     return files.allSatisfy { name, expected, inode, device in
       let fd = openat(descriptor, name, O_RDWR | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)
       guard fd >= 0 else { return false }
@@ -2323,6 +2345,10 @@ final class TopologyOwnedFixtures: @unchecked Sendable {
   /// Only called by the retained native worker owner after CLI, broker and worker
   /// waits and checked pipe closure. No pre-existing run is ever adopted.
   func cleanupWorkerNamespace(owner: UUID) -> Bool {
+    cleanupWorkerNamespace(owner: owner, unlaunched: false)
+  }
+
+  private func cleanupWorkerNamespace(owner: UUID, unlaunched: Bool) -> Bool {
     runtimeAdmission.lock()
     defer { runtimeAdmission.unlock() }
     guard runtimeCleanupDescriptors.isEmpty,
@@ -2336,7 +2362,7 @@ final class TopologyOwnedFixtures: @unchecked Sendable {
       else { return false }
     }
     endMetadataMutation(owner: owner)
-    return cleanup()
+    return cleanup(unlaunched: unlaunched)
   }
 
   private func emptyOwnedRuntimeDirectory(_ directory: Int32, device: dev_t) -> Bool {
@@ -2388,11 +2414,15 @@ final class TopologyOwnedFixtures: @unchecked Sendable {
   }
 
   @discardableResult func cleanup() -> Bool {
+    cleanup(unlaunched: false)
+  }
+
+  private func cleanup(unlaunched: Bool) -> Bool {
     runtimeAdmission.lock()
     defer { runtimeAdmission.unlock() }
     guard runtimeCleanupDescriptors.isEmpty else { return false }
     guard permitsNamespaceMutation else { return false }
-    guard !cleaned else { return true }
+    guard namespaceIsActive else { return cleanupState == .removed }
     var success = true
     for record in ownedDirectories {
       guard let expected = record.identity,
@@ -2432,9 +2462,13 @@ final class TopologyOwnedFixtures: @unchecked Sendable {
     {
       success = false
     } else if unlinkat(parent, runID, AT_REMOVEDIR) != 0 {
+      if unlaunched, success, errno == ENOTEMPTY {
+        cleanupState = .unlaunchedRemovalPending
+        return false
+      }
       success = false
     }
-    cleaned = true
+    cleanupState = success ? .removed : .unverified
     return success
   }
 

@@ -6,6 +6,8 @@ import ProviderRequest
 public enum LibrarySummaryError: Error, Equatable {
   case providerUnavailable, geometryUnavailable, staleIdentity, invalidGrounding, invalidResult
   case requestInProgress, cleanupUnavailable, persistenceFailure
+  /// The worker never started. Its owned setup directory can be removed once empty.
+  case unlaunchedCleanupPending
 }
 
 /// Decoder must validate canonical geometry and full quote extent, not merely decode a BLOB.

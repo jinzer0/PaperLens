@@ -99,6 +99,7 @@ public final class NativeCodexConnection: ObservableObject {
       login.namespace.copyLoginAuthentication(to: target) else {
       if !target.cleanupUnlaunchedWorkerNamespace() {
         summaryNamespaceDebt = (identity.paperID, target)
+        if target.hasPendingUnlaunchedRemoval { throw LibrarySummaryError.unlaunchedCleanupPending }
         throw LibrarySummaryError.cleanupUnavailable
       }
       throw LibrarySummaryError.providerUnavailable
@@ -134,8 +135,16 @@ public final class NativeCodexConnection: ObservableObject {
     // A different Paper's known namespace may remain. Any unexpected root entry
     // or replacement still prevents a purge receipt.
     if let debt = summaryNamespaceDebt {
-      guard debt.paperID != paperID else { throw LocalLibraryError.producerClosureUnknown }
-      try IsolatedAgentLibraryPurge.verifySummaryRoot(summaryRoot, allowing: debt.namespace)
+      if debt.paperID == paperID {
+        guard debt.namespace.cleanupUnlaunchedWorkerNamespace() else {
+          throw LocalLibraryError.producerClosureUnknown
+        }
+        summaryNamespaceDebt = nil
+        objectWillChange.send()
+        try IsolatedAgentLibraryPurge.verifySummaryRoot(summaryRoot)
+      } else {
+        try IsolatedAgentLibraryPurge.verifySummaryRoot(summaryRoot, allowing: debt.namespace)
+      }
     } else if let other = summaryScopes.values.first(where: { $0.paperID != paperID }) {
       try other.verifyNamespaceForUnrelatedPurge(at: summaryRoot)
     } else {

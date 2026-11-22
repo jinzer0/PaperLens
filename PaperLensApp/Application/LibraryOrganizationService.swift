@@ -58,7 +58,7 @@ public enum LibrarySummaryFailure: String, CaseIterable, Sendable {
     case .invalidGrounding: return "응답의 원문 근거를 확인하지 못해 요약을 저장하지 않았습니다. 파싱 상태를 확인하세요."
     case .geometryUnavailable: return "요약에 필요한 원문 위치 정보가 없습니다. 파싱 상태를 확인하세요. PDF는 계속 읽을 수 있습니다."
     case .staleIdentity: return "논문 또는 Provider 설정이 변경되어 이전 요청을 저장하지 않았습니다. 현재 상태에서 다시 생성하세요."
-    case .cleanupUnavailable: return "요약 실행의 안전한 종료를 확인하지 못했습니다. 원문 보호를 위해 새 요청과 삭제를 보류합니다."
+    case .cleanupUnavailable: return "요약 작업의 안전한 정리를 확인하지 못했습니다. 정리가 확인될 때까지 새 요청과 삭제를 보류합니다."
     case .persistenceFailure: return "요약을 안전하게 저장하지 못했습니다. 현재 저장 상태를 새로 확인하세요."
     case .paperUnavailable: return "현재 논문을 사용할 수 없어 요약을 중단했습니다. 라이브러리 상태를 확인하세요."
     case .requestInProgress: return "다른 요약이 실행 중이거나 이전 실행의 정리가 필요합니다. 현재 작업 상태를 확인하세요."

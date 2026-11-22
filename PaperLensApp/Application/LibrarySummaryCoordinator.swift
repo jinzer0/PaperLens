@@ -34,7 +34,7 @@ extension LibrarySummaryFailure {
       case .invalidGrounding: return .invalidGrounding
       case .invalidResult: return .invalidResponse
       case .requestInProgress: return .requestInProgress
-      case .cleanupUnavailable: return .cleanupUnavailable
+      case .cleanupUnavailable, .unlaunchedCleanupPending: return .cleanupUnavailable
       case .persistenceFailure: return .persistenceFailure
       }
     }
@@ -353,6 +353,7 @@ extension LibrarySummaryFailure {
       var failure = error
       // An isolated producer may report unknown physical retirement. Keep the
       // paper lease held so deletion cannot remove a producer's remaining input.
+      // Unlaunched cleanup debt is fenced by the Provider owner at purge instead.
       if awaitingProducer, error as? LibrarySummaryError == .cleanupUnavailable {
         retainLease = true
         producerCleanupDebt.append(lease)

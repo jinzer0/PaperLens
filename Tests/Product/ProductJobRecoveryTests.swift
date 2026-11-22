@@ -12,7 +12,8 @@ struct StartupSummaryFixture {
   let result: ValidatedProviderResult
   let geometry: CanonicalExtractionGeometryValidator
 
-  init(database: ProductDatabase, lifecycle: LocalLibraryLifecycle, epoch: UUID) async throws {
+  init(database: ProductDatabase, lifecycle: LocalLibraryLifecycle, epoch: UUID,
+    persistOriginalGeometry: Bool = false) async throws {
     self.database = database
     let source = database.root.appendingPathComponent("startup-\(UUID().uuidString).pdf")
     try Data("%PDF-1.7\nsynthetic owned summary PDF\n%%EOF\n".utf8).write(to: source)
@@ -58,6 +59,18 @@ struct StartupSummaryFixture {
       return .init(page: key.page, sentenceID: key.sentenceID,
         text: owner.fullSourceQuote, geometry: bytes)
     })
+    if persistOriginalGeometry {
+      // The generation coordinator requires a separate archive of the original fixture anchors.
+      try database.adapterWrite { db in
+        for owner in owners {
+          try db.execute(sql: """
+            INSERT INTO extractionGeometryOwner(revision, sentenceID, page, maximumErrorPDFPoints, originalAnchor)
+            VALUES (?, ?, ?, 0, ?)
+            """, arguments: [extraction.revision.uuidString, owner.identity.sentenceID,
+              owner.identity.pageIndex, CanonicalExtractionGeometryValidator.encodeCanonicalAnchor(owner)])
+        }
+      }
+    }
     // Explicit synthetic trusted-context generation, not derived from a durable UUID.
     identity = LibrarySummaryIdentity(paperID: paper, generation: extraction.generation,
       requestPaperGeneration: 1, pdfSHA256: hash, revision: extraction.revision,
