@@ -461,6 +461,10 @@ final class ImportFixtureProtocol: URLProtocol, @unchecked Sendable {
   override func startLoading() {
     guard let url = request.url else { return }
     let fixture = url.pathComponents.dropFirst().first ?? "chunks"
+    if fixture == "offline" {
+      client?.urlProtocol(self, didFailWithError: URLError(.notConnectedToInternet))
+      return
+    }
     if fixture.hasPrefix("redirect") {
       let target: String
       switch fixture {
@@ -489,6 +493,11 @@ final class ImportFixtureProtocol: URLProtocol, @unchecked Sendable {
     let response = HTTPURLResponse(url: url, statusCode: fixture == "status" ? 404 : 200,
       httpVersion: "HTTP/1.1", headerFields: headers)!
     client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+    if fixture == "lost-connection" {
+      client?.urlProtocol(self, didLoad: Data("%PDF-1.7\n".utf8))
+      client?.urlProtocol(self, didFailWithError: URLError(.networkConnectionLost))
+      return
+    }
     if fixture == "stall" {
       client?.urlProtocol(self, didLoad: Data("%P".utf8))
       Self.state.start(url.lastPathComponent)

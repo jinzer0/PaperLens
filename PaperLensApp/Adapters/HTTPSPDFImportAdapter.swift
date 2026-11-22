@@ -6,7 +6,8 @@ import ProviderRequest
 #endif
 
 public enum URLImportError: Error, Equatable, Sendable {
-  case rejected, capacity, cancelled, writerUnavailable, destinationMissing, closureUnknown, cleanupFailed
+  case rejected, connectionFailed, capacity, cancelled, writerUnavailable, destinationMissing
+  case closureUnknown, cleanupFailed
 }
 
 /// Created only after the actual file producer and URLSession have closed/drained.
@@ -390,7 +391,15 @@ private final class HTTPSPDFProducer: NSObject, URLSessionDataDelegate, @uncheck
       request()
       return
     }
-    if error != nil, failure == nil { failure = cancelled ? .cancelled : .rejected }
+    if let error, failure == nil {
+      switch (error as? URLError)?.code {
+      case .notConnectedToInternet, .networkConnectionLost, .cannotFindHost, .cannotConnectToHost,
+        .dnsLookupFailed, .timedOut:
+        failure = .connectionFailed
+      default:
+        failure = .rejected
+      }
+    }
     do {
       try check()
       guard admitted, bytes > 0, let output else { throw URLImportError.rejected }

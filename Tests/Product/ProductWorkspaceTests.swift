@@ -214,6 +214,35 @@ private actor WorkspaceDeletionAgent: AgentLibraryPurging {
     XCTAssertEqual(try f.database.libraryRecords().filter { $0.status == .importFailed }.count, 1)
   }
 
+  func testURLConnectionFailureLeavesNoPublishedPDFAndPreservesRetry() async throws {
+    let f = try await fixture()
+    let session = URLSessionConfiguration.ephemeral
+    session.protocolClasses = [ImportFixtureProtocol.self]
+    let workspace = try ProductWorkspace(database: f.database, lifecycle: f.lifecycle,
+      connection: f.connection, parsing: nil, diagnosticSource: nil, urlSessionConfiguration: session)
+    let urls = workspace.urls
+
+    for (index, endpoint) in ["offline", "lost-connection"].enumerated() {
+      try urls.prepare("https://fixture.invalid/\(endpoint)", destination: "미분류", possibleDuplicate: true)
+      urls.continueImport(confirmationID: try XCTUnwrap(urls.confirmation).id)
+      let deadline = ContinuousClock.now + .seconds(5)
+      while urls.state == .downloading && ContinuousClock.now < deadline {
+        try await Task.sleep(for: .milliseconds(10))
+      }
+      XCTAssertEqual(urls.state, .failed(.connectionFailed))
+      let rows = try f.database.libraryRecords()
+      XCTAssertEqual(rows.count, index + 1)
+      XCTAssertTrue(rows.allSatisfy { $0.status == .importFailed })
+
+      try urls.retry()
+      let retry = try XCTUnwrap(urls.confirmation)
+      guard case .retry = retry.purpose else { return XCTFail("Connection failure lost its original job") }
+      urls.cancelConfirmation()
+      XCTAssertEqual(urls.state, .failed(.connectionFailed))
+      XCTAssertEqual(try f.database.libraryRecords().count, rows.count)
+    }
+  }
+
   func testDeletingFailedURLImportDismissesItsRetryAtEveryStage() async throws {
     enum RetryStage: CaseIterable { case failureBanner, confirmation, cancellingDownload }
 
