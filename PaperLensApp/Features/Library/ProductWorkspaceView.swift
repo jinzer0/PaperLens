@@ -443,13 +443,7 @@ public final class ProductWorkspace: ObservableObject {
   func openImportedPDF(_ paperID: UUID) async {
     guard canOpenReader else { return }
     do {
-      try await openReader {
-        let (snapshot, _) = try await organization.snapshot(filter: .init())
-        guard let paper = snapshot.papers.first(where: { $0.id == paperID }) else {
-          throw OrganizationError.stalePaper
-        }
-        return paper
-      }
+      try await openReader(paperID: paperID, expectedGeneration: nil)
     } catch { failure = "가져온 PDF를 열지 못했습니다. 라이브러리에서 현재 상태를 확인하세요." }
   }
 
@@ -459,8 +453,7 @@ public final class ProductWorkspace: ObservableObject {
     guard !deletingPaperIDs.contains(paperID), !finishedDeletionIDs.contains(paperID) else { return nil }
     revision += 1
     do {
-      let record = try database.libraryRecords().first(where: { $0.id == paperID })
-      guard record?.status == .ready else {
+      guard try database.libraryStatus(paperID: paperID) == .ready else {
         failure = "PDF 가져오기가 완료되지 않았습니다. 라이브러리의 실패 상태를 확인하세요."
         return nil
       }
@@ -483,7 +476,7 @@ public final class ProductWorkspace: ObservableObject {
   }
 
   public func open(_ paper: OrganizedPaper) async throws {
-    try await openReader { paper }
+    try await openReader(paperID: paper.id, expectedGeneration: paper.generation)
   }
 
   func startUnreservedParsing(for observed: OpenReader) async {
@@ -505,20 +498,22 @@ public final class ProductWorkspace: ObservableObject {
 
   private var canPrepareLocalImport: Bool { canOpenReader && localImportID == nil }
 
-  private func openReader(resolvePaper: () async throws -> OrganizedPaper) async throws {
+  private func openReader(paperID: UUID, expectedGeneration: UUID?) async throws {
     guard canOpenReader else { throw ProductWorkspaceError.busy }
     confirmationCancellation = nil
     opening = true
     defer { opening = false }
-    let paper = try await resolvePaper()
-    guard !deletingPaperIDs.contains(paper.id), !finishedDeletionIDs.contains(paper.id)
+    guard !deletingPaperIDs.contains(paperID), !finishedDeletionIDs.contains(paperID)
     else { throw OrganizationError.stalePaper }
-    try await organization.admitOpen(paper)
+    let generation = try await database.readOrganizationOpenGeneration(
+      paperID: paperID, expectedGeneration: expectedGeneration)
+    guard !deletingPaperIDs.contains(paperID), !finishedDeletionIDs.contains(paperID)
+    else { throw OrganizationError.stalePaper }
     // Bind the selected generation at lease acquisition too, not just at the list's check.
-    let provider = SelectedPaperReadLeases(base: readLeases, paper: paper)
-    let identity = try database.annotationIdentity(paperID: paper.id)
-    guard identity.generation == paper.generation else { throw AnnotationError.stalePaper }
-    let metadataIdentity = try database.publishedMetadataPaperIdentity(paperID: paper.id)
+    let provider = SelectedPaperReadLeases(base: readLeases, paperID: paperID, generation: generation)
+    let identity = try database.annotationIdentity(paperID: paperID)
+    guard identity.generation == generation else { throw AnnotationError.stalePaper }
+    let metadataIdentity = try database.publishedMetadataPaperIdentity(paperID: paperID)
     if let metadataIdentity {
       guard metadataIdentity.generation == identity.generation,
         metadataIdentity.pdfSHA256 == identity.pdfSHA256
@@ -526,9 +521,9 @@ public final class ProductWorkspace: ObservableObject {
     }
     metadataReadRequest = nil
     reader = OpenReader(
-      id: paper.id, session: ReaderSession(database: database, leaseProvider: provider),
+      id: paperID, session: ReaderSession(database: database, leaseProvider: provider),
       annotationIdentity: identity, metadataIdentity: metadataIdentity)
-    if latestLocalImport == paper.id { latestLocalImport = nil }
+    if latestLocalImport == paperID { latestLocalImport = nil }
     failure = nil
   }
 
@@ -696,16 +691,18 @@ public enum ProductWorkspaceError: Error { case busy, diagnosticSourceRequired }
 
 @MainActor private final class SelectedPaperReadLeases: ReaderLeaseProvider {
   private let base: LibraryReadLeaseProvider
-  private let paper: OrganizedPaper
-  init(base: LibraryReadLeaseProvider, paper: OrganizedPaper) {
+  private let paperID: UUID
+  private let generation: UUID
+  init(base: LibraryReadLeaseProvider, paperID: UUID, generation: UUID) {
     self.base = base
-    self.paper = paper
+    self.paperID = paperID
+    self.generation = generation
   }
   func acquireReadLease(
     for snapshot: ReaderPaperSnapshot,
     onRevoked: @escaping @MainActor () -> Void
   ) throws -> any ReaderReadLease {
-    guard snapshot.paperID == paper.id, snapshot.generation == paper.generation else {
+    guard snapshot.paperID == paperID, snapshot.generation == generation else {
       throw ReaderError.revoked
     }
     return try base.acquireReadLease(for: snapshot, onRevoked: onRevoked)

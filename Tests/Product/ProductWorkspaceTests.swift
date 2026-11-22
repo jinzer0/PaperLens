@@ -1288,6 +1288,47 @@ private actor WorkspaceDeletionAgent: AgentLibraryPurging {
     XCTAssertTrue(f.workspace.libraryFilter.favoritesOnly)
   }
 
+  func testImportCompletionAndOpeningOnlyDependOnTheSelectedPaper() async throws {
+    let f = try await fixture()
+    let unrelatedID = try await importSelected(f)
+    try await f.workspace.prepareImport(source: f.source)
+    let confirmation = try confirmation(f.workspace)
+    try f.database.adapterWrite {
+      try $0.execute(sql: "UPDATE paper SET status = 'invalid' WHERE id = ?",
+        arguments: [unrelatedID.uuidString])
+    }
+    XCTAssertThrowsError(try f.database.libraryRecords())
+    XCTAssertThrowsError(try f.database.organizationSnapshot(filter: .init()))
+
+    let operation = try XCTUnwrap(f.workspace.startLocalImport(
+      confirmation.id, destinationFolderID: confirmation.destinationFolderID))
+    f.workspace.sheet = nil
+    XCTAssertNil(f.workspace.presentationDidDismiss(confirmationID: confirmation.id))
+    let imported = await operation.value
+    let id = try XCTUnwrap(imported)
+    XCTAssertNotEqual(id, unrelatedID)
+    XCTAssertNil(f.workspace.failure)
+    XCTAssertEqual(f.workspace.latestLocalImport, id)
+
+    await f.workspace.openImportedPDF(id)
+    let reader = try XCTUnwrap(f.workspace.reader)
+    XCTAssertEqual(reader.id, id)
+    _ = try reader.session.open(paperID: id, validateDocument: { url in
+      XCTAssertEqual(try Data(contentsOf: url), try Data(contentsOf: f.source))
+      return 1
+    }, discard: {})
+    f.workspace.returnToLibrary()
+
+    // The direct lookup still requires the selected PDF to match its committed digest.
+    try f.database.adapterWrite {
+      try $0.execute(sql: "UPDATE paper SET pdfSHA256 = ? WHERE id = ?",
+        arguments: [String(repeating: "a", count: 64), id.uuidString])
+    }
+    await f.workspace.openImportedPDF(id)
+    XCTAssertNil(f.workspace.reader)
+    XCTAssertNotNil(f.workspace.failure)
+  }
+
   func testActualWorkspaceImportDuplicateAndPersistedOrganizationBinding() async throws {
     let f = try await fixture()
     let folder = try await f.workspace.imports.createFolder(name: "Destination")

@@ -235,9 +235,21 @@ extension ProductDatabase {
       try validateOrganizationPDF(currentOrganizationPaper(db, paperID: paperID, generation: generation), verifyDigest: true)
     }
   }
-  private func currentOrganizationPaper(_ db: Database, paperID: UUID, generation: UUID) throws -> Row {
-    guard let row = try Row.fetchOne(db, sql: "SELECT * FROM paper WHERE id = ? AND generation = ?",
-      arguments: [paperID.uuidString, generation.uuidString]) else { throw OrganizationError.stalePaper }
+  func readOrganizationOpenGeneration(paperID: UUID, expectedGeneration: UUID?) async throws -> UUID {
+    try await adapterReadAsync { db in
+      let row = try self.currentOrganizationPaper(db, paperID: paperID, generation: expectedGeneration)
+      guard let generation = String.fromDatabaseValue(row["generation"]).flatMap(UUID.init(uuidString:)) else {
+        throw ProductDatabaseError.invalidRecord
+      }
+      try self.validateOrganizationPDF(row, verifyDigest: true)
+      return generation
+    }
+  }
+
+  private func currentOrganizationPaper(_ db: Database, paperID: UUID, generation: UUID?) throws -> Row {
+    guard let row = try Row.fetchOne(db,
+      sql: "SELECT * FROM paper WHERE id = ? AND generation = COALESCE(?, generation)",
+      arguments: [paperID.uuidString, generation?.uuidString]) else { throw OrganizationError.stalePaper }
     return row
   }
   private func validateOrganizationPDF(_ row: Row, verifyDigest: Bool = false) throws {

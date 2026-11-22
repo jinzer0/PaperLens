@@ -256,6 +256,15 @@ public final class ProductDatabase: @unchecked Sendable {
     }
   }
 
+  func libraryStatus(paperID: UUID) throws -> LibraryStatus? {
+    try queue.read { db in
+      guard let value = try String.fetchOne(db, sql: "SELECT status FROM paper WHERE id = ?",
+        arguments: [paperID.uuidString]) else { return nil }
+      guard let status = LibraryStatus(rawValue: value) else { throw ProductDatabaseError.invalidRecord }
+      return status
+    }
+  }
+
   public func libraryRecords() throws -> [LibraryRecord] {
     try queue.read { db in
       try Row.fetchAll(db, sql: """
