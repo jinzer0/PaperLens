@@ -2129,6 +2129,28 @@ final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
       replacementModel: "explicit-test-snapshot"))
   }
 
+  func testProviderCASRollsBackWhenAnySelectorFieldDiffersFromTheRequest() throws {
+    for rewrittenField in ["kind = OLD.kind", "slotID = OLD.slotID", "generation = OLD.generation", "model = OLD.model"] {
+      let db = try ProductDatabase.open(at: root.appendingPathComponent(UUID().uuidString))
+      let previous = try db.compareAndSwapProviderConfiguration(expected: db.providerConfiguration(),
+        replacementKind: .openAIAPIKey, replacementSlotID: UUID(), replacementModel: "fixture-previous")
+      try db.adapterWrite { sql in
+        try sql.execute(sql: """
+          CREATE TRIGGER rewriteSelector AFTER UPDATE ON providerConfig WHEN NEW.generation > OLD.generation BEGIN
+            UPDATE providerConfig SET \(rewrittenField) WHERE singleton = NEW.singleton;
+          END;
+          """)
+      }
+      let newSlot = UUID()
+      XCTAssertThrowsError(try db.compareAndSwapProviderConfiguration(expected: previous,
+        replacementKind: .codexChatGPT, replacementSlotID: newSlot, replacementModel: "fixture-new"), rewrittenField) {
+        XCTAssertEqual($0 as? ProductDatabaseError, .invalidRecord)
+      }
+      let restarted = try ProductDatabase.open(at: db.root)
+      XCTAssertEqual(try restarted.providerConfiguration(), previous, rewrittenField)
+    }
+  }
+
   private func physicalTemporaryDirectory() throws -> URL {
     // Resolve only the test fixture base. The inventory must inspect the named summary root.
     let path = try XCTUnwrap(realpath(temporary.path, nil))

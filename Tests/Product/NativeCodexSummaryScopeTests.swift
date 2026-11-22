@@ -234,7 +234,9 @@ import ProviderRequest
                 count = os.write(1, frame)
                 assert count > 0
                 frame = frame[count:]
-            if \(closeAfterProbe ? "True" : "False") and method == 'product.connectionTest':
+            if method == 'product.connectionTest' and (
+                \(closeAfterProbe ? "True" : "False") or os.path.exists('work/close-after-probe')
+            ):
                 gate('close-product-output')
                 os.close(1)
                 return
@@ -538,11 +540,41 @@ import ProviderRequest
     XCTAssertTrue(FileManager.default.fileExists(atPath: initial.path))
     XCTAssertFalse(FileManager.default.fileExists(atPath: cancelled.path))
 
+    try database.adapterWrite { db in
+      try db.execute(sql: """
+        CREATE TRIGGER rewriteProvider AFTER UPDATE ON providerConfig WHEN NEW.generation > OLD.generation BEGIN
+          UPDATE providerConfig SET model = 'fixture-unverified-model' WHERE singleton = NEW.singleton;
+        END;
+        """)
+    }
+    codex.connect(mode: "browser")
+    let rejected = try XCTUnwrap(prepared.last)
+    XCTAssertNotEqual(rejected, initial)
+    XCTAssertNotEqual(rejected, cancelled)
+    try await waitFor { codex.phase == .signingIn }
+    codex.checkLogin()
+    try await waitForMarker("probe-received", directory: rejected)
+    try Data().write(to: marker("close-after-probe", directory: rejected))
+    try Data().write(to: marker("release-probe", directory: rejected))
+    try await waitFor { codex.phase == .retiring }
+    try Data().write(to: marker("close-product-output", directory: rejected))
+    try await waitForMarker("retirement-received", directory: rejected)
+    XCTAssertEqual(try database.providerConfiguration(), lastGood)
+    XCTAssertTrue(codex.eligibleForEntry)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: marker("retirement-received", directory: initial).path))
+    try Data().write(to: marker("release-retirement", directory: rejected))
+    try await waitFor { codex.canStart && codex.offersRetry }
+    XCTAssertTrue(codex.showsFailure)
+    XCTAssertTrue(codex.statusMessage.contains("저장하지 못했습니다"))
+    XCTAssertFalse(FileManager.default.fileExists(atPath: rejected.path))
+    try database.adapterWrite { try $0.execute(sql: "DROP TRIGGER rewriteProvider") }
+
     codex.connect(mode: "browser")
     let retry = try XCTUnwrap(prepared.last)
-    XCTAssertEqual(prepared.count, 3)
+    XCTAssertEqual(prepared.count, 4)
     XCTAssertNotEqual(retry, initial)
     XCTAssertNotEqual(retry, cancelled)
+    XCTAssertNotEqual(retry, rejected)
     try await waitFor { codex.phase == .signingIn }
     XCTAssertTrue(codex.eligibleForEntry)
     codex.checkLogin()

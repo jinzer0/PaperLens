@@ -231,6 +231,7 @@ public final class ProductDatabase: @unchecked Sendable {
     guard expected.generation >= 0, expected.generation < Int64.max else {
       throw ProductDatabaseError.generationExhausted
     }
+    let nextGeneration = expected.generation + 1
     return try queue.write { db in
       try db.execute(sql: """
         UPDATE providerConfig SET kind = ?, slotID = ?, model = ?, generation = generation + 1
@@ -239,8 +240,14 @@ public final class ProductDatabase: @unchecked Sendable {
           replacementModel, expected.generation, expected.kind?.rawValue,
           expected.slotID?.uuidString, expected.model])
       guard db.changesCount == 1 else { throw ProductDatabaseError.staleConfiguration }
+      // Confirm the exact durable selection before callers retire the last-good owner.
+      guard try Int.fetchOne(db, sql: """
+        SELECT 1 FROM providerConfig
+        WHERE singleton = 1 AND generation = ? AND kind IS ? AND slotID IS ? AND model IS ?
+        """, arguments: [nextGeneration, replacementKind?.rawValue, replacementSlotID?.uuidString,
+          replacementModel]) == 1 else { throw ProductDatabaseError.invalidRecord }
       return ProviderConfiguration(kind: replacementKind, slotID: replacementSlotID,
-        generation: expected.generation + 1,
+        generation: nextGeneration,
         model: replacementModel)
     }
   }
