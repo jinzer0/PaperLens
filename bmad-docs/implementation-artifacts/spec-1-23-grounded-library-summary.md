@@ -1,5 +1,21 @@
 # Story 1.23 Build Spec — Grounded Library Summary
 
+## 서명 앱의 합성 요약 재실행 검증 — 2026-11-22
+
+- `54b4f25623d8530e8b5b4a8cfb5c40cd53504549` 기반 Release 앱을 macOS 26.7.1
+  arm64에서 세 번 실행했다. Developer ID 서명을 확인한 검증 빌드에서 전용 합성
+  작업공간과 로컬 Provider 응답을 사용했다. PDFium 추출, 요약의 응답 검증과 저장,
+  Library와 Reader 화면은 실제 앱 경로를 거쳤다.
+- 8쪽 PDF의 영문 요약을 생성하고 Library 상세의 원문 인용과 페이지를 저장된
+  근거와 대조했다. 다음 생성 요청이 시간 초과된 뒤 앱을 종료하고, 재실행해서
+  같은 결과와 실패 상태가 복원되는 것을 확인했다. 명시적 재시도는 같은 논문과
+  추출 revision에 새 결과를 저장했다. 논문을 삭제한 뒤 요약·근거 소유권·앱 사본의
+  제거와 합성 원본의 보존을 확인했고, 세 번째 실행에서 삭제 상태가 유지됐다.
+- 파싱·요약 관련 XCTest 107개가 통과했다. 로컬 기록은
+  `.build/epic1-summary-relaunch/verify-summary.log`와 `canonical-row-fix-tests.json`에
+  있다. 검증 범위는 합성 입력과 응답으로 실행한 앱 흐름이다. 실제 Provider 인증과
+  응답, 최소 지원 OS의 실행, Epic 전체 수용 검증은 별도로 남아 있다.
+
 ## Bounded saved-outcome presentation (baseline 448ec86)
 
 Architect213 SOURCE_SLICE_READY identifies loss of the persisted budgetLimited fact
