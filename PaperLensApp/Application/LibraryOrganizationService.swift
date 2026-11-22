@@ -79,15 +79,24 @@ public struct LibrarySummaryRecentAttempt: Sendable {
 }
 /// Passive facts from one database read, never dispatch or publication authority.
 public struct LibrarySummaryObservation: Sendable {
+  enum SavedSource: Equatable { case current, previous, noCurrentSource }
+
   public let record: LibrarySummaryRecord?
   /// Most recently inserted attempt for the exact Paper/generation/PDF, not current input/configuration.
   public let recentAttempt: LibrarySummaryRecentAttempt?
   public let availability: LibrarySummaryAvailability
   // Nil means no current published extraction for the same Paper and PDF.
   let source: LibrarySummarySource?
+
+  var savedSource: SavedSource? {
+    guard let record else { return nil }
+    guard let source else { return .noCurrentSource }
+    return record.identity.revision == source.revision ? .current : .previous
+  }
 }
 
 struct LibrarySummarySource: Sendable {
+  let revision: UUID
   let sentences: Int
   let geometryOwners: Int
   let geometryBytes: Int

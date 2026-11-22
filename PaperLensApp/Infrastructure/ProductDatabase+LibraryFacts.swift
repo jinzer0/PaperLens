@@ -39,7 +39,7 @@ extension ProductDatabase {
       FROM extractionGeometryOwner WHERE revision = ?
       """, arguments: [revision.uuidString, revision.uuidString])
     else { throw ProductDatabaseError.invalidRecord }
-    return LibrarySummarySource(sentences: try row.decode(Int.self, forColumn: "sentences"),
+    return LibrarySummarySource(revision: revision, sentences: try row.decode(Int.self, forColumn: "sentences"),
       geometryOwners: try row.decode(Int.self, forColumn: "owners"),
       geometryBytes: try row.decode(Int.self, forColumn: "bytes"))
   }

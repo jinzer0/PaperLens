@@ -1102,6 +1102,56 @@ final class LibrarySummaryServiceTests: XCTestCase {
     XCTAssertEqual(files, ["document.pdf"])
   }
 
+  @MainActor func testLateSummaryAfterReparseKeepsPriorSourceLabelAndEvidence() async throws {
+    let f = try fixture()
+    defer { try? FileManager.default.removeItem(at: f.root) }
+    try prepareCoordinator(f)
+    let provider = SummaryProvider()
+    let authority = try ProviderRequest(), epoch = UUID()
+    let initial = LibrarySummaryCoordinator(database: f.db, epoch: epoch, leases: SummaryLeases(),
+      authority: authority, provider: provider)
+    let paperID = f.identity.paperID
+    let generation = f.identity.generation
+    let saved = try await initial.generate(paperID: paperID, generation: generation, outputLanguage: "en")
+    XCTAssertFalse(saved.claimAnchors.isEmpty)
+    XCTAssertEqual(try f.db.librarySortFacts().first?.summary?.savedSource, .current)
+
+    let newer = UUID()
+    provider.beforeResult = { identity in
+      XCTAssertEqual(identity.revision, saved.identity.revision)
+      let parse = ExtractionIdentity(paperID: paperID, generation: generation, pdfSHA256: f.identity.pdfSHA256,
+        pdfReference: "papers/\(paperID.uuidString)/document.pdf", revision: newer, job: UUID(),
+        attempt: UUID(), fence: UUID(), correlation: UUID(), input: UUID(), epoch: UUID(),
+        configuration: try f.db.providerConfiguration())
+      try f.db.reserveExtraction(parse)
+      try f.db.publishExtraction(parse, sentences: [
+        .init(page: 0, sentenceID: 0, text: "New source revision", geometry: Data(), originalOwner: nil),
+      ], checkBudget: {})
+    }
+    let coordinator = LibrarySummaryCoordinator(database: f.db, epoch: epoch, leases: SummaryLeases(),
+      authority: authority, provider: provider)
+    do {
+      _ = try await coordinator.generate(paperID: paperID, generation: generation, outputLanguage: "en")
+      XCTFail("The in-flight response must not publish for a superseded extraction")
+    } catch { XCTAssertEqual(error as? LibrarySummaryError, .staleIdentity) }
+
+    let reopened = try ProductDatabase.open(at: f.root)
+    let summary = try XCTUnwrap(reopened.librarySortFacts().first?.summary)
+    XCTAssertEqual(summary.source?.revision, newer)
+    XCTAssertEqual(summary.savedSource, .previous)
+    XCTAssertEqual(summary.recentAttempt?.failure, .staleIdentity)
+    XCTAssertEqual(summary.record?.id, saved.id)
+    XCTAssertEqual(summary.record?.identity.revision, saved.identity.revision)
+    XCTAssertEqual(summary.record?.claimAnchors, saved.claimAnchors)
+    XCTAssertEqual(try reopened.adapterRead { try Int.fetchOne($0,
+      sql: "SELECT COUNT(*) FROM librarySummaryResult") }, 1)
+    try reopened.adapterWrite { try $0.execute(sql: "DELETE FROM extractionVisible") }
+    let unpublished = try XCTUnwrap(reopened.librarySortFacts().first?.summary)
+    XCTAssertEqual(unpublished.savedSource, .noCurrentSource)
+    XCTAssertEqual(unpublished.record?.claimAnchors, saved.claimAnchors)
+    XCTAssertEqual(provider.calls, 2)
+  }
+
   @MainActor func testRevocationCancelsSummaryButRetainsLeaseUntilActualProviderReturn() async throws {
     let f = try fixture()
     defer { try? FileManager.default.removeItem(at: f.root) }

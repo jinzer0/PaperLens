@@ -1242,6 +1242,14 @@ private struct LibraryIdentification {
           } else {
             Text(summary.text).lineLimit(1).truncationMode(.tail)
           }
+          switch observation.savedSource {
+          case .previous:
+            Text("이전 파싱 결과로 만든 요약입니다.").font(.caption)
+          case .noCurrentSource:
+            Text("저장 당시 원문으로 만든 요약입니다. 현재 파싱 결과가 없습니다.").font(.caption)
+          case .current, nil:
+            EmptyView()
+          }
           if insufficiency == "noEvidence" {
             Text("저장 당시 근거 없음 · 정규 근거 후보가 없습니다.")
           } else if insufficiency == "budgetLimited" {
