@@ -156,16 +156,15 @@ public final class ProductAppComposition: ObservableObject {
     phase = .modelRequired
   }
 
-  /// Only the explicit Continue action calls this. Durable selector and slot safety are
-  /// checked again, rather than relying on a previously rendered success label.
   public var canEnterLibrary: Bool {
-    guard let connection else { return false }
-    if codex?.currentConfiguration?.kind == .codexChatGPT {
+    guard let connection, let selected = connection.savedConfiguration else { return false }
+    if selected.kind == .codexChatGPT {
       return codex?.eligibleForEntry == true
     }
-    return connection.eligibleForEntry
+    return connection.usableSelection(for: selected) != nil
   }
 
+  /// The explicit Continue action rechecks the durable selector and slot safety.
   public func continueToLibrary() throws {
     guard case .connection(let connection) = phase, let lifecycle, canEnterLibrary else {
       throw ProductEntryError.connectionRequired

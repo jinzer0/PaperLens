@@ -294,6 +294,50 @@ final class ProviderSettingsTests: XCTestCase {
     XCTAssertEqual(try slots.read(winner.slotID), "fixture-fresh-candidate")
   }
 
+  func testSettingsAvailabilityRequiresTheCurrentDurableSelectionDuringAProbe() async throws {
+    let root = try fixtureRoot()
+    defer { try? removeFixture(root) }
+    let database = try ProductDatabase.open(at: root.appendingPathComponent("database"))
+    let slots = try APIKeySlotStore(directory: root.appendingPathComponent("slots"))
+    let configuration = try NativeOpenAIConfiguration(model: "fixture-snapshot")
+    let slot = try slots.create(key: "fixture-last-good")
+    let previous = try database.compareAndSwapProviderConfiguration(expected: database.providerConfiguration(),
+      replacementKind: .openAIAPIKey, replacementSlotID: slot, replacementModel: configuration.model)
+    let transport = SettingsSuspendedTransport()
+    let connection = NativeAPIKeyConnection(configuration: configuration, slots: slots,
+      persistence: DatabaseAPIKeySelector(database: database, configuration: configuration),
+      transport: transport, authority: try ProviderRequest())
+    let codex = NativeCodexConnection(database: database,
+      root: root.appendingPathComponent("codex-scopes"), apiKey: connection, prepareWorker: { _ in nil })
+    let service = ProviderSettingsService(connection: connection, codex: codex)
+    service.restore()
+    let lease = try service.acquireLease()
+    service.reconnect(key: "fixture-late-candidate")
+    await waitUntil { transport.count == 1 }
+    guard transport.count == 1 else { return }
+    XCTAssertTrue(service.eligibleForEntry)
+
+    // Simulate another authorized selector writer committing a newer generation of the same slot.
+    let current = try database.compareAndSwapProviderConfiguration(expected: previous,
+      replacementKind: .openAIAPIKey, replacementSlotID: slot, replacementModel: configuration.model)
+    XCTAssertEqual(service.currentProviderLabel, "OpenAI API")
+    XCTAssertFalse(service.eligibleForEntry)
+    XCTAssertNil(service.activeSelection)
+    XCTAssertFalse(try service.mayPublish(lease))
+    XCTAssertThrowsError(try service.acquireLease())
+
+    try transport.complete(0)
+    await waitUntil { service.phase == .failed(.selectorConflict) }
+    XCTAssertFalse(service.eligibleForEntry)
+    XCTAssertEqual(try database.providerConfiguration(), current)
+    XCTAssertEqual(try slots.validatedSlotIDs(), [slot])
+    try service.releaseAfterTermination(lease)
+    service.restore()
+    XCTAssertEqual(service.activeSelection?.configGeneration, current.generation)
+    XCTAssertTrue(service.eligibleForEntry)
+    XCTAssertEqual(transport.count, 1, "Restoring the selected slot must not replay the old probe")
+  }
+
   func testKeyBindingInvalidatesSharedCandidateBeforeChangedEntryWriteAndRejectsLateSuccess() async throws {
     let f = try fixture()
     let old = try XCTUnwrap(f.service.activeSelection)

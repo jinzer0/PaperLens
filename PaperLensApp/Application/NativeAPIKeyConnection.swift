@@ -193,6 +193,16 @@ public final class NativeAPIKeyConnection: ObservableObject {
 
   var hasUncommittedProbe: Bool { running != nil && !publishingSelection }
 
+  var savedConfiguration: ProviderConfiguration? { try? persistence?.selectorSnapshot() }
+
+  func usableSelection(for selected: ProviderConfiguration) -> APIKeySelection? {
+    guard !ownerRetired, !storageBlocked, eligibleForEntry, selected.kind == .openAIAPIKey,
+      let selection = selected.slotSelection, selection == activeSelection,
+      (try? persistence?.selectionMatchesConfiguration(configuration)) == true
+    else { return nil }
+    return selection
+  }
+
   private func publishPhase(_ next: APIKeyConnectionPhase) {
     // A synchronous Settings callback can cancel during the published setter.
     intendedPhase = next

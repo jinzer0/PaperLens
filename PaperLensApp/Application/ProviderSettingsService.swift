@@ -792,22 +792,35 @@ public final class ProviderSettingsService: ObservableObject {
     codexObservation = codex?.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }
   }
   public var phase: APIKeyConnectionPhase { connection.phase }
-  public var activeSelection: APIKeySelection? { connection.activeSelection }
+  public var activeSelection: APIKeySelection? {
+    guard let selected = savedConfiguration else { return nil }
+    return connection.usableSelection(for: selected)
+  }
   public var eligibleForEntry: Bool {
-    if let codex, codex.currentConfiguration?.kind == .codexChatGPT {
-      return codex.eligibleForEntry
-    }
-    return connection.eligibleForEntry
+    guard let selected = savedConfiguration else { return false }
+    return isAvailable(selected)
   }
   public var currentProviderLabel: String {
-    if let codex {
-      switch codex.currentConfiguration?.kind {
-      case .codexChatGPT: return "ChatGPT"
-      case .openAIAPIKey: return "OpenAI API"
-      case nil: return "없음"
-      }
+    guard let selected = savedConfiguration else { return "확인 불가" }
+    return providerLabel(selected.kind)
+  }
+  private var savedConfiguration: ProviderConfiguration? {
+    if let codex { return codex.currentConfiguration }
+    return connection.savedConfiguration
+  }
+  private func isAvailable(_ selected: ProviderConfiguration) -> Bool {
+    switch selected.kind {
+    case .codexChatGPT: return codex?.eligibleForEntry == true
+    case .openAIAPIKey: return connection.usableSelection(for: selected) != nil
+    case nil: return false
     }
-    return activeSelection == nil ? "없음" : "OpenAI API"
+  }
+  private func providerLabel(_ kind: ProviderKind?) -> String {
+    switch kind {
+    case .codexChatGPT: return "ChatGPT"
+    case .openAIAPIKey: return "OpenAI API"
+    case nil: return "없음"
+    }
   }
   var keyStorageBlocked: Bool { connection.storageBlocked }
   public var candidatesBlocked: Bool {
@@ -819,7 +832,8 @@ public final class ProviderSettingsService: ObservableObject {
   public var model: String { connection.configuration.model }
   public var isTesting: Bool { connection.hasUncommittedProbe }
   public var availabilityMessage: String {
-    if eligibleForEntry { return "현재 \(currentProviderLabel) 연결을 사용할 수 있습니다." }
+    guard let selected = savedConfiguration else { return "저장된 Provider 상태를 확인할 수 없습니다." }
+    if isAvailable(selected) { return "현재 \(providerLabel(selected.kind)) 연결을 사용할 수 있습니다." }
     return "현재 선택을 사용할 수 없습니다. 명시적으로 연결 상태를 확인하세요."
   }
   public func restore() {
