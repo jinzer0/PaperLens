@@ -132,22 +132,19 @@ public struct LibraryBrowserView: View {
         }
       }
       if let snapshot {
+        let preferences = snapshot.preferences
         HStack {
-          Picker("표시", selection: Binding(get: { snapshot.preferences.presentation }, set: { value in
-            savePreference(.presentation(value))
-          })) {
-            Text("목록").tag(LibraryPresentation.list)
-            Text("카드").tag(LibraryPresentation.grid)
-          }.pickerStyle(.segmented)
-            .focused($organizationFocus, equals: .presentation)
-          Picker("정렬", selection: Binding(get: { snapshot.preferences.sort }, set: { value in
-            savePreference(.sort(value))
-          })) {
-            Text("최근 읽음").tag(LibrarySort.recentlyRead)
-            Text("이름").tag(LibrarySort.name)
-            Text("최근 추가").tag(LibrarySort.recentlyAdded)
-            Text("발행연도").tag(LibrarySort.publicationYear)
-          }.focused($organizationFocus, equals: .sort)
+          Text("표시").accessibilityHidden(true)
+          LibraryPresentationControl(selection: preferences.presentation,
+            focus: $organizationFocus, select: { savePreference(.presentation($0)) })
+          Text("정렬").accessibilityHidden(true)
+          let currentSort = sortLabel(preferences.sort)
+          KeyboardLibraryMenu(title: currentSort, label: "정렬", value: currentSort,
+            actions: LibrarySort.allCases.map { sort in
+              LibraryMenu.Action(.sort(sort), sortLabel(sort), checked: sort == preferences.sort) {
+                savePreference(.sort(sort))
+              }
+            }, focus: $organizationFocus, target: .sort)
         }.disabled(busy || loading)
       }
       if loadFailed {
@@ -450,7 +447,7 @@ public struct LibraryBrowserView: View {
         .accessibilityLabel("\(paper.title) 즐겨찾기")
         .accessibilityValue(paper.organization.favorite ? "설정됨" : "설정되지 않음")
         let currentStatus = readingLabel(paper.organization.readingStatus)
-        KeyboardLibraryPaperMenu(title: "읽기 상태 · \(currentStatus)", label: "\(paper.title) 읽기 상태 변경",
+        KeyboardLibraryMenu(title: "읽기 상태 · \(currentStatus)", label: "\(paper.title) 읽기 상태 변경",
           value: currentStatus, actions: PaperReadingStatus.allCases.map { status in
             .init(.reading(status), readingLabel(status), checked: status == paper.organization.readingStatus) {
               var value = paper.organization
@@ -531,14 +528,14 @@ public struct LibraryBrowserView: View {
         }
         .disabled(!canMovePaper)
         .accessibilityLabel("\(paper.title) 폴더 이동")
-      KeyboardLibraryPaperMenu(title: "더 보기", label: "\(paper.title) 더 보기", value: nil,
+      KeyboardLibraryMenu(title: "더 보기", label: "\(paper.title) 더 보기", value: nil,
         actions: paperMenuActions(paper), focus: $focusedPaper, target: paper.id)
         .disabled(busy)
     }
   }
 
-  private func paperMenuActions(_ paper: OrganizedPaper) -> [LibraryPaperMenu.Action] {
-    var actions: [LibraryPaperMenu.Action] = []
+  private func paperMenuActions(_ paper: OrganizedPaper) -> [LibraryMenu.Action] {
+    var actions: [LibraryMenu.Action] = []
     if paper.canRetryImport {
       actions.append(.init(.retryPDF, "새 PDF 선택 후 같은 작업 재시도",
         enabled: localPDFAvailable && !busy && !loading && !loadFailed) {
@@ -852,7 +849,22 @@ public struct LibraryBrowserView: View {
     refresh(completingOrganization: organizationToken)
   }
 
+  private func sortLabel(_ sort: LibrarySort) -> String {
+    switch sort {
+    case .recentlyRead: return "최근 읽음"
+    case .name: return "이름"
+    case .recentlyAdded: return "최근 추가"
+    case .publicationYear: return "발행연도"
+    }
+  }
+
   private func savePreference(_ change: OrganizationPreferenceChange) {
+    guard !loading, let preferences = snapshot?.preferences else { return }
+    switch change {
+    case .presentation(let value) where value == preferences.presentation: return
+    case .sort(let value) where value == preferences.sort: return
+    default: break
+    }
     perform { try await service.savePreference(change) }
   }
   private func saveOrganization(_ value: PaperOrganization, for paper: OrganizedPaper,
@@ -1133,18 +1145,79 @@ private struct OrganizationActionReturn {
   var awaitingRequest: OrganizationQueryState.Request?
 }
 
-@MainActor private struct KeyboardLibraryPaperMenu<Focus: Hashable>: View {
+@MainActor private struct LibraryPresentationControl: View {
+  let selection: LibraryPresentation
+  let focus: FocusState<OrganizationControlFocus?>.Binding
+  let select: @MainActor (LibraryPresentation) -> Void
+  @Environment(\.isEnabled) private var isEnabled
+
+  var body: some View {
+    Segments(selection: selection, select: select)
+      .fixedSize()
+      .focusable(isEnabled, interactions: [.activate, .edit])
+      .focused(focus, equals: .presentation)
+      .onKeyPress(.space, phases: .down) { press in
+        guard press.modifiers.isEmpty, isEnabled else { return .ignored }
+        select(selection == .list ? .grid : .list)
+        return .handled
+      }
+      .accessibilityLabel("표시")
+      .accessibilityValue(selection == .list ? "목록" : "카드")
+      .accessibilityHint("스페이스 키로 목록과 카드 보기를 전환합니다.")
+  }
+
+  private struct Segments: NSViewRepresentable {
+    let selection: LibraryPresentation
+    let select: @MainActor (LibraryPresentation) -> Void
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeNSView(context: Context) -> Control {
+      let control = Control(labels: ["목록", "카드"], trackingMode: .selectOne,
+        target: context.coordinator, action: #selector(Coordinator.activate(_:)))
+      control.setAccessibilityLabel("표시")
+      return control
+    }
+
+    func updateNSView(_ control: Control, context: Context) {
+      let selected = selection == .list ? 0 : 1
+      context.coordinator.selected = selected
+      context.coordinator.select = isEnabled ? select : nil
+      control.selectedSegment = selected
+      control.isEnabled = isEnabled
+    }
+
+    final class Control: NSSegmentedControl {
+      override var acceptsFirstResponder: Bool { false }
+    }
+
+    @MainActor final class Coordinator: NSObject {
+      var selected = 0
+      var select: (@MainActor (LibraryPresentation) -> Void)?
+
+      @objc func activate(_ control: Control) {
+        let requested = control.selectedSegment
+        control.selectedSegment = selected
+        guard requested >= 0, requested != selected else { return }
+        select?(requested == 0 ? .list : .grid)
+      }
+    }
+  }
+}
+
+@MainActor private struct KeyboardLibraryMenu<Focus: Hashable>: View {
   let title: String
   let label: String
   let value: String?
-  let actions: [LibraryPaperMenu.Action]
+  let actions: [LibraryMenu.Action]
   let focus: FocusState<Focus?>.Binding
   let target: Focus
   @Environment(\.isEnabled) private var isEnabled
-  @State private var opener = LibraryPaperMenu.Opener()
+  @State private var opener = LibraryMenu.Opener()
 
   var body: some View {
-    LibraryPaperMenu(title: title, label: label, value: value, actions: actions, opener: opener)
+    LibraryMenu(title: title, label: label, value: value, actions: actions, opener: opener)
       .focusable(isEnabled, interactions: [.activate, .edit])
       .focused(focus, equals: target)
       .onKeyPress(.space, phases: .down) { press in
@@ -1157,9 +1230,11 @@ private struct OrganizationActionReturn {
   }
 }
 
-@MainActor private struct LibraryPaperMenu: NSViewRepresentable {
+@MainActor private struct LibraryMenu: NSViewRepresentable {
   struct Action {
-    enum Kind: Equatable { case retryPDF, retryURL, edit, retryDeletion, delete, reading(PaperReadingStatus) }
+    enum Kind: Equatable {
+      case retryPDF, retryURL, edit, retryDeletion, delete, reading(PaperReadingStatus), sort(LibrarySort)
+    }
 
     let kind: Kind
     let title: String
@@ -1205,8 +1280,8 @@ private struct OrganizationActionReturn {
       button.invalidateIntrinsicContentSize()
     }
     button.isEnabled = isEnabled
-    button.paperLabel = label
-    button.paperValue = value
+    button.menuLabel = label
+    button.menuValue = value
   }
 
   final class Opener {
@@ -1214,12 +1289,12 @@ private struct OrganizationActionReturn {
   }
 
   final class Button: NSPopUpButton {
-    var paperLabel = ""
-    var paperValue: String?
+    var menuLabel = ""
+    var menuValue: String?
 
     override var acceptsFirstResponder: Bool { false }
-    override func accessibilityLabel() -> String? { paperLabel }
-    override func accessibilityValue() -> Any? { paperValue }
+    override func accessibilityLabel() -> String? { menuLabel }
+    override func accessibilityValue() -> Any? { menuValue }
   }
 
   @MainActor final class Coordinator: NSObject, NSMenuDelegate {
