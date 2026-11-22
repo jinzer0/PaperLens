@@ -1,5 +1,21 @@
 # Story 1.24 Build Spec — Library presentation and record revisits
 
+## 서명 앱의 읽기 기록과 삭제 재시도 검증 — 2026-11-22
+
+macOS 26.7.1 arm64에서 소스 `66bf739d305e6d9208c11d593065372f8c28460f`의
+Developer ID 서명 앱으로 합성 PDF 한 편을 가져왔다. 기본 목록·최근 읽음과 이름·최근
+추가·발행연도 선택을 확인했다. 카드 보기에서 Reader를 열어 3쪽을 저장했고 Library
+상세에서 3쪽을 확인했다. 삭제 경고에 대상 이름·삭제 범위·원본 보존·되돌릴 수 없음이
+표시됐다. 취소하고 Reader를 열자 3쪽이 복원됐다. Reader에서 저장한 Highlight와 Note
+본문도 Library 상세에 표시됐다.
+
+합성 정리 경로에 빈 디렉터리를 두자 삭제 미완료가 표시되고 열기가 비활성화됐다.
+이 디렉터리를 제거한 뒤 화면의 재시도로 같은 삭제 ID가 완료됐다. 보관 PDF·주석·활성
+추출은 제거됐고 가져오기 전 원본은 남았다. 정상 종료 뒤 DB에서 삭제 완료와 카드·발행연도
+설정의 보존을 확인했다. 관련 테스트 163개가 통과했으며 로컬 기록은
+`.build/epic1-story124-signed-ui-result.json`에 있다. 서명 앱에서 여러 논문의 실제 정렬
+순서, 앱 재실행, 키보드·VoiceOver, 실제 Agent 데이터 삭제 검증은 남아 있다.
+
 ## Current isolated workspace verification — 2026-10-14
 
 The current full-Epic execution request resumes permitted private-fixture verification.
