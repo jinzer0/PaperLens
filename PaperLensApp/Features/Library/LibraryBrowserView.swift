@@ -836,6 +836,11 @@ public struct LibraryBrowserView: View {
     if let blocker = summaries.generationBlocker(paperID: paper.id, observation: observation,
       providerAvailable: providerAvailable) {
       Text(summaryAvailabilityLabel(blocker)).font(.caption)
+      if case .terminationWriteFailed(let attempt) = blocker {
+        Button("요약 종료 상태 저장 다시 시도") { recoverSummaryTermination(paper, attempt: attempt) }
+          .accessibilityLabel("\(paper.title) 요약 종료 상태 저장 다시 시도")
+          .disabled(!summaryActionsAvailable)
+      }
     } else {
       if let attempt = observation?.recentAttempt, attempt.canRetry {
         Button("요약 다시 시도") { retrySummary(paper, attempt: attempt) }
@@ -855,6 +860,7 @@ public struct LibraryBrowserView: View {
     switch blocker {
     case .unconfirmed: return "요약 생성에 필요한 상태를 확인할 수 없습니다."
     case .terminationUnconfirmed: return "이전 요약 작업의 종료 상태를 확인할 수 없습니다. 앱을 다시 열어 확인하세요."
+    case .terminationWriteFailed: return "요약 작업의 종료 상태를 저장하지 못했습니다."
     case .needsParsing: return "요약을 생성하려면 PDF의 파싱을 완료하세요."
     case .geometryUnavailable: return "요약에 필요한 원문 위치 정보를 사용할 수 없습니다."
     case .providerUnavailable: return "요약을 생성하려면 Settings에서 Provider 연결을 확인하세요."
@@ -867,12 +873,25 @@ public struct LibraryBrowserView: View {
       && summaries.activePaperID == nil
   }
 
-  private func canRequestSummary(for paper: OrganizedPaper) -> Bool {
+  private func currentSummaryObservation(for paper: OrganizedPaper) -> LibrarySummaryObservation? {
     guard summaryActionsAvailable, paper.readable, renderedPaperControls(for: paper),
       !deletingPaperIDs.contains(paper.id), !finishedDeletionIDs.contains(paper.id),
-      let facts = currentFacts[paper.id], facts.generation == paper.generation else { return false }
-    return summaries.generationBlocker(paperID: paper.id, observation: facts.summary,
+      let facts = currentFacts[paper.id], facts.generation == paper.generation else { return nil }
+    return facts.summary
+  }
+
+  private func canRequestSummary(for paper: OrganizedPaper) -> Bool {
+    guard let observation = currentSummaryObservation(for: paper) else { return false }
+    return summaries.generationBlocker(paperID: paper.id, observation: observation,
       providerAvailable: providerSettings.eligibleForEntry) == nil
+  }
+
+  private func recoverSummaryTermination(_ paper: OrganizedPaper, attempt: LibrarySummaryIdentity) {
+    guard let observation = currentSummaryObservation(for: paper),
+      summaries.generationBlocker(paperID: paper.id, observation: observation,
+        providerAvailable: providerSettings.eligibleForEntry) == .terminationWriteFailed(attempt)
+    else { return }
+    perform { try summaries.recoverTermination(attempt) }
   }
 
   private func beginSummary(_ paper: OrganizedPaper, language: String) {

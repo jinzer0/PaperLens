@@ -169,6 +169,11 @@ extension LibrarySummaryFailure {
   // retirement holds the provider boundary as well as the affected paper lease.
   private var stageCleanupDebt: [UUID: (SummaryStage, any ReaderReadLease)] = [:]
   private var producerCleanupDebt: [any ReaderReadLease] = []
+  private struct PendingTermination {
+    let identity: LibrarySummaryIdentity
+    let reason: LibrarySummaryFailure
+  }
+  private var pendingTerminations: [UUID: PendingTermination] = [:]
 
   private enum Generation {
     case new(language: String)
@@ -187,6 +192,7 @@ extension LibrarySummaryFailure {
 
   enum GenerationBlocker: Equatable {
     case unconfirmed, terminationUnconfirmed, needsParsing, geometryUnavailable, providerUnavailable, cleanupUnavailable
+    case terminationWriteFailed(LibrarySummaryIdentity)
   }
 
   /// This observes prerequisites for the Library controls. Dispatch still checks
@@ -195,11 +201,28 @@ extension LibrarySummaryFailure {
     providerAvailable: Bool) -> GenerationBlocker? {
     guard stageCleanupDebt[paperID] == nil, producerCleanupDebt.isEmpty else { return .cleanupUnavailable }
     guard let observation else { return .unconfirmed }
-    guard observation.recentAttempt?.activity != .running else { return .terminationUnconfirmed }
+    if let attempt = observation.recentAttempt, attempt.activity == .running {
+      if pendingTerminations[paperID]?.identity == attempt.identity {
+        return .terminationWriteFailed(attempt.identity)
+      }
+      return .terminationUnconfirmed
+    }
     guard let source = observation.source else { return .needsParsing }
     guard source.fitsOwnerBudget(maximumSentences: authority.limit("sentences")),
       source.sentences == source.geometryOwners else { return .geometryUnavailable }
     return providerAvailable ? nil : .providerUnavailable
+  }
+
+  /// Retries only the recorded terminal write after the owned operation has returned.
+  func recoverTermination(_ expected: LibrarySummaryIdentity) throws {
+    try Task.checkCancellation()
+    guard active == nil, requested == nil else { throw LibrarySummaryError.requestInProgress }
+    guard let pending = pendingTerminations[expected.paperID], pending.identity == expected else { return }
+    // If ownership changed, discard the obsolete action and refresh the Library.
+    do { try database.failLibrarySummary(expected, reason: pending.reason) }
+    catch LibrarySummaryError.staleIdentity { }
+    pendingTerminations.removeValue(forKey: expected.paperID)
+    completionRevision = UUID()
   }
 
   /// The retained application owner keeps generation alive when Library gives way
@@ -324,6 +347,7 @@ extension LibrarySummaryFailure {
       }
       try apply(.claim(line)); try apply(.acquireWriter(line, permit: writer)); try apply(.dispatch(line))
       let result = try await service.dispatch(request, identity: identity, snapshot: policy, retrying: failed) {
+        pendingTerminations.removeValue(forKey: paperID)
         reserved = true
         awaitingProducer = true
       }
@@ -365,8 +389,15 @@ extension LibrarySummaryFailure {
         }
       }
       if reserved {
-        do { try database.failLibrarySummary(identity, reason: .classify(failure)) }
-        catch { throw LibrarySummaryError.persistenceFailure }
+        let reason = LibrarySummaryFailure.classify(failure)
+        do { try database.failLibrarySummary(identity, reason: reason) }
+        catch LibrarySummaryError.staleIdentity { throw failure }
+        catch {
+          if reason != .cleanupUnavailable {
+            pendingTerminations[paperID] = PendingTermination(identity: identity, reason: reason)
+          }
+          throw LibrarySummaryError.persistenceFailure
+        }
       }
       throw failure
     }

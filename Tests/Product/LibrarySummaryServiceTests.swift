@@ -1050,19 +1050,38 @@ final class LibrarySummaryServiceTests: XCTestCase {
       XCTAssertEqual(unresolved.activity, .running)
       XCTAssertNil(unresolved.failure)
       XCTAssertEqual(coordinator.generationBlocker(paperID: f.identity.paperID,
-        observation: observation, providerAvailable: true), .terminationUnconfirmed)
+        observation: observation, providerAvailable: false), .terminationWriteFailed(unresolved.identity))
       XCTAssertEqual(observation.record?.id, saved.id)
       XCTAssertEqual(observation.record?.claimAnchors, saved.claimAnchors)
+      do {
+        try coordinator.recoverTermination(unresolved.identity)
+        XCTFail("Rejected termination write reported success")
+      } catch { }
+      XCTAssertEqual(coordinator.generationBlocker(paperID: f.identity.paperID,
+        observation: observation, providerAvailable: false), .terminationWriteFailed(unresolved.identity))
 
       try f.db.adapterWrite { try $0.execute(sql: "DROP TRIGGER failTerminalWrite") }
+      try coordinator.recoverTermination(saved.identity)
+      XCTAssertEqual(try f.db.librarySortFacts().first?.summary?.recentAttempt?.activity, .running)
+      let failure: LibrarySummaryFailure
+      if timing == "AFTER" {
+        // A fresh owner sees a durable unresolved job but no live recovery action.
+        let recovery = try ProductJobRecovery(database: f.db).recoverStartup(currentEpoch: UUID())
+        XCTAssertEqual(recovery.interruptedJobs.map(\.jobID), [unresolved.identity.job])
+        failure = .interrupted
+      } else {
+        failure = cancelled ? .cancelled : .timedOut
+      }
+      try coordinator.recoverTermination(unresolved.identity)
       let reopened = try ProductDatabase.open(at: f.root), nextEpoch = UUID()
-      let recovery = try ProductJobRecovery(database: reopened).recoverStartup(currentEpoch: nextEpoch)
-      XCTAssertEqual(recovery.interruptedJobs.map(\.jobID), [unresolved.identity.job])
       let recovered = try XCTUnwrap(reopened.librarySortFacts().first?.summary?.recentAttempt)
-      XCTAssertEqual(recovered.failure, .interrupted)
+      XCTAssertEqual(recovered.identity, unresolved.identity)
+      XCTAssertEqual(recovered.failure, failure)
       XCTAssertTrue(recovered.canRetry)
-      XCTAssertEqual(try LibrarySummaryService(database: reopened).restore(paperID: f.identity.paperID)?.id, saved.id)
-      XCTAssertEqual(provider.calls, 2, "Recovery and restore do not send a new request")
+      let retained = try LibrarySummaryService(database: reopened).restore(paperID: f.identity.paperID)
+      XCTAssertEqual(retained?.id, saved.id)
+      XCTAssertEqual(retained?.claimAnchors, saved.claimAnchors)
+      XCTAssertEqual(provider.calls, 2, "Saving the terminal status and restoring do not send a request")
 
       provider.suspend = false
       provider.beforeResult = nil
@@ -1075,6 +1094,36 @@ final class LibrarySummaryServiceTests: XCTestCase {
       XCTAssertEqual(provider.outputLanguages, ["ko", "en", "en"])
       XCTAssertNotEqual(try LibrarySummaryService(database: reopened).restore(paperID: f.identity.paperID)?.id, saved.id)
     }
+  }
+
+  @MainActor func testStaleSummaryTerminationRecoveryCannotChangeDeletingPaper() async throws {
+    let f = try fixture()
+    defer { try? FileManager.default.removeItem(at: f.root) }
+    try prepareCoordinator(f)
+    let provider = SummaryProvider()
+    provider.beforeResult = { _ in throw URLError(.timedOut) }
+    let coordinator = LibrarySummaryCoordinator(database: f.db, epoch: UUID(), leases: SummaryLeases(),
+      authority: try ProviderRequest(), provider: provider)
+    try f.db.adapterWrite { db in
+      try db.execute(sql: """
+        CREATE TRIGGER ignoreSummaryTermination BEFORE UPDATE OF state ON librarySummaryJob
+        WHEN NEW.state = 'failed' BEGIN SELECT RAISE(IGNORE); END;
+        """)
+    }
+    do {
+      try await coordinator.generate(paperID: f.identity.paperID, generation: f.identity.generation,
+        outputLanguage: "ko")
+      XCTFail("Uncommitted termination reported success")
+    } catch { XCTAssertEqual(error as? LibrarySummaryError, .persistenceFailure) }
+    let pending = try XCTUnwrap(f.db.librarySortFacts().first?.summary?.recentAttempt).identity
+    _ = try XCTUnwrap(f.db.beginDeletion(f.identity.paperID))
+    // Even if the deletion-side terminal update did not stick, the revoked paper
+    // must not be touched by an older recovery button callback.
+    try f.db.adapterWrite { try $0.execute(sql: "DROP TRIGGER ignoreSummaryTermination") }
+    try coordinator.recoverTermination(pending)
+    XCTAssertEqual(try f.db.adapterRead { try String.fetchOne($0, sql: "SELECT state FROM librarySummaryJob") }, "running")
+    XCTAssertNil(try LibrarySummaryService(database: f.db).restore(paperID: f.identity.paperID))
+    XCTAssertEqual(provider.calls, 1)
   }
 
   @MainActor func testExplicitCoordinatorDispatchPublishesGroundedResultAndRestoresWithoutRequest() async throws {

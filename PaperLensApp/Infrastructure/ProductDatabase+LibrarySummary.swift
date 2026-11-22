@@ -420,19 +420,29 @@ extension ProductDatabase {
   public func failLibrarySummary(_ identity: LibrarySummaryIdentity,
     reason: LibrarySummaryFailure = .terminated) throws {
     try adapterWrite { db in
-      guard let row = try Row.fetchOne(db, sql: "SELECT identity, state FROM librarySummaryJob WHERE job = ?",
-        arguments: [identity.job.uuidString]) else { throw LibrarySummaryError.staleIdentity }
+      let lineage = "job = ? AND paperID = ? AND attempt = ? AND fence = ? AND correlation = ? AND input = ? AND epoch = ?"
+      let arguments: StatementArguments = [identity.job.uuidString, identity.paperID.uuidString,
+        identity.attempt.uuidString, identity.fence.uuidString, identity.correlation.uuidString,
+        identity.input.uuidString, identity.epoch.uuidString]
+      guard let row = try Row.fetchOne(db, sql: "SELECT identity, state FROM librarySummaryJob WHERE \(lineage)",
+        arguments: arguments) else { throw LibrarySummaryError.staleIdentity }
       let data = try row.decode(Data.self, forColumn: "identity")
       guard try JSONDecoder().decode(LibrarySummaryIdentity.self, from: data) == identity else {
         throw LibrarySummaryError.staleIdentity
       }
       guard try row.decode(String.self, forColumn: "state") == "running" else { return }
+      guard try Int.fetchOne(db, sql: """
+        SELECT COUNT(*) FROM paper WHERE id = ? AND generation = ? AND status = 'ready'
+          AND deletionID IS NULL AND pdfSHA256 = ? AND pdfReference = ?
+        """, arguments: [identity.paperID.uuidString, identity.generation.uuidString,
+          identity.pdfSHA256, "papers/\(identity.paperID.uuidString)/document.pdf"]) == 1
+      else { throw LibrarySummaryError.staleIdentity }
       try db.execute(sql: "UPDATE librarySummaryJob SET state = 'failed', failure = ? WHERE job = ? AND state = 'running'",
         arguments: [reason.rawValue, identity.job.uuidString])
       guard db.changesCount == 1, try Int.fetchOne(db, sql: """
         SELECT COUNT(*) FROM librarySummaryJob
-        WHERE job = ? AND identity = ? AND state = 'failed' AND failure = ?
-        """, arguments: [identity.job.uuidString, data, reason.rawValue]) == 1
+        WHERE \(lineage) AND identity = ? AND state = 'failed' AND failure = ?
+        """, arguments: arguments + [data, reason.rawValue]) == 1
       else { throw LibrarySummaryError.persistenceFailure }
     }
   }
