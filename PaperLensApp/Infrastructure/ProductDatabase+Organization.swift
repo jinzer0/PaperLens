@@ -337,7 +337,7 @@ extension ProductDatabase {
     let info = try libraryPDFEntry(at: url)
     let maximumBytes = try Self.ownedPDFByteLimit.get()
     guard info.st_mode & S_IFMT == S_IFREG, info.st_size > 0, info.st_size <= maximumBytes,
-      info.st_mode & 0o222 == 0
+      info.st_mode & S_IRUSR != 0, info.st_mode & 0o222 == 0
     else { throw OrganizationError.unavailablePDF }
     return url
   }

@@ -414,8 +414,9 @@ final class ProductJobRecoveryTests: XCTestCase, @unchecked Sendable {
     let writable = try await ownedStartupImport("unsealed")
     let aliased = try await ownedStartupImport("misplaced")
     let oversized = try await ownedStartupImport("oversized")
+    let unreadable = try await ownedStartupImport("unreadable")
     let intact = try await ownedStartupImport("intact")
-    let unavailable = [writable, aliased, oversized]
+    let unavailable = [writable, aliased, oversized, unreadable]
     let before = try (unavailable + [intact]).map {
       (paper: try row("paper", paper: $0), job: try row("importJob", paper: $0))
     }
@@ -441,6 +442,10 @@ final class ProductJobRecoveryTests: XCTestCase, @unchecked Sendable {
     }
     try FileManager.default.setAttributes([.posixPermissions: 0o400], ofItemAtPath: oversizedPDF.path)
 
+    let unreadablePDF = papers.appendingPathComponent("\(unreadable.uuidString)/document.pdf")
+    let unreadableBytes = try Data(contentsOf: unreadablePDF)
+    try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: unreadablePDF.path)
+
     let running = try database.organizationSnapshot(filter: .init())
     XCTAssertEqual(running.papers.filter(\.readable).map(\.id), [intact])
     XCTAssertTrue(running.papers.allSatisfy { $0.status == .ready })
@@ -462,13 +467,17 @@ final class ProductJobRecoveryTests: XCTestCase, @unchecked Sendable {
       XCTAssertEqual(recovered["cleanupDebt"] as Int, 1)
       assertUnchanged(saved.job, try row("importJob", paper: id))
     }
-    assertUnchanged(before[3].paper, try row("paper", paper: intact))
-    assertUnchanged(before[3].job, try row("importJob", paper: intact))
+    assertUnchanged(before[unavailable.count].paper, try row("paper", paper: intact))
+    assertUnchanged(before[unavailable.count].job, try row("importJob", paper: intact))
     XCTAssertEqual(try Data(contentsOf: writablePDF), unsealedBytes)
     XCTAssertEqual(try Data(contentsOf: relocatedPDF), relocatedBytes)
     XCTAssertEqual(try namespace.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink, true)
     let attributes = try FileManager.default.attributesOfItem(atPath: oversizedPDF.path)
     XCTAssertEqual((attributes[.size] as? NSNumber)?.uint64Value, size)
+    let unreadableAttributes = try FileManager.default.attributesOfItem(atPath: unreadablePDF.path)
+    XCTAssertEqual((unreadableAttributes[.posixPermissions] as? NSNumber)?.intValue, 0o000)
+    try FileManager.default.setAttributes([.posixPermissions: 0o400], ofItemAtPath: unreadablePDF.path)
+    XCTAssertEqual(try Data(contentsOf: unreadablePDF), unreadableBytes)
   }
 
   func testRestartReconcilesMissingPDFWithSavedReaderPosition() async throws {
