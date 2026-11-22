@@ -284,6 +284,65 @@ final class ParsingRecoveryCoordinatorTests: XCTestCase {
     XCTAssertEqual(history, [historical])
   }
 
+  func testRetryTerminalWriteCanBeRecoveredWithoutDispatchingAgain() async throws {
+    let (database, old, root) = try fixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let usable = UUID()
+    try database.adapterWrite { db in
+      try db.execute(sql: """
+        INSERT INTO extractionRevision(id, paperID, generation, pdfSHA256, pdfReference)
+        VALUES (?, ?, ?, ?, ?)
+        """, arguments: [usable.uuidString, old.paperID.uuidString, old.generation.uuidString,
+          old.pdfSHA256, old.pdfReference])
+      try db.execute(sql: "INSERT INTO extractionVisible(paperID, revision) VALUES (?, ?)",
+        arguments: [old.paperID.uuidString, usable.uuidString])
+      try db.execute(sql: """
+        CREATE TRIGGER ignoreFailedAttempt BEFORE UPDATE OF state ON extractionAttempt
+        WHEN NEW.state = 'failed' BEGIN SELECT RAISE(IGNORE); END;
+        """)
+    }
+    let producer = HeldFailureProducer()
+    let coordinator = ParsingRecoveryCoordinator(service: .init(database: database,
+      producer: producer, geometryValidator: RejectingValidator()), currentEpoch: UUID())
+    let before = try await coordinator.presentation(paperID: old.paperID)
+    let context = try XCTUnwrap(before.retry)
+    let operation = Task { try await coordinator.retry(context) }
+    await producer.waitForStart()
+    let running = try await coordinator.presentation(paperID: old.paperID)
+    XCTAssertNil(running.pendingTerminalAttempt)
+    await producer.release()
+    do { try await operation.value; XCTFail("Uncommitted failure reported success") }
+    catch { XCTAssertEqual(error as? ExtractionError, .storageFailure) }
+
+    let pending = try await coordinator.presentation(paperID: old.paperID)
+    let attempt = try XCTUnwrap(pending.pendingTerminalAttempt)
+    XCTAssertEqual(pending.status.state, "running")
+    XCTAssertEqual(pending.status.usableRevision, usable)
+    XCTAssertNil(pending.retry)
+    XCTAssertEqual(ParsingFailureNotice.message(status: pending.status, unavailable: false,
+      terminalWritePending: true), "파싱 종료 상태를 저장하지 못했습니다.")
+    do { try await coordinator.retry(context); XCTFail("Old Retry created another attempt") }
+    catch { XCTAssertEqual(error as? ParsingRecoveryError, .staleContext) }
+    do { try await coordinator.recoverTerminalWrite(attempt); XCTFail("Ignored write reported success") }
+    catch { XCTAssertEqual(error as? ExtractionError, .storageFailure) }
+    let stillPending = try await coordinator.presentation(paperID: old.paperID)
+    XCTAssertEqual(stillPending.pendingTerminalAttempt, attempt)
+
+    try database.adapterWrite { try $0.execute(sql: "DROP TRIGGER ignoreFailedAttempt") }
+    try await coordinator.recoverTerminalWrite(old)
+    XCTAssertEqual(try database.extractionStatus(paperID: old.paperID).state, "running")
+    try await coordinator.recoverTerminalWrite(attempt)
+    let recovered = try await coordinator.presentation(paperID: old.paperID)
+    XCTAssertNil(recovered.pendingTerminalAttempt)
+    XCTAssertEqual(recovered.retry?.failedAttempt, attempt)
+    XCTAssertEqual(recovered.retry?.usableRevision, usable)
+    let reopened = try ProductDatabase.open(at: root)
+    XCTAssertEqual(try reopened.extractionStatus(paperID: old.paperID).failure, "invalidBatch")
+    XCTAssertEqual(try invocationCount(reopened), 2)
+    let calls = await producer.identities
+    XCTAssertEqual(calls, [attempt])
+  }
+
   func testFailedRetryReservationRollsBackHistoryAndKeepsCurrentFailure() async throws {
     let (database, old, root) = try fixture()
     defer { try? FileManager.default.removeItem(at: root) }

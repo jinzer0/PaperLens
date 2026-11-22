@@ -388,6 +388,44 @@ private actor WorkspaceDeletionAgent: AgentLibraryPurging {
     }, 1)
   }
 
+  func testImportedParsingExposesTerminalWriteFailureAndDiscardsItDuringDeletion() async throws {
+    let f = try await fixture()
+    let id = try await importSelected(f)
+    let graph = try MainPDFiumParsingComposition(lifecycle: f.lifecycle,
+      authority: ProviderRequest(), geometryBinding: parsingBinding())
+    let workspace = try ProductWorkspace(database: f.database, lifecycle: f.lifecycle,
+      connection: f.connection, parsing: graph)
+    let reference = try f.database.readerSnapshot(paperID: id).pdfReference
+    // Reject the owned fixture before parser helper startup.
+    try FileManager.default.removeItem(at: f.database.root.appendingPathComponent(reference))
+    try f.database.adapterWrite { db in
+      try db.execute(sql: """
+        CREATE TRIGGER ignoreFailedAttempt BEFORE UPDATE OF state ON extractionAttempt
+        WHEN NEW.state = 'failed' BEGIN SELECT RAISE(IGNORE); END;
+        """)
+    }
+    let imported = try XCTUnwrap(workspace.imported(id))
+    await imported.value
+    XCTAssertTrue(workspace.failedInitialParsing.contains(id))
+    let coordinator = graph.recoveryCoordinator
+    let pending = try await coordinator.presentation(paperID: id)
+    let attempt = try XCTUnwrap(pending.pendingTerminalAttempt)
+    XCTAssertEqual(attempt.paperID, id)
+    XCTAssertEqual(pending.status.state, "running")
+    XCTAssertNil(pending.retry)
+
+    _ = try XCTUnwrap(f.database.beginDeletion(id))
+    // A stale Reader button can arrive before the next status observation.
+    try await coordinator.recoverTerminalWrite(attempt)
+    let deleting = try await coordinator.presentation(paperID: id)
+    XCTAssertEqual(deleting.status.state, "unavailable")
+    XCTAssertNil(deleting.pendingTerminalAttempt)
+    XCTAssertNil(deleting.retry)
+    XCTAssertEqual(try f.database.adapterRead {
+      try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM extractionInvocation")
+    }, 1)
+  }
+
   private func openOwnedReader(_ f: Fixture, id: UUID,
     discard: @escaping @MainActor () -> Void = {}) async throws -> ProductWorkspace.OpenReader {
     try await f.workspace.open(paper(f, id: id))

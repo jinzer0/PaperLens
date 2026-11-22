@@ -103,7 +103,7 @@ extension ProductDatabase {
     }
   }
 
-  private func matchesExtractionAttempt(_ db: Database, _ identity: ExtractionIdentity,
+  func matchesExtractionAttempt(_ db: Database, _ identity: ExtractionIdentity,
     state: String, failure: ExtractionError? = nil) throws -> Bool {
     try Int.fetchOne(db, sql: """
       SELECT COUNT(*) FROM extractionAttempt WHERE paperID = ? AND generation = ?
@@ -328,7 +328,9 @@ extension ProductDatabase {
       // A stale callback must neither fail a newer attempt nor erase prior usable content.
       guard try Int.fetchOne(db, sql: """
         SELECT COUNT(*) FROM paper WHERE id = ? AND status = 'ready' AND deletionID IS NULL
-        """, arguments: [identity.paperID.uuidString]) == 1 else { return }
+          AND generation = ? AND pdfSHA256 = ? AND pdfReference = ?
+        """, arguments: [identity.paperID.uuidString, identity.generation.uuidString,
+          identity.pdfSHA256, identity.pdfReference]) == 1 else { return }
       do { try guardExtractionAttempt(db, identity, requireCurrentPaper: false) }
       catch ExtractionError.staleAttempt { return }
       try db.execute(sql: "UPDATE extractionAttempt SET state = 'failed', failure = ? WHERE paperID = ?",

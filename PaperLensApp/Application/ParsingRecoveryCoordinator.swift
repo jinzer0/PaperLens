@@ -18,11 +18,23 @@ public actor ParsingRecoveryCoordinator {
   struct Presentation: Sendable {
     let status: ExtractionStatus
     let retry: ParsingRecoveryContext?
+    let pendingTerminalAttempt: ExtractionIdentity?
+
+    init(status: ExtractionStatus, retry: ParsingRecoveryContext?, pendingTerminalAttempt: ExtractionIdentity? = nil) {
+      self.status = status
+      self.retry = retry
+      self.pendingTerminalAttempt = pendingTerminalAttempt
+    }
   }
 
   private let service: ExtractionRevisionService
   private let currentEpoch: UUID
   private var inFlight: Set<UUID> = []
+  private struct PendingTerminalWrite {
+    let identity: ExtractionIdentity
+    let failure: ExtractionError
+  }
+  private var pendingTerminalWrites: [UUID: PendingTerminalWrite] = [:]
 
   public init(service: ExtractionRevisionService, currentEpoch: UUID) {
     self.service = service
@@ -34,9 +46,36 @@ public actor ParsingRecoveryCoordinator {
   }
 
   func presentation(paperID: UUID) throws -> Presentation {
-    try service.database.adapterRead { db in
-      try Self.fetchPresentation(paperID: paperID, includesRetry: true, in: db)
+    let database = service.database
+    let pending = pendingTerminalWrites[paperID]
+    let presentation = try database.adapterRead { db in
+      let current = try Self.fetchPresentation(paperID: paperID, includesRetry: true, in: db)
+      guard let pending, current.status.state == "running",
+        try database.matchesExtractionAttempt(db, pending.identity, state: "running")
+      else { return current }
+      return Presentation(status: current.status, retry: nil, pendingTerminalAttempt: pending.identity)
     }
+    if pending != nil, presentation.pendingTerminalAttempt == nil { pendingTerminalWrites.removeValue(forKey: paperID) }
+    return presentation
+  }
+
+  func parseInitial(_ identity: ExtractionIdentity) async throws {
+    do { try await service.parse(identity, firstInvocationOnly: true) }
+    catch let failure as ExtractionTerminalWriteFailure { try retainTerminalWrite(failure) }
+  }
+
+  // Retrying the status write cannot reserve or dispatch a parser attempt.
+  func recoverTerminalWrite(_ expected: ExtractionIdentity) throws {
+    try Task.checkCancellation()
+    guard let pending = pendingTerminalWrites[expected.paperID], pending.identity == expected else { return }
+    try service.database.failExtraction(expected, failure: pending.failure)
+    pendingTerminalWrites.removeValue(forKey: expected.paperID)
+  }
+
+  private func retainTerminalWrite(_ error: ExtractionTerminalWriteFailure) throws -> Never {
+    pendingTerminalWrites[error.identity.paperID] = PendingTerminalWrite(identity: error.identity,
+      failure: error.failure)
+    throw error.underlying
   }
 
   static func fetchPresentation(paperID: UUID, includesRetry: Bool, in db: Database) throws -> Presentation {
@@ -92,7 +131,8 @@ public actor ParsingRecoveryCoordinator {
     }
     inFlight.insert(paperID)
     defer { inFlight.remove(paperID) }
-    try await service.consumeReserved(identity, producer: producer, validator: validator)
+    do { try await service.consumeReserved(identity, producer: producer, validator: validator) }
+    catch let failure as ExtractionTerminalWriteFailure { try retainTerminalWrite(failure) }
     return identity
   }
 

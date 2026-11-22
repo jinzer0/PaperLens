@@ -108,7 +108,7 @@ import ProviderRequest
     else { return nil }
     initialInFlight.insert(paperID)
     defer { initialInFlight.remove(paperID) }
-    try await service.parse(identity, firstInvocationOnly: true)
+    try await recoveryCoordinator.parseInitial(identity)
     return identity
   }
 

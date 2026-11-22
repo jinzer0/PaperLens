@@ -759,6 +759,12 @@ private struct ExtractionFailureProvenance: Error {
   let origin: Origin
 }
 
+struct ExtractionTerminalWriteFailure: Error {
+  let identity: ExtractionIdentity
+  let failure: ExtractionError
+  let underlying: any Error
+}
+
 private final class ExtractionPublicationObservation: @unchecked Sendable {
   private let lock = NSLock()
   private var published = false
@@ -772,7 +778,8 @@ public struct ExtractionRevisionService: Sendable {
   public let geometryValidator: (any ExtractionGeometryValidating)?
 
   public func parse(_ identity: ExtractionIdentity) async throws {
-    try await parse(identity, firstInvocationOnly: false)
+    do { try await parse(identity, firstInvocationOnly: false) }
+    catch let failure as ExtractionTerminalWriteFailure { throw failure.underlying }
   }
 
   func parse(_ identity: ExtractionIdentity, firstInvocationOnly: Bool) async throws {
@@ -824,7 +831,8 @@ public struct ExtractionRevisionService: Sendable {
       // Pin/accounting cleanup can fail after publication; keep that debt distinct.
       guard !observation.didPublish else { throw original }
       let failure = Self.failure(for: original, fromPublication: provenance?.origin == .publication)
-      try await Task.detached { try database.failExtraction(identity, failure: failure) }.value
+      do { try await Task.detached { try database.failExtraction(identity, failure: failure) }.value }
+      catch { throw ExtractionTerminalWriteFailure(identity: identity, failure: failure, underlying: error) }
       throw original
     }
   }

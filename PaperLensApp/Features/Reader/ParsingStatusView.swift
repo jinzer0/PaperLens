@@ -39,8 +39,10 @@ enum ParsingFailureNotice: PreferenceKey {
     if let message = nextValue() { value = message }
   }
 
-  static func message(status: ExtractionStatus?, unavailable: Bool) -> String? {
-    guard !unavailable, let status, status.state == "failed" else { return nil }
+  static func message(status: ExtractionStatus?, unavailable: Bool, terminalWritePending: Bool = false) -> String? {
+    guard !unavailable else { return nil }
+    if terminalWritePending { return "파싱 종료 상태를 저장하지 못했습니다." }
+    guard let status, status.state == "failed" else { return nil }
     return ParsingFailureMessage.korean(status.failure)
   }
 }
@@ -142,10 +144,17 @@ public struct ParsingStatusView: View {
             .font(.caption)
         }
       }
-      Button("상태 새로 고침") { Task { _ = await recoverTracking(key: key) } }
+      let pending = presentation?.pendingTerminalAttempt
+      Button(pending == nil ? "상태 새로 고침" : "종료 상태 저장 다시 시도") {
+        Task { await refreshFromButton(pending, key: key) }
+      }
+      .disabled(pending != nil && retrying)
     }
     .textSelection(.enabled)
     .preference(key: ParsingFailureNotice.self, value: failureNotice)
+    .onChange(of: initialStartFailed) { _, failed in
+      if failed { Task { _ = await recoverTracking(key: key) } }
+    }
     .task(id: key) {
       guard isCurrent(key), !Task.isCancelled else { return }
       if presentationPaperID != key.paperID {
@@ -186,7 +195,8 @@ public struct ParsingStatusView: View {
     if canStartParsing && initialStartFailed {
       return "파싱을 시작하지 못했습니다. 다시 시도하세요."
     }
-    return ParsingFailureNotice.message(status: status, unavailable: unavailable)
+    return ParsingFailureNotice.message(status: status, unavailable: unavailable,
+      terminalWritePending: presentation?.pendingTerminalAttempt != nil)
   }
 
   private var aiPreparationReason: String {
@@ -201,22 +211,21 @@ public struct ParsingStatusView: View {
 
   private var title: String {
     if unavailable { return "파싱 상태를 불러올 수 없습니다." }
+    if let failureNotice { return failureNotice }
     switch status?.state {
     case "running": return "원문을 파싱하고 있습니다."
     case "succeeded": return "검색용 원문 준비가 완료되었습니다."
-    case "failed":
-      return ParsingFailureMessage.korean(status?.failure)
     case "unavailable": return "현재 논문의 원문을 사용할 수 없습니다."
-    default: return failureNotice ?? "검색용 원문이 아직 준비되지 않았습니다."
+    default: return "검색용 원문이 아직 준비되지 않았습니다."
     }
   }
 
   private var icon: String {
-    if unavailable || (canStartParsing && initialStartFailed) { return "exclamationmark.triangle" }
+    if unavailable || failureNotice != nil { return "exclamationmark.triangle" }
     switch status?.state {
     case "succeeded": return "checkmark.circle"
     case "running": return "hourglass"
-    case "failed", "unavailable": return "exclamationmark.triangle"
+    case "unavailable": return "exclamationmark.triangle"
     default: return "doc.text.magnifyingglass"
     }
   }
@@ -253,6 +262,20 @@ public struct ParsingStatusView: View {
     guard let recoveredKey = await recoverTracking(key: key),
       isCurrent(recoveredKey), !Task.isCancelled else { return }
     retryFailure = failure?.matching(presentation)
+  }
+
+  @MainActor private func refreshFromButton(_ pending: ExtractionIdentity?, key: ObservationTaskKey) async {
+    guard isCurrent(key), !Task.isCancelled else { return }
+    if let pending, let coordinator {
+      guard !retrying, presentation?.pendingTerminalAttempt == pending else { return }
+      retrying = true
+      defer { if key.paperID == paperID { retrying = false } }
+      // On another write error the same recovery action stays visible after readback.
+      try? await coordinator.recoverTerminalWrite(pending)
+      _ = await recoverTracking(key: key)
+    } else {
+      _ = await recoverTracking(key: key)
+    }
   }
 
   @MainActor private func recoverTracking(key: ObservationTaskKey) async -> ObservationTaskKey? {
