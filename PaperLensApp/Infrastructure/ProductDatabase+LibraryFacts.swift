@@ -52,6 +52,7 @@ extension ProductDatabase {
       \(Self.currentLibraryMetadataJoins)
       WHERE p.status = 'ready' AND p.deletionID IS NULL
       """).compactMap { row in
+      try Task.checkCancellation()
       let id: String = row["id"]
       let generation: String = row["generation"]
       guard let paperID = UUID(uuidString: id), let generationID = UUID(uuidString: generation)

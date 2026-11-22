@@ -24,6 +24,7 @@ public struct LibraryBrowserView: View {
   @State private var observedMetadataRevision: UUID?
   @State private var observedSummaryRevision: UUID?
   @State private var query = OrganizationQueryState()
+  @State private var loadTask: Task<Void, Never>?
   @State private var currentFacts: [UUID: OrganizationSortFacts] = [:]
   @State private var folders: [LibraryFolder] = []
   @State private var folderLoadFailed = false
@@ -932,7 +933,7 @@ public struct LibraryBrowserView: View {
     }
     if let slot, sheetPresentation?.slot.id == slot.id { sheetPresentation?.awaitingRequest = request }
     let deletions = finishedDeletionIDs
-    Task { await load(request, refreshingDeletions: deletions) }
+    loadTask = Task { await load(request, refreshingDeletions: deletions) }
   }
   private func invalidateObservation(preservingEditor slotID: UUID? = nil,
     completingOrganization token: UUID? = nil) {
@@ -944,6 +945,8 @@ public struct LibraryBrowserView: View {
     clearObservation(completingOrganization: token)
   }
   private func clearObservation(completingOrganization token: UUID? = nil) {
+    loadTask?.cancel()
+    loadTask = nil
     if !canPreserveOrganizationReturn(token) { organizationFocusToRestore = nil }
     currentFacts = [:]
     folders = []
@@ -956,7 +959,7 @@ public struct LibraryBrowserView: View {
     do {
       let observation = try await service.observation(filter: request.filter)
       let value = observation.snapshot
-      guard query.accept(value, request: request, currentFilter: filter) else { return }
+      guard !Task.isCancelled, query.accept(value, request: request, currentFilter: filter) else { return }
       if !refreshingDeletions.isEmpty { acknowledgeDeletionRefresh(refreshingDeletions) }
       folders = observation.folders ?? []
       folderLoadFailed = observation.folders == nil
@@ -968,6 +971,7 @@ public struct LibraryBrowserView: View {
       consumeSheetReturn(request)
       consumeOrganizationReturn(request)
     } catch {
+      guard !Task.isCancelled else { return }
       query.reject(request: request, currentFilter: filter)
       consumeSheetReturn(request)
       if query.failed, !query.loading { consumeOrganizationReturn(request) }

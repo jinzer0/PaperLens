@@ -223,9 +223,10 @@ public actor LibraryOrganizationService {
   }
 
   func observation(filter: OrganizationFilter) async throws -> OrganizationObservation {
-    let database = database
-    var result = try await Task.detached { try database.organizationObservation(filter: filter) }.value
+    var result = try await database.readOrganizationObservation(filter: filter)
+    try Task.checkCancellation()
     result.snapshot = try Self.sorted(result.snapshot, facts: result.facts)
+    try Task.checkCancellation()
     return result
   }
 

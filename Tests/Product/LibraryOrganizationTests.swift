@@ -827,6 +827,51 @@ final class LibraryOrganizationTests: XCTestCase {
     XCTAssertEqual(query.snapshot?.papers.map(\.title), ["Beta"], "Last committed projection survives but is not displayed as current")
   }
 
+  func testCancellingInFlightLibrarySearchReleasesDatabaseForCurrentFiltersAndWrites() async throws {
+    let database = try ProductDatabase.open(at: root())
+    _ = try seed(database, title: "Old search")
+    let currentPaper = try seed(database, title: "Current search")
+    let lifecycle = try await LocalLibraryLifecycle.open(database: database)
+    let service = LibraryOrganizationService(database: database, lifecycle: lifecycle)
+    let entered = expectation(description: "Old search reached its SQLite read")
+    let release = DispatchSemaphore(value: 0)
+    try database.adapterWrite { db in
+      db.add(function: DatabaseFunction("pauseOrganizationRead", argumentCount: 0) { _ in
+        entered.fulfill()
+        return release.wait(timeout: .now() + 5) == .success ? 1 : 0
+      })
+      try db.execute(sql: """
+        ALTER TABLE organizationPreferences RENAME TO fixturePreferences;
+        CREATE VIEW organizationPreferences AS
+          SELECT * FROM fixturePreferences WHERE pauseOrganizationRead() = 1;
+        """)
+    }
+    var oldFilter = OrganizationFilter()
+    oldFilter.search = "Old search"
+    let old = Task { [oldFilter] in try await service.observation(filter: oldFilter) }
+    await fulfillment(of: [entered], timeout: 5)
+    old.cancel()
+    release.signal()
+    do {
+      _ = try await old.value
+      XCTFail("A cancelled search cannot return an observation")
+    } catch is CancellationError {}
+
+    try database.adapterWrite { db in
+      try db.execute(sql: """
+        DROP VIEW organizationPreferences;
+        ALTER TABLE fixturePreferences RENAME TO organizationPreferences;
+        """)
+    }
+    try await service.savePreferences(.init(presentation: .grid, sort: .name))
+    var filter = OrganizationFilter()
+    filter.search = "Current search"
+    let fresh = try await service.observation(filter: filter)
+    XCTAssertEqual(fresh.snapshot.preferences, .init(presentation: .grid, sort: .name))
+    XCTAssertEqual(fresh.snapshot.papers.map(\.id), [currentPaper.0])
+    XCTAssertEqual(fresh.snapshot.papers.first?.readable, true)
+  }
+
   func testQueryInvalidationAndSaveVersusDeletionBothOrdersNeverRestorePaper() async throws {
     let database = try ProductDatabase.open(at: root())
     let a = try seed(database, title: "Delete first"), b = try seed(database, title: "Save first")

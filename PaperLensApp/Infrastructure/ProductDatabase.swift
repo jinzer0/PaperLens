@@ -157,6 +157,10 @@ public final class ProductDatabase: @unchecked Sendable {
     try queue.read(body)
   }
 
+  func adapterReadAsync<T: Sendable>(_ body: @Sendable (Database) throws -> T) async throws -> T {
+    try await queue.read(body)
+  }
+
   func adapterWrite<T>(_ body: (Database) throws -> T) throws -> T {
     try queue.write(body)
   }

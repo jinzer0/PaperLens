@@ -51,13 +51,20 @@ extension ProductDatabase {
 
   /// The Library rows, detail facts and sidebar describe the same committed state.
   func organizationObservation(filter: OrganizationFilter) throws -> OrganizationObservation {
-    try adapterRead { db in
-      let snapshot = try organizationSnapshot(filter: filter, in: db)
-      let ids = Set(snapshot.papers.filter { $0.status == .ready }.map(\.id))
-      let facts = try librarySortFacts(for: ids, in: db)
-      return OrganizationObservation(snapshot: snapshot, facts: facts,
-        folders: try? folders(in: db), tags: try? organizationTags(in: db))
-    }
+    try adapterRead { try organizationObservation(filter: filter, in: $0) }
+  }
+
+  func readOrganizationObservation(filter: OrganizationFilter) async throws -> OrganizationObservation {
+    try await adapterReadAsync { try self.organizationObservation(filter: filter, in: $0) }
+  }
+
+  private func organizationObservation(filter: OrganizationFilter, in db: Database) throws -> OrganizationObservation {
+    let snapshot = try organizationSnapshot(filter: filter, in: db)
+    try Task.checkCancellation()
+    let ids = Set(snapshot.papers.filter { $0.status == .ready }.map(\.id))
+    let facts = try librarySortFacts(for: ids, in: db)
+    return OrganizationObservation(snapshot: snapshot, facts: facts,
+      folders: try? folders(in: db), tags: try? organizationTags(in: db))
   }
 
   private func organizationPreferences(in db: Database) throws -> OrganizationPreferences {
@@ -108,6 +115,7 @@ extension ProductDatabase {
     let search = LibraryOrganizationService.normalized(filter.search.trimmingCharacters(in: .whitespacesAndNewlines))
     let tag = filter.tag.map(LibraryOrganizationService.normalized)
     let papers = try rows.compactMap { row -> OrganizedPaper? in
+      try Task.checkCancellation()
       let idString: String = row["id"], generationString: String = row["generation"]
       guard let id = UUID(uuidString: idString), let generation = UUID(uuidString: generationString),
         let status = LibraryStatus(rawValue: row["status"]),
@@ -130,12 +138,13 @@ extension ProductDatabase {
       let canRetryImport = status == .importFailed && failure != "missingPDF"
         && String.fromDatabaseValue(row["importJobState"]) == "failed"
         && (row["hasImportHistory"] as Bool) && !(row["cleanupDebt"] as Bool)
+      let readable = (try? validateOrganizationPDF(row, verifyDigest: true)) != nil
+      try Task.checkCancellation()
       return OrganizedPaper(id: id, generation: generation, title: title, sourceTitle: sourceTitle,
         sourceMetadataInvalid: metadata.invalid, status: status,
         deletionID: String.fromDatabaseValue(row["deletionID"]).flatMap(UUID.init(uuidString:)),
         failure: failure, bytesCopied: row["bytesCopied"], createdAt: Date(timeIntervalSince1970: row["createdAt"]),
-        readable: (try? validateOrganizationPDF(row, verifyDigest: true)) != nil,
-        canRetryImport: canRetryImport,
+        readable: readable, canRetryImport: canRetryImport,
         organization: PaperOrganization(readingStatus: readingStatus, favorite: favorite, tags: labels))
     }
     return OrganizationSnapshot(preferences: preferences, totalCount: totalCount,
@@ -251,7 +260,11 @@ extension ProductDatabase {
       let input = try FileHandle(forReadingFrom: url)
       var hash = SHA256()
       do {
-        while let data = try input.read(upToCount: 64 * 1024), !data.isEmpty { hash.update(data: data) }
+        while true {
+          try Task.checkCancellation()
+          guard let data = try input.read(upToCount: 64 * 1024), !data.isEmpty else { break }
+          hash.update(data: data)
+        }
         try input.close()
       } catch { try? input.close(); throw error }
       guard hash.finalize().map({ String(format: "%02x", $0) }).joined() == digest
