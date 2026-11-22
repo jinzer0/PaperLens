@@ -433,22 +433,18 @@ public struct LibraryBrowserView: View {
         .focused($organizationFocus, equals: .favorite(paper.id))
         .accessibilityLabel("\(paper.title) 즐겨찾기")
         .accessibilityValue(paper.organization.favorite ? "설정됨" : "설정되지 않음")
-        Menu("읽기 상태 · \(readingLabel(paper.organization.readingStatus))") {
-          ForEach(PaperReadingStatus.allCases, id: \.self) { status in
-            Button {
+        let currentStatus = readingLabel(paper.organization.readingStatus)
+        LibraryPaperMenu(title: "읽기 상태 · \(currentStatus)", label: "\(paper.title) 읽기 상태 변경",
+          value: currentStatus, actions: PaperReadingStatus.allCases.map { status in
+            .init(.reading(status), readingLabel(status), checked: status == paper.organization.readingStatus) {
               var value = paper.organization
               value.readingStatus = status
               saveOrganization(value, for: paper, origin: .reading(paper.id))
-            } label: {
-              if status == paper.organization.readingStatus {
-                Label(readingLabel(status), systemImage: "checkmark")
-              } else { Text(readingLabel(status)) }
             }
-          }
-        }
+          }, requestsFocus: organizationFocus == .reading(paper.id))
+        .focusable(!deletionPending && paper.readable && !busy && !loading && !loadFailed,
+          interactions: [.activate, .edit])
         .focused($organizationFocus, equals: .reading(paper.id))
-        .accessibilityLabel("\(paper.title) 읽기 상태 변경")
-        .accessibilityValue(readingLabel(paper.organization.readingStatus))
       }.disabled(deletionPending || !paper.readable || busy || loading || loadFailed)
       if !paper.organization.tags.isEmpty { Text(paper.organization.tags.joined(separator: " · ")).font(.caption) }
       if !paper.sourceMetadataInvalid {
@@ -522,16 +518,16 @@ public struct LibraryBrowserView: View {
         }
         .disabled(!canMovePaper)
         .accessibilityLabel("\(paper.title) 폴더 이동")
-      LibraryMoreMenu(label: "\(paper.title) 더 보기", actions: paperMenuActions(paper),
-        requestsFocus: focusedPaper == paper.id)
+      LibraryPaperMenu(title: "더 보기", label: "\(paper.title) 더 보기", value: nil,
+        actions: paperMenuActions(paper), requestsFocus: focusedPaper == paper.id)
         .focusable(!busy, interactions: [.activate, .edit])
         .focused($focusedPaper, equals: paper.id)
         .disabled(busy)
     }
   }
 
-  private func paperMenuActions(_ paper: OrganizedPaper) -> [LibraryMoreMenu.Action] {
-    var actions: [LibraryMoreMenu.Action] = []
+  private func paperMenuActions(_ paper: OrganizedPaper) -> [LibraryPaperMenu.Action] {
+    var actions: [LibraryPaperMenu.Action] = []
     if paper.canRetryImport {
       actions.append(.init(.retryPDF, "새 PDF 선택 후 같은 작업 재시도",
         enabled: localPDFAvailable && !busy && !loading && !loadFailed) {
@@ -850,7 +846,11 @@ public struct LibraryBrowserView: View {
     // A native click or menu action may leave keyboard focus in the search field.
     // Focus controls asynchronous restoration below, not permission to save a current row.
     switch origin {
-    case .favorite(let id), .reading(let id): guard id == paper.id else { return }
+    case .favorite(let id): guard id == paper.id else { return }
+    case .reading(let id):
+      guard id == paper.id else { return }
+      // A completed menu save may keep its old logical focus until the native row is rebuilt.
+      if organizationFocus == origin { organizationFocus = nil }
     default: return
     }
     let receipt = OrganizationActionReturn(token: UUID(), mountID: mountID,
@@ -1120,24 +1120,29 @@ private struct OrganizationActionReturn {
   let awaitingRequest: OrganizationQueryState.Request?
 }
 
-@MainActor private struct LibraryMoreMenu: NSViewRepresentable {
+@MainActor private struct LibraryPaperMenu: NSViewRepresentable {
   struct Action {
-    enum Kind: Int { case retryPDF, retryURL, edit, retryDeletion, delete }
+    enum Kind: Equatable { case retryPDF, retryURL, edit, retryDeletion, delete, reading(PaperReadingStatus) }
 
     let kind: Kind
     let title: String
     let enabled: Bool
+    let checked: Bool
     let perform: @MainActor () -> Void
 
-    init(_ kind: Kind, _ title: String, enabled: Bool = true, perform: @escaping @MainActor () -> Void) {
+    init(_ kind: Kind, _ title: String, enabled: Bool = true, checked: Bool = false,
+      perform: @escaping @MainActor () -> Void) {
       self.kind = kind
       self.title = title
       self.enabled = enabled
+      self.checked = checked
       self.perform = perform
     }
   }
 
+  let title: String
   let label: String
+  let value: String?
   let actions: [Action]
   let requestsFocus: Bool
   @Environment(\.isEnabled) private var isEnabled
@@ -1147,7 +1152,8 @@ private struct OrganizationActionReturn {
   func makeNSView(context: Context) -> Button {
     let button = Button(frame: .zero, pullsDown: true)
     button.menu = NSMenu()
-    button.addItem(withTitle: Self.title)
+    // AppKit reserves the first item for the pull-down button's title.
+    button.addItem(withTitle: title)
     button.autoenablesItems = false
     button.menu?.delegate = context.coordinator
     button.setAccessibilityRole(.menuButton)
@@ -1156,19 +1162,24 @@ private struct OrganizationActionReturn {
 
   func updateNSView(_ button: Button, context: Context) {
     context.coordinator.actions = isEnabled ? actions : []
+    if let header = button.item(at: 0), header.title != title {
+      header.title = title
+      button.invalidateIntrinsicContentSize()
+    }
     button.isEnabled = isEnabled
     button.paperLabel = label
-    button.requestFocus(requestsFocus)
+    button.paperValue = value
+    button.requestFocus(requestsFocus && isEnabled)
   }
-
-  private static let title = "더 보기"
 
   final class Button: NSPopUpButton {
     var paperLabel = ""
+    var paperValue: String?
     private var focusRequested = false
 
     override var acceptsFirstResponder: Bool { isEnabled }
     override func accessibilityLabel() -> String? { paperLabel }
+    override func accessibilityValue() -> Any? { paperValue }
 
     func requestFocus(_ requested: Bool) {
       guard focusRequested != requested else { return }
@@ -1198,14 +1209,13 @@ private struct OrganizationActionReturn {
     var actions: [Action] = []
 
     func menuNeedsUpdate(_ menu: NSMenu) {
-      menu.removeAllItems()
-      // AppKit reserves the first item for the pull-down button's title.
-      menu.addItem(withTitle: LibraryMoreMenu.title, action: nil, keyEquivalent: "")
+      while menu.numberOfItems > 1 { menu.removeItem(at: 1) }
       for action in actions {
         let item = NSMenuItem(title: action.title, action: #selector(selectAction(_:)), keyEquivalent: "")
-        item.tag = action.kind.rawValue
+        item.representedObject = action.kind
         item.target = self
         item.isEnabled = action.enabled
+        item.state = action.checked ? .on : .off
         if action.kind == .delete {
           item.attributedTitle = NSAttributedString(string: action.title,
             attributes: [.foregroundColor: NSColor.systemRed])
@@ -1215,7 +1225,8 @@ private struct OrganizationActionReturn {
     }
 
     @objc private func selectAction(_ item: NSMenuItem) {
-      guard let action = actions.first(where: { $0.kind.rawValue == item.tag && $0.enabled })
+      guard let kind = item.representedObject as? Action.Kind,
+        let action = actions.first(where: { $0.kind == kind && $0.enabled })
       else { return }
       action.perform()
     }
