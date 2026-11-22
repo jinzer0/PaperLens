@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 @MainActor
@@ -521,40 +522,49 @@ public struct LibraryBrowserView: View {
         }
         .disabled(!canMovePaper)
         .accessibilityLabel("\(paper.title) 폴더 이동")
-      Menu("더 보기") {
-        if paper.canRetryImport {
-          Button("새 PDF 선택 후 같은 작업 재시도") { requestRetry(paper) }
-            .disabled(!localPDFAvailable || busy || loading || loadFailed)
-          if let retryImportURL {
-            Button("URL 입력 후 같은 작업 재시도") {
-              guard !nativeSheetPending, deleting == nil, !operationFailed,
-                renderedPaperControls(for: paper) else { return }
-              retryImportURL(paper) {
-                guard !nativeSheetPending, renderedPaperControls(for: paper) else { return }
-                focusedPaper = paper.id
-              }
-            }.disabled(busy || loading || loadFailed)
-          }
-        }
-        Button("태그·읽기 상태·즐겨찾기 편집") {
-          beginTagEdit(paper)
-        }.disabled(!paper.readable)
-        if paper.status == .deletionFailed {
-          Button("삭제 다시 시도") { deletePaper(paper, true) }
-        } else {
-          Button("삭제", role: .destructive) {
-            guard !nativeSheetPending, !busy else { return }
-            organizationFocusToRestore = nil
-            interruptSheetReturn(newerWork: true)
-            deleting = paper
-          }.disabled(paper.status == .deleting)
-        }
-      }.focusable(!busy, interactions: [.activate, .edit])
+      LibraryMoreMenu(label: "\(paper.title) 더 보기", actions: paperMenuActions(paper),
+        requestsFocus: focusedPaper == paper.id)
+        .focusable(!busy, interactions: [.activate, .edit])
         .focused($focusedPaper, equals: paper.id)
         .disabled(busy)
-        .accessibilityLabel("\(paper.title) 더 보기")
     }
   }
+
+  private func paperMenuActions(_ paper: OrganizedPaper) -> [LibraryMoreMenu.Action] {
+    var actions: [LibraryMoreMenu.Action] = []
+    if paper.canRetryImport {
+      actions.append(.init(.retryPDF, "새 PDF 선택 후 같은 작업 재시도",
+        enabled: localPDFAvailable && !busy && !loading && !loadFailed) {
+        requestRetry(paper)
+      })
+      if let retryImportURL {
+        actions.append(.init(.retryURL, "URL 입력 후 같은 작업 재시도",
+          enabled: !busy && !loading && !loadFailed) {
+            guard !nativeSheetPending, deleting == nil, !operationFailed,
+              renderedPaperControls(for: paper) else { return }
+            retryImportURL(paper) {
+              guard !nativeSheetPending, renderedPaperControls(for: paper) else { return }
+              focusedPaper = paper.id
+            }
+          })
+      }
+    }
+    actions.append(.init(.edit, "태그·읽기 상태·즐겨찾기 편집", enabled: paper.readable) {
+      beginTagEdit(paper)
+    })
+    if paper.status == .deletionFailed {
+      actions.append(.init(.retryDeletion, "삭제 다시 시도") { deletePaper(paper, true) })
+    } else {
+      actions.append(.init(.delete, "삭제", enabled: paper.status != .deleting) {
+        guard !nativeSheetPending, !busy else { return }
+        organizationFocusToRestore = nil
+        interruptSheetReturn(newerWork: true)
+        deleting = paper
+      })
+    }
+    return actions
+  }
+
   private var nativeSheetPending: Bool {
     sheetPresentation.map { !$0.nativeDismissConsumed } ?? false
   }
@@ -1108,6 +1118,108 @@ private struct OrganizationActionReturn {
   let filter: OrganizationFilter
   let refreshRevision: Int
   let awaitingRequest: OrganizationQueryState.Request?
+}
+
+@MainActor private struct LibraryMoreMenu: NSViewRepresentable {
+  struct Action {
+    enum Kind: Int { case retryPDF, retryURL, edit, retryDeletion, delete }
+
+    let kind: Kind
+    let title: String
+    let enabled: Bool
+    let perform: @MainActor () -> Void
+
+    init(_ kind: Kind, _ title: String, enabled: Bool = true, perform: @escaping @MainActor () -> Void) {
+      self.kind = kind
+      self.title = title
+      self.enabled = enabled
+      self.perform = perform
+    }
+  }
+
+  let label: String
+  let actions: [Action]
+  let requestsFocus: Bool
+  @Environment(\.isEnabled) private var isEnabled
+
+  func makeCoordinator() -> Coordinator { Coordinator() }
+
+  func makeNSView(context: Context) -> Button {
+    let button = Button(frame: .zero, pullsDown: true)
+    button.menu = NSMenu()
+    button.addItem(withTitle: Self.title)
+    button.autoenablesItems = false
+    button.menu?.delegate = context.coordinator
+    button.setAccessibilityRole(.menuButton)
+    return button
+  }
+
+  func updateNSView(_ button: Button, context: Context) {
+    context.coordinator.actions = isEnabled ? actions : []
+    button.isEnabled = isEnabled
+    button.paperLabel = label
+    button.requestFocus(requestsFocus)
+  }
+
+  private static let title = "더 보기"
+
+  final class Button: NSPopUpButton {
+    var paperLabel = ""
+    private var focusRequested = false
+
+    override var acceptsFirstResponder: Bool { isEnabled }
+    override func accessibilityLabel() -> String? { paperLabel }
+
+    func requestFocus(_ requested: Bool) {
+      guard focusRequested != requested else { return }
+      focusRequested = requested
+      guard requested else { return }
+      // SwiftUI restores focus to the wrapper. Transfer it after the update so AppKit receives keys.
+      Task { @MainActor [weak self] in
+        guard let self, self.focusRequested, self.isEnabled,
+          let window = self.window, window.isKeyWindow, window.firstResponder !== self
+        else { return }
+        window.makeFirstResponder(self)
+      }
+    }
+
+    override func keyDown(with event: NSEvent) {
+      if isEnabled, event.charactersIgnoringModifiers == " ",
+        event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty
+      {
+        if !event.isARepeat { performClick(nil) }
+      } else {
+        super.keyDown(with: event)
+      }
+    }
+  }
+
+  @MainActor final class Coordinator: NSObject, NSMenuDelegate {
+    var actions: [Action] = []
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+      menu.removeAllItems()
+      // AppKit reserves the first item for the pull-down button's title.
+      menu.addItem(withTitle: LibraryMoreMenu.title, action: nil, keyEquivalent: "")
+      for action in actions {
+        let item = NSMenuItem(title: action.title, action: #selector(selectAction(_:)), keyEquivalent: "")
+        item.tag = action.kind.rawValue
+        item.target = self
+        item.isEnabled = action.enabled
+        if action.kind == .delete {
+          item.attributedTitle = NSAttributedString(string: action.title,
+            attributes: [.foregroundColor: NSColor.systemRed])
+        }
+        menu.addItem(item)
+      }
+    }
+
+    @objc private func selectAction(_ item: NSMenuItem) {
+      guard let action = actions.first(where: { $0.kind.rawValue == item.tag && $0.enabled })
+      else { return }
+      action.perform()
+    }
+  }
 }
 
 private enum OrganizationControlFocus: Hashable {
