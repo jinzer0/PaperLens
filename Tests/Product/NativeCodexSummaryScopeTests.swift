@@ -1319,6 +1319,42 @@ import ProviderRequest
     XCTAssertFalse(FileManager.default.fileExists(atPath: namespace.directoryURL.path))
   }
 
+  private func retireSummaryBeforeExecution(leavingUnownedEntry: Bool) async throws {
+    let (root, namespace, launch) = try workerFixture(script: "raise AssertionError('unexpected summary worker')\n")
+    defer { try? FileManager.default.removeItem(at: root) }
+    XCTAssertTrue(namespace.prepareRuntimeDirectories())
+    let obstruction = namespace.directoryURL.appendingPathComponent("unowned.txt")
+    let bytes = Data("preserve unexpected entry".utf8)
+    if leavingUnownedEntry { try bytes.write(to: obstruction) }
+    let paper = UUID()
+    let (_, _, params) = try parameters(paperID: paper)
+    let scope = NativeCodexSummaryScope(launch: launch, paperID: paper, params: params)
+    let retired = expectation(description: "pre-execution retirement reported to deletion and termination")
+    retired.expectedFulfillmentCount = 2
+    let deletion = Task { await scope.retireAndWait(); retired.fulfill() }
+    let termination = Task { await scope.retireAndWait(); retired.fulfill() }
+    await fulfillment(of: [retired], timeout: 2)
+
+    XCTAssertEqual(scope.clean, !leavingUnownedEntry)
+    do { _ = try await scope.execute(); XCTFail("A retired summary started execution") }
+    catch {
+      if leavingUnownedEntry { XCTAssertEqual(error as? LibrarySummaryError, .cleanupUnavailable) }
+      else { XCTAssertTrue(error is CancellationError) }
+    }
+    await deletion.value
+    await termination.value
+    if leavingUnownedEntry { XCTAssertEqual(try Data(contentsOf: obstruction), bytes) }
+    else { XCTAssertFalse(FileManager.default.fileExists(atPath: namespace.directoryURL.path)) }
+  }
+
+  func testDeletionAndTerminationCanAwaitSummaryRetirementBeforeExecution() async throws {
+    try await retireSummaryBeforeExecution(leavingUnownedEntry: false)
+  }
+
+  func testRetirementBeforeSummaryExecutionPropagatesUnverifiedCleanup() async throws {
+    try await retireSummaryBeforeExecution(leavingUnownedEntry: true)
+  }
+
   func testPurgeRevokesBufferedSuccessAndWaitsForActualRetirement() async throws {
     let (root, namespace, launch) = try workerFixture(script: controlWorkerScript(holdResult: false))
     defer { try? FileManager.default.removeItem(at: root) }

@@ -677,7 +677,8 @@ internal final class NativeCodexSummaryScope {
   private var outcome: Result<Data, any Error>?
   private var continuation: CheckedContinuation<Data, any Error>?
   private var waiters: [CheckedContinuation<Void, Never>] = []
-  private var terminalReceived = false
+  private var executionStarted = false
+  private var retirementResult: Result<Data, any Error>?
   private(set) var clean = false
   private(set) var isCancelled = false
 
@@ -686,6 +687,9 @@ internal final class NativeCodexSummaryScope {
     namespace = launch.namespace
     owner = OwnedChildRetirement(worker: launch,
       deadlineUptimeNanoseconds: DispatchTime.now().uptimeNanoseconds + 5_000_000_000)
+    owner.observeTerminal { [weak self] terminal in
+      Task { @MainActor in self?.finished(terminal) }
+    }
   }
 
   func verifyNamespaceForUnrelatedPurge(at root: URL) throws {
@@ -707,18 +711,25 @@ internal final class NativeCodexSummaryScope {
   }
 
   func execute() async throws -> Data {
+    guard !executionStarted else { throw LibrarySummaryError.providerUnavailable }
+    executionStarted = true
     let result: Data = try await withTaskCancellationHandler {
       try await withCheckedThrowingContinuation { continuation in
+        if let retirementResult {
+          continuation.resume(with: retirementResult)
+          return
+        }
         self.continuation = continuation
-        owner.observeTerminal { [weak self] terminal in
-          Task { @MainActor in self?.finished(terminal) }
+        if isCancelled || Task.isCancelled {
+          cancel()
+          return
         }
         owner.startProduct(startDeadlineUptimeNanoseconds:
           DispatchTime.now().uptimeNanoseconds + 5_000_000_000) { [self] result in
           switch result {
           case .failure: fail(LibrarySummaryError.providerUnavailable)
           case .success(let lifecycle):
-            guard outcome == nil, !terminalReceived else { owner.retire(); return }
+            guard outcome == nil, retirementResult == nil else { owner.retire(); return }
             self.lifecycle = lifecycle
             lifecycle.onTerminal = { [self] id, terminal in receive(id, terminal: terminal) }
             do {
@@ -768,17 +779,17 @@ internal final class NativeCodexSummaryScope {
 
   func retireAndWait() async {
     cancel()
-    if terminalReceived { return }
+    if retirementResult != nil { return }
     await withCheckedContinuation { waiters.append($0) }
   }
 
   private func finished(_ terminal: OwnedChildRetirement.Terminal) {
-    guard !terminalReceived else { return }
-    terminalReceived = true
+    guard retirementResult == nil else { return }
     if case .clean = terminal { clean = true }
     let result: Result<Data, any Error> = clean
       ? outcome ?? .failure(LibrarySummaryError.providerUnavailable)
       : .failure(LibrarySummaryError.cleanupUnavailable)
+    retirementResult = result
     lifecycle = nil
     let pending = continuation; continuation = nil
     pending?.resume(with: result)
