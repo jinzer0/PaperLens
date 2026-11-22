@@ -269,18 +269,13 @@ public struct ProductJobRecovery: Sendable {
     }
     for capture in references {
       try Task.checkCancellation()
-      let expected = "papers/\(capture.id.uuidString)/document.pdf"
-      let url = database.root.appendingPathComponent(capture.reference)
-      let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
       let unavailable: Bool
-      if capture.reference != expected || values?.isRegularFile != true || values?.isSymbolicLink == true {
+      do {
+        let pdf = try database.validateOwnedLibraryPDFLocation(
+          paperID: capture.id.uuidString, reference: capture.reference)
+        unavailable = try FolderImportService.hashOwnedPDF(pdf) != capture.sha256
+      } catch OrganizationError.unavailablePDF {
         unavailable = true
-      } else {
-        // Compare the bounded, closed read with the digest of the admitted PDF.
-        // Even an empty file or invalid PDF header can produce a definitive mismatch.
-        let digest = try FolderImportService.hashOwnedPDF(url)
-        try Task.checkCancellation()
-        unavailable = digest != capture.sha256
       }
       try Task.checkCancellation()
       if unavailable {

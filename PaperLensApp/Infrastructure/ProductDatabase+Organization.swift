@@ -1,6 +1,11 @@
 import CryptoKit
+import Darwin
 import Foundation
 import GRDB
+
+#if SWIFT_PACKAGE
+  import ProviderRequest
+#endif
 
 extension ProductDatabase {
   public static func registerOrganizationMigrations(in migrator: inout DatabaseMigrator) {
@@ -296,21 +301,12 @@ extension ProductDatabase {
   private func validateOrganizationPDF(_ row: Row, verifyDigest: Bool = false) throws {
     let id: String = row["id"], status: String = row["status"]
     let deletionID: String? = row["deletionID"], reference: String? = row["pdfReference"], digest: String? = row["pdfSHA256"]
-    guard status == "ready", deletionID == nil, reference == "papers/\(id)/document.pdf",
+    guard status == "ready", deletionID == nil,
       let digest, digest.count == 64, digest.allSatisfy({ "0123456789abcdef".contains($0) })
     else { throw OrganizationError.unavailablePDF }
-    let url = root.appendingPathComponent("papers/\(id)/document.pdf")
-    for parent in [root.appendingPathComponent("papers"), url.deletingLastPathComponent()] {
-      let values = try parent.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
-      guard values.isDirectory == true, values.isSymbolicLink != true else { throw OrganizationError.unavailablePDF }
-    }
-    let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
-    let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
-    let permissions = (attributes[.posixPermissions] as? NSNumber)?.intValue
-    guard values.isRegularFile == true, values.isSymbolicLink != true, (values.fileSize ?? 0) > 0,
-      let permissions, permissions & 0o222 == 0 else { throw OrganizationError.unavailablePDF }
+    let pdf = try validateOwnedLibraryPDFLocation(paperID: id, reference: reference)
     if verifyDigest {
-      let input = try FileHandle(forReadingFrom: url)
+      let input = try FileHandle(forReadingFrom: pdf)
       var hash = SHA256()
       do {
         while true {
@@ -323,5 +319,36 @@ extension ProductDatabase {
       guard hash.finalize().map({ String(format: "%02x", $0) }).joined() == digest
       else { throw OrganizationError.unavailablePDF }
     }
+  }
+
+  private static let ownedPDFByteLimit = Result { Int64(try ProviderRequest().limit("pdfBytes")) }
+
+  /// Startup and Library admission must agree about the immutable PDF's location and shape.
+  func validateOwnedLibraryPDFLocation(paperID: String, reference: String?) throws -> URL {
+    guard UUID(uuidString: paperID)?.uuidString == paperID,
+      reference == "papers/\(paperID)/document.pdf" else { throw OrganizationError.unavailablePDF }
+    let papers = root.appendingPathComponent("papers", isDirectory: false)
+    let namespace = papers.appendingPathComponent(paperID, isDirectory: false)
+    for parent in [papers, namespace] {
+      let info = try libraryPDFEntry(at: parent)
+      guard info.st_mode & S_IFMT == S_IFDIR else { throw OrganizationError.unavailablePDF }
+    }
+    let url = namespace.appendingPathComponent("document.pdf", isDirectory: false)
+    let info = try libraryPDFEntry(at: url)
+    let maximumBytes = try Self.ownedPDFByteLimit.get()
+    guard info.st_mode & S_IFMT == S_IFREG, info.st_size > 0, info.st_size <= maximumBytes,
+      info.st_mode & 0o222 == 0
+    else { throw OrganizationError.unavailablePDF }
+    return url
+  }
+
+  private func libraryPDFEntry(at url: URL) throws -> stat {
+    var info = stat()
+    if Darwin.lstat(url.path, &info) != 0 {
+      let failure = errno
+      if failure == ENOENT || failure == ENOTDIR { throw OrganizationError.unavailablePDF }
+      throw POSIXError(POSIXErrorCode(rawValue: failure) ?? .EIO)
+    }
+    return info
   }
 }

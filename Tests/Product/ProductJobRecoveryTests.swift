@@ -410,6 +410,67 @@ final class ProductJobRecoveryTests: XCTestCase, @unchecked Sendable {
     assertUnchanged(intactJob, try row("importJob", paper: intact))
   }
 
+  func testLibraryAdmissionAndRestartAgreeOnUnavailableStoredPDFs() async throws {
+    let writable = try await ownedStartupImport("unsealed")
+    let aliased = try await ownedStartupImport("misplaced")
+    let oversized = try await ownedStartupImport("oversized")
+    let intact = try await ownedStartupImport("intact")
+    let unavailable = [writable, aliased, oversized]
+    let before = try (unavailable + [intact]).map {
+      (paper: try row("paper", paper: $0), job: try row("importJob", paper: $0))
+    }
+    let papers = root.appendingPathComponent("papers", isDirectory: true)
+    let writablePDF = papers.appendingPathComponent("\(writable.uuidString)/document.pdf")
+    let unsealedBytes = try Data(contentsOf: writablePDF)
+    try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: writablePDF.path)
+
+    let namespace = papers.appendingPathComponent(aliased.uuidString)
+    let relocated = root.appendingPathComponent("relocated-synthetic-pdf", isDirectory: true)
+    try FileManager.default.moveItem(at: namespace, to: relocated)
+    let relocatedPDF = relocated.appendingPathComponent("document.pdf")
+    let relocatedBytes = try Data(contentsOf: relocatedPDF)
+    try FileManager.default.createSymbolicLink(at: namespace, withDestinationURL: relocated)
+
+    let oversizedPDF = papers.appendingPathComponent("\(oversized.uuidString)/document.pdf")
+    let size = UInt64(try ProviderRequest().limit("pdfBytes")) + 1
+    try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: oversizedPDF.path)
+    do {
+      let handle = try FileHandle(forWritingTo: oversizedPDF)
+      defer { try? handle.close() }
+      try handle.truncate(atOffset: size)
+    }
+    try FileManager.default.setAttributes([.posixPermissions: 0o400], ofItemAtPath: oversizedPDF.path)
+
+    let running = try database.organizationSnapshot(filter: .init())
+    XCTAssertEqual(running.papers.filter(\.readable).map(\.id), [intact])
+    XCTAssertTrue(running.papers.allSatisfy { $0.status == .ready })
+
+    database = nil
+    database = try ProductDatabase.open(at: root)
+    let restarted = try await LocalLibraryLifecycle.open(database: database)
+    let snapshot = try await LibraryOrganizationService(database: database, lifecycle: restarted)
+      .snapshot(filter: .init(), facts: [])
+    XCTAssertEqual(snapshot.papers.filter(\.readable).map(\.id), [intact])
+    for (id, saved) in zip(unavailable, before) {
+      let paper = try XCTUnwrap(snapshot.papers.first { $0.id == id })
+      XCTAssertEqual(paper.status, .importFailed)
+      XCTAssertEqual(paper.failure, "missingPDF")
+      XCTAssertFalse(paper.canRetryImport)
+      let recovered = try row("paper", paper: id)
+      assertUnchanged(saved.paper, recovered, except: ["status", "pdfReference", "cleanupDebt"])
+      XCTAssertTrue((recovered["pdfReference"] as DatabaseValue).isNull)
+      XCTAssertEqual(recovered["cleanupDebt"] as Int, 1)
+      assertUnchanged(saved.job, try row("importJob", paper: id))
+    }
+    assertUnchanged(before[3].paper, try row("paper", paper: intact))
+    assertUnchanged(before[3].job, try row("importJob", paper: intact))
+    XCTAssertEqual(try Data(contentsOf: writablePDF), unsealedBytes)
+    XCTAssertEqual(try Data(contentsOf: relocatedPDF), relocatedBytes)
+    XCTAssertEqual(try namespace.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink, true)
+    let attributes = try FileManager.default.attributesOfItem(atPath: oversizedPDF.path)
+    XCTAssertEqual((attributes[.size] as? NSNumber)?.uint64Value, size)
+  }
+
   func testUnavailableImportCASRejectsStaleCapturedGenerationSHAAndReference() async throws {
     let paper = try await ownedStartupImport("old capture")
     let newerPaper = try await ownedStartupImport("newer metadata")
