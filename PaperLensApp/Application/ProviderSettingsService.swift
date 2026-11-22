@@ -334,10 +334,22 @@ public final class NativeCodexConnection: ObservableObject {
   /// Renew only the current intent's observation. The shared channel/session owns
   /// request and traffic limits; observation adds no polling interval or expiry.
   public func checkLogin() {
-    guard intendedPhase == .signingIn, let candidate, candidate.ending == nil else { return }
+    guard let intentID else { return }
+    checkLogin(intentID: intentID)
+  }
+
+  func checkLogin(intentID: UUID) {
+    guard intendedPhase == .signingIn, let candidate, candidate.intentID == intentID,
+      candidate.ending == nil else { return }
     if let reason = loginStorageFailure(staging: candidate.namespace) { return fail(candidate, reason) }
     publishPhase(.observing)
     send(.observe, method: "product.loginObserve", params: candidate.identityParams, for: candidate)
+  }
+
+  func loginPageURL(intentID: UUID) -> URL? {
+    guard intendedPhase == .signingIn || intendedPhase == .observing,
+      let candidate, candidate.intentID == intentID, fenced(candidate) else { return nil }
+    return instructions?.url
   }
 
   private func loginStorageFailure(staging namespace: TopologyOwnedFixtures? = nil) -> String? {

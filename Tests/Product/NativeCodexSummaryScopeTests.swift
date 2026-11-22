@@ -432,9 +432,13 @@ import ProviderRequest
     let firstDirectory = try XCTUnwrap(prepared)
     XCTAssertNotEqual(firstDirectory, unstarted)
     try await waitFor { codex.phase == .signingIn }
-    codex.checkLogin()
+    let firstIntent = try XCTUnwrap(codex.intentID)
+    let firstURL = try XCTUnwrap(codex.instructions?.url)
+    XCTAssertEqual(codex.loginPageURL(intentID: firstIntent), firstURL)
+    codex.checkLogin(intentID: firstIntent)
     try await waitForMarker("probe-received", directory: firstDirectory)
     XCTAssertEqual(codex.phase, .probing)
+    XCTAssertNil(codex.loginPageURL(intentID: firstIntent))
     workspace.sheet = nil
     XCTAssertEqual(codex.phase, .retiring)
     XCTAssertTrue(workspace.settings.eligibleForEntry)
@@ -458,7 +462,14 @@ import ProviderRequest
     let retryDirectory = try XCTUnwrap(prepared)
     XCTAssertNotEqual(retryDirectory, firstDirectory)
     try await waitFor { codex.phase == .signingIn }
-    codex.checkLogin()
+    let retryIntent = try XCTUnwrap(codex.intentID)
+    XCTAssertNotEqual(retryIntent, firstIntent)
+    XCTAssertEqual(codex.instructions?.url, firstURL)
+    XCTAssertNil(codex.loginPageURL(intentID: firstIntent))
+    codex.checkLogin(intentID: firstIntent)
+    XCTAssertEqual(codex.phase, .signingIn)
+    XCTAssertEqual(codex.loginPageURL(intentID: retryIntent), firstURL)
+    codex.checkLogin(intentID: retryIntent)
     try await waitForMarker("probe-received", directory: retryDirectory)
     try Data().write(to: marker("release-probe", directory: retryDirectory))
     try await waitFor { codex.eligibleForEntry }

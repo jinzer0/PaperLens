@@ -123,6 +123,7 @@ public struct ProviderSettingsView: View {
 @MainActor
 public struct NativeCodexConnectionView: View {
   @ObservedObject private var connection: NativeCodexConnection
+  @Environment(\.openURL) private var openURL
   private let isCurrent: @MainActor () -> Bool
 
   public init(connection: NativeCodexConnection) {
@@ -148,7 +149,7 @@ public struct NativeCodexConnectionView: View {
         }
       }
       .disabled(!connection.canStart)
-      if let instructions = connection.instructions,
+      if let instructions = connection.instructions, let intentID = connection.intentID,
         connection.phase == .signingIn || connection.phase == .observing
       {
         if let code = instructions.userCode {
@@ -159,16 +160,27 @@ public struct NativeCodexConnectionView: View {
           Text(instructions.url.absoluteString)
             .font(.caption).textSelection(.enabled)
           Link("로그인 페이지 열기", destination: instructions.url)
+            .environment(\.openURL, OpenURLAction { url in
+              guard isCurrent(), connection.loginPageURL(intentID: intentID) == url else {
+                return .discarded
+              }
+              openURL(url)
+              return .handled
+            })
         }
-        Button("로그인 완료 확인") { if isCurrent() { connection.checkLogin() } }
+        Button("로그인 완료 확인") {
+          if isCurrent() { connection.checkLogin(intentID: intentID) }
+        }
           .disabled(connection.phase != .signingIn)
         Text("직접 선택할 때만 완료를 확인합니다. 확인 중에는 다시 요청하지 않으며 공통 세션 한도와 요청 제한 시간이 적용됩니다.")
           .font(.caption).foregroundStyle(.secondary)
       }
-      if connection.hasPendingLogin {
+      if connection.hasPendingLogin, let intentID = connection.intentID {
         HStack {
           ProgressView().controlSize(.small).accessibilityLabel("ChatGPT 연결 진행 중")
-          Button("ChatGPT 로그인 취소") { if isCurrent() { connection.cancelUncommittedLogin() } }
+          Button("ChatGPT 로그인 취소") {
+            if isCurrent(), connection.intentID == intentID { connection.cancelUncommittedLogin() }
+          }
         }
       } else if connection.phase == .retiring {
         ProgressView("실제 종료 및 정리 확인 중")
