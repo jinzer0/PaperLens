@@ -178,8 +178,10 @@ public final class ProductDatabase: @unchecked Sendable {
     }.values(in: queue, bufferingPolicy: .bufferingNewest(1))
   }
 
-  func libraryMetadataChanges() -> AnyPublisher<Void, Error> {
-    DatabaseRegionObservation(tracking: Table("extractionVisible"), Table("readerMetadata"))
+  func libraryContentChanges() -> AnyPublisher<Void, Error> {
+    DatabaseRegionObservation(tracking: Table("extractionVisible"), Table("readerMetadata"),
+      Table("organizationPreferences"), Table("paperOrganization"), Table("paperUserTag"),
+      Table("libraryFolder"), Table("paperFolder"))
       .publisher(in: queue)
       .map { _ in () }
       .eraseToAnyPublisher()

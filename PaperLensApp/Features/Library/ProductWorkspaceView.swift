@@ -54,7 +54,7 @@ public final class ProductWorkspace: ObservableObject {
   private let diagnosticSource: URL?
   private let readLeases: LibraryReadLeaseProvider
   private var urlImportObservation: AnyCancellable?
-  private var libraryMetadataObservation: AnyCancellable?
+  private var libraryContentObservation: AnyCancellable?
   private var scopedSource: URL?
   private var pendingConfirmation: UUID?
   private var continuedLocalConfirmation: UUID?
@@ -159,7 +159,7 @@ public final class ProductWorkspace: ObservableObject {
   @Published private(set) var deletionRevision = 0
   @Published private(set) var failedInitialParsing: Set<UUID> = []
   @Published public private(set) var revision = 0
-  @Published private(set) var libraryMetadataRevision = UUID()
+  @Published private(set) var libraryContentRevision = UUID()
   @Published public private(set) var preparing = false
   @Published public private(set) var opening = false
   @Published public private(set) var failure: String?
@@ -217,10 +217,10 @@ public final class ProductWorkspace: ObservableObject {
         default: break
         }
       }
-    libraryMetadataObservation = database.libraryMetadataChanges()
+    libraryContentObservation = database.libraryContentChanges()
       .receive(on: DispatchQueue.main)
       .sink(receiveCompletion: { _ in }, receiveValue: { [weak self] in
-        self?.libraryMetadataRevision = UUID()
+        self?.libraryContentRevision = UUID()
       })
   }
 
@@ -970,7 +970,7 @@ public struct ProductWorkspaceView: View {
             filter: $workspace.libraryFilter, refreshRevision: workspace.revision,
             deletingPaperIDs: workspace.deletingPaperIDs, finishedDeletionIDs: workspace.finishedDeletionIDs,
             deletionRevision: workspace.deletionRevision,
-            metadataRevision: workspace.libraryMetadataRevision,
+            contentRevision: workspace.libraryContentRevision,
             activeImportProgress: activeImportProgress, localPDFAvailable: workspace.canPrepareLocalImport,
             libraryPresentationAvailable: workspace.canOpenReader,
             readReadingRecords: { [annotations = workspace.annotations] paperID, generation in

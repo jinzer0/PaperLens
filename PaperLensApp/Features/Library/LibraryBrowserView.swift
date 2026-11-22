@@ -15,7 +15,7 @@ public struct LibraryBrowserView: View {
   @ObservedObject private var summaries: LibrarySummaryCoordinator
   @ObservedObject private var providerSettings: ProviderSettingsService
   private let refreshRevision: Int
-  private let metadataRevision: UUID?
+  private let contentRevision: UUID?
   private let deletingPaperIDs: Set<UUID>
   private let finishedDeletionIDs: Set<UUID>
   private let deletionRevision: Int
@@ -24,7 +24,7 @@ public struct LibraryBrowserView: View {
   private let libraryPresentationAvailable: Bool
   @State private var observedDeletionRevision: Int?
   @State private var observedImportIDs: Set<UUID> = []
-  @State private var observedMetadataRevision: UUID?
+  @State private var observedContentRevision: UUID?
   @State private var observedSummaryRevision: UUID?
   @State private var query = OrganizationQueryState()
   @State private var loadTask: Task<Void, Never>?
@@ -50,7 +50,7 @@ public struct LibraryBrowserView: View {
 
   public init(service: LibraryOrganizationService, folderService: FolderImportService,
     filter: Binding<OrganizationFilter>, refreshRevision: Int, deletingPaperIDs: Set<UUID>,
-    finishedDeletionIDs: Set<UUID>, deletionRevision: Int, metadataRevision: UUID? = nil,
+    finishedDeletionIDs: Set<UUID>, deletionRevision: Int, contentRevision: UUID? = nil,
     activeImportProgress: [UUID: Int64] = [:], localPDFAvailable: Bool = true,
     libraryPresentationAvailable: Bool = true,
     readReadingRecords: @escaping @Sendable (UUID, UUID) async throws -> LibraryReadingRecords,
@@ -65,7 +65,7 @@ public struct LibraryBrowserView: View {
     self.service = service; self.folderService = folderService
     self.readReadingRecords = readReadingRecords
     _filter = filter; self.refreshRevision = refreshRevision
-    self.metadataRevision = metadataRevision
+    self.contentRevision = contentRevision
     self.openPaper = openPaper; self.importPDF = importPDF
     self.deletingPaperIDs = deletingPaperIDs; self.deletePaper = deletePaper
     self.finishedDeletionIDs = finishedDeletionIDs
@@ -344,7 +344,7 @@ public struct LibraryBrowserView: View {
       invalidateObservation()
     }
     .onChange(of: refreshRevision) { _, _ in refresh() }
-    .onChange(of: metadataRevision) { _, _ in refreshAfterBackgroundChange() }
+    .onChange(of: contentRevision) { _, _ in refreshAfterBackgroundChange() }
     .onChange(of: deletionRevision) { _, _ in refreshAfterBackgroundChange() }
     .onChange(of: finishedDeletionIDs) { _, _ in refreshAfterBackgroundChange() }
     .onChange(of: activeImportIDs) { _, _ in refreshAfterBackgroundChange() }
@@ -777,7 +777,7 @@ public struct LibraryBrowserView: View {
   private func refreshAfterBackgroundChange() {
     guard canRefreshAfterBackgroundChange,
       !finishedDeletionIDs.isEmpty || observedDeletionRevision != deletionRevision || observedImportIDs != activeImportIDs
-        || observedMetadataRevision != metadataRevision
+        || observedContentRevision != contentRevision
         || observedSummaryRevision != summaries.completionRevision else { return }
     refresh()
   }
@@ -946,7 +946,7 @@ public struct LibraryBrowserView: View {
     guard rootMount != nil, !busy else { return }
     observedDeletionRevision = deletionRevision
     observedImportIDs = activeImportIDs
-    observedMetadataRevision = metadataRevision
+    observedContentRevision = contentRevision
     observedSummaryRevision = summaries.completionRevision
     if !canPreserveOrganizationReturn(token) { organizationFocusToRestore = nil }
     let request = query.begin(filter: filter)

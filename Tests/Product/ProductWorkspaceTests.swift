@@ -2116,11 +2116,69 @@ private actor WorkspaceDeletionAgent: AgentLibraryPurging {
     XCTAssertTrue(composition.workspace === workspace)
   }
 
+  func testLibraryObservesCommittedPreferencesClassificationAndFolders() async throws {
+    let f = try await fixture()
+    let id = try await importSelected(f)
+    let service = f.workspace.organization
+    var updates = 0
+    let observation = f.workspace.$libraryContentRevision.dropFirst().sink { _ in updates += 1 }
+    defer { observation.cancel() }
+
+    try await service.savePreferences(.init(presentation: .grid, sort: .name))
+    for _ in 0..<100 where updates < 1 { try await Task.sleep(for: .milliseconds(10)) }
+    XCTAssertEqual(updates, 1)
+    let updated = try await service.observation(filter: .init())
+    XCTAssertEqual(updated.snapshot.preferences, .init(presentation: .grid, sort: .name))
+    let paper = try XCTUnwrap(updated.snapshot.papers.first { $0.id == id })
+
+    try await service.save(.init(readingStatus: .reading, favorite: true, tags: ["review"]), for: paper)
+    for _ in 0..<100 where updates < 2 { try await Task.sleep(for: .milliseconds(10)) }
+    XCTAssertEqual(updates, 2, "One committed classification change refreshes each observer once")
+    var filter = OrganizationFilter()
+    filter.favoritesOnly = true
+    filter.tag = "review"
+    let classified = try await service.observation(filter: filter)
+    XCTAssertEqual(classified.snapshot.papers.map(\.id), [id])
+    XCTAssertEqual(classified.snapshot.papers.first?.organization.readingStatus, .reading)
+
+    let folder = try f.database.createFolder(name: "Read next")
+    for _ in 0..<100 where updates < 3 { try await Task.sleep(for: .milliseconds(10)) }
+    XCTAssertEqual(updates, 3)
+    let placement = try f.database.capturePaperPlacement(paperID: id, generation: paper.generation)
+    try f.database.movePaper(placement, to: folder.id)
+    for _ in 0..<100 where updates < 4 { try await Task.sleep(for: .milliseconds(10)) }
+    XCTAssertEqual(updates, 4)
+    filter.folder = .folder(folder.id)
+    let moved = try await service.observation(filter: filter)
+    XCTAssertEqual(moved.folders?.map(\.id), [folder.id])
+    XCTAssertEqual(moved.snapshot.papers.map(\.id), [id])
+
+    try f.database.adapterWrite { db in
+      try db.execute(sql: """
+        CREATE TRIGGER rewriteLibraryPreference AFTER UPDATE ON organizationPreferences
+        WHEN NEW.sort = 'publicationYear' BEGIN
+          UPDATE organizationPreferences SET sort = 'recentlyAdded' WHERE singleton = NEW.singleton;
+        END;
+        """)
+    }
+    do {
+      try await service.savePreference(.sort(.publicationYear))
+      XCTFail("An altered preference write must roll back")
+    } catch { XCTAssertEqual(error as? ProductDatabaseError, .invalidRecord) }
+    await withCheckedContinuation { continuation in
+      DispatchQueue.main.async { continuation.resume() }
+    }
+    XCTAssertEqual(updates, 4, "Rolled-back changes must not refresh the Library")
+    let reopened = try ProductDatabase.open(at: f.database.root)
+    XCTAssertEqual(try reopened.organizationSnapshot(filter: filter).preferences,
+      .init(presentation: .grid, sort: .name))
+  }
+
   func testLibraryObservesPublishedPDFTitleAndMetadataOnSameRevision() async throws {
     let f = try await fixture()
     let id = try await importSelected(f)
     var observedRevisions: [UUID] = []
-    let observation = f.workspace.$libraryMetadataRevision.dropFirst().sink { observedRevisions.append($0) }
+    let observation = f.workspace.$libraryContentRevision.dropFirst().sink { observedRevisions.append($0) }
     defer { observation.cancel() }
 
     let sourceTitle = "원본 PDF 메타데이터 제목"
