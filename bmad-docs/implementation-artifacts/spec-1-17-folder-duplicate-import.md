@@ -1,5 +1,15 @@
 # Story 1.17 Build Spec — Folder arrangement and duplicate local import
 
+## 서명 앱의 폴더 배치 검증 — 2026-11-22
+
+macOS 26.7.1 arm64에서 소스 `abe2a1f62273f06fcae94a3b373520d3946e475f`의
+Developer ID 서명 앱을 합성 Workspace 모드로 실행했다. 폴더를 만든 뒤 미분류로
+가져온 합성 PDF를 해당 폴더로 옮겼다. 저장 전후 앱 소유 PDF의 경로, 파일 식별자,
+SHA-256이 같았다. Reader에서 Library로 돌아왔을 때 폴더 선택과 같은 논문이 유지됐다.
+정상 종료 후 DB를 읽기 전용으로 다시 열어 논문 한 편의 폴더 배치와 가져오기 성공 상태를
+확인했다. 관련 폴더 테스트 25개가 통과했다. 로컬 결과는
+`.build/epic1-story117-118-signed-ui-result.json`에 있다. 제품 앱의 재실행 검증은 남아 있다.
+
 ## Bounded inner folder-manager outcome and read recovery (baseline 1d194e0)
 
 Architect210 SOURCE_SLICE_READY grounds this continuation in the existing flat-folder

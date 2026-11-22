@@ -1,5 +1,18 @@
 # Story 1.18 Build Spec — URL Import and shared Library entry
 
+## 서명 앱의 URL 확인과 취소 검증 — 2026-11-22
+
+macOS 26.7.1 arm64에서 소스 `abe2a1f62273f06fcae94a3b373520d3946e475f`의
+Developer ID 서명 앱을 합성 Workspace 모드로 실행했다. arXiv 초록, arXiv PDF,
+일반 HTTPS 링크가 각각 맞는 확인 화면을 열었다. 각 확인 화면과 취소 직후의 DB에서
+논문과 가져오기 Job이 0개였다. 일반 HTTP 링크는 안전한 입력 오류를 표시했다.
+
+선택한 폴더가 일반 HTTPS 확인 화면에 표시됐다. 합성 모드에서 writer 요청을 거부하자
+실패와 다시 시도가 표시됐고, 다시 시도는 같은 폴더로 새 확인 화면을 열었다. 취소 뒤
+실패 상태로 돌아갔고 DB에는 URL 가져오기 Job이 없었다. URL 가져오기와 복구 관련
+테스트 70개가 통과했다. 로컬 결과는 `.build/epic1-story117-118-signed-ui-result.json`에
+있다. 실제 외부 다운로드, 앱 재실행, P-6 측정은 별도 검증으로 남아 있다.
+
 ## Existing direct PDF-button focus wiring (baseline b8b3bd3)
 
 The next paired Story1.17 phase uses the surviving PDF 선택 Button, not the closed
