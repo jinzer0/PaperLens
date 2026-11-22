@@ -581,6 +581,29 @@ class AttemptFixtureTests(unittest.TestCase):
             self.recover()
             self.identity = self.new_identity()
 
+    def test_fresh_recovery_syncs_root_when_previous_cleanup_lost_its_final_sync(self):
+        self.prepare()
+        run, _, _, _ = self.paths()
+        run_receipt = self.root / (self.identity['runID'] + '.owner.json')
+        root_inode = self.root.stat().st_ino
+        fsync = os.fsync
+
+        def refuse_absence_sync(fd):
+            if os.fstat(fd).st_ino == root_inode and not run_receipt.exists():
+                raise FileNotFoundError(errno.ENOENT, 'directory sync failed')
+            fsync(fd)
+
+        with patch.object(agent.os, 'fsync', side_effect=refuse_absence_sync):
+            with self.assertRaises(FileNotFoundError):
+                self.store.terminal(**self.identity, outcome='cancelled')
+            self.assertFalse(run.exists())
+            self.assertFalse(run_receipt.exists())
+            self.store.close()
+            self.store = agent.AttemptFixtures()
+            with self.assertRaises(FileNotFoundError):
+                self.store.recover(self.identity['runID'])
+        self.recover()
+
     def test_foreign_root_run_and_unreceipted_attempt_are_untouched(self):
         self.root.mkdir(parents=True, mode=0o700)
         with self.assertRaises(Exception):
@@ -958,6 +981,32 @@ class AttemptFixtureTests(unittest.TestCase):
                 with self.assertRaises(agent.AttemptCancelled):
                     self.store.prepare(**{**self.identity, 'correlationID': str(uuid.uuid4())})
                 self.assertEqual(self.store.paper_purge(**purge), {'absent': True, 'drained': True})
+
+    def test_purge_retry_syncs_missing_attempt_receipt_without_touching_other_paper(self):
+        other = self.new_identity(self.identity['runID'])
+        self.prepare()
+        self.prepare(other)
+        run, child, _, receipt = self.paths()
+        run_inode = run.stat().st_ino
+        other_marker = self.paths(other)[2]
+        preserved = self.snapshot(other_marker)
+        purge = self.purge_identity()
+        fsync = os.fsync
+
+        def refuse_absence_sync(fd):
+            if os.fstat(fd).st_ino == run_inode and not receipt.exists():
+                raise OSError(errno.EIO, 'directory sync failed')
+            fsync(fd)
+
+        with patch.object(agent.os, 'fsync', side_effect=refuse_absence_sync):
+            with self.assertRaises(OSError):
+                self.store.paper_purge(**purge)
+            self.assertFalse(child.exists())
+            self.assertFalse(receipt.exists())
+            with self.assertRaises(OSError):
+                self.store.paper_purge(**purge)
+        self.assertEqual(self.store.paper_purge(**purge), {'absent': True, 'drained': True})
+        self.assertEqual(self.snapshot(other_marker), preserved)
 
     def test_caps_reserve_before_mutation_and_existing_purge_identity_retries_at_capacity(self):
         identities = []

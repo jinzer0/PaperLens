@@ -1008,12 +1008,15 @@ class AttemptFixtures:
             run = None
         if run is None:
             validate()
-            try:
-                os.unlink(runID + '.owner.json', dir_fd=root)
-                bindings[(runID + '.owner.json',)] = None
-                os.fsync(root)
-            except FileNotFoundError:
-                pass
+            receipt_name = runID + '.owner.json'
+            if bindings[(receipt_name,)] is not None:
+                os.unlink(receipt_name, dir_fd=root)
+                bindings[(receipt_name,)] = None
+            # A prior cleanup may have unlinked the receipt before its fsync failed.
+            os.fsync(root)
+        elif not selected:
+            # A retry can see the attempt receipt gone while other Papers remain.
+            os.fsync(run)
         validate()
 
     def cleanup(self, runID: str, identity: dict | None = None, *, recovered=False,
