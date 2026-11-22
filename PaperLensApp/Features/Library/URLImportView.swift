@@ -4,6 +4,11 @@ import UniformTypeIdentifiers
 
 public typealias URLImportRetryAction = @MainActor (OrganizedPaper, @escaping @MainActor () -> Void) -> Void
 
+@MainActor
+func urlImportPasteboardText(_ pasteboard: NSPasteboard) -> String? {
+  pasteboard.string(forType: .string) ?? pasteboard.string(forType: .URL)
+}
+
 /// Wrap the actual Library content; neither confirmation nor completion replaces it.
 public struct URLImportView<LibraryContent: View>: View {
   @ObservedObject private var service: URLImportService
@@ -29,6 +34,7 @@ public struct URLImportView<LibraryContent: View>: View {
   @State private var folderLoadFailed = false
   @State private var folderRefreshID = UUID()
   @FocusState private var inputFocused: Bool
+  @FocusState private var confirmationCancelFocused: Bool
   @FocusState private var openerFocused: Opener?
   @State private var inputPresentation: InputPresentation?
   @State private var confirmationPresentation: ConfirmationPresentation?
@@ -138,12 +144,14 @@ public struct URLImportView<LibraryContent: View>: View {
             return .handled
           }
           .disabled(!canPresentInput)
-        Button("URL 붙여넣기") {
-          guard drag.isCurrent(mount, interaction), canPresentInput else { return }
-          drag.interrupt()
-          if let text = NSPasteboard.general.string(forType: .string) { prepare(text, opener: .toolbar(.paste)) }
-          else { invalidInput = true }
-        }.focused($openerFocused, equals: .paste)
+        Button("URL 붙여넣기") { pasteURL(mount: mount, interaction: interaction) }
+          .focusable(canPresentInput, interactions: .edit)
+          .focused($openerFocused, equals: .paste)
+          .onKeyPress(.space, phases: .down) { press in
+            guard press.modifiers.isEmpty else { return .ignored }
+            pasteURL(mount: mount, interaction: interaction)
+            return .handled
+          }
           .disabled(!canPresentInput)
         Button("PDF 선택") { openPDFPicker(mount: mount, interaction: interaction) }
           .focusable(localPDFAvailable, interactions: .edit)
@@ -244,6 +252,16 @@ public struct URLImportView<LibraryContent: View>: View {
         let confirmationID, service.confirmation?.id == confirmationID else { return }
       cancelConfirmation(confirmationID)
     }), onDismiss: { confirmationDidDismiss(confirmationPresentationID, mount: mount) }) { intent in
+      let cancel = {
+        guard drag.isCurrent(mount, interaction), mountedConfirmationID == intent.id else { return }
+        cancelConfirmation(intent.id)
+      }
+      let proceed = {
+        guard drag.isCurrent(mount, interaction), mountedConfirmationID == intent.id,
+          service.confirmation(for: intent.id) != nil else { return }
+        drag.interrupt()
+        service.continueImport(confirmationID: intent.id)
+      }
       VStack(alignment: .leading, spacing: 16) {
         if case .retry = intent.purpose {
           Text("URL 가져오기 다시 시도 확인").font(.headline)
@@ -269,22 +287,23 @@ public struct URLImportView<LibraryContent: View>: View {
         }
         Text("다운로드 후 Library에 머무릅니다.")
         HStack {
-          Button("취소") {
-            guard drag.isCurrent(mount, interaction), mountedConfirmationID == intent.id else { return }
-            cancelConfirmation(intent.id)
-          }.keyboardShortcut(.cancelAction)
-          Button("계속") {
-            guard drag.isCurrent(mount, interaction), mountedConfirmationID == intent.id,
-              service.confirmation(for: intent.id) != nil else { return }
-            drag.interrupt()
-            service.continueImport(confirmationID: intent.id)
-          }
+          Button("취소", action: cancel)
+            .focusable(true, interactions: .edit)
+            .focused($confirmationCancelFocused)
+            .keyboardShortcut(.cancelAction)
+            .onKeyPress(keys: [.escape, .return], phases: .down) { press in
+              guard press.modifiers.isEmpty else { return .ignored }
+              if press.key == .escape { cancel() } else { proceed() }
+              return .handled
+            }
+          Button("계속", action: proceed)
             .keyboardShortcut(.defaultAction)
         }
       }.padding().frame(minWidth: 420)
         .onAppear {
           guard confirmationPresentation?.id == intent.id else { return }
           confirmationPresentation?.appeared = true
+          confirmationCancelFocused = true
         }
     }
     .alert("지원하지 않는 URL", isPresented: $invalidInput) {
@@ -315,6 +334,13 @@ public struct URLImportView<LibraryContent: View>: View {
     drag.interrupt()
     inputPresentation = InputPresentation(mount: drag.mount, retry: nil, interaction: drag.interaction)
     inputSheet = true
+  }
+
+  private func pasteURL(mount: UUID?, interaction: UUID) {
+    guard drag.isCurrent(mount, interaction), canPresentInput else { return }
+    drag.interrupt()
+    guard let text = urlImportPasteboardText(NSPasteboard.general) else { invalidInput = true; return }
+    prepare(text, opener: .toolbar(.paste))
   }
 
   private func openPDFPicker(mount: UUID?, interaction: UUID) {
@@ -441,25 +467,35 @@ public struct URLImportView<LibraryContent: View>: View {
         Label(safeMessage(reason), systemImage: "exclamationmark.triangle")
         if service.canRetry {
           Button("다시 시도") {
-            guard drag.isCurrent(mount, interaction), service.state == .failed(reason),
-              service.canRetry, canPresentInput else { return }
-            drag.interrupt()
-            let folder = folders.first { $0.id == destinationFolderID }
-            guard destinationFolderID == nil || folder != nil else { retryUnavailable = true; return }
-            do {
-              try service.retry(destination: folder?.name ?? "미분류", destinationFolderID: folder?.id)
-              if let confirmation = service.confirmation {
-                confirmationPresentation = ConfirmationPresentation(id: confirmation.id,
-                  opener: .toolbar(.retry), mount: mount, interaction: drag.interaction,
-                  stateAfterCancel: .failed(reason))
-              }
-            } catch { retryUnavailable = true }
+            retryFailedImport(reason, mount: mount, interaction: interaction)
           }
+          .focusable(canPresentInput, interactions: .edit)
           .focused($openerFocused, equals: .retry)
+          .onKeyPress(.space, phases: .down) { press in
+            guard press.modifiers.isEmpty else { return .ignored }
+            retryFailedImport(reason, mount: mount, interaction: interaction)
+            return .handled
+          }
           .disabled(!canPresentInput)
         }
       }
     }
+  }
+
+  private func retryFailedImport(_ reason: URLImportError, mount: UUID?, interaction: UUID) {
+    guard drag.isCurrent(mount, interaction), service.state == .failed(reason),
+      service.canRetry, canPresentInput else { return }
+    drag.interrupt()
+    let folder = folders.first { $0.id == destinationFolderID }
+    guard destinationFolderID == nil || folder != nil else { retryUnavailable = true; return }
+    do {
+      try service.retry(destination: folder?.name ?? "미분류", destinationFolderID: folder?.id)
+      if let confirmation = service.confirmation {
+        confirmationPresentation = ConfirmationPresentation(id: confirmation.id,
+          opener: .toolbar(.retry), mount: mount, interaction: drag.interaction,
+          stateAfterCancel: .failed(reason))
+      }
+    } catch { retryUnavailable = true }
   }
 
   private func prepare(_ text: String, opener: FocusReturn? = nil) {

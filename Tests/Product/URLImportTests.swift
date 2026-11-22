@@ -1,3 +1,4 @@
+import AppKit
 import Combine
 import CryptoKit
 import Darwin
@@ -32,6 +33,26 @@ final class URLImportTests: XCTestCase {
       "https://arxiv.org/abs/not-an-id", "https://arxiv.org/abs/2401.12345?token=secret"] {
       XCTAssertThrowsError(try adapter.route(value))
     }
+  }
+
+  @MainActor
+  func testURLPasteAcceptsNativeURLRepresentationAndPreservesPlainText() throws {
+    let pasteboard = NSPasteboard.withUniqueName()
+    defer { pasteboard.releaseGlobally() }
+    let url = "https://arxiv.org/abs/2401.12345v2"
+    let urlItem = NSPasteboardItem()
+    XCTAssertTrue(urlItem.setString(url, forType: .URL))
+    XCTAssertTrue(pasteboard.writeObjects([urlItem]))
+    XCTAssertNil(pasteboard.string(forType: .string))
+    let input = try XCTUnwrap(urlImportPasteboardText(pasteboard))
+    let recognized = try HTTPSPDFImportAdapter(authority: ProviderRequest()).recognize(input)
+    XCTAssertEqual(recognized.kind, .arxivAbstract)
+    XCTAssertEqual(recognized.request.value, "https://arxiv.org/pdf/2401.12345v2")
+
+    pasteboard.clearContents()
+    let plainText = "https://fixture.invalid/copied.pdf"
+    XCTAssertTrue(pasteboard.setString(plainText, forType: .string))
+    XCTAssertEqual(urlImportPasteboardText(pasteboard), plainText)
   }
 
   func testChunkedMagicProducesRealClosedImmutableStageAndDigest() async throws {
