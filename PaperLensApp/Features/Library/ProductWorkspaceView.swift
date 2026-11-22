@@ -63,6 +63,7 @@ public final class ProductWorkspace: ObservableObject {
   internal var beforeImportConfirmationInstallForOwnedFixtures:
     (@MainActor (LocalImportConfirmation) -> Void)?
   private var metadataReadRequest: UUID?
+  private static let metadataLookupFailure = "논문 정보를 확인하지 못했습니다. 상태 새로 고침으로 다시 확인하세요."
   private var publishingReader = false
   private var closingReader = false
   private var installingSheet = false
@@ -595,11 +596,19 @@ public final class ProductWorkspace: ObservableObject {
     let provider = SelectedPaperReadLeases(base: readLeases, paperID: paperID, generation: generation)
     let identity = try database.annotationIdentity(paperID: paperID)
     guard identity.generation == generation else { throw AnnotationError.stalePaper }
-    let metadataIdentity = try database.publishedMetadataPaperIdentity(paperID: paperID)
-    if let metadataIdentity {
-      guard metadataIdentity.generation == identity.generation,
-        metadataIdentity.pdfSHA256 == identity.pdfSHA256
-      else { throw ReaderMetadataError.staleIdentity }
+    let metadataIdentity: ReaderMetadataIdentity?
+    let metadataLookupFailed: Bool
+    do {
+      let published = try database.publishedMetadataPaperIdentity(paperID: paperID)
+      if let published {
+        guard published.generation == identity.generation, published.pdfSHA256 == identity.pdfSHA256
+        else { throw ReaderMetadataError.staleIdentity }
+      }
+      metadataIdentity = published
+      metadataLookupFailed = false
+    } catch {
+      metadataIdentity = nil
+      metadataLookupFailed = true
     }
     metadataReadRequest = nil
     publishReader(OpenReader(
@@ -607,7 +616,7 @@ public final class ProductWorkspace: ObservableObject {
       annotationIdentity: identity, metadataIdentity: metadataIdentity, presentationMount: presentationMount))
     guard presentationMount.map(presentationMounts.contains) ?? true else { throw CancellationError() }
     if latestLocalImport == paperID { latestLocalImport = nil }
-    failure = nil
+    failure = metadataLookupFailed ? Self.metadataLookupFailure : nil
   }
 
   private func checkReaderPresentation(_ mount: UUID?) throws {
@@ -645,11 +654,12 @@ public final class ProductWorkspace: ObservableObject {
     }
     observed.session.close()
     reader = nil
+    if failure == Self.metadataLookupFailure { failure = nil }
     revision += 1
   }
 
   /// Intent from the mounted status view, never an authoritative revision supplied by it.
-  /// False means pending admission: retain the intent for the existing poll to retry.
+  /// False retains the refresh intent after pending admission or a failed metadata read.
   /// True means reconciled or dismissed, not proof that metadata was published.
   @discardableResult public func refreshPublishedMetadata(for observed: OpenReader) async -> Bool {
     guard isCurrentReader(observed), !Task.isCancelled else { return true }
@@ -708,16 +718,22 @@ public final class ProductWorkspace: ObservableObject {
       observed.session.admissionState == failed.admission
         || observed.session.admissionState == .closed
     else { return false }
-    if observed.session.currentPaper == nil {
+    let documentIsCurrent = (try? withCurrentMetadataDocument(observed) { _ in true }) == true
+    guard documentIsCurrent else {
       closeReader(observed)
-    } else {
+      failure = "논문을 계속 읽을 수 없습니다. 라이브러리에서 현재 상태를 확인하세요."
+      return true
+    }
+    if reader?.metadataIdentity != nil {
       publishReader(OpenReader(
         id: observed.id, session: observed.session,
         annotationIdentity: observed.annotationIdentity, metadataIdentity: nil,
         presentationMount: observed.presentationMount))
     }
-    failure = "논문 정보를 확인하지 못했습니다. 라이브러리에서 논문을 다시 열어 확인하세요."
-    return true
+    if isCurrentReader(observed), failure != Self.metadataLookupFailure {
+      failure = Self.metadataLookupFailure
+    }
+    return false
   }
 
   func readPublishedMetadata(for observed: OpenReader) async throws -> PublishedMetadataRefresh {
@@ -755,11 +771,7 @@ public final class ProductWorkspace: ObservableObject {
       refresh.admission != .pending
     else { return false }
     do {
-      let updated: OpenReader? = try observed.session.withReadAccess {
-        guard let paper = observed.session.currentPaper,
-          paper.paperID == observed.id, paper.generation == observed.annotationIdentity.generation,
-          try database.annotationIdentity(paperID: observed.id) == observed.annotationIdentity
-        else { throw ReaderMetadataError.staleIdentity }
+      let updated: OpenReader? = try withCurrentMetadataDocument(observed) { paper in
         // The detached read can race publication/removal. Only the sole DB's current
         // pointer may be advertised, and this recheck stays under actual Reader access.
         let current = try database.publishedMetadataPaperIdentity(paperID: observed.id)
@@ -784,11 +796,27 @@ public final class ProductWorkspace: ObservableObject {
     } catch {
       guard isCurrentReader(observed), !Task.isCancelled else { return true }
       guard metadataReadRequest == refresh.request else { return false }
-      // Ownership/hash denial cannot keep a document admitted under obsolete facts.
-      if error as? ReaderMetadataError == .staleIdentity { observed.session.close() }
       throw error
     }
-    return metadataReadRequest == refresh.request
+    guard metadataReadRequest == refresh.request else { return false }
+    if failure == Self.metadataLookupFailure { failure = nil }
+    return true
+  }
+
+  private func withCurrentMetadataDocument<T>(_ observed: OpenReader,
+    _ read: (ReaderPaperSnapshot) throws -> T) throws -> T {
+    do {
+      return try observed.session.withReadAccess {
+        guard let paper = observed.session.currentPaper,
+          paper.paperID == observed.id, paper.generation == observed.annotationIdentity.generation,
+          try database.annotationIdentity(paperID: observed.id) == observed.annotationIdentity
+        else { throw AnnotationError.stalePaper }
+        return try read(paper)
+      }
+    } catch AnnotationError.stalePaper {
+      observed.session.close()
+      throw AnnotationError.stalePaper
+    }
   }
 
   private func isCurrentReader(_ observed: OpenReader) -> Bool {

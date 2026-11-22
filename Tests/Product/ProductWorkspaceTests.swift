@@ -1010,8 +1010,9 @@ private actor WorkspaceDeletionAgent: AgentLibraryPurging {
       XCTAssertTrue(reconciliation.observe(outcome), "First nil/error must reconcile open-time identity")
       let completed = await f.workspace.refreshPublishedMetadata(for: observed)
       reconciliation.resolve(outcome, completed: completed)
-      XCTAssertTrue(completed)
-      XCTAssertFalse(reconciliation.observe(outcome), "Resolved identical outcome is change-based")
+      XCTAssertEqual(completed, !queryFailure)
+      XCTAssertEqual(reconciliation.observe(outcome), queryFailure,
+        "A failed optional lookup must remain refreshable for the same revision")
       XCTAssertNil(f.workspace.reader?.metadataIdentity)
       XCTAssertEqual(f.workspace.failure != nil, queryFailure)
       XCTAssertTrue(f.workspace.reader?.session === observed.session)
@@ -1101,7 +1102,7 @@ private actor WorkspaceDeletionAgent: AgentLibraryPurging {
     XCTAssertNil(f.workspace.failure)
     XCTAssertEqual(try readToken(f, id: id), newToken)
     let next = await f.workspace.refreshPublishedMetadata(for: observed)
-    XCTAssertTrue(next)
+    XCTAssertFalse(next)
     XCTAssertNil(f.workspace.reader?.metadataIdentity)
     XCTAssertNotNil(f.workspace.failure)
     XCTAssertNoThrow(try observed.session.withReadAccess {})
@@ -1351,6 +1352,78 @@ private actor WorkspaceDeletionAgent: AgentLibraryPurging {
     XCTAssertTrue(f.workspace.reader?.session === observed.session)
     XCTAssertEqual(try readToken(f, id: id), token)
     XCTAssertNoThrow(try observed.session.withReadAccess {})
+    f.workspace.returnToLibrary()
+  }
+
+  func testMetadataLookupFailureStillOpensPDFAndAllowsRefreshInPlace() async throws {
+    let f = try await fixture()
+    var bounds = CGRect(x: 0, y: 0, width: 400, height: 600)
+    let pdf = try XCTUnwrap(CGContext(f.source as CFURL, mediaBox: &bounds, nil))
+    pdf.beginPDFPage(nil)
+    pdf.endPDFPage()
+    pdf.closePDF()
+    let id = try await importSelected(f)
+    let published = try publishMetadataRevision(f, id: id)
+    let selected = try await paper(f, id: id)
+    try f.database.adapterWrite {
+      try $0.execute(sql: "ALTER TABLE extractionVisible RENAME TO suspendedExtractionVisible")
+    }
+
+    try await f.workspace.open(selected)
+    let reader = try XCTUnwrap(f.workspace.reader)
+    XCTAssertNil(reader.metadataIdentity)
+    XCTAssertNotNil(f.workspace.failure)
+    let presentation = ReaderPresentation(session: reader.session,
+      annotationIdentity: reader.annotationIdentity, annotationService: f.workspace.annotations,
+      metadataService: f.workspace.metadata, metadataIdentity: reader.metadataIdentity)
+    presentation.open(paperID: id)
+    XCTAssertTrue(presentation.opened)
+    XCTAssertEqual(presentation.pdfView.document?.pageCount, 1)
+    let token = try readToken(f, id: id)
+
+    let pending = await f.workspace.refreshPublishedMetadata(for: reader)
+    XCTAssertFalse(pending)
+    XCTAssertNil(f.workspace.reader?.metadataIdentity)
+    try f.database.adapterWrite {
+      try $0.execute(sql: "ALTER TABLE suspendedExtractionVisible RENAME TO extractionVisible")
+    }
+    let refreshed = await f.workspace.refreshPublishedMetadata(for: reader)
+    XCTAssertTrue(refreshed)
+    XCTAssertEqual(f.workspace.reader?.metadataIdentity, published)
+    XCTAssertTrue(f.workspace.reader?.session === reader.session)
+    XCTAssertEqual(try readToken(f, id: id), token)
+    XCTAssertNil(f.workspace.failure)
+    XCTAssertNoThrow(try reader.session.withReadAccess {})
+    f.workspace.returnToLibrary()
+  }
+
+  func testMalformedReplacementMetadataPointerDoesNotRevokeOriginalPDF() async throws {
+    let f = try await fixture()
+    let id = try await importSelected(f)
+    let published = try publishMetadataRevision(f, id: id)
+    let reader = try await openOwnedReader(f, id: id)
+    let captured = try await f.workspace.readPublishedMetadata(for: reader)
+    let token = try readToken(f, id: id)
+    XCTAssertEqual(captured.identity, published)
+    try f.database.adapterWrite { db in
+      try db.execute(sql: """
+        INSERT INTO extractionRevision(id, paperID, generation, pdfSHA256, pdfReference)
+        SELECT 'invalid-revision', paperID, generation, pdfSHA256, pdfReference
+        FROM extractionRevision WHERE id = ?
+        """, arguments: [published.revisionID.uuidString])
+      try db.execute(sql: "UPDATE extractionVisible SET revision = 'invalid-revision' WHERE paperID = ?",
+        arguments: [id.uuidString])
+    }
+
+    XCTAssertThrowsError(try f.workspace.applyPublishedMetadata(captured)) {
+      XCTAssertEqual($0 as? ReaderMetadataError, .staleIdentity)
+    }
+    let refreshed = await f.workspace.refreshPublishedMetadata(for: reader)
+    XCTAssertFalse(refreshed)
+    XCTAssertNil(f.workspace.reader?.metadataIdentity)
+    XCTAssertTrue(f.workspace.reader?.session === reader.session)
+    XCTAssertEqual(try readToken(f, id: id), token)
+    XCTAssertNoThrow(try reader.session.withReadAccess {})
     f.workspace.returnToLibrary()
   }
 
