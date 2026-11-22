@@ -370,6 +370,9 @@ final class ProviderSettingsTests: XCTestCase {
     XCTAssertTrue(f.service.isTesting)
     f.transport.fail(0)
     await waitUntil { f.service.phase == .failed(.authentication) }
+    f.service.restore() // Reopening Settings keeps the previous replacement outcome.
+    XCTAssertEqual(f.service.phase, .failed(.authentication))
+    XCTAssertEqual(f.transport.count, 1)
     XCTAssertEqual(f.service.activeSelection, old)
     XCTAssertTrue(f.service.eligibleForEntry)
     XCTAssertEqual(f.selector.commits, 0)
@@ -461,8 +464,27 @@ final class ProviderSettingsTests: XCTestCase {
     XCTAssertThrowsError(try f.service.acquireLease())
     f.service.restore()
     XCTAssertEqual(f.transport.count, 1)
-    XCTAssertEqual(f.service.phase, .idle)
+    XCTAssertEqual(f.service.phase, .failed(.authentication))
     try removeFixture(f.root)
+  }
+
+  func testRestoringSettingsStillDetectsMissingSelectedKeyAfterFailedReplacement() async throws {
+    let f = try fixture()
+    defer { try? removeFixture(f.root) }
+    let old = try XCTUnwrap(f.service.activeSelection)
+    f.service.reconnect(key: "fixture-rejected")
+    await waitUntil { f.transport.count == 1 }
+    guard f.transport.count == 1 else { return }
+    f.transport.fail(0)
+    await waitUntil { f.service.phase == .failed(.authentication) }
+
+    try f.slots.remove(old.slotID)
+    f.service.restore()
+    XCTAssertEqual(f.selector.selection, old)
+    XCTAssertNil(f.service.activeSelection)
+    XCTAssertFalse(f.service.eligibleForEntry)
+    XCTAssertEqual(f.service.phase, .failed(.unsafeStorage))
+    XCTAssertEqual(f.transport.count, 1)
   }
 
   func testCleanupDebtPropagatesAndRemainsVisibleDuringEntryEdits() async throws {

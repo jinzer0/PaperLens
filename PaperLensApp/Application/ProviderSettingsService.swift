@@ -812,7 +812,7 @@ public final class ProviderSettingsService: ObservableObject {
   }
   public func restore() {
     guard !isTesting else { return }
-    connection.restore()
+    connection.restore(preservingRetryableFailure: true)
   }
   public func reconnect(key: String) {
     guard !keyStorageBlocked, codex?.preparingForApplicationTermination != true else { return }

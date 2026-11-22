@@ -30,6 +30,17 @@ public enum APIKeyConnectionError: Error, Equatable, Sendable {
     case .persistenceFailure: return "연결 선택의 저장 결과를 확인하지 못했습니다."
     }
   }
+
+  fileprivate var isRetryableProbeFailure: Bool {
+    switch self {
+    case .invalidKey, .authentication, .rateLimited, .providerUnavailable, .transport,
+      .deadline, .invalidResponse, .cancelled, .staleCandidate, .selectorConflict:
+      return true
+    case .invalidConfiguration, .unsupportedProfile, .unsafeStorage, .cleanupBlocked,
+      .persistenceUnavailable, .persistenceFailure:
+      return false
+    }
+  }
 }
 
 public struct APIKeySelection: Equatable, Sendable {
@@ -229,6 +240,12 @@ public final class NativeAPIKeyConnection: ObservableObject {
   /// Startup never replays a probe or infers a selection from files. Only recorded
   /// crash orphans under the store's exclusive lifetime lock can be removed.
   public func restore() {
+    restore(preservingRetryableFailure: false)
+  }
+
+  func restore(preservingRetryableFailure: Bool) {
+    let previousSelection = activeSelection
+    let previousPhase = phase
     defer { publishOwnerReplacementAvailability() }
     eligibleForEntry = false
     do {
@@ -247,8 +264,14 @@ public final class NativeAPIKeyConnection: ObservableObject {
       try reconcileSlotInventory(selected: selected)
       activeSelection = selected
       eligibleForEntry = selected != nil
-      publishPhase(unresolvedSlots ? .failed(.cleanupBlocked)
-        : selected.map(APIKeyConnectionPhase.connected) ?? .idle)
+      if unresolvedSlots {
+        publishPhase(.failed(.cleanupBlocked))
+      } else if preservingRetryableFailure, previousSelection == selected,
+        case .failed(let error) = previousPhase, error.isRetryableProbeFailure {
+        publishPhase(previousPhase)
+      } else {
+        publishPhase(selected.map(APIKeyConnectionPhase.connected) ?? .idle)
+      }
     } catch {
       activeSelection = nil
       fail(error)
