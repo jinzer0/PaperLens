@@ -1,8 +1,10 @@
-import Darwin
+import AppKit
 import Combine
+import Darwin
 import Foundation
 import GRDB
 import PDFKit
+import SwiftUI
 import XCTest
 #if SWIFT_PACKAGE
 import ProviderRequest
@@ -34,6 +36,23 @@ private actor WorkspaceDeletionAgent: AgentLibraryPurging {
     let lifecycle: LocalLibraryLifecycle
     let connection: NativeAPIKeyConnection
     let workspace: ProductWorkspace
+  }
+
+  private struct ParsingNoticeHost: View {
+    @ObservedObject var workspace: ProductWorkspace
+    let database: ProductDatabase
+    let paperID: UUID
+    let onUsableRevisionChange: @MainActor () async -> Bool
+
+    var body: some View {
+      HSplitView {
+        Color.clear.frame(minWidth: 240)
+        ParsingStatusView(database: database, paperID: paperID,
+          coordinator: workspace.parsingRecoveryCoordinator,
+          initialStartFailed: workspace.failedInitialParsing.contains(paperID),
+          onUsableRevisionChange: onUsableRevisionChange).frame(minWidth: 240)
+      }
+    }
   }
 
   private func privateRoot() throws -> URL {
@@ -404,8 +423,36 @@ private actor WorkspaceDeletionAgent: AgentLibraryPurging {
         WHEN NEW.state = 'failed' BEGIN SELECT RAISE(IGNORE); END;
         """)
     }
+    let mounted = expectation(description: "Parsing panel read its initial state")
+    let reported = expectation(description: "Mounted Reader offers terminal status recovery")
+    let cleared = expectation(description: "Deletion clears the terminal write notice")
+    var didMount = false
+    var didReportFailure = false
+    let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 560),
+      styleMask: [.borderless], backing: .buffered, defer: true)
+    window.isReleasedWhenClosed = false
+    defer { window.close() }
+    let host = ParsingNoticeHost(workspace: workspace, database: f.database, paperID: id) {
+      if !didMount {
+        didMount = true
+        mounted.fulfill()
+      }
+      return true
+    }
+    window.contentView = NSHostingView(rootView: host.onPreferenceChange(ParsingFailureNotice.self) { message in
+      if !didReportFailure, message == "파싱 종료 상태를 저장하지 못했습니다." {
+        didReportFailure = true
+        reported.fulfill()
+      } else if didReportFailure, message == nil {
+        cleared.fulfill()
+      }
+    })
+    window.contentView?.layoutSubtreeIfNeeded()
+    await fulfillment(of: [mounted], timeout: 4)
+
     let imported = try XCTUnwrap(workspace.imported(id))
     await imported.value
+    await fulfillment(of: [reported], timeout: 4)
     XCTAssertTrue(workspace.failedInitialParsing.contains(id))
     let coordinator = graph.recoveryCoordinator
     let pending = try await coordinator.presentation(paperID: id)
@@ -421,6 +468,7 @@ private actor WorkspaceDeletionAgent: AgentLibraryPurging {
     XCTAssertEqual(deleting.status.state, "unavailable")
     XCTAssertNil(deleting.pendingTerminalAttempt)
     XCTAssertNil(deleting.retry)
+    await fulfillment(of: [cleared], timeout: 4)
     XCTAssertEqual(try f.database.adapterRead {
       try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM extractionInvocation")
     }, 1)
