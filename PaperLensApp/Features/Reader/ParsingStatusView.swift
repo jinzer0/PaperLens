@@ -3,31 +3,44 @@ import SwiftUI
 /// Tracks scheduling intent, not publication authority. The first nil/error matters too.
 struct ParsingMetadataReconciliation {
   enum Outcome: Equatable { case revision(UUID?), unavailable }
+
+  struct Work: Equatable {
+    let id = UUID()
+    let outcome: Outcome
+  }
+
   private var latest: Outcome?
   private var pending = true
   private var request: UUID?
+  private(set) var work: Work?
+
   mutating func beginRequest() -> UUID {
     let value = UUID()
     request = value
     return value
   }
+
   func isCurrent(_ value: UUID) -> Bool { request == value }
-  mutating func observe(_ outcome: Outcome, request: UUID) -> Bool {
-    guard isCurrent(request) else { return false }
-    return observe(outcome)
-  }
-  mutating func resolve(_ outcome: Outcome, completed: Bool, request: UUID) {
+
+  mutating func schedule(_ outcome: Outcome, request: UUID) {
     guard isCurrent(request) else { return }
-    resolve(outcome, completed: completed)
+    if latest != outcome {
+      pending = true
+      latest = outcome
+    }
+    guard pending, work?.outcome != outcome else { return }
+    work = Work(outcome: outcome)
   }
-  mutating func observe(_ outcome: Outcome) -> Bool {
-    if latest != outcome { pending = true }
-    latest = outcome
-    return pending
-  }
-  mutating func resolve(_ outcome: Outcome, completed: Bool) {
-    guard latest == outcome else { return }
+
+  mutating func resolve(_ work: Work, completed: Bool) {
+    guard self.work == work else { return }
     pending = !completed
+    self.work = nil
+  }
+
+  mutating func invalidateRequests() {
+    request = nil
+    work = nil
   }
 }
 
@@ -107,6 +120,7 @@ public struct ParsingStatusView: View {
 
   public var body: some View {
     let key = ObservationTaskKey(paperID: paperID, restart: restartToken)
+    let metadataWork = reconciliation.work
     VStack(alignment: .leading, spacing: 8) {
       Text("파싱 상태와 복구").font(.headline).accessibilityAddTraits(.isHeader)
       Label(title, systemImage: icon)
@@ -181,8 +195,13 @@ public struct ParsingStatusView: View {
         let request = reconciliation.beginRequest()
         updatePresentation(nil)
         unavailable = true
-        await reconcile(.unavailable, request: request)
+        reconciliation.schedule(.unavailable, request: request)
       }
+    }
+    // Metadata I/O has its own task so it cannot delay the committed status stream.
+    .task(id: metadataWork?.id) {
+      guard let metadataWork else { return }
+      await reconcileMetadata(metadataWork, key: key)
     }
   }
 
@@ -284,7 +303,7 @@ public struct ParsingStatusView: View {
     guard isCurrent(key), !Task.isCancelled else { return nil }
     guard trackingKey == key, trackingEnded else { return key }
     // Advancing the task key invalidates pending readback/reconciliation, not publication.
-    _ = reconciliation.beginRequest()
+    reconciliation.invalidateRequests()
     let restart = UUID()
     restartToken = restart
     trackingEnded = false
@@ -307,12 +326,12 @@ public struct ParsingStatusView: View {
       guard reconciliation.isCurrent(request), isCurrent(key), !Task.isCancelled else { return }
       updatePresentation(latest)
       unavailable = false
-      await reconcile(.revision(latest.status.usableRevision), request: request)
+      reconciliation.schedule(.revision(latest.status.usableRevision), request: request)
     } catch {
       guard reconciliation.isCurrent(request), isCurrent(key), !Task.isCancelled else { return }
       unavailable = true
       updatePresentation(nil)
-      await reconcile(.unavailable, request: request)
+      reconciliation.schedule(.unavailable, request: request)
     }
   }
 
@@ -321,10 +340,11 @@ public struct ParsingStatusView: View {
     retryFailure = retryFailure?.matching(latest)
   }
 
-  @MainActor private func reconcile(_ outcome: ParsingMetadataReconciliation.Outcome, request: UUID) async {
-    guard reconciliation.observe(outcome, request: request) else { return }
+  @MainActor private func reconcileMetadata(_ work: ParsingMetadataReconciliation.Work, key: ObservationTaskKey) async {
+    guard isCurrent(key), presentationPaperID == key.paperID,
+      reconciliation.work == work, !Task.isCancelled else { return }
     let completed = await onUsableRevisionChange()
-    guard !Task.isCancelled, reconciliation.isCurrent(request) else { return }
-    reconciliation.resolve(outcome, completed: completed, request: request)
+    guard isCurrent(key), presentationPaperID == key.paperID, !Task.isCancelled else { return }
+    reconciliation.resolve(work, completed: completed)
   }
 }

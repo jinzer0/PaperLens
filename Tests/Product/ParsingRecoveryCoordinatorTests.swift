@@ -621,6 +621,50 @@ final class ParsingRecoveryCoordinatorTests: XCTestCase {
     await fulfillment(of: [cleared], timeout: 4)
   }
 
+  @MainActor func testCommittedParsingFailureAppearsWhileReaderMetadataRefreshWaits() async throws {
+    let (database, identity, root) = try fixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    try database.adapterWrite {
+      try $0.execute(sql: "UPDATE extractionAttempt SET state = 'running', failure = NULL")
+    }
+    let metadataStarted = expectation(description: "Reader started its initial metadata refresh")
+    let reported = expectation(description: "Committed failure reaches the Reader before metadata refresh completes")
+    var releaseMetadata: CheckedContinuation<Void, Never>?
+    var metadataRequests = 0
+    var didReportFailure = false
+    let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 560),
+      styleMask: [.borderless], backing: .buffered, defer: true)
+    window.isReleasedWhenClosed = false
+    defer {
+      releaseMetadata?.resume()
+      window.close()
+    }
+    window.contentView = NSHostingView(rootView: HSplitView {
+      Color.clear.frame(minWidth: 240)
+      ParsingStatusView(database: database, paperID: identity.paperID,
+        onUsableRevisionChange: {
+          metadataRequests += 1
+          if metadataRequests == 1 {
+            await withCheckedContinuation {
+              releaseMetadata = $0
+              metadataStarted.fulfill()
+            }
+          }
+          return true
+        }).frame(minWidth: 240)
+    }.onPreferenceChange(ParsingFailureNotice.self) { message in
+      if !didReportFailure, message == "원문 파싱 결과를 저장하지 못했습니다. 다시 시도하세요." {
+        didReportFailure = true
+        reported.fulfill()
+      }
+    })
+    window.contentView?.layoutSubtreeIfNeeded()
+    await fulfillment(of: [metadataStarted], timeout: 4)
+    try database.failExtraction(identity, failure: .storageFailure)
+    await fulfillment(of: [reported], timeout: 2)
+    XCTAssertEqual(metadataRequests, 1)
+  }
+
   func testFailureMessagesNeverExposeWorkerDiagnostics() {
     let diagnostic = "secret/path token=private duration=9 attempt=42"
     XCTAssertEqual(ParsingFailureMessage.korean(diagnostic),

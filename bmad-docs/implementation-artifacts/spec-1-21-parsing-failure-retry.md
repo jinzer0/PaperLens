@@ -380,3 +380,16 @@ BLOCK finding. This is source inspection, not behavioral/runtime proof. Deferred
 obligations include terminal error then explicit recovery and later commit delivery,
 overlapping recoveries/Retry, delayed old-task entry, cancellation during readback or
 metadata callback, and native immediate notice. No acceptance or runtime proof claimed.
+
+## 논문 정보 갱신 중 파싱 실패 표시
+
+Reader의 파싱 상태 관찰은 저장된 최신 상태를 읽어 표시한다. 논문 정보 갱신은
+Reader에 연결된 별도 작업에서 실행한다. 갱신 중 같은 원문 revision을 받으면 기존
+요청을 공유한다. 원문 revision이 바뀌면 새 요청이 이전 요청을 대체하고, 이전 요청의
+완료는 새 요청에 영향을 주지 않는다. 실패한 정보 갱신은 다음 상태 확인에서 재시도한다.
+
+합성 DB와 창을 띄우지 않은 Reader 분할 뷰에서 논문 정보 갱신을 멈춘 상태로 파싱
+실패를 저장했다. 변경 전에는 알림 검사가 제한 시간 내에 끝나지 않았다. 변경 후에는
+갱신이 계속 대기하는 동안 고정된 한국어 실패 사유가 Reader에 전달됐다. 관련 XCTest
+153개가 통과했고 macOS 15.0을 대상으로 빌드한 arm64 Release 앱의 Developer ID
+서명을 확인했다. 최소 지원 OS에서의 실행, 실제 parser 재시도와 앱 재시작은 검증 범위에 남아 있다.
