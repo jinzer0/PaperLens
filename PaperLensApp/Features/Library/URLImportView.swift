@@ -490,6 +490,7 @@ public struct URLImportView<LibraryContent: View>: View {
     case .cancelled: return "다운로드가 취소되었습니다."
     case .capacity: return "다른 가져오기가 진행 중입니다."
     case .writerUnavailable: return "현재 Library에서 가져오기를 시작할 수 없습니다."
+    case .destinationMissing: return "저장 폴더가 없어졌습니다. 다른 폴더를 선택한 뒤 다시 시도하세요."
     case .closureUnknown, .cleanupFailed: return "정리가 완료되지 않았습니다. Library 상태를 확인하세요."
     case .rejected: return "PDF 응답 또는 가져오기 제한을 확인할 수 없습니다."
     }

@@ -88,6 +88,47 @@ final class LibraryURLImportWriterTests: XCTestCase, @unchecked Sendable {
   }
 
   @MainActor
+  func testDeletedFolderBeforeReservationOffersFreshRetryWithoutAnotherPaperOrJob() async throws {
+    let db = try database()
+    let removed = try db.createFolder(name: "Removed destination")
+    let replacement = try db.createFolder(name: "New destination")
+    let lifecycle = try await LocalLibraryLifecycle.open(database: db)
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [URLRouteFixture.self]
+    let service = URLImportService(authority: try ProviderRequest(), sessionConfiguration: configuration,
+      grantWriter: { try await lifecycle.grantURLImportWriter(for: $0) })
+    try service.prepare("https://writer.invalid/download", destination: removed.name,
+      possibleDuplicate: false, destinationFolderID: removed.id)
+    let initial = try XCTUnwrap(service.confirmation)
+    try db.deleteFolder(id: removed.id)
+    service.continueImport(confirmationID: initial.id)
+    let deadline = ContinuousClock.now + .seconds(5)
+    while service.state == .downloading && ContinuousClock.now < deadline {
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    XCTAssertEqual(service.state, .failed(.destinationMissing))
+    XCTAssertTrue(service.canRetry)
+    XCTAssertTrue(try db.libraryRecords().isEmpty)
+    XCTAssertEqual(try db.adapterRead { try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM importJob") }, 0)
+
+    try service.retry(destination: replacement.name, destinationFolderID: replacement.id)
+    let retry = try XCTUnwrap(service.confirmation)
+    XCTAssertNotEqual(retry.id, initial.id)
+    XCTAssertEqual(retry.destinationFolderID, replacement.id)
+    guard case .newPaper = retry.purpose else { return XCTFail("No durable attempt was reserved") }
+    XCTAssertTrue(try db.libraryRecords().isEmpty)
+    service.continueImport(confirmationID: retry.id)
+    let retryDeadline = ContinuousClock.now + .seconds(5)
+    while service.state == .downloading && ContinuousClock.now < retryDeadline {
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    guard case .ready(let paperID) = service.state else { return XCTFail("Retry did not publish the PDF") }
+    XCTAssertEqual(try db.folderID(for: paperID), replacement.id)
+    XCTAssertEqual(try db.libraryRecords().map(\.id), [paperID])
+    XCTAssertEqual(try db.adapterRead { try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM importJob") }, 1)
+  }
+
+  @MainActor
   func testURLRetryPublishesSameJobToNewlySelectedFolderAfterOriginalFolderIsDeleted() async throws {
     let db = try database()
     let original = try db.createFolder(name: "Original destination")
@@ -99,8 +140,7 @@ final class LibraryURLImportWriterTests: XCTestCase, @unchecked Sendable {
       grantWriter: { intent in
         let writer = try await lifecycle.grantURLImportWriter(for: intent)
         if intent.destinationFolderID == original.id {
-          try await writer.abort(reason: .rejected)
-          throw URLImportError.rejected
+          try db.deleteFolder(id: original.id)
         }
         return writer
       })
@@ -113,11 +153,11 @@ final class LibraryURLImportWriterTests: XCTestCase, @unchecked Sendable {
     while service.state == .downloading && ContinuousClock.now < failureDeadline {
       try await Task.sleep(for: .milliseconds(10))
     }
-    XCTAssertEqual(service.state, .failed(.rejected))
+    XCTAssertEqual(service.state, .failed(.destinationMissing))
+    XCTAssertTrue(service.canRetry)
     let failedPaper = try XCTUnwrap(db.organizationSnapshot(filter: .init()).papers.first)
     let expected = try db.captureRetryableImport(paperID: failedPaper.id, generation: failedPaper.generation)
     let failed = try expected.journal.currentCapture().identity
-    try db.deleteFolder(id: original.id)
 
     try service.retry(destination: "미분류", destinationFolderID: nil)
     let cancelled = try XCTUnwrap(service.confirmation)

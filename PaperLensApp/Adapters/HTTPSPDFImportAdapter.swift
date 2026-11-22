@@ -6,7 +6,7 @@ import ProviderRequest
 #endif
 
 public enum URLImportError: Error, Equatable, Sendable {
-  case rejected, capacity, cancelled, writerUnavailable, closureUnknown, cleanupFailed
+  case rejected, capacity, cancelled, writerUnavailable, destinationMissing, closureUnknown, cleanupFailed
 }
 
 /// Created only after the actual file producer and URLSession have closed/drained.

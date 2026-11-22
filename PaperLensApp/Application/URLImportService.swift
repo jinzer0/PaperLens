@@ -275,13 +275,22 @@ public final class URLImportService: ObservableObject {
         lastInput = nil
         failedIntent = nil
       } catch {
-        var safe = error as? URLImportError ??
-          (Task.isCancelled || (error as? LocalLibraryError) == .cancelled ? .cancelled : .rejected)
+        var safe: URLImportError
+        if let reason = error as? URLImportError {
+          safe = reason
+        } else if Task.isCancelled || (error as? LocalLibraryError) == .cancelled {
+          safe = .cancelled
+        } else if (error as? FolderImportError) == .missingFolder {
+          safe = .destinationMissing
+        } else {
+          safe = .rejected
+        }
         if let ownedWriter {
           ownedWriter.revoke()
           do { try await ownedWriter.abort(reason: safe) } catch { safe = .cleanupFailed }
         }
-        admittedFailure = ownedWriter != nil || intent.admission.granted
+        // Consuming a grant can fail before Main reserves any durable work.
+        admittedFailure = ownedWriter != nil || intent.admission.reservationAcknowledged
         // Main's query is bound to the acknowledged execution, never to an error
         // label. It runs only after the real writer's abort/drain has returned.
         retryRecord = try? await intent.admission.captureFailed()
