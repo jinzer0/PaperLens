@@ -96,26 +96,30 @@ private final class AnnotationPageDelegate: NSObject, PDFDocumentDelegate {
 }
 
 @MainActor final class ReaderAnnotationBindingTests: XCTestCase {
-  private func fixture() async throws
+  private func fixture(pdfBytes: Data? = nil) async throws
     -> (URL, ProductDatabase, LocalLibraryLifecycle, UUID, AnnotationBindingFixture) {
     let temporary = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
     addTeardownBlock { try FileManager.default.removeItem(at: temporary) }
-    let data = NSMutableData()
-    let consumer = try XCTUnwrap(CGDataConsumer(data: data as CFMutableData))
-    var box = CGRect(x: 0, y: 0, width: 400, height: 600)
-    let pdf = try XCTUnwrap(CGContext(consumer: consumer, mediaBox: &box, nil))
-    for _ in 0..<2 {
-      pdf.beginPDFPage(nil)
-      pdf.textPosition = CGPoint(x: 40, y: 500)
-      let text = NSAttributedString(string: "alpha original owned text", attributes: [
-        .font: NSFont.systemFont(ofSize: 14)])
-      CTLineDraw(CTLineCreateWithAttributedString(text as CFAttributedString), pdf)
-      pdf.endPDFPage()
-    }
-    pdf.closePDF()
     let source = temporary.appendingPathComponent("owned.pdf")
-    try (data as Data).write(to: source)
+    if let pdfBytes {
+      try pdfBytes.write(to: source)
+    } else {
+      let data = NSMutableData()
+      let consumer = try XCTUnwrap(CGDataConsumer(data: data as CFMutableData))
+      var box = CGRect(x: 0, y: 0, width: 400, height: 600)
+      let pdf = try XCTUnwrap(CGContext(consumer: consumer, mediaBox: &box, nil))
+      for _ in 0..<2 {
+        pdf.beginPDFPage(nil)
+        pdf.textPosition = CGPoint(x: 40, y: 500)
+        let text = NSAttributedString(string: "alpha original owned text", attributes: [
+          .font: NSFont.systemFont(ofSize: 14)])
+        CTLineDraw(CTLineCreateWithAttributedString(text as CFAttributedString), pdf)
+        pdf.endPDFPage()
+      }
+      pdf.closePDF()
+      try (data as Data).write(to: source)
+    }
     let database = try ProductDatabase.open(at: temporary.appendingPathComponent("library"))
     let lifecycle = try await LocalLibraryLifecycle.open(database: database)
     let id = try await lifecycle.importPDF(from: source)
@@ -171,13 +175,14 @@ private final class AnnotationPageDelegate: NSObject, PDFDocumentDelegate {
   }
 
   private func presentation(database: ProductDatabase, lifecycle: LocalLibraryLifecycle,
-    paperID: UUID) throws -> ReaderPresentation {
+    paperID: UUID, pdfView: PDFView = PDFView()) throws -> ReaderPresentation {
     let session = ReaderSession(database: database,
       leaseProvider: LibraryReadLeaseProvider(lifecycle: lifecycle))
     let reader = ReaderPresentation(session: session,
       annotationIdentity: try database.annotationIdentity(paperID: paperID),
       annotationService: AnnotationService(database: database),
-      metadataService: ReaderMetadataService(database: database), metadataIdentity: nil)
+      metadataService: ReaderMetadataService(database: database), metadataIdentity: nil,
+      pdfView: pdfView)
     reader.open(paperID: paperID)
     XCTAssertTrue(reader.opened)
     return reader
@@ -391,6 +396,44 @@ private final class AnnotationPageDelegate: NSObject, PDFDocumentDelegate {
     }
     reader.session.close()
     XCTAssertEqual(reader.currentMatchNumber, 0)
+  }
+
+  func testContinuousSearchKeepsNeighboringMatchVisibleAndRestoresItsPage() async throws {
+    let (_, db, lifecycle, id, _) = try await fixture(pdfBytes: SyntheticPDFGeometryCalibration.fixturePDF())
+    let frame = CGRect(x: 0, y: 0, width: 450, height: 363)
+    let window = NSWindow(contentRect: frame, styleMask: [.titled], backing: .buffered, defer: true)
+    window.isReleasedWhenClosed = false
+    let view = PDFView(frame: frame)
+    window.contentView = view
+    let reader = try presentation(database: db, lifecycle: lifecycle, paperID: id, pdfView: view)
+    defer { reader.session.close(); window.close() }
+    view.layoutSubtreeIfNeeded()
+    reader.query = "AB"
+    reader.search()
+    await settleSearch(reader)
+    XCTAssertEqual(reader.searchState, .matches(8))
+    let document = try XCTUnwrap(view.document)
+    let clip = try XCTUnwrap(view.documentView?.enclosingScrollView?.contentView)
+
+    for (delta, pageIndex) in [(1, 1), (-1, 0), (1, 1)] {
+      reader.showMatch(delta: delta)
+      view.layoutSubtreeIfNeeded()
+      XCTAssertEqual(reader.currentMatchNumber, pageIndex + 1)
+      let matchedPage = try XCTUnwrap(document.page(at: pageIndex))
+      XCTAssertTrue(view.currentPage === matchedPage)
+      XCTAssertEqual(reader.pageIndex, pageIndex)
+      let selected = try XCTUnwrap(view.currentSelection)
+      XCTAssertTrue(selected.pages.first === matchedPage)
+      let target = view.convert(selected.bounds(for: matchedPage), from: matchedPage)
+      let viewport = view.convert(clip.bounds, from: clip).intersection(view.bounds)
+      XCTAssertTrue(viewport.contains(CGPoint(x: target.midX, y: target.midY)))
+    }
+    var returned = false
+    reader.leave { returned = true }
+    XCTAssertTrue(returned)
+    let reopened = try presentation(database: db, lifecycle: lifecycle, paperID: id)
+    defer { reopened.session.close() }
+    XCTAssertEqual(reopened.pageIndex, 1)
   }
 
   func testNestedNativeMatchNavigationKeepsLatestPageSelectionAndNumber() async throws {

@@ -460,9 +460,18 @@ import SwiftUI
         pdfView.setCurrentSelection(selection, animate: false)
         // Selection notifications can synchronously start another move or invalidate the search.
         guard isCurrentNavigation(), pdfView.document === document else { return }
+        if let page = selection.pages.first, page.document === document,
+          pdfView.window != nil, pdfView.currentPage !== page {
+          // In continuous mode an already-visible match can sit on a neighboring
+          // page. Establish the matched page before refining the scroll to its text.
+          try session.withReadAccess {
+            guard isCurrentNavigation(), pdfView.document === document else { return }
+            pdfView.go(to: page)
+          }
+        }
         try session.withReadAccess {
           guard isCurrentNavigation(), pdfView.document === document else { return }
-          pdfView.go(to: selection)
+          if !isSearchMatchVisible(selection) { pdfView.go(to: selection) }
           guard isCurrentNavigation(), pdfView.document === document else { return }
           currentMatchNumber = index + 1
         }
@@ -471,6 +480,16 @@ import SwiftUI
       guard isCurrentNavigation() else { return }
       failure = "Reader operation rejected: \(error)"
     }
+  }
+
+  private func isSearchMatchVisible(_ selection: PDFSelection) -> Bool {
+    guard let page = selection.pages.first, pdfView.currentPage === page,
+      let clip = pdfView.documentView?.enclosingScrollView?.contentView,
+      pdfView.window != nil else { return false }
+    let selectionBounds = selection.bounds(for: page)
+    guard !selectionBounds.isEmpty else { return false }
+    let visible = pdfView.convert(clip.bounds, from: clip).intersection(pdfView.bounds)
+    return visible.contains(pdfView.convert(selectionBounds, from: page))
   }
 
   func leave(onReturn: () -> Void) {

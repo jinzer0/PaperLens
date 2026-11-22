@@ -1,5 +1,19 @@
 # Story 1.15 Build Spec — Native Reader and durable last-read
 
+## 연속 보기 검색 결과의 표시와 읽기 위치 복원 — 2026-11-22
+
+여러 페이지가 동시에 보이면 PDFKit은 화면 가운데를 지나는 페이지를 현재 페이지로
+판정한다. 이미 화면 가장자리에 보이는 검색 결과로 이동할 때 다른 페이지가 읽기
+위치로 남을 수 있다. 검색 결과가 이웃 페이지에 있으면 해당 페이지로 먼저 이동하고,
+텍스트가 여전히 화면 밖에 있으면 PDFKit의 선택 위치 이동으로 이어간다. 기존 Reader
+세션에서 실제 표시 페이지와 확대 비율을 읽어 저장한다.
+
+macOS 26.7.1 arm64 서명 앱의 합성 PDF에서 1쪽과 회전된 2쪽 사이 양방향 검색
+이동을 확인했다. 검색 결과와 페이지 표시가 일치했고, 100%와 298%에서 Library로
+나갔다 돌아왔을 때 2쪽과 확대 비율이 복원됐다. 종료 후 저장소의 읽기 위치와 원본·보관
+PDF 해시를 확인했다. 관련 테스트 99개가 통과했으며 로컬 결과는
+`.build/epic1-search-position/result.json`에 있다.
+
 ## Korean Reader failure presentation without diagnostic exposure
 
 Baseline33979f9f42085100a5387a03f53461de7a05ea42 still renders the internal
