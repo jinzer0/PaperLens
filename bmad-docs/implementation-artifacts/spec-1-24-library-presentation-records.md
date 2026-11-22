@@ -13,8 +13,15 @@ Developer ID 서명 앱으로 합성 PDF 한 편을 가져왔다. 기본 목록�
 이 디렉터리를 제거한 뒤 화면의 재시도로 같은 삭제 ID가 완료됐다. 보관 PDF·주석·활성
 추출은 제거됐고 가져오기 전 원본은 남았다. 정상 종료 뒤 DB에서 삭제 완료와 카드·발행연도
 설정의 보존을 확인했다. 관련 테스트 163개가 통과했으며 로컬 기록은
-`.build/epic1-story124-signed-ui-result.json`에 있다. 서명 앱에서 여러 논문의 실제 정렬
-순서, 앱 재실행, 키보드·VoiceOver, 실제 Agent 데이터 삭제 검증은 남아 있다.
+`.build/epic1-story124-signed-ui-result.json`에 있다.
+
+소스 `6ed4dac48bc12f8c21b408feb57774e34ac9f8d3`의 Developer ID 서명 앱에
+출처 제목과 발행연도가 서로 다른 합성 PDF 세 편을 가져왔다. 처음 가져온 논문을
+다시 읽은 뒤 카드 보기에서 최근 읽음, 최근 추가, 발행연도 순서가 각각 실제 저장 값과
+일치했다. 세 편의 가져오기 이름이 같아 이름 정렬에서는 UUID 동률 순서를 확인했다.
+정상 종료 후 저장소에서 카드 보기와 발행연도 설정이 유지됐다. 로컬 결과는
+`.build/epic1-multipaper-library/result.json`에 있다. 서로 다른 가져오기 이름의
+서명 앱 정렬, 앱 재실행, 키보드·VoiceOver, 실제 Agent 데이터 삭제 검증은 남아 있다.
 
 ## Current isolated workspace verification — 2026-10-14
 

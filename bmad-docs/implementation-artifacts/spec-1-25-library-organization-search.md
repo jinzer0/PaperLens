@@ -15,6 +15,14 @@ Developer ID 서명 앱으로 전용 합성 PDF 한 편을 가져왔다. 앱 메
 `.build/epic1-story125-tag-gui-result.json`에 있다. 제품 앱 재실행과 키보드 이동·VoiceOver
 검증은 남아 있다.
 
+소스 `6ed4dac48bc12f8c21b408feb57774e34ac9f8d3`의 Developer ID 서명 앱에서
+합성 논문 세 편을 사용했다. 출처 제목·정확한 사용자 태그·읽음·즐겨찾기 조건을 함께
+선택했을 때 일치하는 논문 한 편이 카드와 목록에 동일하게 표시됐다. 다른 논문의 제목을
+입력하면 결과가 없었다. 조건이 적용된 상태에서 일치한 논문을 삭제하자 조건이 유지된
+채 결과가 사라졌고, 조건을 지우자 나머지 두 편만 표시됐다. 정상 종료 후 저장소에서
+삭제 기록과 사용자 태그 제거를 확인했다. 로컬 결과는
+`.build/epic1-multipaper-library/result.json`에 있다.
+
 ## Bounded ordinary Favorite/Reading Status focus return (baseline b978770)
 
 Existing sidebar/direct-controls delivery requires after-actual-requery return to the
