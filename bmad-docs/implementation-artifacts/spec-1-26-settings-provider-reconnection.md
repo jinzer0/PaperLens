@@ -1,5 +1,17 @@
 # Story 1.26 Build Spec — Settings Provider reconnection
 
+## Settings 키보드 초점과 재연결 흐름 — 2026-11-22
+
+macOS 26.7.1 arm64의 Developer ID 서명 앱에서 Settings를 닫으면 초점이 태그 필터로
+이동하는 결함을 재현했다. 수정한 앱에서는 닫기 또는 Escape 후 Settings 버튼으로
+초점이 돌아왔고, 스페이스 키로 다시 열 수 있었다.
+
+전용 합성 저장소와 로컬 응답으로 연결 거절 및 취소를 검증했다. 거절 후 재시도 안내가
+유지됐고, 취소 후 키 입력란으로 초점이 돌아왔다. 늦은 응답을 받은 뒤 임시 키가 정리됐으며
+기존 선택과 연결 버전은 앱을 재실행한 뒤에도 일치했다. 관련 XCTest 116개가 통과했다.
+로컬 실행 기록은 `.build/epic1-settings-actual-flow/settings-verified-ui.log`에 있다.
+실제 Provider 인증, VoiceOver 사용 및 macOS 15 검증은 남아 있다.
+
 ## API 키 연결 확인 취소 — 2026-11-22
 
 Settings와 최초 연결 화면의 취소 버튼을 화면에 표시된 API 키 확인 시도에 연결했다.

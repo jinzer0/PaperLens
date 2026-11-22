@@ -959,7 +959,14 @@ public struct ProductWorkspaceView: View {
         HStack {
           Group {
             Button("폴더 관리") { openToolbar(.folders) }.focused($folderOpenerFocused)
-            Button("Settings") { openToolbar(.settings) }.focused($settingsOpenerFocused)
+            Button("Settings") { openToolbar(.settings) }
+              .focusable(workspace.canOpenReader)
+              .focused($settingsOpenerFocused)
+              .onKeyPress(.space, phases: .down) { press in
+                guard press.modifiers.isEmpty else { return .ignored }
+                openToolbar(.settings)
+                return .handled
+              }
             if let mount, let paperID = workspace.latestLocalImport {
               Button("가져온 PDF 열기") {
                 Task { await workspace.openImportedPDF(paperID, presentationMount: mount) }
@@ -1142,7 +1149,7 @@ public struct ProductWorkspaceView: View {
   private func invalidateDirectIntent() { directIntent?.invalidated = true }
 
   private func openToolbar(_ kind: ToolbarPresentation.Kind) {
-    guard let mount, nativeSlot == nil, toolbarPresentation == nil, workspace.sheet == nil,
+    guard workspace.canOpenReader, let mount, nativeSlot == nil, toolbarPresentation == nil, workspace.sheet == nil,
       !workspace.sheetCleanupPending, !workspace.preparing, !workspace.opening,
       workspace.reader == nil
     else { return }
