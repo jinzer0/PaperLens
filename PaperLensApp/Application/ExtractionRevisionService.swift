@@ -334,9 +334,16 @@ public actor PDFiumExtractionProducer: ExtractionBatchProducing {
 
   public func withBatches(_ identity: ExtractionIdentity,
     consume: @escaping @Sendable ([ExtractionBatch], ExtractionConsumptionScope) async throws -> Void) async throws {
-    guard !running, sessions.isEmpty else { throw PDFiumFailure(code: .busy) }
+    guard !running else { throw PDFiumFailure(code: .busy) }
     running = true
     defer { running = false }
+    try Task.checkCancellation()
+    // A late verified End only records proof. The next admission can complete
+    // checked local teardown once the original consumer has returned.
+    if let (operationID, session) = sessions.first, session.scopeReturned, session.end != nil {
+      try await finishSession(session, operationID: operationID)
+    }
+    guard sessions.isEmpty else { throw PDFiumFailure(code: .busy) }
     try Task.checkCancellation()
     let operationID = UUID()
     acquisitionOperationID = operationID
@@ -409,9 +416,7 @@ public actor PDFiumExtractionProducer: ExtractionBatchProducing {
       try await consume(batches, scope)
       batches.removeAll(keepingCapacity: false)
       input.recordConsumerDisposal()
-      try await releasePin(session)
-      try await finishResources(session)
-      connection.invalidate(); sessions.removeValue(forKey: operationID)
+      try await finishSession(session, operationID: operationID)
     } catch {
       batches.removeAll(keepingCapacity: false)
       input.recordConsumerDisposal()
@@ -419,14 +424,10 @@ public actor PDFiumExtractionProducer: ExtractionBatchProducing {
       do {
         if session.began {
           try await cancelAndDrain(operationID: operationID)
-          try await releasePin(session)
-        } else {
-          // No message or FD was sent: dispose the returned captured operation
-          // using its own actual ID, including a mismatched acquisition.
-          try await releasePin(session)
         }
-        try await finishResources(session)
-        connection.invalidate(); sessions.removeValue(forKey: operationID)
+        // If no message was sent, dispose the returned captured input using its
+        // own ID, including a mismatched acquisition.
+        try await finishSession(session, operationID: operationID)
       } catch { throw PDFiumFailure(code: .cleanupIncomplete) }
       throw original
     }
@@ -466,9 +467,7 @@ public actor PDFiumExtractionProducer: ExtractionBatchProducing {
       catch { session.drainTask = nil; throw error }
     }
     if session.scopeReturned {
-      try await releasePin(session)
-      try await finishResources(session)
-      session.connection.invalidate(); sessions.removeValue(forKey: operationID)
+      try await finishSession(session, operationID: operationID)
     }
   }
 
@@ -483,6 +482,15 @@ public actor PDFiumExtractionProducer: ExtractionBatchProducing {
     }
     try session.input.closeSender()
   }
+
+  private func finishSession(_ session: Session, operationID: UUID) async throws {
+    try await releasePin(session)
+    try await finishResources(session)
+    guard sessions[operationID] === session else { return }
+    session.connection.invalidate()
+    sessions.removeValue(forKey: operationID)
+  }
+
   private func releasePin(_ session: Session) async throws {
     if let task = session.pinReleaseTask { try await task.value; return }
     try session.input.closeSender()
