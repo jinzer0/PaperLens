@@ -339,6 +339,35 @@ private final class AnnotationPageDelegate: NSObject, PDFDocumentDelegate {
     XCTAssertEqual(reader.currentMatchNumber, 0)
   }
 
+  func testNestedNativeMatchNavigationKeepsLatestPageSelectionAndNumber() async throws {
+    let (_, db, lifecycle, id, _) = try await fixture()
+    let reader = try presentation(database: db, lifecycle: lifecycle, paperID: id)
+    defer { reader.session.close() }
+    reader.query = "alpha"
+    reader.search()
+    await settleSearch(reader)
+    XCTAssertEqual(reader.searchState, .matches(2))
+    XCTAssertEqual(reader.currentMatchNumber, 1)
+    let document = try XCTUnwrap(reader.pdfView.document)
+    var movedAgain = false
+    let token = NotificationCenter.default.addObserver(forName: .PDFViewSelectionChanged,
+      object: reader.pdfView, queue: .main) { _ in
+      MainActor.assumeIsolated {
+        guard !movedAgain else { return }
+        movedAgain = true
+        reader.showMatch(delta: 1)
+      }
+    }
+    defer { NotificationCenter.default.removeObserver(token) }
+
+    reader.showMatch(delta: 1)
+
+    XCTAssertTrue(movedAgain)
+    XCTAssertEqual(reader.currentMatchNumber, 1)
+    XCTAssertEqual(document.index(for: try XCTUnwrap(reader.pdfView.currentPage)), 0)
+    XCTAssertEqual(document.index(for: try XCTUnwrap(reader.pdfView.currentSelection?.pages.first)), 0)
+  }
+
   func testReaderNavigationAndZoomStayCurrentWhenPositionSaveFails() async throws {
     let (_, db, lifecycle, id, _) = try await fixture()
     let reader = try presentation(database: db, lifecycle: lifecycle, paperID: id)

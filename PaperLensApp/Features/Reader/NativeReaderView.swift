@@ -29,6 +29,7 @@ import SwiftUI
   private var matchIndex = 0
   private var searchTask: Task<Void, Never>?
   private var searchGeneration = UUID()
+  private var matchNavigation = UUID()
   private var restoring = false
   private weak var admittedDocument: PDFDocument?
   private weak var scrollClipView: NSClipView?
@@ -442,26 +443,32 @@ import SwiftUI
   }
 
   func showMatch(delta: Int) {
-    guard !matches.isEmpty else { return }
+    guard opened, !matches.isEmpty else { return }
     let generation = searchGeneration
+    let navigation = UUID()
+    matchNavigation = navigation
+    func isCurrentNavigation() -> Bool {
+      opened && searchGeneration == generation && matchNavigation == navigation
+    }
     do {
       try session.withReadAccess {
-        guard opened, searchGeneration == generation, !matches.isEmpty else { return }
+        guard isCurrentNavigation() else { return }
         guard let document = pdfView.document else { throw ReaderError.notOpen }
-        matchIndex = (matchIndex + delta + matches.count) % matches.count
-        let selection = matches[matchIndex]
+        let index = (matchIndex + delta + matches.count) % matches.count
+        matchIndex = index
+        let selection = matches[index]
         pdfView.setCurrentSelection(selection, animate: false)
-        // Selection notifications can synchronously discard or replace this search.
-        guard opened, searchGeneration == generation, pdfView.document === document else { return }
+        // Selection notifications can synchronously start another move or invalidate the search.
+        guard isCurrentNavigation(), pdfView.document === document else { return }
         try session.withReadAccess {
-          guard opened, searchGeneration == generation, pdfView.document === document else { return }
+          guard isCurrentNavigation(), pdfView.document === document else { return }
           pdfView.go(to: selection)
-          guard opened, searchGeneration == generation, pdfView.document === document else { return }
-          currentMatchNumber = matchIndex + 1
+          guard isCurrentNavigation(), pdfView.document === document else { return }
+          currentMatchNumber = index + 1
         }
       }
     } catch {
-      guard opened, searchGeneration == generation else { return }
+      guard isCurrentNavigation() else { return }
       failure = "Reader operation rejected: \(error)"
     }
   }
