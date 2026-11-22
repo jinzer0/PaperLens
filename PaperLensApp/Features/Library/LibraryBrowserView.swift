@@ -332,6 +332,7 @@ public struct LibraryBrowserView: View {
   }
 
   public var body: some View {
+    let completedOrganizationReturn = query.loading ? nil : organizationFocusToRestore?.awaitingRequest
     HSplitView {
       filterSidebar
       libraryContent.frame(minWidth: 360, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -360,9 +361,24 @@ public struct LibraryBrowserView: View {
     }
     .onChange(of: summaries.completionRevision) { _, _ in refreshAfterBackgroundChange() }
     .onChange(of: filter) { _, _ in refresh() }
+    .task(id: completedOrganizationReturn) {
+      // The accepted query may have rebuilt the row. Wait for SwiftUI to install its focus target.
+      guard !Task.isCancelled, let completedOrganizationReturn, let receipt = organizationFocusToRestore,
+        receipt.awaitingRequest == completedOrganizationReturn else { return }
+      if case .reading = receipt.control, organizationFocus == receipt.control,
+        organizationReturnIsEligible(receipt) {
+        // The old menu's focus can outlive its view. Wait for the reset before restoring it.
+        organizationFocus = nil
+        return
+      }
+      consumeOrganizationReturn(completedOrganizationReturn)
+    }
     .onChange(of: organizationFocus) { _, value in
       if let value, value != organizationFocusToRestore?.control { organizationFocusToRestore = nil }
       if value != nil { interruptSheetReturn(newerWork: false) }
+      if value == nil, let completedOrganizationReturn {
+        consumeOrganizationReturn(completedOrganizationReturn)
+      }
     }
     .onChange(of: focusedPaper) { _, value in
       if value != nil { organizationFocusToRestore = nil }
@@ -434,17 +450,14 @@ public struct LibraryBrowserView: View {
         .accessibilityLabel("\(paper.title) 즐겨찾기")
         .accessibilityValue(paper.organization.favorite ? "설정됨" : "설정되지 않음")
         let currentStatus = readingLabel(paper.organization.readingStatus)
-        LibraryPaperMenu(title: "읽기 상태 · \(currentStatus)", label: "\(paper.title) 읽기 상태 변경",
+        KeyboardLibraryPaperMenu(title: "읽기 상태 · \(currentStatus)", label: "\(paper.title) 읽기 상태 변경",
           value: currentStatus, actions: PaperReadingStatus.allCases.map { status in
             .init(.reading(status), readingLabel(status), checked: status == paper.organization.readingStatus) {
               var value = paper.organization
               value.readingStatus = status
               saveOrganization(value, for: paper, origin: .reading(paper.id))
             }
-          }, requestsFocus: organizationFocus == .reading(paper.id))
-        .focusable(!deletionPending && paper.readable && !busy && !loading && !loadFailed,
-          interactions: [.activate, .edit])
-        .focused($organizationFocus, equals: .reading(paper.id))
+          }, focus: $organizationFocus, target: .reading(paper.id))
       }.disabled(deletionPending || !paper.readable || busy || loading || loadFailed)
       if !paper.organization.tags.isEmpty { Text(paper.organization.tags.joined(separator: " · ")).font(.caption) }
       if !paper.sourceMetadataInvalid {
@@ -518,10 +531,8 @@ public struct LibraryBrowserView: View {
         }
         .disabled(!canMovePaper)
         .accessibilityLabel("\(paper.title) 폴더 이동")
-      LibraryPaperMenu(title: "더 보기", label: "\(paper.title) 더 보기", value: nil,
-        actions: paperMenuActions(paper), requestsFocus: focusedPaper == paper.id)
-        .focusable(!busy, interactions: [.activate, .edit])
-        .focused($focusedPaper, equals: paper.id)
+      KeyboardLibraryPaperMenu(title: "더 보기", label: "\(paper.title) 더 보기", value: nil,
+        actions: paperMenuActions(paper), focus: $focusedPaper, target: paper.id)
         .disabled(busy)
     }
   }
@@ -825,11 +836,20 @@ public struct LibraryBrowserView: View {
   }
 
   private func refreshAfterBackgroundChange() {
-    guard canRefreshAfterBackgroundChange,
-      !finishedDeletionIDs.isEmpty || observedDeletionRevision != deletionRevision || observedImportIDs != activeImportIDs
-        || observedContentRevision != contentRevision
-        || observedSummaryRevision != summaries.completionRevision else { return }
-    refresh()
+    guard canRefreshAfterBackgroundChange else { return }
+    let contentChanged = observedContentRevision != contentRevision
+    let otherChanges = !finishedDeletionIDs.isEmpty || observedDeletionRevision != deletionRevision
+      || observedImportIDs != activeImportIDs || observedSummaryRevision != summaries.completionRevision
+    guard contentChanged || otherChanges else { return }
+    var organizationToken: UUID?
+    if contentChanged, !otherChanges, let receipt = organizationFocusToRestore,
+      receipt.awaitingRequest != nil, organizationReturnIsEligible(receipt) {
+      // The database observation can arrive just after the save's own query completes.
+      // Restore against the replacement query so a newer snapshot still determines the target.
+      organizationFocusToRestore?.awaitingRequest = nil
+      organizationToken = receipt.token
+    }
+    refresh(completingOrganization: organizationToken)
   }
 
   private func savePreference(_ change: OrganizationPreferenceChange) {
@@ -1004,12 +1024,7 @@ public struct LibraryBrowserView: View {
     observedSummaryRevision = summaries.completionRevision
     if !canPreserveOrganizationReturn(token) { organizationFocusToRestore = nil }
     let request = query.begin(filter: filter, deletionRevision: deletionRevision)
-    if let receipt = organizationFocusToRestore {
-      organizationFocusToRestore = OrganizationActionReturn(token: receipt.token,
-        mountID: receipt.mountID, paperID: receipt.paperID, generation: receipt.generation,
-        control: receipt.control, filter: receipt.filter, refreshRevision: receipt.refreshRevision,
-        awaitingRequest: request)
-    }
+    organizationFocusToRestore?.awaitingRequest = request
     if let slot, sheetPresentation?.slot.id == slot.id { sheetPresentation?.awaitingRequest = request }
     let deletions = finishedDeletionIDs
     loadTask = Task { await load(request, refreshingDeletions: deletions) }
@@ -1048,12 +1063,10 @@ public struct LibraryBrowserView: View {
       currentFacts = Dictionary(uniqueKeysWithValues: observation.facts
         .filter { generations[$0.paperID] == $0.generation }.map { ($0.paperID, $0) })
       consumeSheetReturn(request)
-      consumeOrganizationReturn(request)
     } catch {
       guard !Task.isCancelled else { return }
       query.reject(request: request, currentFilter: filter)
       consumeSheetReturn(request)
-      if query.failed, !query.loading { consumeOrganizationReturn(request) }
     }
   }
   private func organizationReturnIsEligible(_ receipt: OrganizationActionReturn) -> Bool {
@@ -1117,7 +1130,31 @@ private struct OrganizationActionReturn {
   let control: OrganizationControlFocus
   let filter: OrganizationFilter
   let refreshRevision: Int
-  let awaitingRequest: OrganizationQueryState.Request?
+  var awaitingRequest: OrganizationQueryState.Request?
+}
+
+@MainActor private struct KeyboardLibraryPaperMenu<Focus: Hashable>: View {
+  let title: String
+  let label: String
+  let value: String?
+  let actions: [LibraryPaperMenu.Action]
+  let focus: FocusState<Focus?>.Binding
+  let target: Focus
+  @Environment(\.isEnabled) private var isEnabled
+  @State private var opener = LibraryPaperMenu.Opener()
+
+  var body: some View {
+    LibraryPaperMenu(title: title, label: label, value: value, actions: actions, opener: opener)
+      .focusable(isEnabled, interactions: [.activate, .edit])
+      .focused(focus, equals: target)
+      .onKeyPress(.space, phases: .down) { press in
+        guard press.modifiers.isEmpty, let button = opener.button, button.isEnabled else { return .ignored }
+        button.performClick(nil)
+        return .handled
+      }
+      .accessibilityLabel(label)
+      .accessibilityValue(value ?? "")
+  }
 }
 
 @MainActor private struct LibraryPaperMenu: NSViewRepresentable {
@@ -1144,7 +1181,7 @@ private struct OrganizationActionReturn {
   let label: String
   let value: String?
   let actions: [Action]
-  let requestsFocus: Bool
+  let opener: Opener
   @Environment(\.isEnabled) private var isEnabled
 
   func makeCoordinator() -> Coordinator { Coordinator() }
@@ -1157,6 +1194,7 @@ private struct OrganizationActionReturn {
     button.autoenablesItems = false
     button.menu?.delegate = context.coordinator
     button.setAccessibilityRole(.menuButton)
+    opener.button = button
     return button
   }
 
@@ -1169,40 +1207,19 @@ private struct OrganizationActionReturn {
     button.isEnabled = isEnabled
     button.paperLabel = label
     button.paperValue = value
-    button.requestFocus(requestsFocus && isEnabled)
+  }
+
+  final class Opener {
+    weak var button: Button?
   }
 
   final class Button: NSPopUpButton {
     var paperLabel = ""
     var paperValue: String?
-    private var focusRequested = false
 
-    override var acceptsFirstResponder: Bool { isEnabled }
+    override var acceptsFirstResponder: Bool { false }
     override func accessibilityLabel() -> String? { paperLabel }
     override func accessibilityValue() -> Any? { paperValue }
-
-    func requestFocus(_ requested: Bool) {
-      guard focusRequested != requested else { return }
-      focusRequested = requested
-      guard requested else { return }
-      // SwiftUI restores focus to the wrapper. Transfer it after the update so AppKit receives keys.
-      Task { @MainActor [weak self] in
-        guard let self, self.focusRequested, self.isEnabled,
-          let window = self.window, window.isKeyWindow, window.firstResponder !== self
-        else { return }
-        window.makeFirstResponder(self)
-      }
-    }
-
-    override func keyDown(with event: NSEvent) {
-      if isEnabled, event.charactersIgnoringModifiers == " ",
-        event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty
-      {
-        if !event.isARepeat { performClick(nil) }
-      } else {
-        super.keyDown(with: event)
-      }
-    }
   }
 
   @MainActor final class Coordinator: NSObject, NSMenuDelegate {
