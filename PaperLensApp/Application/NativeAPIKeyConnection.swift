@@ -192,6 +192,10 @@ public final class NativeAPIKeyConnection: ObservableObject {
   private var ownerRetired = false
 
   var hasUncommittedProbe: Bool { running != nil && !publishingSelection }
+  var cancellableProbeID: UUID? {
+    // A synchronous phase observer can run before the published value is assigned.
+    hasUncommittedProbe && intendedPhase == .probing ? intent : nil
+  }
 
   var savedConfiguration: ProviderConfiguration? { try? persistence?.selectorSnapshot() }
 
@@ -327,22 +331,31 @@ public final class NativeAPIKeyConnection: ObservableObject {
 
   /// Edits invalidate intent immediately, even when the user has not pressed Retry.
   public func invalidateCandidate() {
+    invalidateCandidate(showing: unresolvedSlots ? .failed(.cleanupBlocked)
+      : activeSelection.map(APIKeyConnectionPhase.connected) ?? .idle)
+  }
+
+  public func cancel() {
+    invalidateCandidate(showing: .failed(.cancelled))
+  }
+
+  private func invalidateCandidate(showing next: APIKeyConnectionPhase) {
     guard !ownerRetired, !publishingSelection else { return }
     invalidateProbeIntent()
     running = nil
-    publishPhase(unresolvedSlots ? .failed(.cleanupBlocked)
-      : activeSelection.map(APIKeyConnectionPhase.connected) ?? .idle)
+    publishPhase(next)
     publishOwnerReplacementAvailability()
-  }
-  public func cancel() {
-    guard !publishingSelection else { return }
-    invalidateCandidate()
-    publishPhase(.failed(.cancelled))
   }
 
   func cancelUncommittedProbe() {
     guard hasUncommittedProbe else { return }
     cancel()
+  }
+
+  func cancelUncommittedProbe(id: UUID) -> Bool {
+    guard cancellableProbeID == id else { return false }
+    cancel()
+    return true
   }
   public func connect(key: String) {
     connect(key: key, replacing: nil, didPromote: nil)

@@ -72,11 +72,10 @@ public struct ProviderSettingsView: View {
           Button(actionTitle) { submit() }
             .disabled(key.isEmpty || service.isTesting || service.candidatesBlocked)
             .keyboardShortcut(.defaultAction)
-          if service.isTesting {
+          if let probeID = service.apiKeyProbeID {
             ProgressView().controlSize(.small).accessibilityLabel("새 연결 확인 중")
             Button("취소") {
-              guard isCurrent() else { return }
-              service.cancel()
+              guard isCurrent(), service.cancelAPIKeyProbe(id: probeID) else { return }
               keyFocused = true
             }
             .keyboardShortcut(.cancelAction)

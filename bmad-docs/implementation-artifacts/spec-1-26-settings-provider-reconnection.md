@@ -1,5 +1,16 @@
 # Story 1.26 Build Spec — Settings Provider reconnection
 
+## API 키 연결 확인 취소 — 2026-11-22
+
+Settings와 최초 연결 화면의 취소 버튼을 화면에 표시된 API 키 확인 시도에 연결했다.
+이전 버튼의 동작이 뒤늦게 들어와도 새 확인을 취소하거나 이미 표시된 성공·실패 상태를
+바꾸지 않는다. 취소 상태는 한 번만 발행해 상태를 구독하는 코드가 즉시 새 확인을
+시작하더라도 이전 취소 상태가 새 진행 상태를 덮지 않는다.
+
+합성 응답을 보류해 두 경합을 재현했고, 수정 뒤 세 회귀 사례를 포함한 관련 XCTest
+67개가 통과했다. arm64 Release 빌드와 Developer ID 서명을 확인했다. 실제 인증 요청과
+macOS 15에서의 실행 및 Settings 접근성 검증은 남아 있다.
+
 ## Existing Settings opener return (baseline 0ee17ee)
 
 Review194 resolves one finite source input, not an observed native failure:

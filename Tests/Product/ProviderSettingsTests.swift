@@ -552,6 +552,106 @@ final class ProviderSettingsTests: XCTestCase {
     try removeFixture(f.root)
   }
 
+  func testDisplayedAPIKeyCancellationCannotCancelAReplacementOrCommittedProbe() async throws {
+    let f = try fixture()
+    defer { try? removeFixture(f.root) }
+    let firstSelection = try XCTUnwrap(f.service.activeSelection)
+    var entry = "fixture-first-candidate"
+    let entryBinding = Binding(get: { entry }, set: { entry = $0 })
+    let keyBinding = providerSettingsKeyBinding(entryBinding, service: f.service)
+    submitProviderAPIKey(entryBinding, service: f.service)
+    await waitUntil { f.transport.count == 1 }
+    guard f.transport.count == 1 else { return }
+    let displayedFirst = try XCTUnwrap(f.service.apiKeyProbeID)
+
+    keyBinding.wrappedValue = "fixture-replacement-candidate"
+    submitProviderAPIKey(entryBinding, service: f.service)
+    await waitUntil { f.transport.count == 2 }
+    guard f.transport.count == 2 else { try f.transport.complete(0); return }
+    let displayedSecond = try XCTUnwrap(f.service.apiKeyProbeID)
+    XCTAssertNotEqual(displayedFirst, displayedSecond)
+    XCTAssertFalse(f.service.cancelAPIKeyProbe(id: displayedFirst))
+    XCTAssertEqual(f.service.apiKeyProbeID, displayedSecond)
+    XCTAssertEqual(f.service.activeSelection, firstSelection)
+
+    try f.transport.complete(0)
+    try f.transport.complete(1)
+    await waitUntil { f.connection.canReplaceOwner }
+    let committed = try XCTUnwrap(f.service.activeSelection)
+    XCTAssertEqual(committed.configGeneration, firstSelection.configGeneration + 1)
+    XCTAssertFalse(f.service.cancelAPIKeyProbe(id: displayedSecond))
+    XCTAssertEqual(f.service.phase, .connected(committed))
+    XCTAssertEqual(f.selector.commits, 1)
+    XCTAssertTrue(entry.isEmpty)
+
+    f.service.reconnect(key: "fixture-explicitly-cancelled")
+    await waitUntil { f.transport.count == 3 }
+    guard f.transport.count == 3 else { return }
+    let displayedThird = try XCTUnwrap(f.service.apiKeyProbeID)
+    XCTAssertTrue(f.service.cancelAPIKeyProbe(id: displayedThird))
+    XCTAssertEqual(f.service.phase, .failed(.cancelled))
+    try f.transport.complete(2)
+    await waitUntil { f.connection.canReplaceOwner }
+    XCTAssertEqual(f.service.activeSelection, committed)
+    XCTAssertEqual(f.selector.commits, 1)
+    XCTAssertEqual(try f.slots.validatedSlotIDs(), [committed.slotID])
+  }
+
+  func testDisplayedAPIKeyCancellationCannotReplaceReportedFailure() async throws {
+    let f = try fixture()
+    defer { try? removeFixture(f.root) }
+    let previousSelection = try XCTUnwrap(f.service.activeSelection)
+    f.service.reconnect(key: "fixture-rejected-candidate")
+    await waitUntil { f.transport.count == 1 }
+    guard f.transport.count == 1 else { return }
+    let displayed = try XCTUnwrap(f.service.apiKeyProbeID)
+    var ignoredCancellation: Bool?
+    let onFailure = f.connection.$phase.dropFirst().sink { phase in
+      if phase == .failed(.authentication) {
+        ignoredCancellation = !f.service.cancelAPIKeyProbe(id: displayed)
+      }
+    }
+    defer { onFailure.cancel() }
+
+    f.transport.fail(0)
+    await waitUntil { f.connection.canReplaceOwner }
+    XCTAssertEqual(ignoredCancellation, true)
+    XCTAssertEqual(f.service.phase, .failed(.authentication))
+    XCTAssertEqual(f.service.activeSelection, previousSelection)
+  }
+
+  func testCurrentCancellationDoesNotHideAReplacementStartedByItsObserver() async throws {
+    let f = try fixture()
+    defer { try? removeFixture(f.root) }
+    let lastGood = try XCTUnwrap(f.service.activeSelection)
+    f.service.reconnect(key: "fixture-candidate-to-cancel")
+    await waitUntil { f.transport.count == 1 }
+    guard f.transport.count == 1 else { return }
+    let displayed = try XCTUnwrap(f.service.apiKeyProbeID)
+    var restarted = false
+    let observer = f.connection.$phase.dropFirst().sink { phase in
+      guard !restarted, phase == .connected(lastGood) || phase == .failed(.cancelled) else { return }
+      restarted = true
+      f.service.reconnect(key: "fixture-candidate-started-during-cancel")
+    }
+    defer { observer.cancel() }
+
+    XCTAssertTrue(f.service.cancelAPIKeyProbe(id: displayed))
+    XCTAssertTrue(restarted)
+    XCTAssertEqual(f.service.phase, .probing)
+    XCTAssertNotNil(f.service.apiKeyProbeID)
+    XCTAssertNotEqual(f.service.apiKeyProbeID, displayed)
+    XCTAssertEqual(f.service.activeSelection, lastGood)
+
+    try f.transport.complete(0)
+    await waitUntil { f.transport.count == 2 }
+    guard f.transport.count == 2 else { return }
+    try f.transport.complete(1)
+    await waitUntil { f.connection.canReplaceOwner }
+    XCTAssertEqual(f.selector.commits, 1)
+    XCTAssertEqual(f.service.activeSelection?.configGeneration, lastGood.configGeneration + 1)
+  }
+
   func testNewestCandidateWinsWithReverseCompletionsAndNoStaleDisplay() async throws {
     let f = try fixture()
     f.service.reconnect(key: "fixture-older-candidate")

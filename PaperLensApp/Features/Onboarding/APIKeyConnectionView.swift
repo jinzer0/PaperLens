@@ -30,9 +30,9 @@ public struct APIKeyConnectionView: View {
         Button(buttonTitle) { submit() }
           .disabled(key.isEmpty || provider.isTesting || provider.candidatesBlocked)
           .keyboardShortcut(.defaultAction)
-        if connection.phase == .probing {
+        if let probeID = provider.apiKeyProbeID {
           ProgressView().controlSize(.small)
-          Button("취소") { connection.cancel() }
+          Button("취소") { provider.cancelAPIKeyProbe(id: probeID) }
         }
       }
       status

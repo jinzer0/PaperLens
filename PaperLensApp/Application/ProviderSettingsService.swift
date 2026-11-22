@@ -859,6 +859,7 @@ public final class ProviderSettingsService: ObservableObject {
   }
   public var model: String { connection.configuration.model }
   public var isTesting: Bool { connection.hasUncommittedProbe }
+  var apiKeyProbeID: UUID? { connection.cancellableProbeID }
   public var availabilityMessage: String {
     guard let selected = savedConfiguration else { return "저장된 Provider 상태를 확인할 수 없습니다." }
     if isAvailable(selected) { return "현재 \(providerLabel(selected.kind)) 연결을 사용할 수 있습니다." }
@@ -886,6 +887,10 @@ public final class ProviderSettingsService: ObservableObject {
     }
   }
   public func cancel() { connection.cancel() }
+  @discardableResult func cancelAPIKeyProbe(id: UUID) -> Bool {
+    connection.cancelUncommittedProbe(id: id)
+  }
+
   func cancelUncommittedConnections() {
     connection.cancelUncommittedProbe()
     codex?.cancelUncommittedLogin()
