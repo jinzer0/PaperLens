@@ -205,6 +205,59 @@ final class PDFiumExtractionProducerTests: XCTestCase {
     }
   }
 
+  func testWireBatchCanExpandIntoLargerCanonicalRows() throws {
+    let id = identity()
+    let bounds = try PDFiumRawQuad(topLeftX: 0, topLeftY: 100, topRightX: 100, topRightY: 100,
+      bottomRightX: 100, bottomRightY: 0, bottomLeftX: 0, bottomLeftY: 0)
+    let rawPage = try PDFiumRawPage(pageIndex: 0, boundingBox: bounds, mediaBox: bounds,
+      cropBox: bounds, rotationQuarterTurns: 0)
+    let page = try PDFPageGeometry(pageIndex: 0, cropOrigin: .init(x: 0, y: 0),
+      width: 100, height: 100, rotation: 0)
+    let transform = try PDFGeometryAffine(a: 1, b: 0, c: 0, d: 1, tx: 0, ty: 0)
+    let mapping = try PDFiumPageMapping(page: page, rawToCanonical: transform,
+      canonicalToReader: transform)
+    let validator = try PDFiumGeometryValidator(binding: PDFiumGeometryBinding(
+      precision: PDFGeometryPrecision(maximumErrorPDFPoints: 0), mapPage: { _ in mapping }))
+    let left = 10.123456789012345, right = 10.234567890123456
+    let top = 20.123456789012345, bottom = 19.234567890123456
+    let quad = try PDFiumRawQuad(topLeftX: left, topLeftY: top, topRightX: right, topRightY: top,
+      bottomRightX: right, bottomRightY: bottom, bottomLeftX: left, bottomLeftY: bottom)
+    let text = String(repeating: "A", count: 52)
+    let count = text.utf8.count
+    let byteLimit = try limits().maximumBatchBytes
+    let wireKey = try key(id)
+    var wireBytes = try XCTUnwrap(PDFiumBatch.maximumEnvelopePayloadBytes(key: wireKey))
+      + rawPage.payloadBytes
+    var sentences: [ExtractionSentenceInput] = []
+    for index in 0..<8 {
+      let start = index * count
+      let glyphs = try (start..<(start + count)).map { position in
+        try PDFiumGlyph(nativeCharacterIndex: position, unicodeScalar: 65,
+          utf16Start: position, utf16Length: 1, generated: false,
+          matrixA: 1, matrixB: 0, matrixC: 0, matrixD: 1, matrixE: 0, matrixF: 0, rawQuad: quad)
+      }
+      let wire = try PDFiumSentence(paperID: id.paperID, revision: id.revision, pdfSHA256: id.pdfSHA256,
+        pageIndex: 0, sentenceID: index, text: text, nativeStartCharacter: start,
+        nativeCharacterCount: count, sourceUTF16Start: start, sourceUTF16Length: count, glyphs: glyphs)
+      wireBytes += try XCTUnwrap(wire.payloadBytes)
+      let sentenceID = ExtractionSentenceIdentity(paperID: id.paperID, pdfSHA256: id.pdfSHA256,
+        revision: id.revision, page: 0, sentenceID: index)
+      let geometry = PDFiumGeometryInput(identity: sentenceID, sourceText: text,
+        nativeStartCharacter: start, nativeCharacterCount: count, rawPage: rawPage, glyphs: glyphs)
+      sentences.append(.init(identity: sentenceID, text: text, geometry: geometry))
+    }
+    XCTAssertLessThanOrEqual(wireBytes, byteLimit)
+    let batch = ExtractionBatch(identity: id, sequence: 0, sentences: sentences,
+      complete: true, totalSentences: sentences.count)
+    let rows = try ExtractionRevisionService.validate([batch], identity: id,
+      validator: validator, scope: ExtractionConsumptionScope(checkBudget: {}))
+    XCTAssertEqual(rows.map(\.sentenceID), Array(sentences.indices))
+    XCTAssertTrue(rows.allSatisfy { $0.originalOwner?.anchor.fullSourceQuote == text })
+    let rowBytes = rows.map { $0.geometry.count + $0.text.utf8.count }
+    XCTAssertTrue(rowBytes.allSatisfy { $0 <= byteLimit })
+    XCTAssertGreaterThan(rowBytes.reduce(0, +), byteLimit)
+  }
+
   func testAcquisitionRejectsCanonicallyEquivalentButByteDifferentReferenceWithoutStartingHelper() async throws {
     let requested = identity(reference: "é")
     let returned = identity(reference: "é", copying: requested)

@@ -869,6 +869,7 @@ public struct ExtractionRevisionService: Sendable {
     scope: ExtractionConsumptionScope) throws -> [ValidatedExtractionSentence] {
     try scope.checkBudget()
     let authority = try ProviderRequest()
+    let maximumCanonicalRowBytes = authority.limit("batchBytes")
     guard !batches.isEmpty, batches.count <= authority.limit("sentences") else {
       throw ExtractionError.invalidBatch
     }
@@ -881,24 +882,24 @@ public struct ExtractionRevisionService: Sendable {
         batch.complete == (index == batches.count - 1), !batch.sentences.isEmpty,
         batch.sentences.count <= authority.limit("batchSentences"),
         batch.complete || batch.totalSentences == nil else { throw ExtractionError.invalidBatch }
-      var batchBytes = 0
       for sentence in batch.sentences {
         try scope.checkBudget()
         let key = sentence.identity
+        let sentenceBytes = sentence.text.utf8.count
         guard key.paperID == identity.paperID, key.pdfSHA256 == identity.pdfSHA256,
           key.revision == identity.revision, key.page >= 0, key.page < authority.limit("pages"),
           key.sentenceID >= 0, key.sentenceID < authority.limit("sentences"),
           key.sentenceID == output.count, output.last.map({ $0.page <= key.page }) ?? true,
-          !sentence.text.isEmpty,
-          sentence.text.utf8.count <= authority.limit("sentenceBytes") else {
+          sentenceBytes > 0, sentenceBytes <= authority.limit("sentenceBytes") else {
           throw ExtractionError.invalidBatch
         }
         let geometry = try validator.validateAndEncode(sentence.geometry, identity: key,
           expectedText: sentence.text)
         try scope.checkBudget()
+        // The producer bounds wire batches. Canonical geometry is stored one sentence per row.
         guard !geometry.canonicalBytes.isEmpty, geometry.quadCount > 0,
           geometry.quadCount <= authority.limit("quadsPerSentence"),
-          geometry.canonicalBytes.count <= authority.limit("batchBytes") else {
+          geometry.canonicalBytes.count <= maximumCanonicalRowBytes - sentenceBytes else {
           throw ExtractionError.invalidBatch
         }
         if let owner = geometry.originalOwner {
@@ -906,10 +907,9 @@ public struct ExtractionRevisionService: Sendable {
           _ = try owner.archive(for: key, text: sentence.text, candidate: geometry.canonicalBytes)
           try scope.checkBudget()
         }
-        batchBytes += sentence.text.utf8.count + geometry.canonicalBytes.count
-        textBytes += sentence.text.utf8.count
+        textBytes += sentenceBytes
         quads += geometry.quadCount
-        guard batchBytes <= authority.limit("batchBytes"), textBytes <= authority.limit("textBytes"),
+        guard textBytes <= authority.limit("textBytes"),
           quads <= authority.limit("quads"), output.count < authority.limit("sentences") else {
           throw ExtractionError.invalidBatch
         }
