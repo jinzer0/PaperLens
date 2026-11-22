@@ -97,13 +97,20 @@ extension ProductDatabase {
   private func guardExtractionAttempt(_ db: Database, _ identity: ExtractionIdentity,
     requireCurrentPaper: Bool = true) throws {
     if requireCurrentPaper { try guardExtractionPaper(db, identity) }
-    let count = try Int.fetchOne(db, sql: """
+    guard try matchesExtractionAttempt(db, identity, state: "running") else {
+      throw ExtractionError.staleAttempt
+    }
+  }
+
+  private func matchesExtractionAttempt(_ db: Database, _ identity: ExtractionIdentity,
+    state: String, failure: ExtractionError? = nil) throws -> Bool {
+    try Int.fetchOne(db, sql: """
       SELECT COUNT(*) FROM extractionAttempt WHERE paperID = ? AND generation = ?
         AND pdfSHA256 = ? AND pdfReference = ? AND revision = ? AND job = ? AND attempt = ?
         AND fence = ? AND correlation = ? AND input = ? AND epoch = ?
-        AND configSlot IS ? AND configGeneration = ? AND configKind IS ? AND state = 'running'
-      """, arguments: attemptArguments(identity))
-    guard count == 1 else { throw ExtractionError.staleAttempt }
+        AND configSlot IS ? AND configGeneration = ? AND configKind IS ?
+        AND state = ? AND failure IS ?
+      """, arguments: attemptArguments(identity) + [state, failure?.rawValue]) == 1
   }
 
   private func attemptArguments(_ i: ExtractionIdentity) -> StatementArguments {
@@ -217,6 +224,7 @@ extension ProductDatabase {
         VALUES (?, ?, ?, ?, ?)
         """, arguments: [identity.revision.uuidString, identity.paperID.uuidString,
           identity.generation.uuidString, identity.pdfSHA256, identity.pdfReference])
+      guard db.changesCount == 1 else { throw ExtractionError.storageFailure }
       var ownerPrecision: PDFGeometryPrecision?
       for sentence in sentences {
         try checkBudget()
@@ -224,6 +232,7 @@ extension ProductDatabase {
           INSERT INTO extractionSentence(revision, page, sentenceID, text, geometry) VALUES (?, ?, ?, ?, ?)
           """, arguments: [identity.revision.uuidString, sentence.page, sentence.sentenceID,
             sentence.text, sentence.geometry])
+        guard db.changesCount == 1 else { throw ExtractionError.storageFailure }
         if let owner = sentence.originalOwner {
           if let ownerPrecision, ownerPrecision != owner.precision { throw ExtractionError.invalidBatch }
           ownerPrecision = owner.precision
@@ -239,16 +248,10 @@ extension ProductDatabase {
             VALUES (?, ?, ?, ?, ?)
             """, arguments: [identity.revision.uuidString, sentence.sentenceID, sentence.page,
               archive.maximumErrorPDFPoints, original.bytes])
+          guard db.changesCount == 1 else { throw ExtractionError.storageFailure }
         }
       }
       try checkBudget()
-      // Publish only when the new revision has a matching FTS entry for every sentence.
-      let indexedCount = try Int.fetchOne(db, sql: """
-        SELECT COUNT(*) FROM extractionSentence s
-        JOIN extractionFTS f ON f.rowid = s.id AND f.text = s.text
-        WHERE s.revision = ?
-        """, arguments: [identity.revision.uuidString])
-      guard indexedCount == sentences.count else { throw ExtractionError.storageFailure }
       try guardExtractionAttempt(db, identity)
       try db.execute(sql: """
         INSERT INTO extractionVisible(paperID, revision) VALUES (?, ?)
@@ -261,6 +264,26 @@ extension ProductDatabase {
       }
       try db.execute(sql: "UPDATE extractionAttempt SET state = 'succeeded', failure = NULL WHERE paperID = ?",
         arguments: [identity.paperID.uuidString])
+      try guardExtractionPaper(db, identity)
+      guard try matchesExtractionAttempt(db, identity, state: "succeeded"),
+        try Int.fetchOne(db, sql: """
+          SELECT COUNT(*) FROM extractionVisible v
+          JOIN extractionRevision r ON r.id = v.revision AND r.paperID = v.paperID
+          WHERE v.paperID = ? AND r.id = ? AND r.generation = ?
+            AND r.pdfSHA256 = ? AND r.pdfReference = ?
+          """, arguments: [identity.paperID.uuidString, identity.revision.uuidString,
+            identity.generation.uuidString, identity.pdfSHA256, identity.pdfReference]) == 1
+      else { throw ExtractionError.storageFailure }
+      // Check the final rows, including changes made by publication triggers.
+      let indexedCount = try Int.fetchOne(db, sql: """
+        SELECT COUNT(*) FROM extractionSentence s
+        JOIN extractionFTS f ON f.rowid = s.id AND f.text = s.text
+        LEFT JOIN extractionGeometryOwner o ON o.revision = s.revision
+          AND o.sentenceID = s.sentenceID AND o.page = s.page
+        WHERE s.revision = ?
+        HAVING COUNT(o.sentenceID) = ?
+        """, arguments: [identity.revision.uuidString, ownedCount])
+      guard indexedCount == sentences.count else { throw ExtractionError.storageFailure }
       try checkBudget()
     }
   }
@@ -275,6 +298,8 @@ extension ProductDatabase {
       catch ExtractionError.staleAttempt { return }
       try db.execute(sql: "UPDATE extractionAttempt SET state = 'failed', failure = ? WHERE paperID = ?",
         arguments: [failure.rawValue, identity.paperID.uuidString])
+      guard try matchesExtractionAttempt(db, identity, state: "failed", failure: failure)
+      else { throw ExtractionError.storageFailure }
     }
   }
 

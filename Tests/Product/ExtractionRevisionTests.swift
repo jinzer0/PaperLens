@@ -70,6 +70,33 @@ final class ExtractionRevisionTests: XCTestCase {
     return (batch, validator)
   }
 
+  private func replacementWithOriginalGeometry(_ identity: ExtractionIdentity) throws
+    -> ValidatedExtractionSentence {
+    let key = ExtractionSentenceIdentity(paperID: identity.paperID, pdfSHA256: identity.pdfSHA256,
+      revision: identity.revision, page: 0, sentenceID: 0)
+    let bounds = try PDFiumRawQuad(topLeftX: 0, topLeftY: 100, topRightX: 100, topRightY: 100,
+      bottomRightX: 100, bottomRightY: 0, bottomLeftX: 0, bottomLeftY: 0)
+    let rawPage = try PDFiumRawPage(pageIndex: 0, boundingBox: bounds, mediaBox: bounds,
+      cropBox: bounds, rotationQuarterTurns: 0)
+    let page = try PDFPageGeometry(pageIndex: 0, cropOrigin: .init(x: 0, y: 0),
+      width: 100, height: 100, rotation: 0)
+    let transform = try PDFGeometryAffine(a: 1, b: 0, c: 0, d: 1, tx: 0, ty: 0)
+    let mapping = try PDFiumPageMapping(page: page, rawToCanonical: transform,
+      canonicalToReader: transform)
+    let quad = try PDFiumRawQuad(topLeftX: 10, topLeftY: 90, topRightX: 20, topRightY: 90,
+      bottomRightX: 20, bottomRightY: 80, bottomLeftX: 10, bottomLeftY: 80)
+    let glyph = try PDFiumGlyph(nativeCharacterIndex: 0, unicodeScalar: 82,
+      utf16Start: 0, utf16Length: 1, generated: false,
+      matrixA: 1, matrixB: 0, matrixC: 0, matrixD: 1, matrixE: 0, matrixF: 0, rawQuad: quad)
+    let input = PDFiumGeometryInput(identity: key, sourceText: "R", nativeStartCharacter: 0,
+      nativeCharacterCount: 1, rawPage: rawPage, glyphs: [glyph])
+    let validator = try PDFiumGeometryValidator(binding: PDFiumGeometryBinding(
+      precision: PDFGeometryPrecision(maximumErrorPDFPoints: 0), mapPage: { _ in mapping }))
+    let encoded = try validator.validateAndEncode(input, identity: key, expectedText: "R")
+    return ValidatedExtractionSentence(page: 0, sentenceID: 0, text: "R",
+      geometry: encoded.canonicalBytes, originalOwner: try XCTUnwrap(encoded.originalOwner))
+  }
+
   func testProviderKindDriftRejectsExtractionBeforePublication() throws {
     let (db, paper, generation, root) = try fixture()
     defer { try? FileManager.default.removeItem(at: root) }
@@ -233,6 +260,94 @@ final class ExtractionRevisionTests: XCTestCase {
     let hits = try reopened.searchExtraction(paperID: paper, matching: "retained")
     XCTAssertEqual(hits.map(\.revision), [original.revision])
     XCTAssertEqual(hits.first?.canonicalGeometry, Data([1, 2, 3]))
+  }
+
+  func testPublicationRollsBackWhenAnyCommittedComponentIsMissing() throws {
+    let (db, paper, generation, root) = try fixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let original = try identity(db, paper, generation)
+    try db.reserveExtraction(original)
+    try publishFixtureExtraction(db, original, sentences: rows("retained"))
+
+    let incompleteWrites = [
+      """
+      CREATE TRIGGER incompletePublication BEFORE UPDATE ON extractionVisible
+      BEGIN SELECT RAISE(IGNORE); END;
+      """,
+      """
+      CREATE TRIGGER incompletePublication BEFORE UPDATE OF state ON extractionAttempt
+      WHEN NEW.state = 'succeeded' BEGIN SELECT RAISE(IGNORE); END;
+      """,
+      """
+      CREATE TRIGGER incompletePublication AFTER UPDATE OF state ON extractionAttempt
+      WHEN NEW.state = 'succeeded' BEGIN
+        DELETE FROM extractionFTS WHERE rowid IN (
+          SELECT id FROM extractionSentence WHERE revision = NEW.revision
+        );
+      END;
+      """,
+      """
+      CREATE TRIGGER incompletePublication BEFORE INSERT ON extractionGeometryOwner
+      BEGIN SELECT RAISE(IGNORE); END;
+      """,
+    ]
+    for trigger in incompleteWrites {
+      let pending = try identity(db, paper, generation)
+      try db.reserveExtraction(pending)
+      let replacement = try replacementWithOriginalGeometry(pending)
+      try db.adapterWrite { try $0.execute(sql: trigger) }
+      XCTAssertThrowsError(try publishFixtureExtraction(db, pending, sentences: [replacement]), trigger) {
+        XCTAssertEqual($0 as? ExtractionError, .storageFailure)
+      }
+      let status = try db.extractionStatus(paperID: paper)
+      XCTAssertEqual(status.state, "running")
+      XCTAssertEqual(status.usableRevision, original.revision)
+      XCTAssertTrue(try db.searchExtraction(paperID: paper, matching: "R",
+        revision: pending.revision).isEmpty)
+      XCTAssertEqual(try db.adapterRead { try Int.fetchOne($0,
+        sql: "SELECT COUNT(*) FROM extractionRevision WHERE id = ?",
+        arguments: [pending.revision.uuidString]) }, 0)
+      try db.adapterWrite { try $0.execute(sql: "DROP TRIGGER incompletePublication") }
+      try db.failExtraction(pending, failure: .storageFailure)
+    }
+    let reopened = try ProductDatabase.open(at: root)
+    XCTAssertEqual(try reopened.searchExtraction(paperID: paper, matching: "retained").map(\.revision),
+      [original.revision])
+    let retry = try identity(reopened, paper, generation)
+    let replacement = try replacementWithOriginalGeometry(retry)
+    try reopened.reserveExtraction(retry)
+    try publishFixtureExtraction(reopened, retry, sentences: [replacement])
+    XCTAssertEqual(try reopened.extractionStatus(paperID: paper).state, "succeeded")
+    XCTAssertEqual(try reopened.searchExtraction(paperID: paper, matching: "R").map(\.revision),
+      [retry.revision])
+    let originalOwner = try XCTUnwrap(replacement.originalOwner)
+    XCTAssertNotNil(try reopened.originalExtractionGeometryOwners(paperID: paper,
+      generation: generation, pdfSHA256: retry.pdfSHA256, revision: retry.revision,
+      sentences: [originalOwner.anchor.identity]))
+  }
+
+  func testFailedAttemptDoesNotAcceptARewrittenFailureReason() throws {
+    let (db, paper, generation, root) = try fixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let pending = try identity(db, paper, generation)
+    try db.reserveExtraction(pending)
+    try db.adapterWrite { sql in
+      try sql.execute(sql: """
+        CREATE TRIGGER rewriteExtractionFailure AFTER UPDATE OF failure ON extractionAttempt
+        WHEN NEW.failure = 'invalidBatch' BEGIN
+          UPDATE extractionAttempt SET failure = 'interrupted' WHERE paperID = NEW.paperID;
+        END;
+        """)
+    }
+    XCTAssertThrowsError(try db.failExtraction(pending, failure: .invalidBatch)) {
+      XCTAssertEqual($0 as? ExtractionError, .storageFailure)
+    }
+    let status = try db.extractionStatus(paperID: paper)
+    XCTAssertEqual(status.state, "running")
+    XCTAssertNil(status.failure)
+    try db.adapterWrite { try $0.execute(sql: "DROP TRIGGER rewriteExtractionFailure") }
+    try db.failExtraction(pending, failure: .invalidBatch)
+    XCTAssertEqual(try db.extractionStatus(paperID: paper).failure, "invalidBatch")
   }
 
   func testEveryPersistedAttemptFenceIsRevalidatedBeforeWriting() throws {
