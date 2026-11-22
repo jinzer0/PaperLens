@@ -44,7 +44,7 @@ public struct URLImportView<LibraryContent: View>: View {
 
   private struct ConfirmationPresentation {
     let id: UUID
-    let opener: FocusReturn
+    let opener: FocusReturn?
     let mount: UUID?
     var interaction: UUID
     var stateAfterCancel: URLImportService.State = .idle
@@ -106,10 +106,16 @@ public struct URLImportView<LibraryContent: View>: View {
       && retryPreparation == nil && !invalidInput && !retryUnavailable
   }
 
+  private var mountedConfirmationID: UUID? {
+    guard let mount = drag.mount, let presentation = confirmationPresentation,
+      presentation.mount == mount else { return nil }
+    return presentation.id
+  }
+
   public var body: some View {
     let mount = drag.mount
     let interaction = drag.interaction
-    let confirmationID = service.confirmation?.id
+    let confirmationID = mountedConfirmationID
     let inputPresentationID = inputPresentation?.id
     let confirmationPresentationID = confirmationPresentation?.id
     VStack {
@@ -222,7 +228,7 @@ public struct URLImportView<LibraryContent: View>: View {
           inputFocused = true
         }
     }
-    .sheet(item: Binding(get: { service.confirmation }, set: { value in
+    .sheet(item: Binding(get: { service.confirmation(for: mountedConfirmationID) }, set: { value in
       guard value == nil, drag.isCurrent(mount, interaction),
         let confirmationID, service.confirmation?.id == confirmationID else { return }
       cancelConfirmation(confirmationID)
@@ -253,11 +259,12 @@ public struct URLImportView<LibraryContent: View>: View {
         Text("다운로드 후 Library에 머무릅니다.")
         HStack {
           Button("취소") {
-            guard drag.isCurrent(mount, interaction), service.confirmation?.id == intent.id else { return }
+            guard drag.isCurrent(mount, interaction), mountedConfirmationID == intent.id else { return }
             cancelConfirmation(intent.id)
           }.keyboardShortcut(.cancelAction)
           Button("계속") {
-            guard drag.isCurrent(mount, interaction), service.confirmation?.id == intent.id else { return }
+            guard drag.isCurrent(mount, interaction), mountedConfirmationID == intent.id,
+              service.confirmation(for: intent.id) != nil else { return }
             drag.interrupt()
             service.continueImport(confirmationID: intent.id)
           }
@@ -283,10 +290,12 @@ public struct URLImportView<LibraryContent: View>: View {
       Task { await reloadFolders(mount: loadMount, interaction: loadInteraction) }
     }
     .onDisappear {
+      let ownedConfirmationID = mountedConfirmationID
       inputPresentation = nil
       confirmationPresentation = nil
       retryPreparation = nil
       drag.disappear()
+      if let ownedConfirmationID { service.cancelConfirmation(confirmationID: ownedConfirmationID) }
     }
     .onChange(of: service.confirmation?.id) { _ in serviceInterrupted() }
     .onChange(of: service.state) { _ in serviceInterrupted() }
@@ -343,7 +352,7 @@ public struct URLImportView<LibraryContent: View>: View {
     } else {
       confirmationPresentation?.invalidated = true
     }
-    service.cancelConfirmation()
+    service.cancelConfirmation(confirmationID: id)
   }
 
   private func serviceInterrupted() {
@@ -373,6 +382,7 @@ public struct URLImportView<LibraryContent: View>: View {
     switch presentation.opener {
     case .toolbar(let opener): openerFocused = opener
     case .paper(let restore): restore()
+    case nil: break
     }
   }
 
@@ -434,7 +444,7 @@ public struct URLImportView<LibraryContent: View>: View {
       guard destinationFolderID == nil || folder != nil else { throw URLImportError.rejected }
       try service.prepare(text, destination: folder?.name ?? "미분류",
         possibleDuplicate: possibleDuplicate(text), destinationFolderID: destinationFolderID)
-      if let opener, let confirmation = service.confirmation {
+      if let confirmation = service.confirmation {
         confirmationPresentation = ConfirmationPresentation(id: confirmation.id,
           opener: opener, mount: drag.mount, interaction: drag.interaction)
       }

@@ -365,6 +365,44 @@ final class URLImportTests: XCTestCase {
   }
 
   @MainActor
+  func testPendingURLConfirmationCanOnlyBePresentedOrCancelledByItsExactID() throws {
+    let recorder = GrantRecorder()
+    let service = URLImportService(authority: try ProviderRequest(), grantWriter: { _ in
+      recorder.record()
+      throw URLImportError.writerUnavailable
+    })
+    let otherWindow = UUID()
+    let folder = UUID()
+    try service.prepare("https://arxiv.org/abs/2401.00123v2", destination: "First folder",
+      possibleDuplicate: true, destinationFolderID: folder)
+    let first = try XCTUnwrap(service.confirmation)
+    XCTAssertNil(service.confirmation(for: nil))
+    XCTAssertNil(service.confirmation(for: otherWindow))
+    XCTAssertEqual(service.confirmation(for: first.id)?.inputKind, .arxivAbstract)
+    XCTAssertThrowsError(try service.prepare("https://fixture.invalid/other.pdf",
+      destination: "Another folder", possibleDuplicate: false)) {
+      XCTAssertEqual($0 as? URLImportError, .rejected)
+    }
+    service.cancelConfirmation(confirmationID: otherWindow)
+    service.continueImport(confirmationID: otherWindow)
+    XCTAssertEqual(service.state, .confirming)
+    XCTAssertEqual(service.confirmation(for: first.id)?.destinationFolderID, folder)
+
+    service.cancelConfirmation(confirmationID: first.id)
+    XCTAssertEqual(service.state, .idle)
+    XCTAssertNil(service.confirmation(for: first.id))
+    try service.prepare("https://fixture.invalid/other.pdf", destination: "Unfiled", possibleDuplicate: true)
+    let second = try XCTUnwrap(service.confirmation)
+    service.cancelConfirmation(confirmationID: first.id)
+    service.continueImport(confirmationID: first.id)
+    XCTAssertEqual(service.confirmation(for: second.id)?.inputKind, .httpsPDF)
+    XCTAssertEqual(service.state, .confirming)
+    service.cancelConfirmation(confirmationID: second.id)
+    XCTAssertEqual(service.state, .idle)
+    XCTAssertEqual(recorder.count, 0)
+  }
+
+  @MainActor
   func testContinueConsumesOnceAndRetryRequiresFreshConfirmation() async throws {
     let recorder = GrantRecorder()
     let service = URLImportService(authority: try ProviderRequest(), grantWriter: { _ in

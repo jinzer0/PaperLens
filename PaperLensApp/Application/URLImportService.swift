@@ -176,6 +176,11 @@ public final class URLImportService: ObservableObject {
   /// This method validates only; it performs no Job, network, file, or DB effect.
   public func supports(_ input: String) -> Bool { (try? adapter.route(input)) != nil }
 
+  func confirmation(for id: UUID?) -> URLImportConfirmation? {
+    guard let id, confirmation?.id == id else { return nil }
+    return confirmation
+  }
+
   public func prepare(_ input: String, destination: String, possibleDuplicate: Bool,
     destinationFolderID: UUID? = nil) throws {
     try prepare(input, destination: destination, possibleDuplicate: possibleDuplicate,
@@ -196,7 +201,8 @@ public final class URLImportService: ObservableObject {
   private func prepare(_ input: String, destination: String, possibleDuplicate: Bool,
     destinationFolderID: UUID?, purpose: URLImportConfirmation.Purpose,
     restoringFailure: URLImportError? = nil) throws {
-    guard !starting, operation == nil else { throw URLImportError.rejected }
+    guard !starting, operation == nil, confirmation == nil, state != .confirming, state != .downloading
+    else { throw URLImportError.rejected }
     let recognized: (kind: URLImportInputKind, request: ValidatedRequestURL)
     do { recognized = try adapter.recognize(input) } catch { throw URLImportError.rejected }
     lastInput = input
@@ -216,8 +222,13 @@ public final class URLImportService: ObservableObject {
   }
 
   public func cancelConfirmation() {
-    guard !starting, state == .confirming else { return }
-    confirmation?.admission.cancel()
+    guard let id = confirmation?.id else { return }
+    cancelConfirmation(confirmationID: id)
+  }
+
+  func cancelConfirmation(confirmationID: UUID) {
+    guard !starting, state == .confirming, let intent = confirmation(for: confirmationID) else { return }
+    intent.admission.cancel()
     confirmation = nil
     let failure = failureBeforeRetry
     failureBeforeRetry = nil
