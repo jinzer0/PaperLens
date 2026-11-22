@@ -57,6 +57,8 @@ extension ProductDatabase {
     try adapterWrite { db in
       try db.execute(sql: "INSERT INTO libraryFolder(id, name) VALUES (?, ?)",
         arguments: [folder.id.uuidString, folder.name])
+      guard db.changesCount == 1 else { throw ProductDatabaseError.invalidRecord }
+      try Self.verifyStoredFolderName(folder.name, id: folder.id, in: db)
     }
     return folder
   }
@@ -67,6 +69,7 @@ extension ProductDatabase {
       try db.execute(sql: "UPDATE libraryFolder SET name = ? WHERE id = ?",
         arguments: [name, id.uuidString])
       guard db.changesCount == 1 else { throw FolderImportError.missingFolder }
+      try Self.verifyStoredFolderName(name, id: id, in: db)
     }
   }
 
@@ -75,6 +78,12 @@ extension ProductDatabase {
     try adapterWrite { db in
       try db.execute(sql: "DELETE FROM libraryFolder WHERE id = ?", arguments: [id.uuidString])
       guard db.changesCount == 1 else { throw FolderImportError.missingFolder }
+      guard try Int.fetchOne(db, sql: """
+        SELECT EXISTS(SELECT 1 FROM libraryFolder WHERE id = ?)
+          OR EXISTS(SELECT 1 FROM paperFolder WHERE folderID = ?)
+        """, arguments: [id.uuidString, id.uuidString]) == 0 else {
+        throw ProductDatabaseError.invalidRecord
+      }
     }
   }
 
@@ -102,6 +111,10 @@ extension ProductDatabase {
         generation: captured.generation, in: db)
       guard current == captured else { throw FolderImportError.stalePlacement }
       try Self.assignImportedPaper(captured.paperID, folderID: folderID, in: db)
+      let stored = try Self.capturePaperPlacement(paperID: captured.paperID,
+        generation: captured.generation, in: db)
+      guard stored.folder?.id == folderID, stored.sha256 == captured.sha256,
+        stored.pdfReference == captured.pdfReference else { throw ProductDatabaseError.invalidRecord }
     }
   }
 
@@ -173,6 +186,11 @@ extension ProductDatabase {
           return id
         }
     }
+  }
+
+  private static func verifyStoredFolderName(_ name: String, id: UUID, in db: Database) throws {
+    guard try Int.fetchOne(db, sql: "SELECT EXISTS(SELECT 1 FROM libraryFolder WHERE id = ? AND name = ?)",
+      arguments: [id.uuidString, name]) == 1 else { throw ProductDatabaseError.invalidRecord }
   }
 
   private static func validFolderName(_ name: String) throws -> String {

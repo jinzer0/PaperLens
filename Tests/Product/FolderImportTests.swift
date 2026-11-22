@@ -167,6 +167,48 @@ final class FolderImportTests: XCTestCase {
     XCTAssertTrue(FileManager.default.fileExists(atPath: pdf(db, paper).path))
   }
 
+  func testFolderCommandsRejectIgnoredInsertAndRewrittenRenameOrDelete() async throws {
+    let (root, source, db) = try fixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let lifecycle = try await LocalLibraryLifecycle.open(database: db)
+    let service = FolderImportService(database: db, lifecycle: lifecycle)
+    let folder = try await service.createFolder(name: "Stored")
+    let confirmation = try await service.prepare(source: source, destinationFolderID: folder.id)
+    let paper = try await service.continueImport(confirmation.id, destinationFolderID: folder.id)
+    let bytes = try Data(contentsOf: pdf(db, paper))
+    try db.adapterWrite { db in
+      try db.execute(sql: """
+        CREATE TRIGGER ignoreFolderCreation BEFORE INSERT ON libraryFolder
+        WHEN NEW.name = 'Ignored' BEGIN SELECT RAISE(IGNORE); END;
+        CREATE TRIGGER rewriteFolderRename AFTER UPDATE OF name ON libraryFolder
+        WHEN NEW.name = 'Requested' BEGIN
+          UPDATE libraryFolder SET name = 'Rewritten' WHERE id = NEW.id;
+        END;
+        CREATE TRIGGER restoreDeletedFolder AFTER DELETE ON libraryFolder BEGIN
+          INSERT INTO libraryFolder(id, name) VALUES (OLD.id, OLD.name);
+        END;
+        """)
+    }
+
+    do {
+      _ = try await service.createFolder(name: "Ignored")
+      XCTFail("Expected ignored creation to fail")
+    } catch { XCTAssertEqual(error as? ProductDatabaseError, .invalidRecord) }
+    do {
+      try await service.renameFolder(id: folder.id, name: "Requested")
+      XCTFail("Expected rewritten rename to fail")
+    } catch { XCTAssertEqual(error as? ProductDatabaseError, .invalidRecord) }
+    do {
+      try await service.deleteFolder(id: folder.id)
+      XCTFail("Expected restored folder to fail deletion")
+    } catch { XCTAssertEqual(error as? ProductDatabaseError, .invalidRecord) }
+
+    let reopened = try ProductDatabase.open(at: db.root)
+    XCTAssertEqual(try reopened.folders(), [folder])
+    XCTAssertEqual(try reopened.folderID(for: paper), folder.id)
+    XCTAssertEqual(try Data(contentsOf: pdf(db, paper)), bytes)
+  }
+
   func testDeletedDestinationDoesNotSilentlySubstituteDefault() async throws {
     let (root, source, db) = try fixture()
     defer { try? FileManager.default.removeItem(at: root) }
@@ -490,6 +532,43 @@ final class FolderImportTests: XCTestCase {
     XCTAssertEqual(try FileManager.default.attributesOfItem(atPath: pdf(db, paper).path)[.systemFileNumber] as? NSNumber, inode)
     XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: db.root.appendingPathComponent("papers").path), [paper.uuidString])
     XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: pdf(db, paper).deletingLastPathComponent().path), ["document.pdf"])
+  }
+
+  func testMovementRejectsRewrittenDestinationAndIgnoredUnfiling() async throws {
+    let (root, source, db) = try fixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let lifecycle = try await LocalLibraryLifecycle.open(database: db)
+    let service = FolderImportService(database: db, lifecycle: lifecycle)
+    let first = try await service.createFolder(name: "First")
+    let second = try await service.createFolder(name: "Second")
+    let third = try await service.createFolder(name: "Third")
+    let confirmation = try await service.prepare(source: source, destinationFolderID: first.id)
+    let paper = try await service.continueImport(confirmation.id, destinationFolderID: first.id)
+    let original = try capture(db, paper)
+    let bytes = try Data(contentsOf: pdf(db, paper))
+    try db.adapterWrite { db in
+      try db.execute(sql: """
+        CREATE TRIGGER rewriteMovedFolder AFTER UPDATE OF folderID ON paperFolder
+        WHEN NEW.folderID = (SELECT id FROM libraryFolder WHERE name = 'Second') BEGIN
+          UPDATE paperFolder SET folderID = (SELECT id FROM libraryFolder WHERE name = 'Third')
+          WHERE paperID = NEW.paperID;
+        END;
+        CREATE TRIGGER ignoreUnfile BEFORE DELETE ON paperFolder BEGIN SELECT RAISE(IGNORE); END;
+        """)
+    }
+
+    for destination in [second.id, nil] {
+      do {
+        try await service.movePaper(original, to: destination)
+        XCTFail("Expected incorrect placement to fail")
+      } catch { XCTAssertEqual(error as? ProductDatabaseError, .invalidRecord) }
+      XCTAssertEqual(try capture(db, paper), original)
+    }
+    let reopened = try ProductDatabase.open(at: db.root)
+    XCTAssertEqual(try capture(reopened, paper), original)
+    XCTAssertEqual(try Data(contentsOf: pdf(db, paper)), bytes)
+    try await service.movePaper(original, to: third.id)
+    XCTAssertEqual(try reopened.folderID(for: paper), third.id)
   }
 
   func testCapturedMovementRejectsReboundImmutableFactsDeletionAndMissingPaperWithoutWrite() async throws {
