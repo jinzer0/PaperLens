@@ -190,9 +190,11 @@ public final class OwnedChildRetirement: @unchecked Sendable {
     var readyFailure: (@MainActor @Sendable (Failure) -> Void)?
     var consumeTransport: (@MainActor @Sendable (Core) -> Void)?
     enum WorkerPhase {
-      case offer, hello, running, dispatching, product, retiring, brokerEOF, reaping
+      case offer, hello, running, dispatching, product, fenced
     }
     var workerPhase: WorkerPhase = .offer
+    enum WorkerRetirementPhase { case revoking, brokerEOF, reaping }
+    var workerRetirementPhase: WorkerRetirementPhase?
     var workerAtSpawn: NativeBrokerABI.ProcessSnapshot?
     let identityStorage = NativeBrokerABI.ObservationStorage()
     var offerStorage: NativeBrokerABI.ReceiveStorage?
@@ -206,7 +208,6 @@ public final class OwnedChildRetirement: @unchecked Sendable {
     var brokerOffered = false
     var localCLIWaitStatus: UInt64?
     var brokerWaitStatus: UInt64?
-    var revokeSent = false
     var dispatchAcknowledged = false
 
     init(command: Command, deadline: UInt64, hooks: Hooks, runningFixture: Bool = false) {
@@ -723,8 +724,12 @@ public final class OwnedChildRetirement: @unchecked Sendable {
       source.setEventHandler { [self] in pumpControl(fd) }
       source.activate()
     }
-    func queueControl(_ fd: Int32, _ op: String, _ fields: [String: Any] = [:]) throws {
-      guard controlPermitted, case .worker(let launch) = command else { return }
+    @discardableResult
+    func queueControl(_ fd: Int32, _ op: String, _ fields: [String: Any] = [:],
+      startup: Bool = false
+    ) throws -> Bool {
+      guard startup ? allowsIO : controlPermitted, case .worker(let launch) = command
+      else { return false }
       var message = fields
       message["v"] = 2
       message["runID"] = launch.namespace.runID
@@ -733,9 +738,10 @@ public final class OwnedChildRetirement: @unchecked Sendable {
       guard frame.count <= 1028, frame.count <= 2056 - (controlOutput[fd]?.count ?? 0) else {
         throw Failure.control
       }
-      guard controlPermitted else { return }
+      guard startup ? allowsIO : controlPermitted else { return false }
       controlOutput[fd, default: Data()].append(frame)
       flushControl(fd)
+      return true
     }
     func flushControl(_ fd: Int32) {
       guard controlPermitted else { return }
@@ -755,7 +761,7 @@ public final class OwnedChildRetirement: @unchecked Sendable {
       guard controlPermitted else { return }
       if controlOutput[fd]?.isEmpty != false {
         controlWrites.removeValue(forKey: fd)?.cancel()
-        if fd == workerFD, workerPhase == .dispatching, !lock.withLock({ revoked }) {
+        if fd == workerFD, workerPhase == .dispatching, allowsIO {
           workerPhase = .product
           handoffProduct()
         }
@@ -832,11 +838,11 @@ public final class OwnedChildRetirement: @unchecked Sendable {
           if count > 0 { controlInput[fd, default: Data()].append(contentsOf: bytes.prefix(count)) }
           guard controlPermitted else { return }
           if count == 0 {
-            guard fd == brokerFD, workerPhase == .brokerEOF, current.isEmpty,
+            guard fd == brokerFD, workerRetirementPhase == .brokerEOF, current.isEmpty,
               let workerFD, controlOutput[fd]?.isEmpty != false
             else { throw Failure.control }
             controlSources.removeValue(forKey: fd)?.cancel()
-            workerPhase = .reaping
+            workerRetirementPhase = .reaping
             guard let retirementID = lock.withLock({ self.retirementID }) else { throw Failure.control }
             try queueControl(workerFD, "reapBroker", ["retirementID": retirementID])
             return
@@ -874,33 +880,41 @@ public final class OwnedChildRetirement: @unchecked Sendable {
       default: throw Failure.control
       }
       guard Set(message.keys) == Set(["v", "runID", "op"] + extras) else { throw Failure.control }
+      if fd == brokerFD, workerRetirementPhase == .brokerEOF || workerRetirementPhase == .reaping {
+        throw Failure.control
+      }
       if extras.contains("retirementID") {
         guard let value = message["retirementID"] as? String,
           let expected = lock.withLock({ retirementID }), value == expected
         else { throw Failure.control }
       }
       switch op {
-      case "hello" where fd == brokerFD && workerPhase == .hello && allowsIO:
+      case "hello" where fd == brokerFD && workerPhase == .hello:
+        // Consume an in-flight reply from the authenticated broker even when
+        // startup was revoked. Only admitted commands expect another reply.
+        workerPhase = .fenced
         guard allowsIO else { return }
         var info = stat()
         let result = fstat(launch.namespace.descriptor, &info)
         guard allowsIO else { return }
         guard result == 0, let device = UInt64(exactly: info.st_dev) else { throw Failure.identity }
-        workerPhase = .running
-        try queueControl(
+        if try queueControl(
           fd, "run",
           [
             "startupDeadlineNs": startupDeadline,
             "cwdDevice": device, "cwdInode": info.st_ino,
-          ])
-      case "running" where fd == brokerFD && workerPhase == .running && allowsIO:
-        workerPhase = .dispatching
-        try queueControl(fd, "dispatch")
-      case "dispatching" where fd == brokerFD && workerPhase == .dispatching && allowsIO:
+          ], startup: true
+        ) {
+          workerPhase = .running
+        }
+      case "running" where fd == brokerFD && workerPhase == .running:
+        workerPhase = .fenced
+        if try queueControl(fd, "dispatch", startup: true) { workerPhase = .dispatching }
+      case "dispatching" where fd == brokerFD && workerPhase == .dispatching:
         guard !dispatchAcknowledged else { throw Failure.control }
         dispatchAcknowledged = true
         try forwardDispatch()
-      case "brokerOffered" where fd == workerFD && !brokerOffered && allowsIO:
+      case "brokerOffered" where fd == workerFD && brokerIdentity != nil && !brokerOffered:
         brokerOffered = true
         try forwardDispatch()
       case "revokeNeeded":
@@ -910,7 +924,7 @@ public final class OwnedChildRetirement: @unchecked Sendable {
         else { throw Failure.control }
         revoke()
       case "cliRetired", "preLaunchRetired":
-        guard fd == brokerFD, workerPhase == .retiring
+        guard fd == brokerFD, workerRetirementPhase == .revoking
         else { throw Failure.control }
         if op == "cliRetired" {
           guard message["scope"] as? String == "localDirectCLIResources",
@@ -918,9 +932,9 @@ public final class OwnedChildRetirement: @unchecked Sendable {
           else { throw Failure.control }
           localCLIWaitStatus = status
         }
-        workerPhase = .brokerEOF
+        workerRetirementPhase = .brokerEOF
       case "brokerReaped":
-        guard fd == workerFD, workerPhase == .reaping,
+        guard fd == workerFD, workerRetirementPhase == .reaping,
           let status = ProviderRPC.exactUInt64(message["waitStatus"])
         else { throw Failure.control }
         brokerWaitStatus = status
@@ -942,7 +956,7 @@ public final class OwnedChildRetirement: @unchecked Sendable {
       guard allowsIO, dispatchAcknowledged, brokerOffered, workerPhase == .dispatching,
         let workerFD
       else { return }
-      try queueControl(workerFD, "dispatching")
+      try queueControl(workerFD, "dispatching", startup: true)
     }
     func handoffProduct() {
       guard allowsIO else { return }
@@ -969,10 +983,9 @@ public final class OwnedChildRetirement: @unchecked Sendable {
       }
     }
     func retireWorker() {
-      guard controlPermitted, !revokeSent else { return }
-      revokeSent = true
-      workerPhase = .retiring
-      guard let retirementID = lock.withLock({ self.retirementID }) else { return }
+      guard controlPermitted, workerRetirementPhase == nil,
+        let retirementID = lock.withLock({ self.retirementID }) else { return }
+      workerRetirementPhase = .revoking
       do {
         if let brokerFD, brokerIdentity != nil {
           try queueControl(brokerFD, "revoke", ["retirementID": retirementID])

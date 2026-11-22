@@ -252,6 +252,8 @@ final class OwnedChildRetirementTests: XCTestCase {
         size, = struct.unpack('!I', exact(sock, 4))
         assert 0 < size <= 1024
         message = json.loads(exact(sock, size))
+        if retirement and op in ('run', 'dispatch', 'dispatching') and message['op'] == 'revoke':
+            op, fields = 'revoke', ('retirementID',)
         assert set(message) == set(('v', 'runID', 'op') + fields)
         assert message['v'] == 2 and message['runID'] == run_id
         assert message['op'] == op
@@ -315,20 +317,25 @@ final class OwnedChildRetirementTests: XCTestCase {
             broker.connect('b')
             gate('hello')
             send(broker, 'running' if wrong_order else 'hello')
+            message = None
             if not wrong_order:
                 message = receive(broker, 'run', ('startupDeadlineNs', 'cwdDevice', 'cwdInode'))
-                info = os.stat('.')
-                assert message['cwdDevice'] == info.st_dev and message['cwdInode'] == info.st_ino
-                assert message['startupDeadlineNs'] == int(os.environ['PAPERLENS_BROKER_START_DEADLINE_NS'])
-                mark('run-received')
-                gate('running')
-                send(broker, 'running')
-                receive(broker, 'dispatch')
-                mark('dispatch-received')
-                gate('dispatching')
-                send(broker, 'dispatching')
+                if message['op'] == 'run':
+                    info = os.stat('.')
+                    assert message['cwdDevice'] == info.st_dev and message['cwdInode'] == info.st_ino
+                    assert message['startupDeadlineNs'] == int(os.environ['PAPERLENS_BROKER_START_DEADLINE_NS'])
+                    mark('run-received')
+                    gate('running')
+                    send(broker, 'running')
+                    message = receive(broker, 'dispatch')
+                    if message['op'] == 'dispatch':
+                        mark('dispatch-received')
+                        gate('dispatching')
+                        send(broker, 'dispatching')
+                        message = None
             if retirement:
-                message = receive(broker, 'revoke', ('retirementID',))
+                if message is None:
+                    message = receive(broker, 'revoke', ('retirementID',))
                 send(broker, 'preLaunchRetired', retirementID=message['retirementID'])
             else:
                 gate('stop')
@@ -348,15 +355,19 @@ final class OwnedChildRetirementTests: XCTestCase {
                     rights = array.array('i', [peer.fileno()])
                     assert lifecycle.sendmsg([b'B'], [(socket.SOL_SOCKET, socket.SCM_RIGHTS, rights)]) == 1
                     mark('right-offered')
+                    message = None
                     if not wrong_order:
                         gate('offered')
                         send(lifecycle, 'brokerOffered')
-                        receive(lifecycle, 'dispatching')
-                        mark('worker-dispatching')
-                        if product_login:
-                            product_loop()
+                        message = receive(lifecycle, 'dispatching')
+                        if message['op'] == 'dispatching':
+                            mark('worker-dispatching')
+                            if product_login:
+                                product_loop()
+                            message = None
                     if retirement:
-                        message = receive(lifecycle, 'revoke', ('retirementID',))
+                        if message is None:
+                            message = receive(lifecycle, 'revoke', ('retirementID',))
                         identity = message['retirementID']
                         message = receive(lifecycle, 'reapBroker', ('retirementID',))
                         assert message['retirementID'] == identity
@@ -594,6 +605,79 @@ final class OwnedChildRetirementTests: XCTestCase {
 
   func testWorkerRealBrokerRunningBeforeHelloRejectsControlWithoutProductHandoff() async throws {
     try await controlHandshake(offeredFirst: false, wrongOrder: true)
+  }
+
+  private func revokeDuringAuthenticatedStartup(before acknowledgement: String,
+    wrongOrder: Bool = false
+  ) async throws {
+    let (root, namespace, launch) = try workerFixture(
+      script: controlWorkerScript(wrongOrder: wrongOrder, retirement: true))
+    defer { try? FileManager.default.removeItem(at: root) }
+    let child = OwnedChildRetirement(worker: launch,
+      deadlineUptimeNanoseconds: DispatchTime.now().uptimeNanoseconds + 3_000_000_000)
+    let completed = terminalExpectation(child)
+    child.launchWorker()
+    let directory = namespace.directoryURL
+    try await waitForControlMarker("right-offered", in: directory)
+    var authenticated = false
+    for _ in 0..<100 {
+      authenticated = await withCheckedContinuation { continuation in
+        child.core.operation.async { continuation.resume(returning: child.core.brokerIdentity != nil) }
+      }
+      if authenticated { break }
+      try await Task.sleep(nanoseconds: 5_000_000)
+    }
+    XCTAssertTrue(authenticated)
+    if acknowledgement != "hello" {
+      try controlGate("hello", in: directory)
+      try await waitForControlMarker("run-received", in: directory)
+    }
+    if acknowledgement == "dispatching" {
+      try controlGate("running", in: directory)
+      try await waitForControlMarker("dispatch-received", in: directory)
+    }
+
+    child.revoke()
+    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+      child.core.operation.async { continuation.resume() }
+    }
+    try controlGate(acknowledgement, in: directory)
+    try controlGate("offered", in: directory)
+    await fulfillment(of: [completed], timeout: 3)
+    XCTAssertThrowsError(try child.core.reservedEndpoints())
+    if case .clean(let proof) = child.terminal {
+      XCTAssertFalse(wrongOrder)
+      XCTAssertTrue(proof.childReaped)
+      XCTAssertFalse(FileManager.default.fileExists(atPath: directory.path))
+      XCTAssertFalse(child.testingRetained)
+    } else {
+      try? controlGate("stop", in: directory)
+      try? await waitForControlMarker("broker-reaped-physically", in: directory)
+      await physicalTeardown(child)
+      if wrongOrder {
+        XCTAssertEqual(child.terminal, .unknown(.control))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: directory.path))
+        XCTAssertTrue(child.testingRetained)
+      } else {
+        XCTFail("Expected observed retirement after late \(acknowledgement), got \(String(describing: child.terminal))")
+      }
+    }
+  }
+
+  func testWorkerRevokesAuthenticatedBrokerBeforeHelloWithoutDispatch() async throws {
+    try await revokeDuringAuthenticatedStartup(before: "hello")
+  }
+
+  func testWorkerRevokesAuthenticatedBrokerBeforeRunningWithoutDispatch() async throws {
+    try await revokeDuringAuthenticatedStartup(before: "running")
+  }
+
+  func testWorkerRevokesAuthenticatedBrokerBeforeDispatchAcknowledgementWithoutHandoff() async throws {
+    try await revokeDuringAuthenticatedStartup(before: "dispatching")
+  }
+
+  func testWorkerRevocationRejectsOutOfOrderRunningBeforeHello() async throws {
+    try await revokeDuringAuthenticatedStartup(before: "hello", wrongOrder: true)
   }
 
   func testWorkerObservedProcessRetirementPurgesOnlyItsOwnedNamespace() async throws {
