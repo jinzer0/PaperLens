@@ -3,6 +3,46 @@ import AppKit
 import PDFKit
 import SwiftUI
 
+@MainActor private final class ReaderViewport: PDFView {
+  private var pendingOpen: (@MainActor () -> Void)?
+  private var openTask: Task<Void, Never>?
+
+  func openWhenLaidOut(_ open: @escaping @MainActor () -> Void) {
+    pendingOpen = open
+    scheduleOpen()
+  }
+
+  func cancelPendingOpen() {
+    openTask?.cancel()
+    openTask = nil
+    pendingOpen = nil
+  }
+
+  override func layout() {
+    super.layout()
+    scheduleOpen()
+  }
+
+  override func viewDidMoveToWindow() {
+    super.viewDidMoveToWindow()
+    scheduleOpen()
+  }
+
+  private var isLaidOut: Bool { window != nil && !bounds.isEmpty }
+
+  private func scheduleOpen() {
+    guard isLaidOut, pendingOpen != nil, openTask == nil else { return }
+    // Finish the current AppKit layout pass before positioning the document.
+    openTask = Task { [weak self] in
+      guard !Task.isCancelled, let self else { return }
+      self.openTask = nil
+      guard self.isLaidOut, let open = self.pendingOpen else { return }
+      self.pendingOpen = nil
+      open()
+    }
+  }
+}
+
 @MainActor final class ReaderPresentation: NSObject, ObservableObject {
   enum SearchState: Equatable { case idle, searching, matches(Int), noResults }
   let session: ReaderSession
@@ -38,7 +78,8 @@ import SwiftUI
 
   init(session: ReaderSession, annotationIdentity: AnnotationPaperIdentity,
     annotationService: AnnotationService, metadataService: ReaderMetadataService,
-    metadataIdentity: ReaderMetadataIdentity?, pdfView: PDFView = PDFView()) {
+    metadataIdentity: ReaderMetadataIdentity?, pdfView: PDFView? = nil) {
+    let pdfView = pdfView ?? ReaderViewport()
     self.session = session
     self.pdfView = pdfView
     self.annotationIdentity = annotationIdentity
@@ -58,6 +99,10 @@ import SwiftUI
       name: .PDFViewScaleChanged, object: pdfView)
     NotificationCenter.default.addObserver(self, selector: #selector(positionChanged),
       name: .PDFViewVisiblePagesChanged, object: pdfView)
+  }
+
+  func openWhenLaidOut(paperID: UUID) {
+    (pdfView as? ReaderViewport)?.openWhenLaidOut { [weak self] in self?.open(paperID: paperID) }
   }
 
   func open(paperID: UUID) {
@@ -493,6 +538,7 @@ import SwiftUI
   }
 
   func leave(onReturn: () -> Void) {
+    (pdfView as? ReaderViewport)?.cancelPendingOpen()
     guard opened else { session.close(); onReturn(); return }
     do {
       try saveCurrentPosition()
@@ -505,6 +551,7 @@ import SwiftUI
   }
 
   func disappear(reportFailure: (Error) -> Void) {
+    (pdfView as? ReaderViewport)?.cancelPendingOpen()
     if opened {
       do { try saveCurrentPosition() }
       catch { reportFailure(error) }
@@ -649,38 +696,38 @@ import SwiftUI
           }
         }
       }.disabled(!presentation.opened)
-      if presentation.opened {
-        HStack {
-          Button("하이라이트") {
-            captureAnnotationOrigin(.highlight)
-            presentation.highlightSelection()
-          }
-          .focused($annotationFocus, equals: .highlight)
-          .keyboardShortcut("h", modifiers: [.command, .shift])
-          .accessibilityLabel("선택한 원본 PDF 텍스트에 하이라이트 추가")
-          .accessibilityHint("Command-Shift-H로 하이라이트를 저장하고 표시합니다")
-          .help("선택한 원문에 하이라이트 추가 (⇧⌘H)")
-          Button("노트 추가") {
-            captureAnnotationOrigin(.note)
-            presentation.addNote()
-          }
-          .focused($annotationFocus, equals: .note)
-          .keyboardShortcut("n", modifiers: [.command, .shift])
-          .accessibilityLabel("선택한 원본 PDF 텍스트에 개인 노트 추가")
-          .accessibilityHint("Command-Shift-N으로 선택한 원문의 노트 편집기를 엽니다")
-          .help("선택한 원문에 개인 노트 추가 (⇧⌘N)")
-          Button("복사") {
-            presentation.copySelection()
-          }
-          .keyboardShortcut("c", modifiers: [.command, .shift])
-          .accessibilityLabel("선택한 원본 PDF 텍스트 복사")
-          .accessibilityHint("Command-Shift-C로 선택한 원본 텍스트를 복사합니다")
-          .help("선택한 원본 PDF 텍스트 복사 (⇧⌘C)")
-          Text(presentation.annotationFeedback).font(.caption)
-            .accessibilityLabel("주석 상태: \(presentation.annotationFeedback)")
-          Spacer()
-        }.accessibilityElement(children: .contain)
-      }
+      // Keep the viewport size stable when the Reader enables its document actions.
+      HStack {
+        Button("하이라이트") {
+          captureAnnotationOrigin(.highlight)
+          presentation.highlightSelection()
+        }
+        .focused($annotationFocus, equals: .highlight)
+        .keyboardShortcut("h", modifiers: [.command, .shift])
+        .accessibilityLabel("선택한 원본 PDF 텍스트에 하이라이트 추가")
+        .accessibilityHint("Command-Shift-H로 하이라이트를 저장하고 표시합니다")
+        .help("선택한 원문에 하이라이트 추가 (⇧⌘H)")
+        Button("노트 추가") {
+          captureAnnotationOrigin(.note)
+          presentation.addNote()
+        }
+        .focused($annotationFocus, equals: .note)
+        .keyboardShortcut("n", modifiers: [.command, .shift])
+        .accessibilityLabel("선택한 원본 PDF 텍스트에 개인 노트 추가")
+        .accessibilityHint("Command-Shift-N으로 선택한 원문의 노트 편집기를 엽니다")
+        .help("선택한 원문에 개인 노트 추가 (⇧⌘N)")
+        Button("복사") {
+          presentation.copySelection()
+        }
+        .keyboardShortcut("c", modifiers: [.command, .shift])
+        .accessibilityLabel("선택한 원본 PDF 텍스트 복사")
+        .accessibilityHint("Command-Shift-C로 선택한 원본 텍스트를 복사합니다")
+        .help("선택한 원본 PDF 텍스트 복사 (⇧⌘C)")
+        Text(presentation.annotationFeedback).font(.caption)
+          .accessibilityLabel("주석 상태: \(presentation.annotationFeedback)")
+        Spacer()
+      }.accessibilityElement(children: .contain)
+      .disabled(!presentation.opened)
       if presentation.failure != nil {
         HStack {
           Label("작업을 완료하지 못했습니다. 돌아가기를 시도하거나 저장하지 않고 돌아가세요.", systemImage: "exclamationmark.triangle")
@@ -730,7 +777,7 @@ import SwiftUI
           }
       }
     }
-    .onAppear { presentation.open(paperID: paperID) }
+    .onAppear { presentation.openWhenLaidOut(paperID: paperID) }
     .onChange(of: metadataIdentity) { presentation.replaceMetadataIdentity(metadataIdentity) }
     .onChange(of: presentation.annotationContext != nil) {
       if presentation.annotationContext == nil && presentation.opened {
