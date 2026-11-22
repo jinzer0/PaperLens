@@ -62,6 +62,7 @@ struct HTTPSPDFFileEffects: Sendable {
   let checkedClose: @Sendable (FileHandle) throws -> Void
   let sessionStarted: @Sendable (URLSession) -> Void
   let finalNetworkDrain: @Sendable () -> Void
+  var now: @Sendable () -> ContinuousClock.Instant = { ContinuousClock().now }
   static let actual = HTTPSPDFFileEffects(acquired: { _ in },
     checkedClose: { try $0.close() }, sessionStarted: { _ in }, finalNetworkDrain: {})
 }
@@ -174,7 +175,6 @@ private final class HTTPSPDFProducer: NSObject, URLSessionDataDelegate, @uncheck
   private let budget: RequestResourceBudget
   private let assertCurrent: @Sendable () throws -> Void
   private let queue = DispatchQueue(label: "PaperLens.HTTPSPDFProducer")
-  private let clock = ContinuousClock()
   private let started: ContinuousClock.Instant
   private var lastActivity: ContinuousClock.Instant
   private var route: ValidatedRequestURL
@@ -207,7 +207,7 @@ private final class HTTPSPDFProducer: NSObject, URLSessionDataDelegate, @uncheck
     self.effects = effects
     self.completion = completion
     self.journalOwned = journalOwned
-    started = clock.now
+    started = effects.now()
     lastActivity = started
     stage = directory.appendingPathComponent(UUID().uuidString + ".pdf")
     super.init()
@@ -276,8 +276,12 @@ private final class HTTPSPDFProducer: NSObject, URLSessionDataDelegate, @uncheck
   }
 
   private func milliseconds(_ instant: ContinuousClock.Instant) -> Int {
-    let duration = instant.duration(to: clock.now).components
-    return Int(duration.seconds) * 1000 + Int(duration.attoseconds / 1_000_000_000_000_000)
+    let duration = instant.duration(to: effects.now()).components
+    let attosecondsPerMillisecond: Int64 = 1_000_000_000_000_000
+    let milliseconds = Int(duration.attoseconds / attosecondsPerMillisecond)
+    // Keep the ceiling inclusive without rounding a fractional overrun down to the cap.
+    let partialMillisecond = duration.attoseconds % attosecondsPerMillisecond > 0 ? 1 : 0
+    return Int(duration.seconds) * 1000 + milliseconds + partialMillisecond
   }
 
   private func check() throws {
@@ -313,7 +317,7 @@ private final class HTTPSPDFProducer: NSObject, URLSessionDataDelegate, @uncheck
         status: response.statusCode, headers: headers(response), prefix: Data(), budget: budget)
       guard case .redirect(let target) = admission else { throw URLImportError.rejected }
       nextRoute = target
-      lastActivity = clock.now
+      lastActivity = effects.now()
     } catch { failure = .rejected }
     completionHandler(nil)
   }
@@ -324,7 +328,7 @@ private final class HTTPSPDFProducer: NSObject, URLSessionDataDelegate, @uncheck
     do {
       try check()
       guard let http = response as? HTTPURLResponse else { throw URLImportError.rejected }
-      lastActivity = clock.now
+      lastActivity = effects.now()
       if nextRoute != nil { completionHandler(.allow); return }
       responseHeaders = headers(http)
       responseStatus = http.statusCode
@@ -343,7 +347,7 @@ private final class HTTPSPDFProducer: NSObject, URLSessionDataDelegate, @uncheck
       try check()
       try budget.observe("readBufferBytes", value: data.count)
       try budget.add("bodyBytes", delta: data.count)
-      lastActivity = clock.now
+      lastActivity = effects.now()
       if nextRoute != nil { return } // Redirect body counts but is never written.
       if !admitted {
         let magicCount = authority.contract["policies"]["pdfMagic"].string.utf8.count
@@ -422,6 +426,11 @@ private final class HTTPSPDFProducer: NSObject, URLSessionDataDelegate, @uncheck
     effects.finalNetworkDrain()
     networkDrained = true
     if error != nil, failure == nil { failure = .rejected }
+    if failure == nil, bodyComplete {
+      // A closed stage can only succeed within the attempt's total budget.
+      do { try budget.observe("elapsedMs", value: milliseconds(started)) }
+      catch { failure = .rejected }
+    }
     finish(removeStage: true)
   }
 

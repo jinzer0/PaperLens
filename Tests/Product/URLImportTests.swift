@@ -56,6 +56,37 @@ final class URLImportTests: XCTestCase {
     XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: directory.path).count, 1)
   }
 
+  func testTotalDeadlineIncludesFinalTransportDrain() async throws {
+    let authority = try ProviderRequest()
+    let adapter = HTTPSPDFImportAdapter(authority: authority)
+    let route = try adapter.route("https://fixture.invalid/chunks")
+    let pool = try RequestResourcePool(authority: authority, kind: "import")
+    let before = pool.active
+    let directory = try directory()
+    let limit = Duration.milliseconds(authority.limit("importElapsedMs"))
+    for elapsed in [limit, limit + .microseconds(1)] {
+      let clock = HTTPSImportTestClock()
+      let observations = HTTPSCloseObservations(pool: pool)
+      var effects = observations.effects(onDrain: { clock.advance(by: elapsed) })
+      effects.now = { clock.now }
+      do {
+        let stage = try await adapter.download(route: route, stagingDirectory: directory,
+          assertCurrent: {}, configuration: configuration(), effects: effects)
+        XCTAssertEqual(elapsed, limit)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: stage.file.path))
+        try FileManager.default.removeItem(at: stage.file)
+      } catch {
+        XCTAssertGreaterThan(elapsed, limit)
+        XCTAssertEqual(error as? URLImportError, .rejected)
+      }
+      XCTAssertEqual(observations.snapshot.attempts, 1)
+      XCTAssertEqual(observations.snapshot.drains, 1)
+      XCTAssertEqual(observations.snapshot.activeAtDrain, before + 1)
+      XCTAssertEqual(pool.active, before)
+      XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: directory.path).isEmpty)
+    }
+  }
+
   func testExactReadBufferAllowedAndOneOverRejectedWithStageRemoved() async throws {
     let authority = try ProviderRequest()
     let adapter = HTTPSPDFImportAdapter(authority: authority)
@@ -477,6 +508,15 @@ final class URLImportTests: XCTestCase {
   }
 }
 
+private final class HTTPSImportTestClock: @unchecked Sendable {
+  private let lock = NSLock()
+  private var instant = ContinuousClock().now
+  var now: ContinuousClock.Instant { lock.withLock { instant } }
+  func advance(by duration: Duration) {
+    lock.withLock { instant = instant.advanced(by: duration) }
+  }
+}
+
 private final class HTTPSCloseObservations: @unchecked Sendable {
   struct Snapshot {
     var descriptor: Int32?
@@ -491,7 +531,8 @@ private final class HTTPSCloseObservations: @unchecked Sendable {
   private var value = Snapshot()
   init(pool: RequestResourcePool) { self.pool = pool }
   var snapshot: Snapshot { lock.withLock { value } }
-  func effects(failClose: Bool = false, invalidateImmediately: Bool = false) -> HTTPSPDFFileEffects {
+  func effects(failClose: Bool = false, invalidateImmediately: Bool = false,
+    onDrain: @escaping @Sendable () -> Void = {}) -> HTTPSPDFFileEffects {
     HTTPSPDFFileEffects(acquired: { descriptor in
       self.lock.withLock { self.value.descriptor = descriptor }
     }, checkedClose: { handle in
@@ -513,6 +554,7 @@ private final class HTTPSCloseObservations: @unchecked Sendable {
         self.value.drains += 1
         self.value.activeAtDrain = active
       }
+      onDrain()
     })
   }
 }
