@@ -1,3 +1,4 @@
+import Combine
 import CryptoKit
 import Darwin
 import Foundation
@@ -473,6 +474,51 @@ final class URLImportTests: XCTestCase {
     service.cancelConfirmation(confirmationID: second.id)
     XCTAssertEqual(service.state, .idle)
     XCTAssertEqual(recorder.count, 0)
+  }
+
+  @MainActor
+  func testStaleDownloadCancelDoesNotCancelRetry() async throws {
+    let recorder = GrantRecorder()
+    let service = URLImportService(authority: try ProviderRequest(), grantWriter: { _ in
+      recorder.record()
+      throw URLImportError.writerUnavailable
+    })
+    try service.prepare("https://fixture.invalid/chunks", destination: "Library", possibleDuplicate: false)
+    let first = try XCTUnwrap(service.confirmation).id
+    service.continueImport(confirmationID: first)
+    let displayedID = try XCTUnwrap(service.downloadConfirmationID)
+    XCTAssertEqual(displayedID, first)
+    let cancelFirstDownload = {
+      service.cancelDownload(confirmationID: displayedID)
+    }
+    while service.state == .downloading { await Task.yield() }
+    XCTAssertEqual(recorder.count, 1)
+    XCTAssertNil(service.downloadConfirmationID)
+
+    try service.retry()
+    let second = try XCTUnwrap(service.confirmation).id
+    XCTAssertNotEqual(second, first)
+    let staleDuringStart = service.$confirmation.dropFirst().sink {
+      if $0 == nil { cancelFirstDownload() }
+    }
+    service.continueImport(confirmationID: second)
+    staleDuringStart.cancel()
+    XCTAssertEqual(service.downloadConfirmationID, second)
+    cancelFirstDownload()
+    while service.state == .downloading { await Task.yield() }
+    XCTAssertEqual(recorder.count, 2)
+    XCTAssertEqual(service.state, .failed(.writerUnavailable))
+
+    try service.retry()
+    let third = try XCTUnwrap(service.confirmation).id
+    let cancelDuringStart = service.$state.dropFirst().sink {
+      if $0 == .downloading { service.cancelDownload(confirmationID: third) }
+    }
+    service.continueImport(confirmationID: third)
+    cancelDuringStart.cancel()
+    while service.state == .downloading { await Task.yield() }
+    XCTAssertEqual(recorder.count, 2)
+    XCTAssertEqual(service.state, .failed(.cancelled))
   }
 
   @MainActor

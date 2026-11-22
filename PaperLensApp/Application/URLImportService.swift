@@ -119,6 +119,11 @@ public final class URLImportService: ObservableObject {
   private var admittedFailure = false
   private var failureBeforeRetry: URLImportError?
 
+  var downloadConfirmationID: UUID? {
+    guard starting || state == .downloading else { return nil }
+    return failedIntent?.id
+  }
+
   var canRetry: Bool {
     guard case .failed = state, lastInput != nil else { return false }
     return retryPurpose != nil
@@ -250,9 +255,10 @@ public final class URLImportService: ObservableObject {
       starting = false
       startCancellationRequested = false
     }
+    // Publish the consumed intent's identity before either observable setter can request cancellation.
+    failedIntent = intent
     confirmation = nil // Consume once, before any suspension or effect.
     failureBeforeRetry = nil
-    failedIntent = intent
     retryRecord = nil
     admittedFailure = false
     guard let grant else { state = .failed(.writerUnavailable); return }
@@ -329,6 +335,12 @@ public final class URLImportService: ObservableObject {
   }
 
   public func cancelDownload() {
+    guard let id = downloadConfirmationID else { return }
+    cancelDownload(confirmationID: id)
+  }
+
+  func cancelDownload(confirmationID: UUID) {
+    guard downloadConfirmationID == confirmationID else { return }
     if starting { startCancellationRequested = true }
     writer?.revoke()
     operation?.cancel()

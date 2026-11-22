@@ -397,13 +397,15 @@ public struct URLImportView<LibraryContent: View>: View {
     switch service.state {
     case .idle, .confirming: EmptyView()
     case .downloading:
+      let downloadID = service.downloadConfirmationID
       HStack {
         ProgressView().accessibilityLabel("PDF 다운로드 중")
         Text("PDF 다운로드 중")
         Button("취소") {
-          guard drag.isCurrent(mount, interaction), service.state == .downloading else { return }
+          guard drag.isCurrent(mount, interaction), let downloadID,
+            service.downloadConfirmationID == downloadID else { return }
           drag.interrupt()
-          service.cancelDownload()
+          service.cancelDownload(confirmationID: downloadID)
         }
       }
     case .ready(let paper):
