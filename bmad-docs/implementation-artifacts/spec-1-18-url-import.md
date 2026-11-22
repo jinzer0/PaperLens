@@ -11,7 +11,19 @@ Developer ID 서명 앱을 합성 Workspace 모드로 실행했다. arXiv 초록
 실패와 다시 시도가 표시됐고, 다시 시도는 같은 폴더로 새 확인 화면을 열었다. 취소 뒤
 실패 상태로 돌아갔고 DB에는 URL 가져오기 Job이 없었다. URL 가져오기와 복구 관련
 테스트 70개가 통과했다. 로컬 결과는 `.build/epic1-story117-118-signed-ui-result.json`에
-있다. 실제 외부 다운로드, 앱 재실행, P-6 측정은 별도 검증으로 남아 있다.
+있다. 이 실행은 URL 확인과 취소를 검증했다.
+
+## 앱 재시작 뒤 실패한 URL 가져오기 재시도
+
+macOS 26.7.1의 별도 Developer ID 서명 arm64 진단 빌드에서 합성 저장소 하나를
+두 앱 프로세스에 걸쳐 열었다. 합성 HTTPS 응답은 기존 URLSession 설정 주입으로
+공급했다. 첫 확인 화면에서 논문과 Job이 없는 상태를 확인했다. 계속을 누르자
+HTML 응답이 거부됐고 Library에 실패한 가져오기 하나가 남았다.
+
+재실행 뒤 실패 이유와 같은 작업의 URL 재시도 메뉴가 표시됐다. 사용자가 새 링크를
+입력하고 다시 확인하자 PDF가 저장됐다. Paper·generation·Job 식별자는 유지됐고
+attempt만 새로 만들어졌다. 앱 내 PDF의 해시는 DB와 일치했고 Reader에서 8쪽 PDF와
+검색용 원문 준비 상태를 확인했다. 실제 외부 다운로드와 P-6 측정은 검증이 남아 있다.
 
 ## Existing direct PDF-button focus wiring (baseline b8b3bd3)
 
