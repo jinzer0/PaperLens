@@ -1,5 +1,20 @@
 # Story 1.16 Build Spec — Native Highlight and personal Note
 
+## Reader 주석 키보드 조작 검증 — 2026-11-22
+
+Reader의 ⇧⌘H는 하이라이트, ⇧⌘N은 개인 노트, ⇧⌘C는 원문 복사를 실행한다.
+주석 창을 닫으면 키보드 탐색을 켠 경우 창을 열었던 버튼으로, 끈 경우 페이지 번호
+입력 또는 원문 검색 입력으로 초점을 돌린다.
+
+macOS 26.7.1 arm64 Developer ID 서명 앱에서 키보드 탐색을 끈 채 합성 PDF의
+`AB`를 검색했다. 단축키로 노트 작성, ⌘↩ 저장, Esc 작성 취소와 창 닫기,
+하이라이트 저장을 확인했다. 창을 닫자 PDF 페이지를 유지하며 검색 입력으로 초점이
+돌아왔다. Reader 재진입과 정상 종료 후 DB에서 노트와 하이라이트 각각 한 건 및 원문
+위치를 확인했고, 원본과 보관 PDF의 해시는 그대로였다. 선택이 없을 때 복사 단축키가
+안내를 표시했으며 관련 테스트 49개가 통과했다. 로컬 결과는
+`.build/epic1-annotation-keyboard/result.json`에 있다. VoiceOver, 키보드 탐색을 켠
+환경, 실제 클립보드 쓰기와 제품 앱 재실행 검증은 남아 있다.
+
 ## Actual admitted Reader binding — parent verified
 
 The existing annotation migration and CRUD remain owned by the sole ProductDatabase. The next source phase binds `NativeReaderView.swift`, `AnnotationInspector.swift`, `ProductWorkspaceView.swift`, `ProductDatabase+Annotations.swift`, and `ReaderAnnotationBindingTests.swift`. Workspace supplies the guarded current Paper/generation/SHA identity and its real AnnotationService. ReaderPresentation privately owns the PDFView/document; ReaderAnnotationContext holds only weak PDF references and pins every capture/reveal/copy/CRUD operation through the actual ReaderSession. It verifies session, document and durable identity before and after each operation. No original PDF modification, Provider dispatch, AI context or calibrated canonical geometry is added.

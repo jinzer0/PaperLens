@@ -549,7 +549,7 @@ import SwiftUI
 /// Parent supplies the Application session bound to the real shared lifecycle.
 @MainActor public struct NativeReaderView: View {
   @StateObject private var presentation: ReaderPresentation
-  private enum AnnotationOpener: Hashable { case browse, highlight, note, copy, search, page }
+  private enum AnnotationOpener: Hashable { case browse, highlight, note, search, page }
   @FocusState private var annotationFocus: AnnotationOpener?
   @State private var annotationOrigin: AnnotationOpener = .browse
   @State private var pageDraft = ""
@@ -583,7 +583,7 @@ import SwiftUI
         Text(presentation.title).font(.headline).lineLimit(1).help(presentation.title)
         if presentation.opened {
           Button(presentation.annotationContext == nil ? "하이라이트·노트" : "주석 닫기") {
-            if presentation.annotationContext == nil { annotationOrigin = .browse }
+            captureAnnotationOrigin(.browse)
             presentation.toggleAnnotations()
           }
           .focused($annotationFocus, equals: .browse)
@@ -633,26 +633,30 @@ import SwiftUI
       if presentation.opened {
         HStack {
           Button("하이라이트") {
-            annotationOrigin = .highlight
+            captureAnnotationOrigin(.highlight)
             presentation.highlightSelection()
           }
           .focused($annotationFocus, equals: .highlight)
+          .keyboardShortcut("h", modifiers: [.command, .shift])
           .accessibilityLabel("선택한 원본 PDF 텍스트에 하이라이트 추가")
-          .accessibilityHint("하이라이트를 저장하고 저장된 주석을 표시합니다")
+          .accessibilityHint("Command-Shift-H로 하이라이트를 저장하고 표시합니다")
+          .help("선택한 원문에 하이라이트 추가 (⇧⌘H)")
           Button("노트 추가") {
-            annotationOrigin = .note
+            captureAnnotationOrigin(.note)
             presentation.addNote()
           }
           .focused($annotationFocus, equals: .note)
+          .keyboardShortcut("n", modifiers: [.command, .shift])
           .accessibilityLabel("선택한 원본 PDF 텍스트에 개인 노트 추가")
-          .accessibilityHint("원본 선택으로 노트 편집기를 열고 작성 중인 노트를 유지합니다")
+          .accessibilityHint("Command-Shift-N으로 선택한 원문의 노트 편집기를 엽니다")
+          .help("선택한 원문에 개인 노트 추가 (⇧⌘N)")
           Button("복사") {
-            if presentation.annotationContext != nil { annotationOrigin = .copy }
             presentation.copySelection()
           }
-          .focused($annotationFocus, equals: .copy)
+          .keyboardShortcut("c", modifiers: [.command, .shift])
           .accessibilityLabel("선택한 원본 PDF 텍스트 복사")
-          .accessibilityHint("주석을 저장하거나 노트를 열지 않고 원본 텍스트만 복사합니다")
+          .accessibilityHint("Command-Shift-C로 선택한 원본 텍스트를 복사합니다")
+          .help("선택한 원본 PDF 텍스트 복사 (⇧⌘C)")
           Text(presentation.annotationFeedback).font(.caption)
             .accessibilityLabel("주석 상태: \(presentation.annotationFeedback)")
           Spacer()
@@ -715,6 +719,15 @@ import SwiftUI
       }
     }
     .onDisappear { presentation.disappear(reportFailure: onSaveFailure) }
+  }
+
+  private func captureAnnotationOrigin(_ opener: AnnotationOpener) {
+    guard presentation.annotationContext == nil else { return }
+    if NSApplication.shared.isFullKeyboardAccessEnabled {
+      annotationOrigin = opener
+    } else {
+      annotationOrigin = annotationFocus == .page ? .page : .search
+    }
   }
 
   private var pageNavigation: some View {
