@@ -1,5 +1,18 @@
 # Story 1.16 Build Spec — Native Highlight and personal Note
 
+## 앱 재실행 뒤 주석 표시와 삭제 검증 — 2026-11-22
+
+주석을 보고, 편집하고, 삭제하는 버튼의 접근성 이름에 해당 주석의 종류와 페이지를
+표시한다. macOS 26.7.1 arm64 Developer ID 서명 진단 빌드에서 합성 PDF의 2쪽에
+노트를, 3쪽에 하이라이트를 저장했다. Library의 읽기 기록에서 노트 본문을 확인했다.
+새 앱 프로세스에서 ‘2쪽 개인 노트 PDF에서 보기’와 ‘3쪽 하이라이트 PDF에서 보기’를
+실행해 각각 저장한 페이지로 이동했다. 논문을 삭제하고 재실행하자 두 기록과 앱 내
+PDF가 사라졌고, 가져오기 전 원본의 해시는 그대로였다.
+
+관련 XCTest 79개가 통과했다. 로컬 결과는 `.build/epic1-annotation-restart/`의
+`labeled-flow.log`, `labeled-before-reveal.txt`, `xctest-result.json`에 있다.
+실제 VoiceOver 낭독과 시스템 클립보드 쓰기는 검증이 남아 있다.
+
 ## Reader 주석 키보드 조작 검증 — 2026-11-22
 
 Reader의 ⇧⌘H는 하이라이트, ⇧⌘N은 개인 노트, ⇧⌘C는 원문 복사를 실행한다.

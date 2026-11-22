@@ -400,24 +400,28 @@ import SwiftUI
       ScrollView {
         LazyVStack(alignment: .leading, spacing: 0) {
           ForEach(editor.records) { record in
+            let kind = record.kind == .note ? "개인 노트" : "하이라이트"
+            let pages = record.selection.locations.map { "\($0.pageIndex + 1)쪽" }.joined(separator: ", ")
             VStack(alignment: .leading) {
-              Text(record.kind == .note ? "개인 노트" : "하이라이트").font(.headline)
+              Text(kind).font(.headline)
               Text(record.selection.originalText).lineLimit(3)
               if let note = record.note { Text(note).textSelection(.enabled) }
-              Text(record.selection.locations.map { "\($0.pageIndex + 1)쪽" }.joined(separator: ", "))
-                .font(.caption)
+              Text(pages).font(.caption)
               HStack {
                 Button("PDF에서 보기") { perform {
                   try context.reveal(record)
                   try context.publishEditor { editor.feedback = "저장된 주석의 원본 PDF 위치를 표시했습니다." }
                 } }
+                .accessibilityLabel("\(pages) \(kind) PDF에서 보기")
                 .accessibilityHint("저장된 원문 위치로 이동합니다")
                 if record.kind == .note {
                   Button("편집") { perform { try context.beginNote(editing: record) } }
+                    .accessibilityLabel("\(pages) \(kind) 편집")
                 }
                 Button("삭제", role: .destructive) {
                   perform { try context.removeAnnotation(record) }
                 }
+                .accessibilityLabel("\(pages) \(kind) 삭제")
               }
             }
             .accessibilityElement(children: .contain)
