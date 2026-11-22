@@ -181,7 +181,7 @@ public final class ProductDatabase: @unchecked Sendable {
   func libraryContentChanges() -> AnyPublisher<Void, Error> {
     DatabaseRegionObservation(tracking: Table("extractionVisible"), Table("readerMetadata"),
       Table("organizationPreferences"), Table("paperOrganization"), Table("paperUserTag"),
-      Table("libraryFolder"), Table("paperFolder"))
+      Table("libraryFolder"), Table("paperFolder"), Table("paper").select(Column("lastReadAt")))
       .publisher(in: queue)
       .map { _ in () }
       .eraseToAnyPublisher()

@@ -2174,6 +2174,46 @@ private actor WorkspaceDeletionAgent: AgentLibraryPurging {
       .init(presentation: .grid, sort: .name))
   }
 
+  func testLibraryObservesSavedReadingOrderWhileTheReaderStaysOpenInAnotherWindow() async throws {
+    let f = try await fixture()
+    _ = try await importSelected(f)
+    _ = try await importSelected(f)
+    let owner = f.workspace.attachPresentation()
+    let library = f.workspace.attachPresentation()
+    let service = f.workspace.organization
+    let before = try await service.snapshot(filter: .init())
+    XCTAssertEqual(before.snapshot.preferences.sort, .recentlyRead)
+    XCTAssertEqual(before.snapshot.papers.count, 2)
+    let target = try XCTUnwrap(before.snapshot.papers.last?.id)
+    await withCheckedContinuation { continuation in
+      DispatchQueue.main.async { continuation.resume() }
+    }
+
+    var updates = 0
+    let observation = f.workspace.$libraryContentRevision.dropFirst().sink { _ in updates += 1 }
+    defer { observation.cancel() }
+    let reader = try await openOwnedReader(f, id: target, presentationMount: owner)
+    XCTAssertNil(f.workspace.reader(for: library))
+    await withCheckedContinuation { continuation in
+      DispatchQueue.main.async { continuation.resume() }
+    }
+    XCTAssertEqual(updates, 0, "Claiming a Reader does not yet save a reading position")
+
+    try reader.session.save(.init(pageIndex: 1, zoom: 1.25))
+    for _ in 0..<100 where updates == 0 { try await Task.sleep(for: .milliseconds(10)) }
+    XCTAssertEqual(updates, 1)
+    XCTAssertTrue(f.workspace.reader(for: owner)?.session === reader.session)
+    let after = try await service.snapshot(filter: .init())
+    XCTAssertEqual(after.snapshot.papers.first?.id, target)
+    XCTAssertNotNil(after.facts.first(where: { $0.paperID == target })?.lastReadAt)
+
+    f.workspace.returnToLibrary(from: reader, presentationMount: owner)
+    await withCheckedContinuation { continuation in
+      DispatchQueue.main.async { continuation.resume() }
+    }
+    XCTAssertEqual(updates, 1, "Releasing the Reader must not invalidate unchanged reading facts")
+  }
+
   func testLibraryObservesPublishedPDFTitleAndMetadataOnSameRevision() async throws {
     let f = try await fixture()
     let id = try await importSelected(f)
