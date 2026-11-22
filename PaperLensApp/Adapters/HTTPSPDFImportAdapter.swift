@@ -275,20 +275,12 @@ private final class HTTPSPDFProducer: NSObject, URLSessionDataDelegate, @uncheck
     }
   }
 
-  private func milliseconds(_ instant: ContinuousClock.Instant) -> Int {
-    let duration = instant.duration(to: effects.now()).components
-    let attosecondsPerMillisecond: Int64 = 1_000_000_000_000_000
-    let milliseconds = Int(duration.attoseconds / attosecondsPerMillisecond)
-    // Keep the ceiling inclusive without rounding a fractional overrun down to the cap.
-    let partialMillisecond = duration.attoseconds % attosecondsPerMillisecond > 0 ? 1 : 0
-    return Int(duration.seconds) * 1000 + milliseconds + partialMillisecond
-  }
-
   private func check() throws {
     guard failure == nil, !cancelled, !closeAttempted, !finished else { throw URLImportError.cancelled }
     try assertCurrent()
-    try budget.observe("elapsedMs", value: milliseconds(started))
-    try budget.observe("idleMs", value: milliseconds(lastActivity))
+    let now = effects.now()
+    try budget.observe("elapsedMs", value: started.duration(to: now).importBudgetMilliseconds)
+    try budget.observe("idleMs", value: lastActivity.duration(to: now).importBudgetMilliseconds)
   }
 
   private func request() {
@@ -428,7 +420,7 @@ private final class HTTPSPDFProducer: NSObject, URLSessionDataDelegate, @uncheck
     if error != nil, failure == nil { failure = .rejected }
     if failure == nil, bodyComplete {
       // A closed stage can only succeed within the attempt's total budget.
-      do { try budget.observe("elapsedMs", value: milliseconds(started)) }
+      do { try budget.observe("elapsedMs", value: started.duration(to: effects.now()).importBudgetMilliseconds) }
       catch { failure = .rejected }
     }
     finish(removeStage: true)

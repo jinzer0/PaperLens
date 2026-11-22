@@ -546,6 +546,64 @@ final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
     XCTAssertFalse(try XCTUnwrap(reopened.libraryRecords().first { $0.id == id }).cleanupDebt)
   }
 
+  func testLocalCopyDeadlineIncludesVerifiedCloseAndScopeRelease() async throws {
+    let authority = try ProviderRequest()
+    let pool = try RequestResourcePool(authority: authority, kind: "import")
+    let baseline = pool.active
+    let database = try ProductDatabase.open(at: root)
+    let original = try source()
+    let bytes = try Data(contentsOf: original)
+    let limit = Duration.milliseconds(authority.limit("importElapsedMs"))
+    for elapsed in [limit, limit + .microseconds(1)] {
+      let observations = OwnedCopyEffects()
+      let start = ContinuousClock().now
+      var effects = observations.effects
+      effects.now = { observations.scopeCensus[1] == 0 ? start : start.advanced(by: elapsed) }
+      let lifecycle = try await LocalLibraryLifecycle.openForOwnedCopyFixtures(database: database, effects: effects)
+      let id = try await lifecycle.importPDF(from: original)
+      let record = try XCTUnwrap(database.libraryRecords().first { $0.id == id })
+      let completion = try XCTUnwrap(observations.observations.first)
+      XCTAssertEqual(completion.identity.paperID, id)
+      XCTAssertEqual(observations.observedCloseCensus, [[.output, .input]])
+      XCTAssertEqual(observations.observedScopeCensus, [[1, 1]])
+      XCTAssertEqual(pool.active, baseline)
+      XCTAssertFalse(record.cleanupDebt)
+      if elapsed == limit {
+        XCTAssertEqual(completion.status, .closedValidated)
+        XCTAssertEqual(record.status, .ready)
+        XCTAssertEqual(try Data(contentsOf: namespace(id).appendingPathComponent("document.pdf")), bytes)
+      } else {
+        XCTAssertEqual(completion.status, .closedUnvalidated)
+        XCTAssertEqual((completion.error as? RequestContractError)?.code, "importRejected")
+        XCTAssertEqual(record.status, .importFailed)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: namespace(id).path))
+      }
+      XCTAssertEqual(try Data(contentsOf: original), bytes)
+    }
+  }
+
+  func testLocalCopyPastDeadlineDuringScopeAcquisitionDoesNotOpenFiles() async throws {
+    let authority = try ProviderRequest()
+    let database = try ProductDatabase.open(at: root)
+    let observations = OwnedCopyEffects(beforeOpen: { _, _ in
+      XCTFail("The expired attempt must not open a descriptor")
+    })
+    let start = ContinuousClock().now
+    let overLimit = start.advanced(by: .milliseconds(authority.limit("importElapsedMs")) + .microseconds(1))
+    var effects = observations.effects
+    effects.now = { observations.scopeCensus[0] == 0 ? start : overLimit }
+    let lifecycle = try await LocalLibraryLifecycle.openForOwnedCopyFixtures(database: database, effects: effects)
+    let id = try await lifecycle.importPDF(from: source())
+    let record = try XCTUnwrap(database.libraryRecords().first { $0.id == id })
+    let completion = try XCTUnwrap(observations.observations.first)
+    XCTAssertEqual((completion.error as? RequestContractError)?.code, "importRejected")
+    XCTAssertTrue(observations.census.isEmpty)
+    XCTAssertEqual(observations.observedScopeCensus, [[1, 1]])
+    XCTAssertEqual(record.status, .importFailed)
+    XCTAssertFalse(record.cleanupDebt)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: namespace(id).path))
+  }
+
   func testActualConfirmedHashMismatchClosesButNeverValidates() async throws {
     let authority = try ProviderRequest()
     let pool = try RequestResourcePool(authority: authority, kind: "import")

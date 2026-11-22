@@ -98,6 +98,21 @@ final class ImportCancellation: @unchecked Sendable {
 
 enum ActualCopyEndpoint: Hashable, Sendable { case input, output }
 
+extension Duration {
+  var importBudgetMilliseconds: Int {
+    guard self >= .zero else { return -1 }
+    let elapsed = components
+    let attosecondsPerMillisecond: Int64 = 1_000_000_000_000_000
+    let milliseconds = elapsed.attoseconds / attosecondsPerMillisecond
+    // The contract allows the exact limit. Round up so a fractional overrun is rejected.
+    let partialMillisecond: Int64 = elapsed.attoseconds % attosecondsPerMillisecond == 0 ? 0 : 1
+    let (wholeMilliseconds, overflow) = elapsed.seconds.multipliedReportingOverflow(by: 1000)
+    let (total, fractionOverflow) = wholeMilliseconds.addingReportingOverflow(milliseconds + partialMillisecond)
+    if overflow || fractionOverflow { return -1 }
+    return Int(exactly: total) ?? -1
+  }
+}
+
 /// Fixture observation only; this value cannot attest closure to the lifecycle.
 struct ActualCopyCompletionObservation: Sendable {
   enum Status: Equatable, Sendable { case neverStarted, closedUnvalidated, closedValidated, unknown }
@@ -147,6 +162,7 @@ struct ActualCopyEffects: Sendable {
   let startScope: @Sendable (URL) -> Bool
   let stopScope: @Sendable (URL) -> Void
   let completed: @Sendable (ActualCopyCompletionObservation) -> Void
+  var now: @Sendable () -> ContinuousClock.Instant = { ContinuousClock().now }
 
   static let actual = ActualCopyEffects(beforeOpen: { _, _ in },
     checkedClose: { _, handle in try handle.close() },
@@ -1196,6 +1212,7 @@ public actor LocalLibraryLifecycle {
       return completion
     }
     let authority: ProviderRequest
+    let budget: RequestResourceBudget
     let lease: RequestResourceLease
     do {
       try cancellation.check()
@@ -1205,10 +1222,16 @@ public actor LocalLibraryLifecycle {
         throw LocalLibraryError.invalidPDF
       }
       authority = try ProviderRequest()
+      budget = try RequestResourceBudget(authority: authority, kind: "import")
       let pool = try RequestResourcePool(authority: authority, kind: "import")
       guard let acquired = pool.acquire() else { throw LocalLibraryError.importCapacity }
       lease = acquired
     } catch { return completed(.neverStarted(error)) }
+    let started = effects.now()
+    func checkCopyBudget() throws {
+      try cancellation.check()
+      try budget.observe("elapsedMs", value: started.duration(to: effects.now()).importBudgetMilliseconds)
+    }
     let owner = ActualCopyOwner(identity: identity, source: source, stage: stage, lease: lease,
       effects: effects)
     actualOwner = owner
@@ -1219,6 +1242,7 @@ public actor LocalLibraryLifecycle {
     var copied: Int64 = 0
     var workError: (any Error)?
     do {
+      try checkCopyBudget()
       var selected = stat()
       guard source.withUnsafeFileSystemRepresentation({ path in
         guard let path else { return Int32(-1) }
@@ -1230,8 +1254,8 @@ public actor LocalLibraryLifecycle {
       }
       let values = try source.resourceValues(forKeys: [.contentTypeKey])
       guard values.contentType?.conforms(to: .pdf) == true else { throw LocalLibraryError.invalidPDF }
-      let budget = try RequestResourceBudget(authority: authority, kind: "import")
       try effects.beforeOpen(.input, source)
+      try checkCopyBudget()
       let inputFD = source.withUnsafeFileSystemRepresentation { path in
         guard let path else { return Int32(-1) }
         return Darwin.open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)
@@ -1254,6 +1278,7 @@ public actor LocalLibraryLifecycle {
       }) else { throw LocalLibraryError.cleanupFailed }
       owner.namespaceOwned = true
       try effects.beforeOpen(.output, stage)
+      try checkCopyBudget()
       let outputFD = stage.withUnsafeFileSystemRepresentation { path in
         guard let path else { return Int32(-1) }
         return Darwin.open(path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK,
@@ -1267,15 +1292,11 @@ public actor LocalLibraryLifecycle {
         created.st_uid == Darwin.getuid(), created.st_mode & 0o7777 == 0o600,
         created.st_nlink == 1, created.st_size == 0 else { throw LocalLibraryError.invalidPDF }
       var first = true
-      let clock = ContinuousClock()
-      let started = clock.now
       while true {
-        try cancellation.check()
-        let elapsed = started.duration(to: clock.now).components
-        let milliseconds = Int(elapsed.seconds) * 1000 + Int(elapsed.attoseconds / 1_000_000_000_000_000)
-        try budget.observe("elapsedMs", value: milliseconds)
-        guard let chunk = try input.read(upToCount: authority.limit("readBufferBytes")), !chunk.isEmpty
-        else { break }
+        try checkCopyBudget()
+        let next = try input.read(upToCount: authority.limit("readBufferBytes"))
+        try checkCopyBudget()
+        guard let chunk = next, !chunk.isEmpty else { break }
         try budget.observe("readBufferBytes", value: chunk.count)
         if first {
           try authority.validatePDFSignature(prefix: chunk, mime: nil, sourceKind: "localPDF")
@@ -1309,7 +1330,7 @@ public actor LocalLibraryLifecycle {
     ActualCopyOwnership.shared.releaseKnown(owner)
     if let workError { return completed(.closedUnvalidated(workError)) }
     do {
-      try cancellation.check()
+      try checkCopyBudget()
       let digest = hash.finalize().map { String(format: "%02x", $0) }.joined()
       if let expectedSHA256, digest != expectedSHA256 { throw FolderImportError.sourceChanged }
       guard copied > 0 else { throw LocalLibraryError.invalidPDF }
