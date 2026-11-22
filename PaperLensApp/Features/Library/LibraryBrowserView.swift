@@ -7,7 +7,7 @@ public struct LibraryBrowserView: View {
   private let readReadingRecords: @Sendable (UUID, UUID) async throws -> LibraryReadingRecords
   private let openPaper: @MainActor (OrganizedPaper) async throws -> Void
   private let deletePaper: @MainActor (OrganizedPaper, Bool) -> Void
-  private let acknowledgeDeletionRefresh: @MainActor (Set<UUID>) -> Void
+  private let acknowledgeDeletionRefresh: @MainActor (Set<UUID>, Int) -> Void
   private let importPDF: @MainActor () -> Void
   private let retryImportPDF: @MainActor (UUID, UUID) -> Void
   private let retryImportURL: URLImportRetryAction?
@@ -18,8 +18,11 @@ public struct LibraryBrowserView: View {
   private let metadataRevision: UUID?
   private let deletingPaperIDs: Set<UUID>
   private let finishedDeletionIDs: Set<UUID>
+  private let deletionRevision: Int
   private let activeImportProgress: [UUID: Int64]
   private let localPDFAvailable: Bool
+  private let libraryPresentationAvailable: Bool
+  @State private var observedDeletionRevision: Int?
   @State private var observedImportIDs: Set<UUID> = []
   @State private var observedMetadataRevision: UUID?
   @State private var observedSummaryRevision: UUID?
@@ -47,12 +50,13 @@ public struct LibraryBrowserView: View {
 
   public init(service: LibraryOrganizationService, folderService: FolderImportService,
     filter: Binding<OrganizationFilter>, refreshRevision: Int, deletingPaperIDs: Set<UUID>,
-    finishedDeletionIDs: Set<UUID>, metadataRevision: UUID? = nil,
+    finishedDeletionIDs: Set<UUID>, deletionRevision: Int, metadataRevision: UUID? = nil,
     activeImportProgress: [UUID: Int64] = [:], localPDFAvailable: Bool = true,
+    libraryPresentationAvailable: Bool = true,
     readReadingRecords: @escaping @Sendable (UUID, UUID) async throws -> LibraryReadingRecords,
     openPaper: @escaping @MainActor (OrganizedPaper) async throws -> Void,
     deletePaper: @escaping @MainActor (OrganizedPaper, Bool) -> Void,
-    acknowledgeDeletionRefresh: @escaping @MainActor (Set<UUID>) -> Void,
+    acknowledgeDeletionRefresh: @escaping @MainActor (Set<UUID>, Int) -> Void,
     importPDF: @escaping @MainActor () -> Void,
     retryImportPDF: @escaping @MainActor (UUID, UUID) -> Void,
     retryImportURL: URLImportRetryAction? = nil,
@@ -65,8 +69,10 @@ public struct LibraryBrowserView: View {
     self.openPaper = openPaper; self.importPDF = importPDF
     self.deletingPaperIDs = deletingPaperIDs; self.deletePaper = deletePaper
     self.finishedDeletionIDs = finishedDeletionIDs
+    self.deletionRevision = deletionRevision
     self.activeImportProgress = activeImportProgress
     self.localPDFAvailable = localPDFAvailable
+    self.libraryPresentationAvailable = libraryPresentationAvailable
     self.acknowledgeDeletionRefresh = acknowledgeDeletionRefresh
     self.retryImportPDF = retryImportPDF
     self.retryImportURL = retryImportURL
@@ -152,7 +158,7 @@ public struct LibraryBrowserView: View {
           description: Text(folderLoadFailed
             ? "폴더 목록을 불러오지 못했습니다. 선택은 유지됩니다. 다시 불러오세요."
             : "이 UUID의 폴더가 현재 목록에 없습니다. 다른 폴더를 직접 선택하거나 폴더 관리에서 확인하세요."))
-        Button("폴더 관리", action: requestManageFolders).disabled(busy)
+        Button("폴더 관리", action: requestManageFolders).disabled(busy || !libraryPresentationAvailable)
           .focused($organizationFocus, equals: .manageUnavailableFolder)
       } else if let snapshot {
         if let empty = snapshot.emptyState {
@@ -228,7 +234,7 @@ public struct LibraryBrowserView: View {
       if selectedFolderUnavailable, case .folder(let id) = filter.folder {
         Text("선택 유지 · \(id.uuidString)").font(.caption).textSelection(.enabled)
       }
-      Button("폴더 관리", action: requestManageFolders).disabled(busy)
+      Button("폴더 관리", action: requestManageFolders).disabled(busy || !libraryPresentationAvailable)
         .focused($organizationFocus, equals: .manageFolders)
       Divider()
       Text("필터").font(.headline)
@@ -339,6 +345,7 @@ public struct LibraryBrowserView: View {
     }
     .onChange(of: refreshRevision) { _, _ in refresh() }
     .onChange(of: metadataRevision) { _, _ in refreshAfterBackgroundChange() }
+    .onChange(of: deletionRevision) { _, _ in refreshAfterBackgroundChange() }
     .onChange(of: finishedDeletionIDs) { _, _ in refreshAfterBackgroundChange() }
     .onChange(of: activeImportIDs) { _, _ in refreshAfterBackgroundChange() }
     .onChange(of: canRefreshAfterBackgroundChange) { _, ready in
@@ -477,7 +484,7 @@ public struct LibraryBrowserView: View {
   private func paperActions(_ paper: OrganizedPaper) -> some View {
     HStack {
       Button("열기") { perform { try await service.admitOpen(paper); try await openPaper(paper) } }
-        .disabled(!paper.readable || busy)
+        .disabled(!libraryPresentationAvailable || !paper.readable || busy)
         .focused($organizationFocus, equals: .open(paper.id))
         .accessibilityLabel("\(paper.title) 열기")
       Button("논문 상세") {
@@ -750,7 +757,7 @@ public struct LibraryBrowserView: View {
   }
 
   private func requestManageFolders() {
-    guard !nativeSheetPending, !busy else { return }
+    guard libraryPresentationAvailable, !nativeSheetPending, !busy else { return }
     organizationFocusToRestore = nil
     interruptSheetReturn(newerWork: true)
     manageFolders()
@@ -769,7 +776,7 @@ public struct LibraryBrowserView: View {
 
   private func refreshAfterBackgroundChange() {
     guard canRefreshAfterBackgroundChange,
-      !finishedDeletionIDs.isEmpty || observedImportIDs != activeImportIDs
+      !finishedDeletionIDs.isEmpty || observedDeletionRevision != deletionRevision || observedImportIDs != activeImportIDs
         || observedMetadataRevision != metadataRevision
         || observedSummaryRevision != summaries.completionRevision else { return }
     refresh()
@@ -937,6 +944,7 @@ public struct LibraryBrowserView: View {
       invalidateObservation(preservingEditor: slotID, completingOrganization: token)
     }
     guard rootMount != nil, !busy else { return }
+    observedDeletionRevision = deletionRevision
     observedImportIDs = activeImportIDs
     observedMetadataRevision = metadataRevision
     observedSummaryRevision = summaries.completionRevision
@@ -977,7 +985,7 @@ public struct LibraryBrowserView: View {
       let observation = try await service.observation(filter: request.filter)
       let value = observation.snapshot
       guard !Task.isCancelled, query.accept(value, request: request, currentFilter: filter) else { return }
-      if !refreshingDeletions.isEmpty { acknowledgeDeletionRefresh(refreshingDeletions) }
+      if !refreshingDeletions.isEmpty { acknowledgeDeletionRefresh(refreshingDeletions, deletionRevision) }
       folders = observation.folders ?? []
       folderLoadFailed = observation.folders == nil
       tags = observation.tags ?? []

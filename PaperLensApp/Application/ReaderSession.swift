@@ -179,7 +179,7 @@ public enum ReaderNavigation {
     saveMountedPosition = save
   }
 
-  func savePositionBeforeApplicationTermination() throws {
+  func saveMountedPositionIfAvailable() throws {
     try saveMountedPosition?()
   }
 

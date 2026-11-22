@@ -108,7 +108,7 @@ private final class TopologyApplicationDelegate: NSObject, NSApplicationDelegate
     let reader = ProductAppComposition.readerForApplicationTermination()
     do {
       // The Reader can remain mounted until AppKit terminates the process.
-      try reader?.savePositionBeforeApplicationTermination()
+      try reader?.saveMountedPositionIfAvailable()
     } catch {
       let alert = NSAlert()
       alert.alertStyle = .warning

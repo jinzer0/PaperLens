@@ -426,9 +426,9 @@ private actor WorkspaceDeletionAgent: AgentLibraryPurging {
     }, 1)
   }
 
-  private func openOwnedReader(_ f: Fixture, id: UUID,
+  private func openOwnedReader(_ f: Fixture, id: UUID, presentationMount: UUID? = nil,
     discard: @escaping @MainActor () -> Void = {}) async throws -> ProductWorkspace.OpenReader {
-    try await f.workspace.open(paper(f, id: id))
+    try await f.workspace.open(paper(f, id: id), presentationMount: presentationMount)
     let reader = try XCTUnwrap(f.workspace.reader)
     _ = try reader.session.open(paperID: id, validateDocument: { url in
       XCTAssertEqual(try Data(contentsOf: url), try Data(contentsOf: f.source))
@@ -1708,6 +1708,70 @@ private actor WorkspaceDeletionAgent: AgentLibraryPurging {
     f.workspace.returnToLibrary()
   }
 
+  func testOnlyOpeningWindowMountsReaderAndClosingItRestoresPositionAcrossWindows() async throws {
+    let f = try await fixture()
+    let id = try await importSelected(f)
+    let selected = try await paper(f, id: id)
+    let owner = f.workspace.attachPresentation()
+    let other = f.workspace.attachPresentation()
+    var discarded = 0
+    let first = try await openOwnedReader(f, id: id, presentationMount: owner,
+      discard: { discarded += 1 })
+    XCTAssertTrue(f.workspace.reader(for: owner)?.session === first.session)
+    XCTAssertNil(f.workspace.reader(for: other))
+    f.workspace.returnToLibrary(from: first, presentationMount: other)
+    f.workspace.detachPresentation(other)
+    XCTAssertEqual(discarded, 0)
+    try first.session.withReadAccess { }
+
+    let metadata = try publishMetadataRevision(f, id: id)
+    let refreshed = await f.workspace.refreshPublishedMetadata(for: first)
+    XCTAssertTrue(refreshed)
+    XCTAssertEqual(f.workspace.reader(for: owner)?.metadataIdentity, metadata)
+    let position = ReaderPosition(pageIndex: 2, zoom: 1.5)
+    first.session.registerPositionSaveForTermination { [weak session = first.session] in
+      try session?.save(position)
+    }
+    f.workspace.detachPresentation(owner)
+    XCTAssertEqual(discarded, 1)
+    XCTAssertNil(f.workspace.reader)
+    XCTAssertEqual(first.session.admissionState, .closed)
+
+    let freshWindow = f.workspace.attachPresentation()
+    try await f.workspace.open(selected, presentationMount: freshWindow)
+    let fresh = try XCTUnwrap(f.workspace.reader(for: freshWindow))
+    XCTAssertEqual(try fresh.session.open(paperID: id, validateDocument: { _ in 4 }, discard: {}), position)
+    f.workspace.returnToLibrary(from: first, presentationMount: freshWindow)
+    f.workspace.returnToLibrary(from: first, presentationMount: owner)
+    XCTAssertTrue(f.workspace.reader(for: freshWindow)?.session === fresh.session)
+    f.workspace.returnToLibrary(from: fresh, presentationMount: freshWindow)
+    XCTAssertNil(f.workspace.reader)
+  }
+
+  func testWindowClosingDuringReaderAdmissionDoesNotPresentAnUnownedSession() async throws {
+    let f = try await fixture()
+    let id = try await importSelected(f)
+    let selected = try await paper(f, id: id)
+    let closed = f.workspace.attachPresentation()
+    let observation = f.workspace.$opening.sink { opening in
+      if opening { f.workspace.detachPresentation(closed) }
+    }
+    defer { observation.cancel() }
+    do {
+      try await f.workspace.open(selected, presentationMount: closed)
+      XCTFail("A detached window must not install its Reader")
+    } catch is CancellationError { }
+    XCTAssertNil(f.workspace.reader)
+    XCTAssertFalse(f.workspace.opening)
+
+    let current = f.workspace.attachPresentation()
+    observation.cancel()
+    try await f.workspace.open(selected, presentationMount: current)
+    let reader = try XCTUnwrap(f.workspace.reader(for: current))
+    f.workspace.returnToLibrary(from: reader, presentationMount: current)
+    XCTAssertNil(f.workspace.reader)
+  }
+
   func testRealLifecycleRevocationDiscardsBeforeMissingAgentDeletionFailure() async throws {
     let f = try await fixture()
     let id = try await importSelected(f)
@@ -1828,6 +1892,9 @@ private actor WorkspaceDeletionAgent: AgentLibraryPurging {
     XCTAssertEqual(otherConfirmation.matchingPaperIDs, [removalID])
     let otherID = try await f.workspace.imports.continueImport(otherConfirmation.id, destinationFolderID: survivorFolder.id)
     let other = try await paper(f, id: otherID)
+    let libraryWindow = f.workspace.attachPresentation()
+    let readerWindow = f.workspace.attachPresentation()
+    let beforeDeletion = f.workspace.deletionRevision
 
     let source = try f.database.readerSnapshot(paperID: removalID)
     let lease = try LibraryReadLeaseProvider(lifecycle: f.lifecycle).acquireReadLease(for: source) {
@@ -1835,7 +1902,7 @@ private actor WorkspaceDeletionAgent: AgentLibraryPurging {
       XCTAssertEqual(record?.status, .deleting)
     }
     defer { lease.close() }
-    let deletion = try XCTUnwrap(f.workspace.requestDeletion(removal, retry: false))
+    let deletion = try XCTUnwrap(f.workspace.requestDeletion(removal, retry: false, presentationMount: libraryWindow))
     XCTAssertEqual(f.workspace.deletingPaperIDs, [removalID])
     XCTAssertNil(f.workspace.latestLocalImport)
     XCTAssertNil(f.workspace.imported(removalID, localConfirmationID: selected.id))
@@ -1858,7 +1925,7 @@ private actor WorkspaceDeletionAgent: AgentLibraryPurging {
     let callsBeforeDrain = await agent.deletionIDs
     XCTAssertTrue(callsBeforeDrain.isEmpty)
     try await f.workspace.organization.save(.init(readingStatus: .reading, favorite: true), for: other)
-    let survivor = try await openOwnedReader(f, id: otherID)
+    let survivor = try await openOwnedReader(f, id: otherID, presentationMount: readerWindow)
     let survivorPosition = ReaderPosition(pageIndex: 2, zoom: 1.5)
     try survivor.session.save(survivorPosition)
 
@@ -1871,12 +1938,17 @@ private actor WorkspaceDeletionAgent: AgentLibraryPurging {
     let failed = try await paper(f, id: removalID)
     XCTAssertEqual(failed.status, .deletionFailed)
     XCTAssertFalse(failed.readable)
-    f.workspace.returnToLibrary()
-    XCTAssertNil(f.workspace.requestDeletion(failed, retry: true))
-
-    f.workspace.acknowledgeDeletionRefresh([removalID])
-    let retry = try XCTUnwrap(f.workspace.requestDeletion(failed, retry: true))
+    f.workspace.acknowledgeDeletionRefresh([removalID], revision: beforeDeletion)
+    XCTAssertNil(f.workspace.requestDeletion(failed, retry: true, presentationMount: libraryWindow))
+    let failedRevision = f.workspace.deletionRevision
+    f.workspace.acknowledgeDeletionRefresh([removalID], revision: failedRevision)
+    XCTAssertNil(f.workspace.requestDeletion(failed, retry: true, presentationMount: readerWindow))
+    let retry = try XCTUnwrap(f.workspace.requestDeletion(failed, retry: true, presentationMount: libraryWindow))
     await retry.value
+    f.workspace.acknowledgeDeletionRefresh([removalID], revision: failedRevision)
+    XCTAssertEqual(f.workspace.finishedDeletionIDs, [removalID])
+    XCTAssertTrue(f.workspace.reader(for: readerWindow)?.session === survivor.session)
+    f.workspace.returnToLibrary(from: survivor, presentationMount: readerWindow)
     let calls = await agent.deletionIDs
     XCTAssertEqual(calls.count, 2)
     XCTAssertEqual(calls.first, calls.last)

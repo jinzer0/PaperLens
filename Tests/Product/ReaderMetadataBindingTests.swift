@@ -1676,7 +1676,7 @@ private final class MetadataObservedPDFDocument: PDFDocument {
         BEGIN SELECT RAISE(ABORT, 'synthetic position storage failure'); END;
         """)
     }
-    XCTAssertThrowsError(try session.savePositionBeforeApplicationTermination()) {
+    XCTAssertThrowsError(try session.saveMountedPositionIfAvailable()) {
       XCTAssertTrue($0 is DatabaseError)
     }
     XCTAssertEqual(session.restoredPosition, .init(pageIndex: 1, zoom: 2))
@@ -1684,7 +1684,7 @@ private final class MetadataObservedPDFDocument: PDFDocument {
     XCTAssertTrue(presentation.opened)
     XCTAssertTrue(view.document === document)
     try db.adapterWrite { try $0.execute(sql: "DROP TRIGGER rejectQuitPosition") }
-    try session.savePositionBeforeApplicationTermination()
+    try session.saveMountedPositionIfAvailable()
     XCTAssertEqual(session.restoredPosition, .init(pageIndex: 1, zoom: 2))
     XCTAssertTrue(presentation.opened)
 
@@ -1692,7 +1692,7 @@ private final class MetadataObservedPDFDocument: PDFDocument {
     // session removes the callback, so it cannot later save through a stale owner.
     session.close()
     XCTAssertNil(view.document)
-    XCTAssertNoThrow(try session.savePositionBeforeApplicationTermination())
+    XCTAssertNoThrow(try session.saveMountedPositionIfAvailable())
     let reopened = try ProductDatabase.open(at: db.root)
     let records = try reopened.libraryReadingRecords(paperID: identity.paperID, generation: identity.generation)
     XCTAssertEqual(records.position, .init(pageIndex: 1, zoom: 2))

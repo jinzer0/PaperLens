@@ -11,6 +11,7 @@ public struct URLImportView<LibraryContent: View>: View {
   private let possibleDuplicate: (String) -> Bool
   private let captureRetry: (@MainActor (OrganizedPaper) async throws -> ImportRecoveryRecord)?
   private let localPDFAvailable: Bool
+  private let readerAvailable: Bool
   private let openReader: (UUID) -> Void
   private let chooseLocalPDF: (UUID) -> Void
   private let localPDFFocused: FocusState<Bool>.Binding
@@ -80,7 +81,7 @@ public struct URLImportView<LibraryContent: View>: View {
   init(service: URLImportService, folderService: FolderImportService,
     possibleDuplicate: @escaping (String) -> Bool,
     captureRetry: (@MainActor (OrganizedPaper) async throws -> ImportRecoveryRecord)?,
-    localPDFAvailable: Bool = true,
+    localPDFAvailable: Bool = true, readerAvailable: Bool = true,
     openReader: @escaping (UUID) -> Void,
     localPDFFocused: FocusState<Bool>.Binding,
     localIntentInvalidation: Binding<UUID?>,
@@ -92,6 +93,7 @@ public struct URLImportView<LibraryContent: View>: View {
     self.possibleDuplicate = possibleDuplicate
     self.captureRetry = captureRetry
     self.localPDFAvailable = localPDFAvailable
+    self.readerAvailable = readerAvailable
     self.openReader = openReader
     self.chooseLocalPDF = chooseLocalPDF
     self.localPDFFocused = localPDFFocused
@@ -405,10 +407,10 @@ public struct URLImportView<LibraryContent: View>: View {
       HStack {
         Label("Library에 추가됨", systemImage: "checkmark.circle")
         Button("Reader 열기") {
-          guard drag.isCurrent(mount, interaction), service.state == .ready(paper) else { return }
+          guard readerAvailable, drag.isCurrent(mount, interaction), service.state == .ready(paper) else { return }
           drag.interrupt()
           openReader(paper)
-        }
+        }.disabled(!readerAvailable)
       }
     case .failed(let reason):
       HStack {

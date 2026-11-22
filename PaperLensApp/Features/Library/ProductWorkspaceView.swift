@@ -26,6 +26,7 @@ public final class ProductWorkspace: ObservableObject {
     public let session: ReaderSession
     public let annotationIdentity: AnnotationPaperIdentity
     public let metadataIdentity: ReaderMetadataIdentity?
+    fileprivate let presentationMount: UUID?
     public var mountIdentity: ReaderMountIdentity {
       ReaderMountIdentity(
         paperID: id, generation: annotationIdentity.generation,
@@ -62,6 +63,8 @@ public final class ProductWorkspace: ObservableObject {
   internal var beforeImportConfirmationInstallForOwnedFixtures:
     (@MainActor (LocalImportConfirmation) -> Void)?
   private var metadataReadRequest: UUID?
+  private var publishingReader = false
+  private var closingReader = false
   private var installingSheet = false
   private var clearingSheet = false
   private var cleaningSheet = false
@@ -88,11 +91,17 @@ public final class ProductWorkspace: ObservableObject {
 
   func detachPresentation(_ mount: UUID) {
     guard presentationMounts.remove(mount) != nil else { return }
+    if let reader, reader.presentationMount == mount { closeReader(reader, savingPosition: true) }
     if !installingSheet, !clearingSheet,
       importPreparation?.mount == mount || activeSheetMount == mount
     {
       dismissSheet()
     }
+  }
+
+  func reader(for mount: UUID?) -> OpenReader? {
+    guard let mount, presentationMounts.contains(mount), reader?.presentationMount == mount else { return nil }
+    return reader
   }
 
   func sheet(for mount: UUID?) -> Sheet? {
@@ -147,6 +156,7 @@ public final class ProductWorkspace: ObservableObject {
   @Published private(set) var localImportID: UUID?
   @Published private(set) var deletingPaperIDs: Set<UUID> = []
   @Published private(set) var finishedDeletionIDs: Set<UUID> = []
+  @Published private(set) var deletionRevision = 0
   @Published private(set) var failedInitialParsing: Set<UUID> = []
   @Published public private(set) var revision = 0
   @Published private(set) var libraryMetadataRevision = UUID()
@@ -219,8 +229,12 @@ public final class ProductWorkspace: ObservableObject {
     return try await Task.detached { try database.librarySortFacts() }.value
   }
 
-  @discardableResult func requestDeletion(_ paper: OrganizedPaper, retry: Bool) -> Task<Void, Never>? {
-    guard canOpenReader, paper.status != .deleting, paper.status != .tombstone,
+  @discardableResult func requestDeletion(_ paper: OrganizedPaper, retry: Bool,
+    presentationMount: UUID? = nil) -> Task<Void, Never>? {
+    let libraryIsCurrent = presentationMount.map {
+      presentationMounts.contains($0) && reader?.presentationMount != $0
+    } ?? (reader == nil)
+    guard libraryIsCurrent, libraryPresentationIdle, paper.status != .deleting, paper.status != .tombstone,
       retry == (paper.status == .deletionFailed), !finishedDeletionIDs.contains(paper.id),
       deletingPaperIDs.insert(paper.id).inserted
     else { return nil }
@@ -232,6 +246,7 @@ public final class ProductWorkspace: ObservableObject {
     return Task {
       defer {
         // Keep the old row unavailable until Library reloads its durable status.
+        deletionRevision += 1
         finishedDeletionIDs.insert(paper.id)
         deletingPaperIDs.remove(paper.id)
       }
@@ -240,7 +255,8 @@ public final class ProductWorkspace: ObservableObject {
     }
   }
 
-  func acknowledgeDeletionRefresh(_ paperIDs: Set<UUID>) {
+  func acknowledgeDeletionRefresh(_ paperIDs: Set<UUID>, revision: Int) {
+    guard deletionRevision == revision else { return }
     finishedDeletionIDs.subtract(paperIDs)
   }
 
@@ -492,15 +508,20 @@ public final class ProductWorkspace: ObservableObject {
     else { throw ProductWorkspaceError.diagnosticSourceRequired }
   }
 
-  public func openImportedURL(_ paperID: UUID) {
-    Task { await openImportedPDF(paperID) }
+  public func openImportedURL(_ paperID: UUID, presentationMount: UUID? = nil) {
+    Task { await openImportedPDF(paperID, presentationMount: presentationMount) }
   }
 
-  func openImportedPDF(_ paperID: UUID) async {
+  func openImportedPDF(_ paperID: UUID, presentationMount: UUID? = nil) async {
     guard canOpenReader else { return }
     do {
-      try await openReader(paperID: paperID, expectedGeneration: nil)
-    } catch { failure = "가져온 PDF를 열지 못했습니다. 라이브러리에서 현재 상태를 확인하세요." }
+      try await openReader(paperID: paperID, expectedGeneration: nil, presentationMount: presentationMount)
+    } catch is CancellationError {
+      return
+    } catch {
+      guard presentationMount.map(presentationMounts.contains) ?? true else { return }
+      failure = "가져온 PDF를 열지 못했습니다. 라이브러리에서 현재 상태를 확인하세요."
+    }
   }
 
   @discardableResult public func imported(
@@ -531,8 +552,9 @@ public final class ProductWorkspace: ObservableObject {
     return nil
   }
 
-  public func open(_ paper: OrganizedPaper) async throws {
-    try await openReader(paperID: paper.id, expectedGeneration: paper.generation)
+  public func open(_ paper: OrganizedPaper, presentationMount: UUID? = nil) async throws {
+    try await openReader(paperID: paper.id, expectedGeneration: paper.generation,
+      presentationMount: presentationMount)
   }
 
   func startUnreservedParsing(for observed: OpenReader) async {
@@ -548,13 +570,16 @@ public final class ProductWorkspace: ObservableObject {
     }
   }
 
-  private var canOpenReader: Bool {
-    reader == nil && sheet == nil && !sheetCleanupPending && !preparing && !opening
+  private var libraryPresentationIdle: Bool {
+    sheet == nil && !sheetCleanupPending && !preparing && !opening && !publishingReader && !closingReader
   }
 
-  private var canPrepareLocalImport: Bool { canOpenReader && localImportID == nil }
+  fileprivate var canOpenReader: Bool { libraryPresentationIdle && reader == nil }
 
-  private func openReader(paperID: UUID, expectedGeneration: UUID?) async throws {
+  fileprivate var canPrepareLocalImport: Bool { canOpenReader && localImportID == nil }
+
+  private func openReader(paperID: UUID, expectedGeneration: UUID?, presentationMount: UUID?) async throws {
+    try checkReaderPresentation(presentationMount)
     guard canOpenReader else { throw ProductWorkspaceError.busy }
     confirmationCancellation = nil
     opening = true
@@ -563,6 +588,7 @@ public final class ProductWorkspace: ObservableObject {
     else { throw OrganizationError.stalePaper }
     let generation = try await database.readOrganizationOpenGeneration(
       paperID: paperID, expectedGeneration: expectedGeneration)
+    try checkReaderPresentation(presentationMount)
     guard !deletingPaperIDs.contains(paperID), !finishedDeletionIDs.contains(paperID)
     else { throw OrganizationError.stalePaper }
     // Bind the selected generation at lease acquisition too, not just at the list's check.
@@ -576,16 +602,48 @@ public final class ProductWorkspace: ObservableObject {
       else { throw ReaderMetadataError.staleIdentity }
     }
     metadataReadRequest = nil
-    reader = OpenReader(
+    publishReader(OpenReader(
       id: paperID, session: ReaderSession(database: database, leaseProvider: provider),
-      annotationIdentity: identity, metadataIdentity: metadataIdentity)
+      annotationIdentity: identity, metadataIdentity: metadataIdentity, presentationMount: presentationMount))
+    guard presentationMount.map(presentationMounts.contains) ?? true else { throw CancellationError() }
     if latestLocalImport == paperID { latestLocalImport = nil }
     failure = nil
   }
 
+  private func checkReaderPresentation(_ mount: UUID?) throws {
+    try Task.checkCancellation()
+    guard mount.map(presentationMounts.contains) ?? true else { throw CancellationError() }
+  }
+
+  private func publishReader(_ value: OpenReader) {
+    publishingReader = true
+    reader = value
+    publishingReader = false
+    // Published subscribers can detach the owner before the assignment completes.
+    if let mount = value.presentationMount, !presentationMounts.contains(mount) {
+      closeReader(value, savingPosition: true)
+    }
+  }
+
   public func returnToLibrary() {
+    if let reader, reader.presentationMount == nil { closeReader(reader) }
+  }
+
+  func returnToLibrary(from observed: OpenReader, presentationMount: UUID) {
+    guard reader(for: presentationMount)?.session === observed.session else { return }
+    closeReader(observed)
+  }
+
+  private func closeReader(_ observed: OpenReader, savingPosition: Bool = false) {
+    guard !publishingReader, !closingReader, isCurrentReader(observed) else { return }
+    closingReader = true
+    defer { closingReader = false }
     metadataReadRequest = nil
-    reader?.session.close()  // Synchronously discards PDF/search/selection before closing the lease.
+    if savingPosition {
+      do { try observed.session.saveMountedPositionIfAvailable() }
+      catch { reportSaveFailure(error) }
+    }
+    observed.session.close()
     reader = nil
     revision += 1
   }
@@ -651,12 +709,12 @@ public final class ProductWorkspace: ObservableObject {
         || observed.session.admissionState == .closed
     else { return false }
     if observed.session.currentPaper == nil {
-      observed.session.close()
-      reader = nil
+      closeReader(observed)
     } else {
-      reader = OpenReader(
+      publishReader(OpenReader(
         id: observed.id, session: observed.session,
-        annotationIdentity: observed.annotationIdentity, metadataIdentity: nil)
+        annotationIdentity: observed.annotationIdentity, metadataIdentity: nil,
+        presentationMount: observed.presentationMount))
     }
     failure = "논문 정보를 확인하지 못했습니다. 라이브러리에서 논문을 다시 열어 확인하세요."
     return true
@@ -697,7 +755,7 @@ public final class ProductWorkspace: ObservableObject {
       refresh.admission != .pending
     else { return false }
     do {
-      try observed.session.withReadAccess {
+      let updated: OpenReader? = try observed.session.withReadAccess {
         guard let paper = observed.session.currentPaper,
           paper.paperID == observed.id, paper.generation == observed.annotationIdentity.generation,
           try database.annotationIdentity(paperID: observed.id) == observed.annotationIdentity
@@ -716,11 +774,13 @@ public final class ProductWorkspace: ObservableObject {
           metadataReadRequest == refresh.request,
           observed.session.admissionState == refresh.admission,
           reader.metadataIdentity != identity
-        else { return }
-        self.reader = OpenReader(
+        else { return nil }
+        return OpenReader(
           id: reader.id, session: reader.session,
-          annotationIdentity: reader.annotationIdentity, metadataIdentity: identity)
+          annotationIdentity: reader.annotationIdentity, metadataIdentity: identity,
+          presentationMount: reader.presentationMount)
       }
+      if let updated { publishReader(updated) }
     } catch {
       guard isCurrentReader(observed), !Task.isCancelled else { return true }
       guard metadataReadRequest == refresh.request else { return false }
@@ -843,7 +903,7 @@ public struct ProductWorkspaceView: View {
   public var body: some View {
     let slot = nativeSlot
     VStack(spacing: 0) {
-      if let reader = workspace.reader {
+      if let mount, let reader = workspace.reader(for: mount) {
         NativeReaderView(
           paperID: reader.id, session: reader.session,
           annotationIdentity: reader.annotationIdentity, annotationService: workspace.annotations,
@@ -856,8 +916,10 @@ public struct ProductWorkspaceView: View {
               await workspace.startUnreservedParsing(for: reader)
             },
             onUsableRevisionChange: { await workspace.refreshPublishedMetadata(for: reader) }),
-          onReturn: { workspace.returnToLibrary() },
-          onSaveFailure: { workspace.reportSaveFailure($0) }
+          onReturn: { workspace.returnToLibrary(from: reader, presentationMount: mount) },
+          onSaveFailure: {
+            if workspace.reader(for: mount)?.session === reader.session { workspace.reportSaveFailure($0) }
+          }
         )
         .id(reader.mountIdentity)
       } else {
@@ -865,10 +927,12 @@ public struct ProductWorkspaceView: View {
           Group {
             Button("폴더 관리") { openToolbar(.folders) }.focused($folderOpenerFocused)
             Button("Settings") { openToolbar(.settings) }.focused($settingsOpenerFocused)
-            if let paperID = workspace.latestLocalImport {
-              Button("가져온 PDF 열기") { Task { await workspace.openImportedPDF(paperID) } }
+            if let mount, let paperID = workspace.latestLocalImport {
+              Button("가져온 PDF 열기") {
+                Task { await workspace.openImportedPDF(paperID, presentationMount: mount) }
+              }
             }
-          }.disabled(workspace.preparing || workspace.opening || workspace.sheetCleanupPending)
+          }.disabled(!workspace.canOpenReader)
           if let mount, workspace.isPreparingImport(for: mount) {
             ProgressView("PDF 확인 중")
             Button("취소") { workspace.cancelLocalImportPreparation(for: mount) }
@@ -880,8 +944,11 @@ public struct ProductWorkspaceView: View {
           service: urls, folderService: workspace.imports,
           possibleDuplicate: { _ in true },
           captureRetry: { try await workspace.captureURLImportRetry($0) },
-          localPDFAvailable: workspace.localImportID == nil,
-          openReader: { workspace.openImportedURL($0) },
+          localPDFAvailable: workspace.canPrepareLocalImport, readerAvailable: workspace.canOpenReader,
+          openReader: { paperID in
+            guard let mount else { return }
+            workspace.openImportedURL(paperID, presentationMount: mount)
+          },
           localPDFFocused: $localPDFFocused,
           localIntentInvalidation: Binding(
             get: {
@@ -902,19 +969,25 @@ public struct ProductWorkspaceView: View {
             service: workspace.organization, folderService: workspace.imports,
             filter: $workspace.libraryFilter, refreshRevision: workspace.revision,
             deletingPaperIDs: workspace.deletingPaperIDs, finishedDeletionIDs: workspace.finishedDeletionIDs,
+            deletionRevision: workspace.deletionRevision,
             metadataRevision: workspace.libraryMetadataRevision,
-            activeImportProgress: activeImportProgress, localPDFAvailable: workspace.localImportID == nil,
+            activeImportProgress: activeImportProgress, localPDFAvailable: workspace.canPrepareLocalImport,
+            libraryPresentationAvailable: workspace.canOpenReader,
             readReadingRecords: { [annotations = workspace.annotations] paperID, generation in
               try await Task.detached {
                 try annotations.libraryReadingRecords(paperID: paperID, generation: generation)
               }.value
             },
             openPaper: {
+              guard let mount else { throw CancellationError() }
               invalidateDirectIntent()
-              try await workspace.open($0)
+              try await workspace.open($0, presentationMount: mount)
             },
-            deletePaper: { workspace.requestDeletion($0, retry: $1) },
-            acknowledgeDeletionRefresh: { workspace.acknowledgeDeletionRefresh($0) },
+            deletePaper: {
+              guard let mount else { return }
+              workspace.requestDeletion($0, retry: $1, presentationMount: mount)
+            },
+            acknowledgeDeletionRefresh: { workspace.acknowledgeDeletionRefresh($0, revision: $1) },
             importPDF: {
               guard let mount else { return }
               invalidateDirectIntent()
@@ -961,7 +1034,7 @@ public struct ProductWorkspaceView: View {
       if let oldMount { workspace.detachPresentation(oldMount) }
       diagnosticPresentationChange?(nil)
     }
-    .onChange(of: workspace.reader?.mountIdentity) { _, reader in
+    .onChange(of: workspace.reader(for: mount)?.mountIdentity) { _, reader in
       if reader != nil {
         invalidateDirectIntent()
         toolbarPresentation = nil
