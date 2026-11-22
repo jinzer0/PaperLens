@@ -231,9 +231,9 @@ public struct LibraryBrowserView: View {
       Text("폴더").font(.headline)
       folderControl("전체 논문", selection: .all)
       folderControl("미분류", selection: .unfiled)
-      if loading {
+      if loading && folders.isEmpty {
         ProgressView("폴더 불러오는 중")
-      } else if folderLoadFailed || loadFailed {
+      } else if !loading && (folderLoadFailed || loadFailed) {
         Text("폴더 목록을 불러오지 못했습니다.").font(.caption)
         Button("폴더 다시 불러오기", action: requestRefresh).disabled(busy)
           .focused($organizationFocus, equals: .retryFolders)
@@ -263,9 +263,9 @@ public struct LibraryBrowserView: View {
       Divider()
       Text("사용자 태그").font(.headline)
       tagControl("전체 태그", selection: nil)
-      if loading {
+      if loading && tags.isEmpty {
         ProgressView("저장된 태그 불러오는 중")
-      } else if tagLoadFailed || loadFailed {
+      } else if !loading && (tagLoadFailed || loadFailed) {
         Text("저장된 태그를 불러오지 못했습니다. 선택은 유지됩니다.").font(.caption)
         Button("태그 다시 불러오기", action: requestRefresh).disabled(busy)
           .focused($organizationFocus, equals: .retryTags)
@@ -1058,10 +1058,7 @@ public struct LibraryBrowserView: View {
     loadTask = nil
     if !canPreserveOrganizationReturn(token) { organizationFocusToRestore = nil }
     currentFacts = [:]
-    folders = []
-    folderLoadFailed = false
-    tags = []
-    tagLoadFailed = false
+    // These catalogs only select a query. Keep their controls mounted while its rows reload.
     query.invalidate()
   }
   private func load(_ request: OrganizationQueryState.Request, refreshingDeletions: Set<UUID>) async {
