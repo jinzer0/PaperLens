@@ -65,7 +65,7 @@ final class URLImportTests: XCTestCase {
     let directory = try directory()
     let limit = Duration.milliseconds(authority.limit("importElapsedMs"))
     for elapsed in [limit, limit + .microseconds(1)] {
-      let clock = HTTPSImportTestClock()
+      let clock = PDFImportTestClock()
       let observations = HTTPSCloseObservations(pool: pool)
       var effects = observations.effects(onDrain: { clock.advance(by: elapsed) })
       effects.now = { clock.now }
@@ -508,7 +508,7 @@ final class URLImportTests: XCTestCase {
   }
 }
 
-final class HTTPSImportTestClock: @unchecked Sendable {
+final class PDFImportTestClock: @unchecked Sendable {
   private let lock = NSLock()
   private var instant = ContinuousClock().now
   private var pendingAdvance: Duration = .zero

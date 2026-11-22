@@ -1815,6 +1815,28 @@ final class LocalLibraryLifecycleTests: XCTestCase, @unchecked Sendable {
     }
   }
 
+  func testExpiredRetryRevalidationPreservesTheFailedJob() async throws {
+    let (db, lifecycle, old, _) = try await actualRetryFixture()
+    let identity = try old.journal.currentCapture().identity
+    let before = try deletionRows(db, identity.paperID)
+    let limit = Duration.milliseconds(try ProviderRequest().limit("importElapsedMs"))
+    let clock = PDFImportTestClock()
+    let service = FolderImportService(database: db, lifecycle: lifecycle,
+      closeSelectedSource: { try $0.close() }, now: { clock.now })
+    let confirmed = try await service.prepareRetry(source: source("expired-retry.pdf"),
+      paperID: identity.paperID, generation: identity.generation)
+
+    clock.advanceAfterNextRead(by: limit + .microseconds(1))
+    do {
+      _ = try await service.continueImport(confirmed.id, destinationFolderID: nil)
+      XCTFail("An expired retry replaced the failed job")
+    } catch { XCTAssertEqual(error as? FolderImportError, .sourceReadTimedOut) }
+    assertDeletionRowsEqual(before, try deletionRows(db, identity.paperID))
+    XCTAssertFalse(FileManager.default.fileExists(atPath: namespace(identity.paperID).path))
+    let pending = await service.pendingConfirmationCount
+    XCTAssertEqual(pending, 0)
+  }
+
   func testRetryPreparationRejectsLegacySucceededUnavailableAndDeletingJobsWithoutReconstruction() async throws {
     let (db, lifecycle, old, _) = try await actualRetryFixture()
     let service = FolderImportService(database: db, lifecycle: lifecycle)

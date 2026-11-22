@@ -463,7 +463,7 @@ final class LibraryURLImportWriterTests: XCTestCase, @unchecked Sendable {
     let downloadTime = Duration.seconds(7)
     for (overrunAtClose, overrunBeforeMove) in [(false, false), (true, false), (false, true)] {
       let db = try database()
-      let clock = HTTPSImportTestClock()
+      let clock = PDFImportTestClock()
       let roots = LibraryURLImportWriter.rootedValidationIDs
       let before = pool.active
       let observation = URLValidationObservation(pool: pool)

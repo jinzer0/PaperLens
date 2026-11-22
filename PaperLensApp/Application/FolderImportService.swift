@@ -121,22 +121,22 @@ public actor FolderImportService {
   private let lifecycle: LocalLibraryLifecycle
   private let closeSelectedSource: @Sendable (FileHandle) throws -> Void
   private let beforeOpen: (@Sendable (URL) throws -> Void)?
+  private let now: @Sendable () -> ContinuousClock.Instant
   private var pending: [UUID: Pending] = [:]
 
   public init(database: ProductDatabase, lifecycle: LocalLibraryLifecycle) {
-    self.database = database
-    self.lifecycle = lifecycle
-    self.closeSelectedSource = { try $0.close() }
-    self.beforeOpen = nil
+    self.init(database: database, lifecycle: lifecycle, closeSelectedSource: { try $0.close() })
   }
 
   internal init(database: ProductDatabase, lifecycle: LocalLibraryLifecycle,
     closeSelectedSource: @escaping @Sendable (FileHandle) throws -> Void,
-    beforeOpen: (@Sendable (URL) throws -> Void)? = nil) {
+    beforeOpen: (@Sendable (URL) throws -> Void)? = nil,
+    now: @escaping @Sendable () -> ContinuousClock.Instant = { ContinuousClock().now }) {
     self.database = database
     self.lifecycle = lifecycle
     self.closeSelectedSource = closeSelectedSource
     self.beforeOpen = beforeOpen
+    self.now = now
   }
 
   internal nonisolated static func unknownSelectedSourceReads() -> [SelectedSourceReadOwner] {
@@ -217,9 +217,10 @@ public actor FolderImportService {
     let database = database
     let closeSelectedSource = closeSelectedSource
     let beforeOpen = beforeOpen
+    let now = now
     let facts = try await Self.readSelectedSource {
       if validateDestination { try database.validateFolderDestination(destinationFolderID) }
-      let digest = try Self.hashLocalPDF(source, close: closeSelectedSource, beforeOpen: beforeOpen)
+      let digest = try Self.hashLocalPDF(source, close: closeSelectedSource, beforeOpen: beforeOpen, now: now)
       try Task.checkCancellation()
       return (digest, try database.contentHashMatches(digest))
     }
@@ -243,10 +244,11 @@ public actor FolderImportService {
     let database = database
     let closeSelectedSource = closeSelectedSource
     let beforeOpen = beforeOpen
+    let now = now
     let digest = try await Self.readSelectedSource {
       try database.validateFolderDestination(destinationFolderID)
       let digest = try Self.hashLocalPDF(intent.source, close: closeSelectedSource,
-        beforeOpen: beforeOpen)
+        beforeOpen: beforeOpen, now: now)
       guard digest == intent.digest else {
         throw FolderImportError.sourceChanged
       }
@@ -285,18 +287,26 @@ public actor FolderImportService {
 
   private nonisolated static func hashLocalPDF(_ source: URL, validateSignature: Bool = true,
     close: @Sendable (FileHandle) throws -> Void,
-    beforeOpen: (@Sendable (URL) throws -> Void)?) throws -> String {
+    beforeOpen: (@Sendable (URL) throws -> Void)?,
+    now: @Sendable () -> ContinuousClock.Instant = { ContinuousClock().now }) throws -> String {
     try Task.checkCancellation()
-    guard source.isFileURL else { throw FolderImportError.invalidSource }
+    guard source.isFileURL, !source.absoluteString.contains("%00"),
+      !source.path(percentEncoded: false).utf8.contains(0) else { throw FolderImportError.invalidSource }
     let authority = try ProviderRequest()
+    let budget = try RequestResourceBudget(authority: authority, kind: "import")
     let pool = try RequestResourcePool(authority: authority, kind: "import")
     guard let lease = pool.acquire() else { throw LocalLibraryError.importCapacity }
+    let started = now()
+    func checkElapsed() throws {
+      try Task.checkCancellation()
+      do { try budget.observe("elapsedMs", value: started.duration(to: now()).importBudgetMilliseconds) }
+      catch { throw FolderImportError.sourceReadTimedOut }
+    }
     let scoped = source.startAccessingSecurityScopedResource()
     let owner: SelectedSourceReadOwner
     let observed: stat
-    let budget: RequestResourceBudget
     do {
-      budget = try RequestResourceBudget(authority: authority, kind: "import")
+      try checkElapsed()
       var facts = stat()
       guard source.withUnsafeFileSystemRepresentation({ path in
         path.map { Darwin.lstat($0, &facts) } ?? -1
@@ -309,7 +319,7 @@ public actor FolderImportService {
       }
       observed = facts
       try beforeOpen?(source)
-      try Task.checkCancellation()
+      try checkElapsed()
       let descriptor = source.withUnsafeFileSystemRepresentation { path in
         path.map { Darwin.open($0, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK) } ?? -1
       }
@@ -327,10 +337,9 @@ public actor FolderImportService {
     let input = owner.handle
     var hash = SHA256()
     var bytes = 0
-    let clock = ContinuousClock()
-    let start = clock.now
     var failure: (any Error)?
     do {
+      try checkElapsed()
       var pinned = stat()
       guard Darwin.fstat(input.fileDescriptor, &pinned) == 0,
         pinned.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG),
@@ -341,12 +350,10 @@ public actor FolderImportService {
       }
       let size = Int(pinned.st_size)
       while true {
-        try Task.checkCancellation()
-        let elapsed = start.duration(to: clock.now).components
-        try budget.observe("elapsedMs", value: Int(elapsed.seconds) * 1000
-          + Int(elapsed.attoseconds / 1_000_000_000_000_000))
-        guard let chunk = try input.read(upToCount: authority.limit("readBufferBytes")),
-          !chunk.isEmpty else { break }
+        try checkElapsed()
+        let next = try input.read(upToCount: authority.limit("readBufferBytes"))
+        try checkElapsed()
+        guard let chunk = next, !chunk.isEmpty else { break }
         try budget.observe("readBufferBytes", value: chunk.count)
         try budget.add("bodyBytes", delta: chunk.count)
         if validateSignature && bytes == 0 {
@@ -365,6 +372,8 @@ public actor FolderImportService {
     if scoped { source.stopAccessingSecurityScopedResource() }
     SelectedSourceReadRoots.shared.removeKnownClosed(owner.id)
     if let failure { throw failure }
-    return hash.finalize().map { String(format: "%02x", $0) }.joined()
+    let digest = hash.finalize().map { String(format: "%02x", $0) }.joined()
+    try checkElapsed()
+    return digest
   }
 }

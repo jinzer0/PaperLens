@@ -17,7 +17,7 @@ public struct CapturedPaperPlacement: Equatable, Sendable {
 
 public enum FolderImportError: Error, Equatable, Sendable {
   case invalidName, missingFolder, paperNotReady, invalidSource, sourceChanged, consumedIntent
-  case stalePlacement
+  case stalePlacement, sourceReadTimedOut
 }
 
 extension ProductDatabase {

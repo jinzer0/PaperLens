@@ -7,6 +7,8 @@ extension FolderImportError {
       "선택한 저장 폴더가 더 이상 없습니다. Library에서 다른 폴더나 ‘미분류’를 선택한 뒤 PDF를 다시 선택하세요."
     case .sourceChanged, .invalidSource:
       "원본 PDF가 변경되었거나 읽을 수 없습니다. PDF를 다시 선택하세요."
+    case .sourceReadTimedOut:
+      "원본 PDF를 확인하는 데 시간이 너무 오래 걸렸습니다. PDF를 다시 선택하세요."
     default:
       nil
     }

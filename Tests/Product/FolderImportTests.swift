@@ -355,6 +355,66 @@ final class FolderImportTests: XCTestCase {
     try assertNoImportEffects(db)
   }
 
+  func testExpiredSelectionStopsBeforeOpeningAndReturnsCapacity() async throws {
+    let (root, source, db) = try fixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let authority = try ProviderRequest()
+    let pool = try RequestResourcePool(authority: authority, kind: "import")
+    let before = pool.active
+    let limit = Duration.milliseconds(authority.limit("importElapsedMs"))
+    let lifecycle = try await LocalLibraryLifecycle.open(database: db)
+    let clock = PDFImportTestClock()
+    let closes = CloseCalls()
+    let service = FolderImportService(database: db, lifecycle: lifecycle,
+      closeSelectedSource: { handle in closes.record(); try handle.close() },
+      beforeOpen: { _ in clock.advance(by: limit + .microseconds(1)) },
+      now: { clock.now })
+
+    do {
+      _ = try await service.prepare(source: source)
+      XCTFail("An expired selection opened the PDF")
+    } catch { XCTAssertEqual(error as? FolderImportError, .sourceReadTimedOut) }
+    XCTAssertEqual(closes.count, 0)
+    XCTAssertEqual(pool.active, before)
+    let pending = await service.pendingConfirmationCount
+    XCTAssertEqual(pending, 0)
+    try assertNoImportEffects(db)
+  }
+
+  func testSelectionAndContinueBothCountTimeSpentClosingTheSource() async throws {
+    let (root, source, db) = try fixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let authority = try ProviderRequest()
+    let pool = try RequestResourcePool(authority: authority, kind: "import")
+    let before = pool.active
+    let limit = Duration.milliseconds(authority.limit("importElapsedMs"))
+    let lifecycle = try await LocalLibraryLifecycle.open(database: db)
+    let clock = PDFImportTestClock()
+    let closes = CloseCalls()
+    let service = FolderImportService(database: db, lifecycle: lifecycle,
+      closeSelectedSource: { handle in
+        closes.record()
+        try handle.close()
+        clock.advance(by: closes.count == 1 ? limit : limit + .microseconds(1))
+      }, now: { clock.now })
+
+    let confirmation = try await service.prepare(source: source)
+    XCTAssertEqual(closes.count, 1)
+    XCTAssertEqual(pool.active, before)
+    do {
+      _ = try await service.continueImport(confirmation.id, destinationFolderID: nil)
+      XCTFail("An expired revalidation imported the PDF")
+    } catch { XCTAssertEqual(error as? FolderImportError, .sourceReadTimedOut) }
+    XCTAssertEqual(closes.count, 2)
+    XCTAssertEqual(pool.active, before)
+    XCTAssertFalse(FolderImportService.unknownSelectedSourceReads().contains { $0.source == source })
+    do {
+      _ = try await service.continueImport(confirmation.id, destinationFolderID: nil)
+      XCTFail("An expired confirmation could be used again")
+    } catch { XCTAssertEqual(error as? FolderImportError, .consumedIntent) }
+    try assertNoImportEffects(db)
+  }
+
   func testUnknownCloseRetainsRealHandleLeaseAndScopeAfterFacadeLoss() async throws {
     let (root, source, db) = try fixture()
     defer { try? FileManager.default.removeItem(at: root) }
@@ -453,7 +513,8 @@ final class FolderImportTests: XCTestCase {
     let output = try FileHandle(forWritingTo: large)
     try output.truncate(atOffset: UInt64(try ProviderRequest().limit("pdfBytes")) + 1)
     try output.close()
-    for candidate in [symlink, fifo, directory, empty, large] {
+    let encodedNUL = try XCTUnwrap(URL(string: source.absoluteString + "%00suffix.pdf"))
+    for candidate in [symlink, fifo, directory, empty, large, encodedNUL] {
       do { _ = try await service.prepare(source: candidate); XCTFail("Invalid source admitted") }
       catch { XCTAssertEqual(error as? FolderImportError, .invalidSource) }
       XCTAssertEqual(try RequestResourcePool(authority: ProviderRequest(), kind: "import").active, 0)
