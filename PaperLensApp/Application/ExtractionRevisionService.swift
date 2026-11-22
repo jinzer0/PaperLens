@@ -781,7 +781,7 @@ public struct ExtractionRevisionService: Sendable {
     try Task.checkCancellation()
     try await Task.detached {
       do { try database.reserveExtraction(identity, firstInvocationOnly: firstInvocationOnly) }
-      catch let error as DatabaseError where firstInvocationOnly {
+      catch where firstInvocationOnly && (error is DatabaseError || (error as? ExtractionError) == .reservationFailure) {
         try database.recordInitialExtractionFailure(identity)
         throw error
       }

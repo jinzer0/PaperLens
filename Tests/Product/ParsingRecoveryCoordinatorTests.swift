@@ -13,6 +13,16 @@ final class ParsingRecoveryCoordinatorTests: XCTestCase {
     }
   }
 
+  private actor UnexpectedDispatchProducer: ExtractionBatchProducing {
+    private(set) var invocationCount = 0
+
+    func withBatches(_ identity: ExtractionIdentity,
+      consume: @escaping @Sendable ([ExtractionBatch], ExtractionConsumptionScope) async throws -> Void) async throws {
+      invocationCount += 1
+      throw ExtractionError.invalidBatch
+    }
+  }
+
   /// Controlled failure, not a parser or geometry-success substitute.
   private actor HeldFailureProducer: ExtractionBatchProducing {
     private let failure: ExtractionError
@@ -46,7 +56,7 @@ final class ParsingRecoveryCoordinatorTests: XCTestCase {
     }
   }
 
-  private func fixture() throws -> (ProductDatabase, ExtractionIdentity, URL) {
+  private func fixture(reserve: Bool = true) throws -> (ProductDatabase, ExtractionIdentity, URL) {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     let database = try ProductDatabase.open(at: root)
     let paper = UUID(), generation = UUID()
@@ -61,8 +71,10 @@ final class ParsingRecoveryCoordinatorTests: XCTestCase {
         VALUES (?, ?, 'fixture', 'ready', ?, ?, 0)
         """, arguments: [paper.uuidString, generation.uuidString, identity.pdfReference, identity.pdfSHA256])
     }
-    try database.reserveExtraction(identity)
-    try database.failExtraction(identity, failure: .invalidBatch)
+    if reserve {
+      try database.reserveExtraction(identity)
+      try database.failExtraction(identity, failure: .invalidBatch)
+    }
     return (database, identity, root)
   }
 
@@ -295,6 +307,74 @@ final class ParsingRecoveryCoordinatorTests: XCTestCase {
     XCTAssertEqual(try database.adapterRead {
       try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM extractionAttemptHistory")
     }, 0)
+  }
+
+  func testIncompleteRetryReservationRetainsFailedAttemptWithoutDispatch() async throws {
+    for mutation in [
+      "BEFORE INSERT ON extractionInvocation BEGIN SELECT RAISE(IGNORE); END",
+      "BEFORE INSERT ON extractionAttempt BEGIN SELECT RAISE(IGNORE); END",
+      """
+      AFTER INSERT ON extractionAttempt BEGIN
+        UPDATE extractionInvocation SET fence = 'wrong-fence' WHERE attempt = NEW.attempt;
+      END
+      """,
+    ] {
+      let (database, old, root) = try fixture()
+      defer { try? FileManager.default.removeItem(at: root) }
+      let producer = UnexpectedDispatchProducer()
+      let coordinator = ParsingRecoveryCoordinator(service: .init(database: database,
+        producer: producer, geometryValidator: RejectingValidator()), currentEpoch: UUID())
+      let before = try await coordinator.presentation(paperID: old.paperID)
+      let expected = try XCTUnwrap(before.retry)
+      try database.adapterWrite { try $0.execute(sql: "CREATE TRIGGER alterReservation \(mutation)") }
+
+      do { try await coordinator.retry(expected); XCTFail("Incomplete reservation was dispatched") }
+      catch { XCTAssertEqual(error as? ExtractionError, .reservationFailure, mutation) }
+
+      let calls = await producer.invocationCount
+      XCTAssertEqual(calls, 0, mutation)
+      let reopened = try ProductDatabase.open(at: root)
+      let status = try reopened.extractionStatus(paperID: old.paperID)
+      XCTAssertEqual(status.state, before.status.state, mutation)
+      XCTAssertEqual(status.failure, before.status.failure, mutation)
+      XCTAssertEqual(status.usableRevision, before.status.usableRevision, mutation)
+      XCTAssertEqual(try invocationCount(reopened), 1, mutation)
+      XCTAssertEqual(try reopened.adapterRead {
+        try Int.fetchOne($0, sql: "SELECT COUNT(*) FROM extractionAttemptHistory")
+      }, 0, mutation)
+      let reopenedCoordinator = ParsingRecoveryCoordinator(service: .init(database: reopened,
+        producer: producer, geometryValidator: RejectingValidator()), currentEpoch: UUID())
+      let after = try await reopenedCoordinator.context(paperID: old.paperID)
+      XCTAssertEqual(after, expected, mutation)
+    }
+  }
+
+  func testIncompleteInitialReservationPersistsExplicitRetryWithoutDispatch() async throws {
+    let (database, identity, root) = try fixture(reserve: false)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let producer = UnexpectedDispatchProducer()
+    let service = ExtractionRevisionService(database: database, producer: producer,
+      geometryValidator: RejectingValidator())
+    try database.adapterWrite { db in
+      try db.execute(sql: """
+        CREATE TRIGGER ignoreInitialReservation BEFORE INSERT ON extractionAttempt
+        WHEN NEW.state = 'running' BEGIN SELECT RAISE(IGNORE); END;
+        """)
+    }
+
+    do {
+      try await service.parse(identity, firstInvocationOnly: true)
+      XCTFail("Incomplete reservation was dispatched")
+    } catch { XCTAssertEqual(error as? ExtractionError, .reservationFailure) }
+
+    let calls = await producer.invocationCount
+    XCTAssertEqual(calls, 0)
+    XCTAssertEqual(try invocationCount(database), 1)
+    let coordinator = ParsingRecoveryCoordinator(service: service, currentEpoch: identity.epoch)
+    let failure = try await coordinator.presentation(paperID: identity.paperID)
+    XCTAssertEqual(failure.status.state, "failed")
+    XCTAssertEqual(failure.status.failure, ExtractionError.reservationFailure.rawValue)
+    XCTAssertEqual(failure.retry?.failedAttempt, identity)
   }
 
   func testUsableRevisionChangeInvalidatesCapturedRetryAndRetainsReaderData() async throws {

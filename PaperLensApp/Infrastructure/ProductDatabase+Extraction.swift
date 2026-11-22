@@ -201,6 +201,7 @@ extension ProductDatabase {
 
   private func insertExtractionInvocation(_ db: Database, _ identity: ExtractionIdentity,
     failure: ExtractionError? = nil) throws {
+    let state = failure == nil ? "running" : "failed"
     try db.execute(sql: "INSERT INTO extractionInvocation(attempt, fence, revision, paperID) VALUES (?, ?, ?, ?)",
       arguments: [identity.attempt.uuidString, identity.fence.uuidString,
         identity.revision.uuidString, identity.paperID.uuidString])
@@ -208,7 +209,15 @@ extension ProductDatabase {
       INSERT INTO extractionAttempt(paperID, generation, pdfSHA256, pdfReference, revision,
         job, attempt, fence, correlation, input, epoch, configSlot, configGeneration, configKind, state, failure)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      """, arguments: attemptArguments(identity) + [failure == nil ? "running" : "failed", failure?.rawValue])
+      """, arguments: attemptArguments(identity) + [state, failure?.rawValue])
+    try guardExtractionPaper(db, identity)
+    guard try matchesExtractionAttempt(db, identity, state: state, failure: failure),
+      try Int.fetchOne(db, sql: """
+        SELECT COUNT(*) FROM extractionInvocation
+        WHERE attempt = ? AND fence = ? AND revision = ? AND paperID = ?
+        """, arguments: [identity.attempt.uuidString, identity.fence.uuidString,
+          identity.revision.uuidString, identity.paperID.uuidString]) == 1
+    else { throw ExtractionError.reservationFailure }
   }
 
   func publishExtraction(_ identity: ExtractionIdentity, sentences: [ValidatedExtractionSentence],
