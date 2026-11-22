@@ -837,6 +837,8 @@ class OfficialSDKWorker:
             stage = self._current(params)
             if method == 'product.loginObserve':
                 with self.state_lock:
+                    # Observation can authorize the next probe even without an SDK call.
+                    self._admit(request_id)
                     state = {'authCompleted': 'authenticated', 'failed': 'failed',
                              'cancelled': 'cancelled'}.get(stage.controller.state, 'pending')
                 return {'stageID': stage.stage_id, 'intentID': stage.intent_id, 'state': state}

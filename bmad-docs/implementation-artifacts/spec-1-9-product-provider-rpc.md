@@ -1,5 +1,16 @@
 # Story 1.9 Build Spec — Product ProviderRPC
 
+## 종료 중 로그인 상태 조회 — 2026-11-22
+
+브라우저와 기기 코드 로그인(Story 1.11~1.12)의 상태 조회가 Agent 종료 시작 뒤에도
+이전 `authenticated` 상태를 반환할 수 있었다. `product.loginObserve`도 종료 요청
+여부를 확인하고, 종료가 시작됐으면 `unavailable`을 반환한다. 종료 전 명시적 로그인
+취소는 `cancelled`로 조회할 수 있다. SDK 호출로 확보한 로그인 ID는 정리 소유자가 유지한다.
+
+합성 브라우저의 상태 조회 요청이 대기 중일 때 Native `revoke`를 적용한 사례와, 기기 코드
+인증 뒤 Agent가 종료를 요청하고 종료 ID를 기다리는 구간을 검증했다. SDK Worker,
+로그인, RPC 테스트 104개와 패키징 테스트 33개가 통과했다.
+
 ## User-authorized asynchronous retirement contract — 2026-11-07
 
 The user removed the SDK termination/deletion **300ms completion requirement**.

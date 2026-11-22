@@ -271,9 +271,36 @@ class ScriptedDispatchTests(unittest.IsolatedAsyncioTestCase):
         result = await self.call('product.loginCancel', self.bound)
         self.assertTrue(result['accepted'])
         self.assertIn(('account_login_cancel', 'actual-login'), self.owner.client.calls)
+        self.assertEqual((await self.call('product.loginObserve', self.bound))['state'], 'cancelled')
         self.assertFalse((await self.call('product.loginCancel', self.bound))['accepted'])
         self.assertIsNotNone(self.owner.stage)
         self.assertFalse(self.owner.stage.probe_validated)
+
+    async def test_queued_browser_observation_cannot_publish_authentication_after_revoke(self):
+        await self.authenticate()
+        server = agent.Server(mode='product', worker=self.owner)
+        server.ready = self.owner.initialized
+        observe = request('product.loginObserve', self.bound)
+        server.accept(observe)
+        pending = server.pending[observe['id']].task
+        self.owner._control({'v': 2, 'runID': self.owner.run_id, 'op': 'revoke',
+                             'retirementID': str(uuid.uuid4())})
+        await pending
+
+        _, frame = server.outgoing.get_nowait()
+        self.assertEqual(decode_frame(frame), {
+            'kind': 'error', 'id': observe['id'], 'code': 'unavailable'})
+        self.assertEqual(self.owner.stage.login_ids, ['actual-login'])
+
+    async def test_device_observation_refused_while_waiting_for_retirement_identity(self):
+        await self.authenticate('device')
+        with patch.object(self.owner, '_send_control') as control:
+            self.owner._session_limit()
+            control.assert_called_once_with('revokeNeeded', code='sessionLimit')
+        self.assertIsNone(self.owner.retirement_id)
+        with self.assertRaises(ProtocolError) as caught:
+            await self.call('product.loginObserve', self.bound)
+        self.assertEqual(caught.exception.code, 'unavailable')
 
     async def test_bad_cancel_status_and_bad_login_projection_are_closed(self):
         await self.login()
