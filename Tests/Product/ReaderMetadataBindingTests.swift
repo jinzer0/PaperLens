@@ -1594,6 +1594,56 @@ private final class MetadataObservedPDFDocument: PDFDocument {
     }
   }
 
+  func testCenteredPDFConfirmsOutlineArrivalFromVisibleCrop() async throws {
+    let (db, lifecycle, identity, owner) = try await fixture()
+    owner.session.close()
+    let service = ReaderMetadataService(database: db)
+    let session = ReaderSession(database: db, leaseProvider: LibraryReadLeaseProvider(lifecycle: lifecycle))
+    let frame = CGRect(x: 0, y: 0, width: 740, height: 340)
+    let window = NSWindow(contentRect: frame, styleMask: [.titled], backing: .buffered, defer: true)
+    window.isReleasedWhenClosed = false
+    let view = PDFView(frame: frame)
+    window.contentView = view
+    defer {
+      session.close()
+      window.close()
+    }
+    let presentation = ReaderPresentation(session: session,
+      annotationIdentity: try db.annotationIdentity(paperID: identity.paperID),
+      annotationService: AnnotationService(database: db), metadataService: service,
+      metadataIdentity: identity, pdfView: view)
+    presentation.open(paperID: identity.paperID)
+    view.layoutSubtreeIfNeeded()
+    let document = try XCTUnwrap(view.document)
+    let page = try XCTUnwrap(document.page(at: 1))
+    let crop = page.bounds(for: .cropBox)
+    let outline = PDFOutline()
+    let methods = PDFOutline()
+    methods.label = "Methods"
+    methods.destination = PDFDestination(page: page, at: CGPoint(x: crop.minX, y: crop.maxY))
+    outline.insertChild(methods, at: 0)
+    document.outlineRoot = outline
+    let binding = try XCTUnwrap(presentation.metadataBinding)
+    try binding.refresh()
+    XCTAssertNil(binding.state?.activeSectionID)
+    try binding.navigate(sectionID: "/0")
+    view.layoutSubtreeIfNeeded()
+
+    let nativeDestination = try XCTUnwrap(view.currentDestination)
+    XCTAssertTrue(nativeDestination.page === page)
+    XCTAssertLessThan(nativeDestination.point.x, crop.minX)
+
+    try binding.observePosition()
+    let location = try XCTUnwrap(binding.state?.observedLocation)
+    XCTAssertEqual(location.pageIndex, 1)
+    XCTAssertEqual(location.x, crop.minX, accuracy: 0.001)
+    XCTAssertTrue(location.isValid(pageCount: document.pageCount, bounds: crop))
+    XCTAssertEqual(binding.state?.activeSectionID, "/0")
+    let stored = try service.beginSession(for: identity)
+    XCTAssertEqual(stored.location, location)
+    XCTAssertEqual(stored.sectionID, "/0")
+  }
+
   func testSamePageClipScrollUpdatesSectionAndImmediateReturnSavesPosition() async throws {
     let (db, lifecycle, identity, owner) = try await fixture()
     owner.session.close()

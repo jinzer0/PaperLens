@@ -421,3 +421,15 @@ effects are independently cleared after actual request fencing. Preserve981/989/
 991/993/994,996/998/999 as historical pre-correction receipts. Successful tests/compilation
 do not establish visible UI/accessibility, actual parser/calibration, AD8/P1/P2/P3 or Story
 completion. No paid/live/private SDK, trial renewal, push/PR/remote/release action occurred.
+
+## 가운데 정렬된 PDF의 목차 위치 저장
+
+PDFKit이 페이지 왼쪽 여백을 현재 위치로 반환하면, Reader는 같은 페이지의 CropBox와
+실제 표시 영역이 겹치는 부분에서 읽기 위치를 구한다. 확인된 위치로 현재 섹션을 표시하고
+저장한다. 목차에 들어 있는 범위 밖 좌표는 비활성 상태로 표시한다.
+
+서명한 arm64 앱에서 목차로 5쪽에 이동했지만 현재 섹션과 읽기 위치가 누락되는 현상을
+합성 PDF로 재현했다. 수정 후에는 현재 섹션이 표시됐고, 정보 새로고침과 Library를
+거친 Reader 재진입에도 유지됐다. 종료 후 같은 논문의 저장 위치, 제목, 발행연도,
+초록, 주제를 확인했다. 관련 XCTest 151개가 통과했다. 같은 저장소로 앱을 재시작하는
+검증과 macOS 15 실행은 남아 있다.

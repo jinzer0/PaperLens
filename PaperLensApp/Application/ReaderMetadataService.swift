@@ -364,7 +364,7 @@ public final class ReaderOutlineAdapter {
     guard depth < 64, sections.count < 4096 else { return }
     if depth >= 0 {
       let destination = outline.destination ?? (outline.action as? PDFActionGoTo)?.destination
-      let location = destination.flatMap { try? validated($0, forOutline: true) }
+      let location = destination.flatMap { try? validatedOutlineLocation($0) }
       let y = location.flatMap { location in
         destination?.page.flatMap { displayedY(at: location, on: $0) }
       }
@@ -376,14 +376,13 @@ public final class ReaderOutlineAdapter {
       if let child = outline.child(at: index) { collect(child, path: "\(path)/\(index)", depth: depth + 1) }
     }
   }
-  private func validated(_ destination: PDFDestination, forOutline: Bool = false) throws -> ReaderConfirmedLocation {
+  private func validatedOutlineLocation(_ destination: PDFDestination) throws -> ReaderConfirmedLocation {
     guard let page = destination.page, page.document === document else {
       throw ReaderMetadataError.invalidDestination
     }
     let bounds = page.bounds(for: .cropBox)
     var point = destination.point
     if point.x == kPDFDestinationUnspecifiedValue || point.y == kPDFDestinationUnspecifiedValue {
-      guard forOutline else { throw ReaderMetadataError.invalidDestination }
       // PDFKit leaves axes unset for page-fit and partial XYZ destinations.
       // Only the outline anchor needs coordinates; navigation keeps the original destination.
       let transform = page.transform(for: .cropBox)
@@ -406,16 +405,46 @@ public final class ReaderOutlineAdapter {
     guard current == identity, view.document === document else { throw ReaderMetadataError.staleIdentity }
     guard let section = sections.first(where: { $0.id == sectionID }),
       let destination = section.destination else { throw ReaderMetadataError.invalidDestination }
-    _ = try validated(destination, forOutline: true)
+    _ = try validatedOutlineLocation(destination)
     view.go(to: destination)
   }
   /// Call from the actual Reader position observer under its current read lease, not row selection.
   public func confirmedPosition(in view: PDFView, current: ReaderMetadataIdentity) throws
     -> (ReaderConfirmedLocation, String?) {
     guard current == identity, view.document === document else { throw ReaderMetadataError.staleIdentity }
-    guard let destination = view.currentDestination else { throw ReaderMetadataError.invalidDestination }
-    let location = try validated(destination)
+    let location = try Self.observedLocation(from: view.currentDestination, in: view, document: document)
     return (location, activeSection(at: location))
+  }
+
+  static func observedLocation(from destination: PDFDestination?, in view: PDFView,
+    document: PDFDocument) throws -> ReaderConfirmedLocation {
+    guard view.document === document else { throw ReaderMetadataError.staleIdentity }
+    guard let destination, let page = destination.page,
+      page.document === document else { throw ReaderMetadataError.invalidDestination }
+    let point = destination.point
+    let pageIndex = document.index(for: page)
+    let crop = page.bounds(for: .cropBox)
+    func validatedLocation(at point: CGPoint) -> ReaderConfirmedLocation? {
+      let location = ReaderConfirmedLocation(pageIndex: pageIndex, x: Double(point.x), y: Double(point.y))
+      return location.isValid(pageCount: document.pageCount, bounds: crop) ? location : nil
+    }
+    if let location = validatedLocation(at: point) { return location }
+
+    // PDFKit can report the viewport origin in the margin beside a centered page.
+    // Derive the reading point from the actual visible part of that same page.
+    guard point.x.isFinite, point.y.isFinite,
+      point.x != kPDFDestinationUnspecifiedValue, point.y != kPDFDestinationUnspecifiedValue,
+      let window = view.window, !view.isHiddenOrHasHiddenAncestor, view.currentPage === page,
+      let clip = view.documentView?.enclosingScrollView?.contentView, clip.window === window,
+      clip.isDescendant(of: view) else { throw ReaderMetadataError.invalidDestination }
+    let viewport = view.convert(clip.bounds, from: clip).intersection(view.bounds)
+    let visiblePage = view.convert(crop, from: page).intersection(viewport)
+    guard !visiblePage.isEmpty, !visiblePage.isInfinite else { throw ReaderMetadataError.invalidDestination }
+    let top = view.isFlipped ? visiblePage.minY : visiblePage.maxY
+    guard let location = validatedLocation(at: view.convert(CGPoint(x: visiblePage.minX, y: top), to: page)) else {
+      throw ReaderMetadataError.invalidDestination
+    }
+    return location
   }
   public func activeSection(at location: ReaderConfirmedLocation) -> String? {
     guard let page = document.page(at: location.pageIndex),

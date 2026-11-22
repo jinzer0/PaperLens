@@ -157,17 +157,11 @@ public struct ReaderMetadataBindingState {
       let result = try access { view, document, metadata in
         let expected = context
         let adapter = ReaderOutlineAdapter(document: document, identity: identity)
-        // currentDestination can synchronously notify/revoke/replace the Reader.
+        // PDFKit position readback can synchronously notify/revoke/replace the Reader.
         let destination = view.currentDestination
         _ = try validate()
-        guard let destination, let page = destination.page, page.document === document else {
-          throw ReaderMetadataError.invalidDestination
-        }
-        let location = ReaderConfirmedLocation(pageIndex: document.index(for: page),
-          x: Double(destination.point.x), y: Double(destination.point.y))
-        guard location.isValid(pageCount: document.pageCount, bounds: page.bounds(for: .cropBox)) else {
-          throw ReaderMetadataError.invalidDestination
-        }
+        let location = try ReaderOutlineAdapter.observedLocation(from: destination, in: view, document: document)
+        _ = try validate()
         let sectionID = adapter.activeSection(at: location)
         let nextState = try makeState(metadata: metadata, document: document,
           adapter: adapter, context: expected, observed: location)
