@@ -12,6 +12,10 @@ public struct OrganizationPreferences: Equatable, Sendable {
     self.presentation = presentation; self.sort = sort
   }
 }
+enum OrganizationPreferenceChange: Sendable {
+  case presentation(LibraryPresentation)
+  case sort(LibrarySort)
+}
 public struct PaperOrganization: Equatable, Sendable {
   public var readingStatus: PaperReadingStatus
   public var favorite: Bool
@@ -280,6 +284,10 @@ public actor LibraryOrganizationService {
   public func savePreferences(_ preferences: OrganizationPreferences) async throws {
     let database = database
     try await Task.detached { try database.setOrganizationPreferences(preferences) }.value
+  }
+  func savePreference(_ change: OrganizationPreferenceChange) async throws {
+    let database = database
+    try await Task.detached { try database.updateOrganizationPreference(change) }.value
   }
   public func save(_ organization: PaperOrganization, for paper: OrganizedPaper) async throws {
     let database = database

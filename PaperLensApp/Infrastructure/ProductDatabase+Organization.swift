@@ -37,11 +37,26 @@ extension ProductDatabase {
 
   public func setOrganizationPreferences(_ value: OrganizationPreferences) throws {
     try adapterWrite { db in
-      try db.execute(sql: "UPDATE organizationPreferences SET presentation = ?, sort = ? WHERE singleton = 1",
-        arguments: [value.presentation.rawValue, value.sort.rawValue])
-      guard db.changesCount == 1, try organizationPreferences(in: db) == value else {
-        throw ProductDatabaseError.invalidRecord
+      try writeOrganizationPreferences(value, in: db)
+    }
+  }
+
+  func updateOrganizationPreference(_ change: OrganizationPreferenceChange) throws {
+    try adapterWrite { db in
+      var value = try organizationPreferences(in: db)
+      switch change {
+      case .presentation(let presentation): value.presentation = presentation
+      case .sort(let sort): value.sort = sort
       }
+      try writeOrganizationPreferences(value, in: db)
+    }
+  }
+
+  private func writeOrganizationPreferences(_ value: OrganizationPreferences, in db: Database) throws {
+    try db.execute(sql: "UPDATE organizationPreferences SET presentation = ?, sort = ? WHERE singleton = 1",
+      arguments: [value.presentation.rawValue, value.sort.rawValue])
+    guard db.changesCount == 1, try organizationPreferences(in: db) == value else {
+      throw ProductDatabaseError.invalidRecord
     }
   }
 

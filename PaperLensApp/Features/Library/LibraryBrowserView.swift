@@ -124,16 +124,14 @@ public struct LibraryBrowserView: View {
       if let snapshot {
         HStack {
           Picker("표시", selection: Binding(get: { snapshot.preferences.presentation }, set: { value in
-            var preference = snapshot.preferences; preference.presentation = value
-            savePreferences(preference)
+            savePreference(.presentation(value))
           })) {
             Text("목록").tag(LibraryPresentation.list)
             Text("카드").tag(LibraryPresentation.grid)
           }.pickerStyle(.segmented)
             .focused($organizationFocus, equals: .presentation)
           Picker("정렬", selection: Binding(get: { snapshot.preferences.sort }, set: { value in
-            var preference = snapshot.preferences; preference.sort = value
-            savePreferences(preference)
+            savePreference(.sort(value))
           })) {
             Text("최근 읽음").tag(LibrarySort.recentlyRead)
             Text("이름").tag(LibrarySort.name)
@@ -777,8 +775,8 @@ public struct LibraryBrowserView: View {
     refresh()
   }
 
-  private func savePreferences(_ preference: OrganizationPreferences) {
-    perform { try await service.savePreferences(preference) }
+  private func savePreference(_ change: OrganizationPreferenceChange) {
+    perform { try await service.savePreference(change) }
   }
   private func saveOrganization(_ value: PaperOrganization, for paper: OrganizedPaper,
     origin: OrganizationControlFocus) {

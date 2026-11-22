@@ -628,6 +628,36 @@ final class LibraryOrganizationTests: XCTestCase {
     XCTAssertEqual(try reopened.organizationSnapshot(filter: .init()).preferences, saved)
   }
 
+  func testIndependentLibraryPreferenceChangesPreserveBothChoicesOnReopen() async throws {
+    let database = try ProductDatabase.open(at: root())
+    let lifecycle = try await LocalLibraryLifecycle.open(database: database)
+    let service = LibraryOrganizationService(database: database, lifecycle: lifecycle)
+    let initial = try database.organizationSnapshot(filter: .init()).preferences
+    XCTAssertEqual(initial, .init(presentation: .list, sort: .recentlyRead))
+
+    async let presentation: Void = service.savePreference(.presentation(.grid))
+    async let sort: Void = service.savePreference(.sort(.publicationYear))
+    _ = try await (presentation, sort)
+
+    let reopened = try ProductDatabase.open(at: database.root)
+    let saved = OrganizationPreferences(presentation: .grid, sort: .publicationYear)
+    XCTAssertEqual(try reopened.organizationSnapshot(filter: .init()).preferences, saved)
+
+    try database.adapterWrite { db in
+      try db.execute(sql: """
+        CREATE TRIGGER changeUnselectedPreference AFTER UPDATE OF presentation ON organizationPreferences
+        WHEN NEW.presentation = 'list' BEGIN
+          UPDATE organizationPreferences SET sort = 'name' WHERE singleton = NEW.singleton;
+        END;
+        """)
+    }
+    do {
+      try await service.savePreference(.presentation(.list))
+      XCTFail("Expected a save that changed the other preference to roll back")
+    } catch { XCTAssertEqual(error as? ProductDatabaseError, .invalidRecord) }
+    XCTAssertEqual(try reopened.organizationSnapshot(filter: .init()).preferences, saved)
+  }
+
   func testFourComparatorsNullPlacementTiesAndStaleFacts() async throws {
     let database = try ProductDatabase.open(at: root())
     let a = try seed(database, title: "Zulu", createdAt: 10), b = try seed(database, title: "alpha", createdAt: 20)
