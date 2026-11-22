@@ -11,6 +11,11 @@ architecture_baseline: 1195c92227cc628e325f5ff24d70cc93639bf7a9
 approval_record: 'https://github.com/jinzer0/PaperLens/issues/3#issuecomment-6049004229'
 ---
 
+## Native 제품 취소 회귀 검증
+
+- Worker가 연결된 Broker의 제어 소켓을 인계하기 전에 취소해도 원래 시작 기한 안에서 Broker 신원을 확인하고 같은 취소 요청을 전달한다. 제품 요청 시작은 즉시 차단된다.
+- 실제 로컬 합성 Worker와 Broker로 두 프로세스의 회수, 제어 소켓 닫힘, 전용 디렉터리 삭제를 확인했다. Worker가 인계 없이 종료되면 `.unknown(.control)`을 보고하고, 정리하지 못한 리소스의 보유 기록을 유지한다.
+
 ## Intent / permission
 
 Epic의 명시적 일괄 SCOPE+IMPLEMENTATION 승인으로 구현한다. 이 Spec을 commit한 뒤 반복 승인 요청 없이 구현/회귀/독립 리뷰를 수행한다. canonical Story1.2 AC는 epics.md다.

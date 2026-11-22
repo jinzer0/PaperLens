@@ -213,7 +213,7 @@ final class OwnedChildRetirementTests: XCTestCase {
   // Optional product replies are synthetic login-only states, never SDK import,
   // provider probing, authenticated login, or Provider acceptance.
   private func controlWorkerScript(wrongOrder: Bool, productLogin: Bool = false,
-    retirement: Bool = false, observationState: String = "pending"
+    retirement: Bool = false, observationState: String = "pending", holdBrokerOffer: Bool = false
   ) -> String {
     """
     import array, json, os, select, socket, struct, subprocess, sys, time
@@ -223,6 +223,7 @@ final class OwnedChildRetirementTests: XCTestCase {
     product_login = \(productLogin ? "True" : "False")
     retirement = \(retirement ? "True" : "False")
     observation_state = \(String(reflecting: observationState))
+    hold_broker_offer = \(holdBrokerOffer ? "True" : "False")
     def mark(name):
         with open('work/' + name, 'x'):
             pass
@@ -353,6 +354,9 @@ final class OwnedChildRetirementTests: XCTestCase {
                 with listener.accept()[0] as peer, socket.socket(fileno=5) as lifecycle:
                     lifecycle.settimeout(3)
                     rights = array.array('i', [peer.fileno()])
+                    if hold_broker_offer:
+                        mark('broker-connected')
+                        gate('send-right')
                     assert lifecycle.sendmsg([b'B'], [(socket.SOL_SOCKET, socket.SCM_RIGHTS, rights)]) == 1
                     mark('right-offered')
                     message = None
@@ -678,6 +682,48 @@ final class OwnedChildRetirementTests: XCTestCase {
 
   func testWorkerRevocationRejectsOutOfOrderRunningBeforeHello() async throws {
     try await revokeDuringAuthenticatedStartup(before: "hello", wrongOrder: true)
+  }
+
+  func testWorkerRevocationWhileBrokerOfferIsPendingRetiresWithoutDispatch() async throws {
+    let (root, namespace, launch) = try workerFixture(
+      script: controlWorkerScript(wrongOrder: false, retirement: true, holdBrokerOffer: true))
+    defer { try? FileManager.default.removeItem(at: root) }
+    let deadline = DispatchTime.now().uptimeNanoseconds + 5_000_000_000
+    let child = OwnedChildRetirement(worker: launch, deadlineUptimeNanoseconds: deadline)
+    let started = expectation(description: "cancelled startup returns once")
+    let retired = terminalExpectation(child)
+    child.startProduct(startDeadlineUptimeNanoseconds: deadline) { result in
+      switch result {
+      case .failure(.revoked): break
+      default: XCTFail("Unexpected cancelled startup result: \(result)")
+      }
+      started.fulfill()
+    }
+    let directory = namespace.directoryURL
+    try await waitForControlMarker("broker-connected", in: directory)
+    let listening = await withCheckedContinuation { continuation in
+      child.core.operation.async {
+        continuation.resume(returning: !child.core.controlSources.isEmpty)
+      }
+    }
+    XCTAssertTrue(listening)
+    child.revoke()
+    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+      child.core.operation.async { continuation.resume() }
+    }
+    for gate in ["hello", "offered", "send-right"] { try controlGate(gate, in: directory) }
+    await fulfillment(of: [started, retired], timeout: 2)
+    guard case .clean(let proof) = child.terminal else {
+      try? controlGate("stop", in: directory)
+      try? await waitForControlMarker("broker-reaped-physically", in: directory)
+      await physicalTeardown(child)
+      return XCTFail("Expected verified process retirement, got \(String(describing: child.terminal))")
+    }
+    XCTAssertTrue(proof.childReaped)
+    XCTAssertEqual(child.testingDescriptorCount, 0)
+    XCTAssertThrowsError(try child.core.reservedEndpoints())
+    XCTAssertFalse(FileManager.default.fileExists(atPath: directory.path))
+    XCTAssertFalse(child.testingRetained)
   }
 
   private func revokeDuringProductHandoff(beforeCapture: Bool) async throws {
@@ -1367,19 +1413,22 @@ final class OwnedChildRetirementTests: XCTestCase {
   }
 
   func testExitedSyntheticWorkerCannotUseGenericWaitOrClean() async throws {
-    let (root, namespace, launch) = try workerFixture(script: "import os\nos._exit(0)\n")
+    let (root, namespace, launch) = try workerFixture(script: "import os\nassert os.read(5, 1)\nos._exit(0)\n")
     defer { try? FileManager.default.removeItem(at: root) }
     let acquired = expectation(description: "synthetic exit-capable worker launched")
     let child = OwnedChildRetirement(
       worker: launch,
       deadlineUptimeNanoseconds: DispatchTime.now().uptimeNanoseconds + 3_000_000_000,
       hooks: .init(workerLaunched: { acquired.fulfill() }))
+    let done = terminalExpectation(child)
     child.launchWorker()
     await fulfillment(of: [acquired], timeout: 2)
+    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+      child.core.operation.async { continuation.resume() }
+    }
     child.retire()
-    try await waitForWorkerRetirement(child)
-    try await Task.sleep(nanoseconds: 400_000_000)
-    XCTAssertNil(child.terminal)
+    await fulfillment(of: [done], timeout: 2)
+    XCTAssertEqual(child.terminal, .unknown(.control))
     XCTAssertFalse(child.core.allowsIO)
     XCTAssertFalse(child.testingReaped)
     XCTAssertEqual(child.testingDescriptorCount, 4)

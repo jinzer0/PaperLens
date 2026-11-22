@@ -241,10 +241,14 @@ public final class OwnedChildRetirement: @unchecked Sendable {
     }
     func observeOwned(_ fd: Int32, type: mode_t, effect: Effect) -> Bool {
       guard permit(effect) else { return false }
+      return recordDescriptorIdentity(fd, type: type, admit: withinDeadline)
+    }
+    private func recordDescriptorIdentity(_ fd: Int32, type: mode_t, admit: () -> Bool) -> Bool {
+      guard admit() else { return false }
       var info = stat()
       let result = fstat(fd, &info)
       if result == 0 { lock.withLock { descriptorIdentities[fd] = info } }
-      guard withinDeadline() else { return false }
+      guard admit() else { return false }
       guard result == 0, info.st_mode & S_IFMT == type else {
         failed(.identity)
         return false
@@ -785,54 +789,64 @@ public final class OwnedChildRetirement: @unchecked Sendable {
         source.activate()
       }
     }
+    private var admitsBrokerOffer: Bool {
+      lock.withLock { terminal == nil && DispatchTime.now().uptimeNanoseconds < startupDeadline }
+    }
+    private func receiveBrokerOffer(from fd: Int32) throws -> Bool {
+      // An already-spawned worker can deliver its broker for cleanup after
+      // revocation, within the original identity observation window.
+      guard admitsBrokerOffer, let workerAtSpawn, let child,
+        case .worker(let launch) = command
+      else { throw Failure.control }
+      let storage = try NativeBrokerABI.ReceiveStorage()
+      offerStorage = storage
+      let admit = { self.admitsBrokerOffer }
+      let offer = try NativeBrokerABI.receiveOffer(
+        socket: fd, storage: storage, admit: admit,
+        capture: { self.captureOwned($0, role: .brokerControl) })
+      guard case .descriptor(let broker) = offer else { return false }
+      guard admit() else { throw Failure.control }
+      hooks.before(.socket)
+      guard recordDescriptorIdentity(broker, type: S_IFSOCK, admit: admit), admit() else {
+        throw Failure.control
+      }
+      let flags = fcntl(broker, F_GETFL)
+      guard admit(), flags >= 0, fcntl(broker, F_SETFL, flags | O_NONBLOCK) == 0 else {
+        throw Failure.control
+      }
+      guard admit() else { throw Failure.control }
+      var noSignal: Int32 = 1
+      guard setsockopt(
+        broker, SOL_SOCKET, SO_NOSIGPIPE, &noSignal, socklen_t(MemoryLayout<Int32>.size)
+      ) == 0 else { throw Failure.control }
+      let credentials = try NativeBrokerABI.observeLocalCredentials(storage: identityStorage, admit: admit)
+      let observation = try NativeBrokerABI.observeIdentity(
+        socket: broker, storage: identityStorage, admit: admit)
+      let workerNow = try NativeBrokerABI.observeProcess(
+        pid: child, storage: identityStorage, admit: admit)
+      guard admit() else { throw Failure.control }
+      let canonical = launch.interpreter.resolvingSymlinksInPath().path
+      guard admit() else { throw Failure.control }
+      try NativeBrokerABI.checkBrokerChain(
+        workerAtSpawn: workerAtSpawn,
+        workerNow: workerNow, nativePID: getpid(), nativeCredentials: credentials,
+        broker: observation, canonicalInterpreterPath: canonical)
+      guard admit() else { throw Failure.control }
+      brokerFD = broker
+      brokerIdentity = observation
+      workerPhase = .hello
+      armControl(broker)
+      if workerRetirementPhase == .revoking {
+        guard let retirementID = lock.withLock({ self.retirementID }) else { throw Failure.control }
+        try queueControl(broker, "revoke", ["retirementID": retirementID])
+      }
+      return true
+    }
     func pumpControl(_ fd: Int32) {
       guard controlPermitted else { return }
       do {
         if fd == workerFD, brokerFD == nil {
-          guard allowsIO else { return }
-          let storage = try NativeBrokerABI.ReceiveStorage()
-          offerStorage = storage
-          let offer = try NativeBrokerABI.receiveOffer(
-            socket: fd, storage: storage,
-            admit: { self.allowsIO }, capture: { self.captureOwned($0, role: .brokerControl) })
-          guard allowsIO else { return }
-          guard case .descriptor(let broker) = offer else { return }
-          brokerFD = broker
-          guard observeOwned(broker, type: S_IFSOCK, effect: .socket), allowsIO else { return }
-          let flags = fcntl(broker, F_GETFL)
-          guard allowsIO else { return }
-          guard flags >= 0, fcntl(broker, F_SETFL, flags | O_NONBLOCK) == 0 else {
-            throw Failure.control
-          }
-          guard allowsIO else { return }
-          var noSignal: Int32 = 1
-          guard
-            setsockopt(
-              broker, SOL_SOCKET, SO_NOSIGPIPE, &noSignal,
-              socklen_t(MemoryLayout<Int32>.size)) == 0
-          else { throw Failure.control }
-          guard allowsIO, let workerAtSpawn, let child,
-            case .worker(let launch) = command
-          else { return }
-          let credentials = try NativeBrokerABI.observeLocalCredentials(
-            storage: identityStorage, admit: { self.allowsIO })
-          let observation = try NativeBrokerABI.observeIdentity(
-            socket: broker,
-            storage: identityStorage, admit: { self.allowsIO })
-          let workerNow = try NativeBrokerABI.observeProcess(
-            pid: child,
-            storage: identityStorage, admit: { self.allowsIO })
-          guard allowsIO else { return }
-          let canonical = launch.interpreter.resolvingSymlinksInPath().path
-          guard allowsIO else { return }
-          try NativeBrokerABI.checkBrokerChain(
-            workerAtSpawn: workerAtSpawn,
-            workerNow: workerNow, nativePID: getpid(), nativeCredentials: credentials,
-            broker: observation, canonicalInterpreterPath: canonical)
-          brokerIdentity = observation
-          guard allowsIO else { return }
-          workerPhase = .hello
-          armControl(broker)
+          guard try receiveBrokerOffer(from: fd) else { return }
         }
         for _ in 0..<16 {
           guard controlPermitted else { return }
