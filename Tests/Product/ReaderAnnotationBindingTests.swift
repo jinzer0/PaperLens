@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import CoreText
 import GRDB
 import PDFKit
@@ -238,8 +239,8 @@ private final class AnnotationPageDelegate: NSObject, PDFDocumentDelegate {
     reader.pdfView.currentSelection = try XCTUnwrap(document.findString("alpha", withOptions: []).last)
     reader.addNote()
     let context = try XCTUnwrap(reader.annotationContext)
-    let draft = try XCTUnwrap(context.editor.draft)
-    try context.publishEditor { context.editor.text = "Read this passage again" }
+    let draft = try XCTUnwrap(context.editor.note)
+    try context.updateNoteText("Read this passage again", editorID: draft.id)
     let originalBinding = try XCTUnwrap(reader.metadataBinding)
     let reference = try db.readerSnapshot(paperID: id).pdfReference
     let revision = UUID()
@@ -259,11 +260,13 @@ private final class AnnotationPageDelegate: NSObject, PDFDocumentDelegate {
     XCTAssertEqual(reader.metadataBinding?.identity?.revisionID, revision)
     XCTAssertTrue(reader.annotationContext === context)
     XCTAssertTrue(context.isActive)
-    XCTAssertEqual(context.editor.draft, draft)
-    XCTAssertEqual(context.editor.text, "Read this passage again")
+    XCTAssertEqual(context.editor.note?.id, draft.id)
+    XCTAssertEqual(context.editor.note?.selection, draft.selection)
+    XCTAssertEqual(context.editor.note?.text, "Read this passage again")
     XCTAssertTrue(reader.pdfView.document === document)
     XCTAssertEqual(document.index(for: try XCTUnwrap(reader.pdfView.currentPage)), 1)
-    let saved = try context.createNote(XCTUnwrap(context.editor.draft), text: context.editor.text)
+    try context.saveNote(editorID: draft.id)
+    let saved = try XCTUnwrap(context.editor.records.first)
     XCTAssertEqual(saved.selection.locations.map(\.pageIndex), [1])
     XCTAssertEqual(try AnnotationService(database: db).libraryReadingRecords(
       paperID: id, generation: context.identity.generation).annotations, [saved])
@@ -662,23 +665,23 @@ private final class AnnotationPageDelegate: NSObject, PDFDocumentDelegate {
     let (_, db, _, id, binding) = try await fixture()
     defer { binding.session.close() }
     let context = try binding.open(database: db, paperID: id)
-    context.editor.draft = try context.capture()
-    context.editor.text = "unsaved observation"
-    context.editor.cancel()
-    XCTAssertNil(context.editor.draft)
-    XCTAssertEqual(context.editor.text, "")
+    try context.beginNote()
+    let draft = try XCTUnwrap(context.editor.note)
+    try context.updateNoteText("unsaved observation", editorID: draft.id)
+    try context.cancelNote(editorID: draft.id)
+    XCTAssertNil(context.editor.note)
     XCTAssertTrue(try context.records().isEmpty)
     let note = try context.createNote(context.capture(), text: "saved")
-    context.editor.draft = try context.capture()
-    context.editor.editing = note
+    try context.beginNote(editing: note)
     context.editor.records = [note]
-    context.editor.text = "pending edit"
+    let editing = try XCTUnwrap(context.editor.note)
+    try context.updateNoteText("pending edit", editorID: editing.id)
     binding.session.close()
     XCTAssertFalse(context.isActive)
-    XCTAssertNil(context.editor.draft)
-    XCTAssertNil(context.editor.editing)
+    XCTAssertNil(context.editor.note)
     XCTAssertTrue(context.editor.records.isEmpty)
-    XCTAssertEqual(context.editor.text, "")
+    XCTAssertNil(context.editor.noteFocusRequest)
+    try context.saveNote(editorID: editing.id)
     XCTAssertThrowsError(try context.createNote(note.selection, text: "late"))
     XCTAssertEqual(try AnnotationService(database: db).records(for: context.identity), [note])
   }
@@ -687,24 +690,81 @@ private final class AnnotationPageDelegate: NSObject, PDFDocumentDelegate {
     let (_, db, _, id, binding) = try await fixture()
     defer { binding.session.close() }
     let context = try binding.open(database: db, paperID: id)
-    let draft = try context.capture()
+    try context.beginNote()
+    let draft = try XCTUnwrap(context.editor.note)
     try binding.session.withReadAccess { binding.view.clearSelection() }
     XCTAssertThrowsError(try context.capture())
     XCTAssertThrowsError(try context.createHighlight())
-    XCTAssertThrowsError(try context.createNote(draft, text: ""))
-    context.editor.draft = draft
-    context.editor.text = "retryable unsaved observation"
+    XCTAssertThrowsError(try context.saveNote(editorID: draft.id))
+    try context.updateNoteText("retryable unsaved observation", editorID: draft.id)
     try db.adapterWrite { sql in
       try sql.execute(sql: """
         CREATE TRIGGER rejectBoundAnnotation BEFORE INSERT ON personalAnnotation
         BEGIN SELECT RAISE(ABORT, 'owned annotation storage failure'); END;
         """)
     }
-    XCTAssertThrowsError(try context.createNote(draft, text: context.editor.text))
+    XCTAssertThrowsError(try context.saveNote(editorID: draft.id))
     XCTAssertTrue(context.isActive)
-    XCTAssertEqual(context.editor.draft, draft)
-    XCTAssertEqual(context.editor.text, "retryable unsaved observation")
+    XCTAssertEqual(context.editor.note?.id, draft.id)
+    XCTAssertEqual(context.editor.note?.selection, draft.selection)
+    XCTAssertEqual(context.editor.note?.text, "retryable unsaved observation")
     XCTAssertTrue(try context.records().isEmpty)
+    try db.adapterWrite { try $0.execute(sql: "DROP TRIGGER rejectBoundAnnotation") }
+    try context.saveNote(editorID: draft.id)
+    XCTAssertNil(context.editor.note)
+    XCTAssertEqual(try context.records().map(\.selection), [draft.selection])
+  }
+
+  func testOldEditorCallbacksCannotRetargetOrSubmitNewDraftsAndEdits() async throws {
+    let (_, db, _, id, binding) = try await fixture()
+    defer { binding.session.close() }
+    let context = try binding.open(database: db, paperID: id)
+    try context.beginNote()
+    let old = try XCTUnwrap(context.editor.note)
+    try context.updateNoteText("discarded", editorID: old.id)
+    try context.cancelNote(editorID: old.id)
+    try binding.session.withReadAccess {
+      let document = try XCTUnwrap(binding.view.document)
+      binding.view.currentSelection = try XCTUnwrap(document.findString("alpha", withOptions: []).first)
+    }
+    try context.beginNote()
+    let new = try XCTUnwrap(context.editor.note)
+    XCTAssertNotEqual(old.id, new.id)
+    XCTAssertNotEqual(old.selection.locations, new.selection.locations)
+    try context.updateNoteText("new observation", editorID: new.id)
+
+    try context.updateNoteText("late text", editorID: old.id)
+    try context.saveNote(editorID: old.id)
+    try context.cancelNote(editorID: old.id)
+    XCTAssertTrue(try context.records().isEmpty)
+    XCTAssertEqual(context.editor.note?.text, "new observation")
+    XCTAssertEqual(context.editor.note?.id, new.id)
+
+    var repeatedSave = false
+    let observer = context.editor.$note.sink { note in
+      guard note == nil, !repeatedSave else { return }
+      repeatedSave = true
+      do { try context.saveNote(editorID: new.id) }
+      catch { XCTFail("Reentrant Save rejected with unexpected error: \(error)") }
+    }
+    defer { observer.cancel() }
+    try context.saveNote(editorID: new.id)
+    XCTAssertTrue(repeatedSave)
+    let saved = try XCTUnwrap(context.editor.records.first)
+    XCTAssertEqual(saved.selection, new.selection)
+    XCTAssertEqual(saved.note, "new observation")
+    XCTAssertEqual(try context.records(), [saved])
+
+    try context.beginNote(editing: saved)
+    let editing = try XCTUnwrap(context.editor.note)
+    try context.updateNoteText("edited text", editorID: editing.id)
+    try context.saveNote(editorID: new.id)
+    XCTAssertEqual(try context.records(), [saved])
+    try context.saveNote(editorID: editing.id)
+    let result = try context.records()
+    XCTAssertEqual(result.map(\.id), [saved.id])
+    XCTAssertEqual(result.map(\.note), ["edited text"])
+    XCTAssertNil(context.editor.note)
   }
 
   func testStaleHashRejectsCaptureRevealWritesAndResetsDraft() async throws {
@@ -713,14 +773,14 @@ private final class AnnotationPageDelegate: NSObject, PDFDocumentDelegate {
     let context = try binding.open(database: db, paperID: id)
     let draft = try context.capture()
     let note = try context.createNote(draft, text: "saved before mismatch")
-    context.editor.draft = draft
+    try context.beginNote()
     try db.adapterWrite { sql in
       try sql.execute(sql: "UPDATE paper SET pdfSHA256 = ? WHERE id = ?",
         arguments: [String(repeating: "b", count: 64), id.uuidString])
     }
     XCTAssertThrowsError(try context.capture())
     XCTAssertFalse(context.isActive)
-    XCTAssertNil(context.editor.draft)
+    XCTAssertNil(context.editor.note)
     XCTAssertThrowsError(try context.reveal(note))
     XCTAssertThrowsError(try context.createNote(draft, text: "late"))
     XCTAssertThrowsError(try context.updateNote(note, text: "late"))
@@ -804,12 +864,12 @@ private final class AnnotationPageDelegate: NSObject, PDFDocumentDelegate {
     defer { binding.session.close() }
     let context = try binding.open(database: db, paperID: id)
     let record = try context.createHighlight()
-    context.editor.draft = try context.capture()
+    try context.beginNote()
     context.editor.records = [record]
     binding.view.onNavigation = { binding.session.close() }
     XCTAssertThrowsError(try context.reveal(record))
     XCTAssertFalse(context.isActive)
-    XCTAssertNil(context.editor.draft)
+    XCTAssertNil(context.editor.note)
     XCTAssertTrue(context.editor.records.isEmpty)
     XCTAssertNil(binding.view.document)
     let fresh = try binding.open(database: db, paperID: id)
