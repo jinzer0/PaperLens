@@ -104,6 +104,75 @@ final class ProviderSettingsTests: XCTestCase {
     try FileManager.default.removeItem(at: root)
   }
 
+  func testChatGPTSetupFailureCleansItsStageAndAllowsRetryOrChangingLoginMethod() throws {
+    let root = try fixtureRoot()
+    defer { try? removeFixture(root) }
+    let database = try ProductDatabase.open(at: root.appendingPathComponent("database"))
+    let slots = try APIKeySlotStore(directory: root.appendingPathComponent("slots"))
+    let slotID = try slots.create(key: "fixture-last-good")
+    let configuration = try NativeOpenAIConfiguration(model: "fixture-snapshot")
+    let committed = try database.compareAndSwapProviderConfiguration(
+      expected: database.providerConfiguration(), replacementKind: .openAIAPIKey,
+      replacementSlotID: slotID, replacementModel: configuration.model)
+    let transport = SettingsSuspendedTransport()
+    let apiKey = NativeAPIKeyConnection(configuration: configuration, slots: slots,
+      persistence: DatabaseAPIKeySelector(database: database, configuration: configuration),
+      transport: transport, authority: try ProviderRequest())
+    apiKey.restore()
+    let loginRoot = root.appendingPathComponent("codex-scopes", isDirectory: true)
+    var attemptedDirectories = [URL]()
+    let codex = NativeCodexConnection(database: database, root: loginRoot, apiKey: apiKey) {
+      attemptedDirectories.append($0.directoryURL)
+      return nil
+    }
+    let settings = ProviderSettingsService(connection: apiKey, codex: codex)
+
+    for mode in ["browser", "device"] {
+      XCTAssertTrue(codex.canStart)
+      codex.connect(mode: mode)
+      XCTAssertEqual(codex.phase, .idle)
+      XCTAssertTrue(codex.showsFailure)
+      XCTAssertTrue(codex.offersRetry)
+      XCTAssertTrue(codex.statusMessage.contains("전용 로그인 저장소 정리를 완료했습니다."))
+      XCTAssertFalse(codex.blocksReplacement)
+      XCTAssertNil(codex.testingOwner)
+      XCTAssertTrue(settings.eligibleForEntry)
+      XCTAssertEqual(try database.providerConfiguration(), committed)
+      XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: loginRoot.path).isEmpty)
+    }
+    XCTAssertEqual(Set(attemptedDirectories).count, 2)
+    XCTAssertEqual(transport.count, 0)
+  }
+
+  func testChatGPTSetupFailureKeepsStageBlockedWhileMetadataOwnerHasNotReleasedIt() throws {
+    let f = try fixture(lastGood: false)
+    defer { try? removeFixture(f.root) }
+    let database = try ProductDatabase.open(at: f.root.appendingPathComponent("database"))
+    let committed = try database.providerConfiguration()
+    let loginRoot = f.root.appendingPathComponent("codex-scopes", isDirectory: true)
+    let metadataOwner = UUID()
+    var namespace: TopologyOwnedFixtures?
+    let codex = NativeCodexConnection(database: database, root: loginRoot, apiKey: f.connection) { attempt in
+      XCTAssertNil(namespace, "An unverified retirement must prevent starting another attempt")
+      namespace = attempt
+      XCTAssertTrue(attempt.beginMetadataMutation(owner: metadataOwner))
+      return nil
+    }
+
+    codex.connect(mode: "device")
+    let retained = try XCTUnwrap(namespace)
+    defer { retained.endMetadataMutation(owner: metadataOwner) }
+    XCTAssertEqual(codex.phase, .blocked)
+    XCTAssertFalse(codex.canStart)
+    XCTAssertFalse(codex.offersRetry)
+    XCTAssertTrue(codex.blocksReplacement)
+    XCTAssertNil(codex.testingOwner)
+    codex.connect(mode: "browser")
+    XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: loginRoot.path), [retained.runID])
+    XCTAssertEqual(try database.providerConfiguration(), committed)
+    XCTAssertEqual(f.transport.count, 0)
+  }
+
   func testClosingWorkspaceSettingsCancelsOnlyUncommittedAPIKeyProbe() async throws {
     let f = try fixture()
     defer { try? removeFixture(f.root) }

@@ -287,12 +287,11 @@ public final class NativeCodexConnection: ObservableObject {
       }
       return
     }
-    // Retain setup failures until their namespace closure can be proved.
     candidate = login
     intentID = login.intentID
     stageID = login.stageID
     guard let worker = prepareWorker(namespace) else {
-      block(login, "서명된 로그인 구성 요소 또는 비백업 저장소를 준비하지 못했습니다.")
+      fail(login, "서명된 로그인 구성 요소 또는 비백업 저장소를 준비하지 못했습니다.")
       return
     }
     login.prepared = true
