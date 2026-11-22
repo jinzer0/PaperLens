@@ -47,6 +47,24 @@ def reserve_directory(name, parent, lifetime):
     return directory(name, lifetime, parent)
 
 
+def remove_case_directories(parent, owner_id, root, build, topology):
+    directories = (
+        (parent, owner_id, root, [".build"]),
+        (root, ".build", build, ["topology"]),
+        (build, "topology", topology, []),
+    )
+    # The child removes the database namespace. Verify the entire retained
+    # hierarchy before removing any of the parent's empty wrapper directories.
+    for container, name, descriptor, entries in directories:
+        named = os.stat(name, dir_fd=container, follow_symlinks=False)
+        if (not stat.S_ISDIR(named.st_mode) or stat.S_IMODE(named.st_mode) != 0o700
+                or named.st_uid != os.getuid() or not os.path.samestat(named, os.fstat(descriptor))
+                or os.listdir(descriptor) != entries):
+            raise ValueError("fixture_replaced")
+    for container, name, _, _ in reversed(directories):
+        os.rmdir(name, dir_fd=container)
+
+
 def validate_provenance(observed, os_build):
     identity_fields = {"osBuild", "imageIdentity", "sqliteVersion", "sqliteSourceId"}
     required = {"compileOptions", "inspectedEntries", "maxEntryBytes"}.union(PROVENANCE_FLAGS)
@@ -149,6 +167,7 @@ def run_case(executable, parent, kind):
         if (first_pid == second_pid or os.listdir(topology)
                 or not exact(first["provenance"], second["provenance"])):
             raise ValueError("relaunch_unconfirmed")
+        remove_case_directories(parent, owner_id, root, build, topology)
         result = {"kind": kind, "firstClosedAndExited": True, "sameDatabaseReopened": True,
                   "secondClosedAndCleaned": True, "provenance": second["provenance"],
                   "reopenChecks": second["checks"]}

@@ -2,18 +2,21 @@
 import copy
 from dataclasses import replace
 import json
+import os
 from pathlib import Path
 import signal
 import subprocess
 import sys
+from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
 from uuid import uuid4
 
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts/topology"
 sys.path.insert(0, str(SCRIPTS))
 import verify_packaged_db as db
 import validate_dependency_lock as dependency_lock
-from run_synthetic_db_relaunch import collect_receipt
+from run_synthetic_db_relaunch import collect_receipt, run_case
 
 
 def fixture(point="current/arm64", run=None, owner=None):
@@ -504,6 +507,64 @@ class RelaunchReceiptTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "^phase_failed$"):
                     collect_receipt(child, timeout=5)
                 self.assertIsNotNone(child.returncode)
+
+
+class RelaunchDirectoryTests(unittest.TestCase):
+    def run_fixture(self, parent, reopen):
+        def phase(_executable, name, _kind, ids, descriptors, _identity):
+            _, topology, namespace = descriptors
+            if name == "first":
+                with os.fdopen(os.open("db.sqlite", os.O_WRONLY, dir_fd=namespace), "wb") as db_file:
+                    db_file.write(b"fixture database")
+                return 1, {"checks": [], "provenance": {}}
+            reopen(parent / ids[0], topology, f"local-grdb-probe-{ids[1]}", namespace)
+            return 2, {"checks": [], "provenance": {}}
+
+        descriptor = os.open(parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            with patch("run_synthetic_db_relaunch.launch", side_effect=phase):
+                return run_case(None, descriptor, "normal")
+        finally:
+            os.close(descriptor)
+
+    def remove_child_fixture(self, _root, topology, entry, namespace):
+        os.unlink("db.sqlite", dir_fd=namespace)
+        os.rmdir(entry, dir_fd=topology)
+
+    def test_closed_and_cleaned_relaunch_removes_only_its_wrappers(self):
+        with TemporaryDirectory() as temporary:
+            parent = Path(temporary)
+            unrelated = parent / "existing-run"
+            unrelated.mkdir()
+            result = self.run_fixture(parent, self.remove_child_fixture)
+            self.assertTrue(result["secondClosedAndCleaned"])
+            self.assertEqual(list(parent.iterdir()), [unrelated])
+
+    def test_unconfirmed_relaunch_retains_database_for_diagnosis(self):
+        def fail_reopen(*_):
+            raise ValueError("reopen_failed")
+
+        with TemporaryDirectory() as temporary:
+            parent = Path(temporary)
+            with self.assertRaisesRegex(ValueError, "^reopen_failed$"):
+                self.run_fixture(parent, fail_reopen)
+            [database] = parent.glob("*/.build/topology/*/db.sqlite")
+            self.assertEqual(database.read_bytes(), b"fixture database")
+
+    def test_replaced_directory_is_left_untouched(self):
+        def replace_topology(root, topology, entry, namespace):
+            self.remove_child_fixture(root, topology, entry, namespace)
+            directory = root / ".build" / "topology"
+            directory.rename(directory.with_name("displaced"))
+            directory.mkdir(mode=0o700)
+
+        with TemporaryDirectory() as temporary:
+            parent = Path(temporary)
+            with self.assertRaisesRegex(ValueError, "^fixture_replaced$"):
+                self.run_fixture(parent, replace_topology)
+            [root] = parent.iterdir()
+            self.assertTrue((root / ".build" / "topology").is_dir())
+            self.assertTrue((root / ".build" / "displaced").is_dir())
 
 
 if __name__ == "__main__":
