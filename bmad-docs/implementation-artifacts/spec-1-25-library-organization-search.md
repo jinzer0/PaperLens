@@ -1,5 +1,20 @@
 # Story 1.25 Build Spec — Library organization, search and filters
 
+## 서명 앱에서 사용자 태그 관리 검증 — 2026-11-22
+
+macOS 26.7.1 arm64에서 소스 `f279dc8447f67705bea6125d7afef77f1e7d5a72`의
+Developer ID 서명 앱으로 전용 합성 PDF 한 편을 가져왔다. 앱 메뉴에서 진단 창을 연 뒤
+접근성 컨트롤로 사용자 태그 두 개를 저장했다. 편집 취소 후 두 태그가 유지됐고, 이름을
+바꾸자 새 이름만 검색에 일치했다. 카드 전환은 검색 조건을 유지했다. 선택한 태그를
+카드에서 삭제하자 조건은 유지된 채 결과가 없어졌고, 조건을 지우면 같은 논문이 다시
+표시됐다. Reader에서 돌아오면 남은 태그 하나가 표시됐다. 중복 태그 저장 시 실패를
+표시했고 현재 값 다시 확인을 선택하면 저장된 태그로 돌아왔다.
+
+종료 후 DB를 읽기 전용으로 열어 남은 태그 하나와 카드 보기 설정을 확인했다. 합성 원본과
+라이브러리 PDF의 해시가 일치했고 관련 Swift 테스트 32개가 통과했다. 로컬 검증 기록은
+`.build/epic1-story125-tag-gui-result.json`에 있다. 제품 앱 재실행과 키보드 이동·VoiceOver
+검증은 남아 있다.
+
 ## Bounded ordinary Favorite/Reading Status focus return (baseline b978770)
 
 Existing sidebar/direct-controls delivery requires after-actual-requery return to the
