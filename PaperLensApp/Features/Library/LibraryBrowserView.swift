@@ -465,11 +465,15 @@ public struct LibraryBrowserView: View {
         Text("최근 읽음 \(date.formatted())").font(.caption)
       }
       LibraryStoredSummary(paper: paper, observation: fact?.summary, showEvidence: false)
-      if summaries.activePaperID == paper.id {
-        HStack {
-          ProgressView("요약 생성 중")
-          Button("요약 취소") { summaries.cancel() }
-        }.disabled(deletionPending)
+      if summaries.activePaperID == paper.id, let requestID = summaries.activeRequestID {
+        if summaries.cancellingRequestID == requestID {
+          ProgressView("요약 취소 처리 중")
+        } else {
+          HStack {
+            ProgressView("요약 생성 중")
+            Button("요약 취소") { summaries.requestCancellation(id: requestID) }
+          }.disabled(deletionPending)
+        }
       } else if paper.readable, !deletionPending {
         summaryActions(for: paper, observation: fact?.summary, providerAvailable: providerAvailable)
       }

@@ -158,6 +158,8 @@ extension LibrarySummaryFailure {
   @Published public private(set) var activePaperID: UUID?
   @Published public private(set) var requestFailure: LibrarySummaryFailure?
   @Published private(set) var completionRevision: UUID?
+  @Published private(set) var cancellingRequestID: UUID?
+  private(set) var activeRequestID: UUID?
   private let database: ProductDatabase
   private let epoch: UUID
   private let leases: any ReaderLeaseProvider
@@ -186,7 +188,19 @@ extension LibrarySummaryFailure {
     self.authority = authority; self.provider = provider
   }
 
-  public func cancel() { requested?.cancel(); active?.cancel() }
+  public func cancel() {
+    guard let activeRequestID else { return }
+    requestCancellation(id: activeRequestID)
+  }
+
+  @discardableResult func requestCancellation(id: UUID) -> Bool {
+    guard activeRequestID == id, requested?.isCancelled != true, active?.isCancelled != true else { return false }
+    // Mark the owned tasks before notifying observers, which may synchronously cancel again.
+    requested?.cancel()
+    active?.cancel()
+    cancellingRequestID = id
+    return true
+  }
 
   public func clearRequestFailure() { requestFailure = nil }
 
@@ -238,21 +252,23 @@ extension LibrarySummaryFailure {
 
   private func request(paperID: UUID, generation: UUID, action: Generation) -> Bool {
     guard requested == nil, active == nil else { return false }
+    let requestID = UUID()
     // Published observers may synchronously cancel or try to submit another request.
     requested = Task {
       defer {
-        activePaperID = nil
-        completionRevision = UUID()
+        finishPresentation()
         requested = nil
       }
       do {
-        _ = try await performGeneration(paperID: paperID, generation: generation, action: action)
+        _ = try await performGeneration(paperID: paperID, generation: generation, action: action,
+          requestID: requestID)
       } catch {
         if !Task.isCancelled || error as? LibrarySummaryError == .persistenceFailure {
           requestFailure = .classify(error)
         }
       }
     }
+    activeRequestID = requestID
     requestFailure = nil
     activePaperID = paperID
     return true
@@ -262,28 +278,37 @@ extension LibrarySummaryFailure {
     outputLanguage: String) async throws -> LibrarySummaryRecord {
     guard requested == nil else { throw LibrarySummaryError.requestInProgress }
     return try await performGeneration(paperID: paperID, generation: generation,
-      action: .new(language: outputLanguage))
+      action: .new(language: outputLanguage), requestID: UUID())
   }
 
   private func performGeneration(paperID: UUID, generation: UUID,
-    action: Generation) async throws -> LibrarySummaryRecord {
+    action: Generation, requestID: UUID) async throws -> LibrarySummaryRecord {
     try Task.checkCancellation()
     guard active == nil, producerCleanupDebt.isEmpty else { throw LibrarySummaryError.requestInProgress }
     guard stageCleanupDebt[paperID] == nil else { throw LibrarySummaryError.cleanupUnavailable }
-    let task = Task { try await self.execute(paperID: paperID, generation: generation, action: action) }
+    let task = Task {
+      try await self.execute(paperID: paperID, generation: generation, action: action, requestID: requestID)
+    }
     active = task
-    if activePaperID != paperID { activePaperID = paperID }
+    if requested == nil {
+      activeRequestID = requestID
+      activePaperID = paperID
+    }
     defer {
-      if requested == nil {
-        activePaperID = nil
-        completionRevision = UUID()
-      }
+      if requested == nil { finishPresentation() }
       active = nil
     }
     return try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
   }
 
-  private func execute(paperID: UUID, generation: UUID, action: Generation) async throws
+  private func finishPresentation() {
+    activeRequestID = nil
+    activePaperID = nil
+    if cancellingRequestID != nil { cancellingRequestID = nil }
+    completionRevision = UUID()
+  }
+
+  private func execute(paperID: UUID, generation: UUID, action: Generation, requestID: UUID) async throws
     -> LibrarySummaryRecord {
     try Task.checkCancellation()
     let outputLanguage: String
@@ -320,8 +345,7 @@ extension LibrarySummaryFailure {
     let paper = try database.readerSnapshot(paperID: paperID)
     guard paper.generation == generation else { throw LibrarySummaryError.staleIdentity }
     let lease = try leases.acquireReadLease(for: paper, onRevoked: { [weak self] in
-      guard let self, self.activePaperID == paperID else { return }
-      self.cancel()
+      self?.requestCancellation(id: requestID)
     })
     var retainLease = false
     defer { if !retainLease { lease.close() } }

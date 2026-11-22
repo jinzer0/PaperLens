@@ -1311,20 +1311,71 @@ final class LibrarySummaryServiceTests: XCTestCase {
       authority: try ProviderRequest(), provider: provider)
     XCTAssertTrue(coordinator.requestGeneration(paperID: f.identity.paperID,
       generation: f.identity.generation, outputLanguage: "ko"))
+    let requestID = try XCTUnwrap(coordinator.activeRequestID)
     for _ in 0..<1000 where provider.continuation == nil { await Task.yield() }
     let completion = try XCTUnwrap(provider.continuation)
-    coordinator.cancel()
+    let subscription = coordinator.$cancellingRequestID.sink { cancelling in
+      if cancelling == requestID {
+        XCTAssertFalse(coordinator.requestCancellation(id: requestID))
+      }
+    }
+    defer { subscription.cancel() }
+    XCTAssertTrue(coordinator.requestCancellation(id: requestID))
+    XCTAssertEqual(coordinator.cancellingRequestID, requestID)
     XCTAssertFalse(leases.lease.closed)
     XCTAssertEqual(coordinator.activePaperID, f.identity.paperID)
     XCTAssertFalse(coordinator.requestGeneration(paperID: UUID(), generation: UUID(), outputLanguage: "en"))
     completion.resume(); provider.continuation = nil
     for _ in 0..<1000 where coordinator.activePaperID != nil { await Task.yield() }
     XCTAssertNil(coordinator.activePaperID)
+    XCTAssertNil(coordinator.activeRequestID)
+    XCTAssertNil(coordinator.cancellingRequestID)
     XCTAssertNil(coordinator.requestFailure, "Explicit cancellation must not show a delayed failure alert")
     XCTAssertNotNil(coordinator.completionRevision)
     XCTAssertTrue(leases.lease.closed)
     XCTAssertNil(try LibrarySummaryService(database: f.db).restore(paperID: f.identity.paperID))
     XCTAssertEqual(try f.db.librarySortFacts().first?.summary?.recentAttempt?.failure, .cancelled)
+  }
+
+  @MainActor func testPreviousSummaryCancelAndRevocationCannotCancelNewRequestForSamePaper() async throws {
+    let f = try fixture()
+    defer { try? FileManager.default.removeItem(at: f.root) }
+    try prepareCoordinator(f)
+    let leases = SummaryLeases(), provider = SummaryProvider()
+    provider.suspend = true
+    let coordinator = LibrarySummaryCoordinator(database: f.db, epoch: UUID(), leases: leases,
+      authority: try ProviderRequest(), provider: provider)
+
+    XCTAssertTrue(coordinator.requestGeneration(paperID: f.identity.paperID,
+      generation: f.identity.generation, outputLanguage: "ko"))
+    let previousID = try XCTUnwrap(coordinator.activeRequestID)
+    for _ in 0..<1000 where provider.continuation == nil { await Task.yield() }
+    let first = try XCTUnwrap(provider.continuation)
+    let revokePrevious = try XCTUnwrap(leases.callback)
+    provider.continuation = nil
+    first.resume()
+    for _ in 0..<1000 where coordinator.activePaperID != nil { await Task.yield() }
+    let firstResult = try XCTUnwrap(LibrarySummaryService(database: f.db).restore(paperID: f.identity.paperID))
+
+    let newLease = SummaryLease()
+    leases.paperLeases[f.identity.paperID] = newLease
+    XCTAssertTrue(coordinator.requestGeneration(paperID: f.identity.paperID,
+      generation: f.identity.generation, outputLanguage: "en"))
+    XCTAssertNotEqual(coordinator.activeRequestID, previousID)
+    for _ in 0..<1000 where provider.continuation == nil { await Task.yield() }
+    let second = try XCTUnwrap(provider.continuation)
+    XCTAssertFalse(coordinator.requestCancellation(id: previousID))
+    revokePrevious()
+    XCTAssertNil(coordinator.cancellingRequestID)
+    XCTAssertFalse(newLease.closed)
+    provider.continuation = nil
+    second.resume()
+    for _ in 0..<1000 where coordinator.activePaperID != nil { await Task.yield() }
+
+    let secondResult = try XCTUnwrap(LibrarySummaryService(database: f.db).restore(paperID: f.identity.paperID))
+    XCTAssertNotEqual(secondResult.id, firstResult.id)
+    XCTAssertTrue(newLease.closed)
+    XCTAssertEqual(provider.outputLanguages, ["ko", "en"])
   }
 
   @MainActor func testLibraryRequestReportsParsingUnavailableWithConfiguredProvider() async throws {
