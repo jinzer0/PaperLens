@@ -1220,6 +1220,62 @@ final class OwnedChildRetirementTests: XCTestCase {
     try await workerSetupFailure(hooks: .init(), descriptors: 10, missingInterpreter: true)
   }
 
+  func testRetiringWorkerBeforeInvokingStartPurgesOwnedNamespaceWithoutSpawning() async throws {
+    let (root, namespace, launch) = try workerFixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    XCTAssertTrue(namespace.prepareRuntimeDirectories())
+    let sentinel = root.appendingPathComponent("foreign.txt")
+    try Data("safe".utf8).write(to: sentinel)
+    let child = OwnedChildRetirement(worker: launch,
+      deadlineUptimeNanoseconds: DispatchTime.now().uptimeNanoseconds + 3_000_000_000,
+      hooks: .init(before: { _ in XCTFail("No process setup was admitted") }))
+    let completed = terminalExpectation(child)
+    child.retire()
+    let ready = expectation(description: "a later start sees revocation")
+    child.startProduct(startDeadlineUptimeNanoseconds: DispatchTime.now().uptimeNanoseconds + 1_000_000_000) { result in
+      if case .failure(.revoked) = result {} else { XCTFail("Retired worker accepted startup: \(result)") }
+      ready.fulfill()
+    }
+    await fulfillment(of: [completed, ready], timeout: 2)
+    guard case .clean(let proof) = child.terminal else {
+      return XCTFail("Expected cleanup of unlaunched scope, got \(String(describing: child.terminal))")
+    }
+    XCTAssertFalse(proof.childReaped)
+    XCTAssertFalse(child.testingChildExists)
+    XCTAssertFalse(child.testingRetained)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: namespace.directoryURL.path))
+    XCTAssertEqual(try Data(contentsOf: sentinel), Data("safe".utf8))
+  }
+
+  func testWorkerRevokedAfterVerifiedSetupClosesOwnedResourcesWithoutSpawning() async throws {
+    let (root, namespace, launch) = try workerFixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let counts = Counts()
+    let reached = expectation(description: "verified setup reached spawn boundary")
+    let child = OwnedChildRetirement(worker: launch,
+      deadlineUptimeNanoseconds: DispatchTime.now().uptimeNanoseconds + 3_000_000_000,
+      hooks: .init(beforeWorkerSpawn: {
+        counts.revokeCapturedChild()
+        reached.fulfill()
+      }, workerLaunched: { XCTFail("Revoked setup started a worker") }))
+    counts.lock.withLock { counts.capturedChild = child }
+    defer { counts.lock.withLock { counts.capturedChild = nil } }
+    let completed = terminalExpectation(child)
+    child.launchWorker()
+    await fulfillment(of: [reached, completed], timeout: 2)
+    guard case .clean(let proof) = child.terminal else {
+      await physicalTeardown(child)
+      return XCTFail("Expected cleanup before the worker spawn, got \(String(describing: child.terminal))")
+    }
+    XCTAssertEqual(proof.checkedDescriptorCloses, 10)
+    XCTAssertFalse(proof.childReaped)
+    XCTAssertFalse(child.testingChildExists)
+    XCTAssertEqual(child.testingDescriptorCount, 0)
+    XCTAssertTrue(child.core.lock.withLock { child.core.spawnStrings.isEmpty })
+    XCTAssertFalse(FileManager.default.fileExists(atPath: namespace.directoryURL.path))
+    XCTAssertFalse(child.testingRetained)
+  }
+
   func testWorkerLateActualSpawnNeverClosesWaitsOrPublishesReady() async throws {
     let (root, namespace, launch) = try workerFixture()
     defer { try? FileManager.default.removeItem(at: root) }

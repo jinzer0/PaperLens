@@ -1996,7 +1996,7 @@ final class TopologyOwnedFixtures: @unchecked Sendable {
   }
 
   /// Used only when no product worker has started.
-  func cleanupUnlaunchedWorkerNamespace() -> Bool {
+  func cleanupUnlaunchedWorkerNamespace(owner: UUID? = nil) -> Bool {
     runtimeAdmission.lock()
     defer { runtimeAdmission.unlock() }
     if cleanupState == .unlaunchedRemovalPending {
@@ -2007,6 +2007,7 @@ final class TopologyOwnedFixtures: @unchecked Sendable {
       cleanupState = .removed
       return true
     }
+    if let owner { return cleanupWorkerNamespace(owner: owner, unlaunched: true) }
     let owner = UUID()
     guard beginMetadataMutation(owner: owner) else { return false }
     return cleanupWorkerNamespace(owner: owner, unlaunched: true)

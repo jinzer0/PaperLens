@@ -85,6 +85,7 @@ public final class OwnedChildRetirement: @unchecked Sendable {
   public struct Proof: Sendable, Equatable {
     public let checkedDescriptorCloses: Int
     public let childReaped: Bool
+    /// The wait status when a child was reaped, or -1 for an unlaunched worker.
     public let childExitStatus: Int32
   }
   public enum Terminal: Sendable, Equatable {
@@ -108,6 +109,7 @@ public final class OwnedChildRetirement: @unchecked Sendable {
     var afterClose: @Sendable () -> Void = {}
     var afterSocketFault: @Sendable () -> Bool = { false }
     var afterDuplicateFault: @Sendable () -> Bool = { false }
+    var beforeWorkerSpawn: @Sendable () -> Void = {}
     var workerLaunched: @Sendable () -> Void = {}
   }
 
@@ -145,6 +147,9 @@ public final class OwnedChildRetirement: @unchecked Sendable {
         if clean { owners.removeValue(forKey: core.identity) }
         else if !core.isWorker { debt = true }
       }
+    }
+    func contains(_ core: Core) -> Bool {
+      lock.withLock { owners[core.identity] === core }
     }
   }
 
@@ -188,6 +193,8 @@ public final class OwnedChildRetirement: @unchecked Sendable {
     var stderrJoined = true
     var cleanupQueued = false
     var workerProcessesRetired = false
+    private var workerSpawnAttempted = false
+    private var workerNamespaceLeased = false
     var readyFailure: (@MainActor @Sendable (Failure) -> Void)?
     var consumeTransport: (@MainActor @Sendable (Core) -> Void)?
     enum WorkerPhase {
@@ -256,17 +263,20 @@ public final class OwnedChildRetirement: @unchecked Sendable {
       consume: @escaping @MainActor @Sendable (Core) -> Void,
       failure: @escaping @MainActor @Sendable (Failure) -> Void
     ) {
-      let first = lock.withLock { () -> Bool in
-        guard !invoked else { return false }
+      let admitted = lock.withLock { () -> Bool? in
+        guard !invoked else { return nil }
         invoked = true
         deadline = startupDeadline
         self.startupDeadline = startupDeadline
         readyFailure = failure
         consumeTransport = consume
-        return true
+        return Roots.shared.admit(self)
       }
-      guard first else { return }
-      guard Roots.shared.admit(self) else {
+      guard let admitted else {
+        if isWorker, lock.withLock({ retirementID != nil }) { failure(.revoked) }
+        return
+      }
+      guard admitted else {
         failed(.admissionBlocked)
         return
       }
@@ -274,16 +284,12 @@ public final class OwnedChildRetirement: @unchecked Sendable {
       source.setEventHandler { @Sendable [self] in revoke(startupOnly: true) }
       source.schedule(
         deadline: DispatchTime(uptimeNanoseconds: startupDeadline), leeway: .nanoseconds(0))
-      lock.withLock { startupTimer = source }
+      lock.withLock {
+        if revoked || terminal != nil { source.cancel() }
+        else { startupTimer = source }
+      }
       source.resume()
       operation.async { [self] in
-        guard allowsIO else { return }
-        if case .worker(let launch) = command,
-          !launch.namespace.beginMetadataMutation(owner: identity)
-        {
-          if allowsIO { failed(.setup) }
-          return
-        }
         guard allowsIO else { return }
         run()
       }
@@ -491,26 +497,7 @@ public final class OwnedChildRetirement: @unchecked Sendable {
         return true
       }
       guard first else { return }
-      if actions != nil {
-        guard permit(.close) else { return }
-        let result = posix_spawn_file_actions_destroy(&actions)
-        if result == 0 { actions = nil }
-        guard withinDeadline() else { return }
-        guard result == 0 else {
-          failed(.setup)
-          return
-        }
-      }
-      if attributes != nil {
-        guard permit(.close) else { return }
-        let result = posix_spawnattr_destroy(&attributes)
-        if result == 0 { attributes = nil }
-        guard withinDeadline() else { return }
-        guard result == 0 else {
-          failed(.setup)
-          return
-        }
-      }
+      guard releaseSpawnConfiguration() else { return }
       // Channel has joined its actual IO before its checked physical closure.
       let remaining = lock.withLock { descriptors }
       for fd in remaining { guard closeOwned(fd) else { return } }
@@ -538,14 +525,43 @@ public final class OwnedChildRetirement: @unchecked Sendable {
       }
       select(.clean(proof))
     }
-    func invoke() {
-      let first = lock.withLock { () -> Bool in
-        guard !invoked else { return false }
-        invoked = true
-        return true
+    private func releaseSpawnConfiguration() -> Bool {
+      if actions != nil {
+        guard permit(.close) else { return false }
+        let result = posix_spawn_file_actions_destroy(&actions)
+        if result == 0 { actions = nil }
+        guard withinDeadline() else { return false }
+        guard result == 0 else {
+          failed(.setup)
+          return false
+        }
       }
-      guard first else { return }
-      guard Roots.shared.admit(self) else {
+      if attributes != nil {
+        guard permit(.close) else { return false }
+        let result = posix_spawnattr_destroy(&attributes)
+        if result == 0 { attributes = nil }
+        guard withinDeadline() else { return false }
+        guard result == 0 else {
+          failed(.setup)
+          return false
+        }
+      }
+      let strings = lock.withLock {
+        let allocated = spawnStrings
+        spawnStrings.removeAll()
+        return allocated
+      }
+      for pointer in strings { free(pointer) }
+      return true
+    }
+    func invoke() {
+      let admitted = lock.withLock { () -> Bool? in
+        guard !invoked else { return nil }
+        invoked = true
+        return Roots.shared.admit(self)
+      }
+      guard let admitted else { return }
+      guard admitted else {
         select(.unknown(.admissionBlocked))
         return
       }
@@ -557,8 +573,11 @@ public final class OwnedChildRetirement: @unchecked Sendable {
       }
       let source = DispatchSource.makeTimerSource(queue: terminalLane)
       if isWorker {
-        lock.withLock { startupTimer = source }
         source.setEventHandler { [self] in revoke(startupOnly: true) }
+        lock.withLock {
+          if revoked || terminal != nil { source.cancel() }
+          else { startupTimer = source }
+        }
       } else {
         lock.withLock { timer = source }
         source.setEventHandler { [self] in select(.unknown(.deadline)) }
@@ -566,14 +585,6 @@ public final class OwnedChildRetirement: @unchecked Sendable {
       source.schedule(deadline: DispatchTime(uptimeNanoseconds: deadline), leeway: .nanoseconds(0))
       source.resume()
       operation.async { [self] in
-        if case .worker(let launch) = command {
-          guard allowsIO else { return }
-          guard launch.namespace.beginMetadataMutation(owner: identity) else {
-            if allowsIO { failed(.setup) }
-            return
-          }
-          guard allowsIO else { return }
-        }
         run()
       }
     }
@@ -698,7 +709,7 @@ public final class OwnedChildRetirement: @unchecked Sendable {
       guard permit(.close) else { return false }
       let target: Int32 = hooks.closeFault() ? -1 : descriptor
       guard withinDeadline() else { return false }
-      if isWorker, !allowsIO, !workerProcessesRetired { return false }
+      if isWorker, !allowsIO, workerSpawnAttempted, !workerProcessesRetired { return false }
       // No retry, including EINTR: uncertain descriptor identity remains rooted.
       guard Darwin.close(target) == 0, target == descriptor else {
         lock.withLock { _ = uncertainCloses.insert(descriptor) }
@@ -986,7 +997,7 @@ public final class OwnedChildRetirement: @unchecked Sendable {
       }
     }
     func retireWorker() {
-      guard controlPermitted, workerRetirementPhase == nil,
+      guard controlPermitted, Roots.shared.contains(self), workerRetirementPhase == nil,
         let retirementID = lock.withLock({ self.retirementID }) else { return }
       workerRetirementPhase = .revoking
       // The pending callback is still unclaimed. Its descriptors have never
@@ -998,6 +1009,10 @@ public final class OwnedChildRetirement: @unchecked Sendable {
           handoff = false
         }
       }
+      if !workerSpawnAttempted, case .worker(let launch) = command {
+        retireUnlaunchedWorker(launch.namespace)
+        return
+      }
       do {
         if let brokerFD, brokerIdentity != nil {
           try queueControl(brokerFD, "revoke", ["retirementID": retirementID])
@@ -1005,7 +1020,34 @@ public final class OwnedChildRetirement: @unchecked Sendable {
         if let workerFD { try queueControl(workerFD, "revoke", ["retirementID": retirementID]) }
       } catch { if controlPermitted { failed(.control) } }
     }
+    private func retireUnlaunchedWorker(_ namespace: TopologyOwnedFixtures) {
+      // This runs on the spawn lane after any in-flight setup has returned.
+      let remaining = lock.withLock { descriptors }
+      guard lock.withLock({ remaining.allSatisfy { descriptorIdentities[$0] != nil } }) else {
+        select(.unknown(.identity))
+        return
+      }
+      guard releaseSpawnConfiguration() else { return }
+      for fd in remaining { guard closeOwned(fd) else { return } }
+      guard namespace.cleanupUnlaunchedWorkerNamespace(owner: workerNamespaceLeased ? identity : nil)
+      else {
+        select(.unknown(.namespaceCleanup))
+        return
+      }
+      let proof = lock.withLock {
+        Proof(checkedDescriptorCloses: closes, childReaped: false, childExitStatus: -1)
+      }
+      select(.clean(proof))
+    }
     func run() {
+      if case .worker(let launch) = command {
+        guard allowsIO else { return }
+        guard launch.namespace.beginMetadataMutation(owner: identity) else {
+          if allowsIO { failed(.setup) }
+          return
+        }
+        workerNamespaceLeased = true
+      }
       guard permit(.pipe) else { return }
       var aliases: [Int32] = []
       var lifecycleChild: Int32?
@@ -1235,10 +1277,12 @@ public final class OwnedChildRetirement: @unchecked Sendable {
             spawnArguments = arguments
             spawnEnvironment = environmentStrings
           }
+          hooks.beforeWorkerSpawn()
         }
         if allocated.allSatisfy({ $0 != nil }), permit(.spawn) {
           var argv = Array(allocated.prefix(arguments.count)) + [nil]
           var environment = Array(allocated.dropFirst(arguments.count)) + [nil]
+          if isWorker { workerSpawnAttempted = true }
           spawnResult = argv.withUnsafeMutableBufferPointer { args in
             environment.withUnsafeMutableBufferPointer { env in
               posix_spawn(
