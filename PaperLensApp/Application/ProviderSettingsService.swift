@@ -114,6 +114,7 @@ public final class NativeCodexConnection: ObservableObject {
     do {
       let result = try await scope.execute()
       removeSummaryScope(requestID)
+      guard !scope.isCancelled else { throw CancellationError() }
       guard currentConfiguration == selected, eligibleForEntry else {
         throw LibrarySummaryError.staleIdentity
       }
@@ -679,6 +680,7 @@ internal final class NativeCodexSummaryScope {
   private var waiters: [CheckedContinuation<Void, Never>] = []
   private var terminalReceived = false
   private(set) var clean = false
+  private(set) var isCancelled = false
 
   init(launch: OwnedChildRetirement.WorkerLaunch, paperID: UUID, params: [String: Any]) {
     self.paperID = paperID; self.params = params
@@ -706,7 +708,7 @@ internal final class NativeCodexSummaryScope {
   }
 
   func execute() async throws -> Data {
-    try await withTaskCancellationHandler {
+    let result: Data = try await withTaskCancellationHandler {
       try await withCheckedThrowingContinuation { continuation in
         self.continuation = continuation
         owner.observeTerminal { [weak self] terminal in
@@ -730,6 +732,11 @@ internal final class NativeCodexSummaryScope {
     } onCancel: {
       Task { @MainActor [self] in cancel() }
     }
+    // Purge is independent of the caller task and can revoke a buffered success
+    // while the process and its namespace are still retiring.
+    guard !isCancelled else { throw CancellationError() }
+    try Task.checkCancellation()
+    return result
   }
 
   private func receive(_ id: UUID, terminal: AgentRPCConnection.Terminal) {
@@ -755,7 +762,10 @@ internal final class NativeCodexSummaryScope {
     owner.retire()
   }
 
-  func cancel() { fail(CancellationError()) }
+  func cancel() {
+    isCancelled = true
+    fail(CancellationError())
+  }
 
   func retireAndWait() async {
     cancel()

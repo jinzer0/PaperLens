@@ -1319,6 +1319,35 @@ import ProviderRequest
     XCTAssertFalse(FileManager.default.fileExists(atPath: namespace.directoryURL.path))
   }
 
+  func testPurgeRevokesBufferedSuccessAndWaitsForActualRetirement() async throws {
+    let (root, namespace, launch) = try workerFixture(script: controlWorkerScript(holdResult: false))
+    defer { try? FileManager.default.removeItem(at: root) }
+    let (_, _, params) = try parameters()
+    let scope = NativeCodexSummaryScope(launch: launch, paperID: UUID(), params: params)
+    let summaryCompletion = Completion()
+    let purgeCompletion = Completion()
+    let summary = Task { defer { summaryCompletion.returned = true }; return try await scope.execute() }
+    // The worker only receives this command after the owner has buffered its typed result.
+    try await waitForMarker("retirement-received", directory: namespace.directoryURL)
+    var purgeStarted = false
+    let purge = Task {
+      purgeStarted = true
+      await scope.retireAndWait()
+      purgeCompletion.returned = true
+    }
+    try await waitFor { purgeStarted }
+    XCTAssertFalse(summaryCompletion.returned)
+    XCTAssertFalse(purgeCompletion.returned)
+    XCTAssertTrue(FileManager.default.fileExists(atPath: namespace.directoryURL.path))
+
+    try Data().write(to: marker("release-retirement", directory: namespace.directoryURL))
+    do { _ = try await summary.value; XCTFail("Purge must revoke a result retained during retirement") }
+    catch { XCTAssertTrue(error is CancellationError) }
+    await purge.value
+    XCTAssertTrue(scope.clean)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: namespace.directoryURL.path))
+  }
+
   func testRemoteTimeoutIsPreservedOnlyAfterActualRetirementAndNamespaceRemoval() async throws {
     let (root, namespace, launch) = try workerFixture(
       script: controlWorkerScript(holdResult: false, remoteTimeout: true))
